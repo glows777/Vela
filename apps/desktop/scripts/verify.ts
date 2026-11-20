@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import {
+  appendFile,
   chmod,
   mkdir,
   mkdtemp,
@@ -36,14 +37,34 @@ const home = resolve(process.env.VELA_DESKTOP_HOME ?? resolve(scratch, 'home'))
 const dataParent = resolve(process.env.VELA_DIR ?? scratch)
 await mkdir(dataParent, { recursive: true })
 const data = await mkdtemp(resolve(dataParent, 'vela-data-'))
-/** Journey 6's own empty data directory, created when that journey starts. */
+/** First run and the Lark journeys each need a data directory of their own. */
 let firstRunData: string | undefined
+let larkData: string | undefined
+let larkOffData: string | undefined
 const profile = resolve(scratch, 'user-data')
 const project = resolve(scratch, 'project')
 const alpha = resolve(scratch, 'alpha')
 const beta = resolve(scratch, 'beta')
 const gamma = resolve(scratch, 'gamma')
+const larkWorkspace = resolve(scratch, 'lark-local')
 const scenario = resolve(scratch, 'faux.json')
+const larkScenario = resolve(scratch, 'lark-faux.json')
+const larkOffScenario = resolve(scratch, 'lark-off-faux.json')
+/** The fake Lark's seed history and the person's scripted messages. */
+const larkDir = resolve(scratch, 'lark')
+const larkProject = 'oc_alpha'
+/** A second enabled group, for the history gap a long disconnect leaves. */
+const gapProject = 'oc_gap'
+/** A third, busy group: routine live messages must not reset paging. */
+const liveProject = 'oc_live'
+/** A fourth group: a filtered page sits inside the gap a long absence leaves. */
+const jumpProject = 'oc_jump'
+/** A group nobody has written in yet. */
+const emptyProject = 'oc_empty'
+/** A group whose first read the fake refuses, as a dropped connection would. */
+const denyProject = 'oc_deny'
+/** A busy group: paging and a refresh can overlap. */
+const raceProject = 'oc_race'
 const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
@@ -53,9 +74,17 @@ const staleModel = process.env.VELA_DESKTOP_VERIFY_STALE_MODEL === '1'
 /** An auth.json Vela cannot read: the window must say so instead of staying blank. */
 const brokenAuth = process.env.VELA_DESKTOP_VERIFY_BROKEN_AUTH === '1'
 await Promise.all(
-  [home, data, profile, project, alpha, beta, gamma].map((path) =>
-    mkdir(path, { recursive: true }),
-  ),
+  [
+    home,
+    data,
+    profile,
+    project,
+    alpha,
+    beta,
+    gamma,
+    larkWorkspace,
+    larkDir,
+  ].map((path) => mkdir(path, { recursive: true })),
 )
 await Bun.write(
   shell,
@@ -708,10 +737,18 @@ const sendIn = async (page: Page, label: string, text: string) => {
  * Waits until a session has no live run. Input sent during a run steers it instead
  * of starting a new one, which is right for a person and wrong for a scripted queue.
  */
-const waitForIdle = async (page: Page, sessionId: string, timeout = 30_000) => {
+const waitForIdle = async (
+  page: Page,
+  sessionId: string,
+  timeout = 30_000,
+  channel = 'local',
+) => {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
-    const sessions = await page.evaluate(() => window.vela.sessions('local'))
+    const sessions = await page.evaluate(
+      (channel) => window.vela.sessions(channel),
+      channel,
+    )
     const session = sessions.find((item) => item.sessionId === sessionId)
     if (
       session &&
@@ -740,12 +777,13 @@ const waitForSessionState = async (
   task: string,
   state: string,
   timeout = 30_000,
+  channel = 'local',
 ) => {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     const sessions = await page.evaluate(
-      (projectId) => window.vela.sessions('local', projectId),
-      projectId,
+      ({ projectId, channel }) => window.vela.sessions(channel, projectId),
+      { projectId, channel },
     )
     const session = sessions.find((item) => item.task === task)
     if (session?.state === state) return session
@@ -827,8 +865,13 @@ const journeyTwo = async (page: Page) => {
     (await failure.textContent())?.includes('invalid api key'),
     'The card carries what the provider said',
   )
+  // The topic's own status line repeats the failure for the group, so only the
+  // recorded reply is meant to be hidden here.
   assert.equal(
-    await panel.getByText(/Check the error above/).count(),
+    await panel
+      .locator('[data-role="assistant"]')
+      .getByText(/Check the error above/)
+      .count(),
     0,
     'The reply the card repeats is hidden',
   )
@@ -867,9 +910,10 @@ const journeyThree = async (page: Page) => {
 
   // The failed run's card is gone once the next run starts, so its recorded reply
   // is back: the failure keeps exactly one visible record at a time.
-  await panel.getByText(/Task failed: invalid api key/).waitFor({
-    timeout: 30_000,
-  })
+  await panel
+    .locator('[data-role="assistant"]')
+    .getByText(/Task failed: invalid api key/)
+    .waitFor({ timeout: 30_000 })
   checks.push(
     'Starting the next run drops the error card and shows the failed reply again.',
   )
@@ -1475,6 +1519,8 @@ async function development() {
   }
   await restartJourney()
   await firstRunJourney()
+  await larkJourneys()
+  await larkOffJourney()
 }
 
 /**
@@ -1750,6 +1796,1161 @@ async function firstRunJourney() {
   }
 }
 
+/** One person's line in the fake Lark group, delivered by the transport's poller. */
+const larkSays = async (control: { op: string; [key: string]: unknown }) => {
+  const path = resolve(larkDir, 'control.jsonl')
+  await appendFile(path, `${JSON.stringify(control)}\n`)
+  const lines = (await readFile(path, 'utf8'))
+    .split('\n')
+    .filter((line) => line.trim() !== '').length
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    try {
+      const handled = JSON.parse(
+        await readFile(resolve(larkDir, 'handled.json'), 'utf8'),
+      ) as { lines?: number }
+      if ((handled.lines ?? 0) >= lines) return
+    } catch {
+      // The first line is still on its way.
+    }
+    await Bun.sleep(20)
+  }
+  throw new Error('The fake Lark did not pick up the control line')
+}
+
+/**
+ * The Lark journeys, on a scratch data directory whose only enabled group is the fake
+ * `oc_alpha`: group chat, a topic started from Home, an uncertain send, a waiting
+ * topic, and switching between a Lark project and a Local one without a reload.
+ */
+async function larkJourneys() {
+  const dir = await mkdtemp(resolve(dataParent, 'vela-lark-'))
+  larkData = dir
+  await Bun.write(
+    resolve(dir, 'settings.json'),
+    JSON.stringify({
+      shellPath: shell,
+      extensionConfig: {
+        lark: {
+          chats: [
+            larkProject,
+            gapProject,
+            liveProject,
+            jumpProject,
+            emptyProject,
+            denyProject,
+            raceProject,
+          ],
+        },
+      },
+    }),
+  )
+  await Bun.write(
+    resolve(larkDir, 'seed.json'),
+    JSON.stringify({
+      chats: {
+        [gapProject]: {
+          name: 'Vela gap',
+          messages: Array.from({ length: 60 }, (_, index) => ({
+            sender: 'Alice',
+            text: `Gap message ${index + 1} of the second group.`,
+          })),
+        },
+        [liveProject]: {
+          name: 'Vela live',
+          messages: Array.from({ length: 120 }, (_, index) => ({
+            sender: index % 2 === 0 ? 'Alice' : 'Bob',
+            text: `Live message ${index + 1} of the third group.`,
+          })),
+        },
+        [jumpProject]: {
+          name: 'Vela jump',
+          messages: Array.from({ length: 100 }, (_, index) => ({
+            sender: 'Bob',
+            text: `Jump message ${index + 1} of the fourth group.`,
+          })),
+        },
+        [emptyProject]: { name: 'Vela empty' },
+        [denyProject]: {
+          name: 'Vela deny',
+          messages: Array.from({ length: 3 }, (_, index) => ({
+            sender: 'Bob',
+            text: `Deny message ${index + 1} of the sixth group.`,
+          })),
+        },
+        [raceProject]: {
+          name: 'Vela race',
+          messages: Array.from({ length: 160 }, (_, index) => ({
+            sender: 'Bob',
+            text: `Race message ${index + 1} of the seventh group.`,
+          })),
+        },
+        [larkProject]: {
+          name: 'Vela dev',
+          messages: [
+            // More than one page, so "Show earlier messages" has something to load.
+            ...Array.from({ length: 55 }, (_, index) => ({
+              sender: index % 2 === 0 ? 'Alice' : 'Bob',
+              text: `Old message ${index + 1} of the group backlog.`,
+            })),
+            { sender: 'Alice', text: 'Morning, everyone.' },
+            { sender: 'Bob', text: 'The nightly build is green.' },
+            {
+              sender: 'Vela',
+              app: true,
+              text: 'I will keep an eye on the retry test.',
+            },
+          ],
+        },
+      },
+    }),
+  )
+  await Bun.write(resolve(larkDir, 'control.jsonl'), '')
+  await Bun.write(
+    larkScenario,
+    JSON.stringify({
+      responses: [
+        // The app's short question in the group.
+        { text: 'The retry test now covers a 429.' },
+        // A person asking in the group.
+        { text: 'Only the deploy step changed.' },
+        // The busy group's live message.
+        { text: 'Noted, the oldest page is still the end.' },
+        { text: 'Noted, the busy group is answered.' },
+        // Starting a topic from Home: a slow step keeps it visibly running.
+        { toolCalls: [{ name: 'bash', input: { command: 'sleep 3' } }] },
+        { text: 'I will read the deploy script first.' },
+        // A reply in the same topic.
+        { text: 'The deploy script still points at staging.' },
+        // A topic that asks the person a question.
+        {
+          toolCalls: [
+            {
+              name: 'channel_wait_for_input',
+              input: { reason: 'Which colour should I use?' },
+            },
+          ],
+        },
+        { text: 'Which colour should I use?' },
+        { text: 'Blue it is.' },
+        { text: 'The unopened group received its answer.' },
+        { text: 'The unopened topic received its answer.' },
+        // A Local question in the same window.
+        { text: 'Local answer in the same window.' },
+      ],
+      generate: Array.from({ length: 20 }, () => ({
+        text: 'Compacted history',
+      })),
+    }),
+  )
+  console.log('Desktop verification: starting the Lark journeys')
+  const lark = await launchDev({
+    VELA_DIR: dir,
+    VELA_MODEL: `faux:${larkScenario}`,
+    VELA_DESKTOP_LARK: 'fake',
+    VELA_DESKTOP_LARK_DIR: larkDir,
+    LARK_APP_ID: 'cli_desktop_fake',
+    LARK_APP_SECRET: 'fake-secret',
+  })
+  try {
+    const { page } = lark
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.goto(new URL('index.html', page.url()).href)
+    await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
+    await page.getByRole('heading', { name: 'VELA', exact: true }).waitFor()
+    const sidebar = page.getByLabel('Sidebar')
+    const panel = page.getByRole('complementary', { name: 'Sessions' })
+    const projectButton = sidebar.getByRole('button', {
+      name: 'Vela dev Lark',
+    })
+    await projectButton.waitFor({ timeout: 30_000 })
+    await page.getByText('Lark · on', { exact: true }).waitFor()
+    checks.push(
+      'A Lark group from the enabled chats is a project with the Lark tag, and the sidebar shows Lark · on.',
+    )
+
+    // Group history, a question from the app, and a person's answer in the group.
+    await projectButton.click()
+    await page.getByRole('heading', { name: 'Vela dev', exact: true }).waitFor()
+    const banner = page.getByRole('banner')
+    assert.equal(await banner.getByText('Lark', { exact: true }).count(), 1)
+    assert(
+      (await banner.textContent())?.includes(larkProject),
+      'The header names the chat id',
+    )
+    await page.getByText('Alice', { exact: true }).first().waitFor()
+    await page.getByText('Morning, everyone.', { exact: true }).waitFor()
+    await page.getByText('Bob', { exact: true }).first().waitFor()
+    await page
+      .getByText('The nightly build is green.', { exact: true })
+      .waitFor()
+    await page
+      .getByText('I will keep an eye on the retry test.', { exact: true })
+      .waitFor()
+    checks.push(
+      "The group chat shows people's messages with their names and Vela's reply.",
+    )
+    await page
+      .getByText(/Vela posts it in the group as the bot, signed Vela app/)
+      .waitFor()
+    checks.push(
+      'The project composer says the bot posts in the group, signed Vela app.',
+    )
+
+    const chat = page.getByLabel('Project chat')
+    await sendIn(
+      page,
+      'Message Vela in this group',
+      'What changed in the retry test?',
+    )
+    await chat
+      .getByText('Vela app: What changed in the retry test?', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await chat
+      .getByText('The retry test now covers a 429.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await chat
+        .locator('[data-role="user"]')
+        .filter({ hasText: 'What changed in the retry test?' })
+        .count(),
+      0,
+      "The app's post is the bot's, not the person's bubble",
+    )
+    checks.push(
+      "A short question sent from the app lands in the group as the bot with Vela app's signature, and the answer shows in the app.",
+    )
+
+    await larkSays({
+      op: 'say',
+      chatId: larkProject,
+      text: 'Anything else I should know?',
+      senderName: 'Alice',
+    })
+    await chat
+      .getByText('Anything else I should know?', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await chat
+      .getByText('Only the deploy step changed.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      "A person's message in the group shows with their name, and Vela's answer comes back to the app.",
+    )
+
+    assert.equal(
+      await page
+        .getByText('Old message 1 of the group backlog.', { exact: true })
+        .count(),
+      0,
+      'The first page is the newest 50 messages',
+    )
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Old message 1 of the group backlog.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'The group reads its newest page first and loads earlier history when the person asks.',
+    )
+
+    // A long disconnect: the page holds 11–60, then 60 messages arrive, and the
+    // refresh returns only 71–120. The gap is filled by reading back until the new
+    // page reaches what is on screen, so 61–70 never go missing.
+    await sidebar.getByRole('button', { name: 'Vela gap Lark' }).click()
+    await page.getByRole('heading', { name: 'Vela gap', exact: true }).waitFor()
+    await page
+      .getByText('Gap message 60 of the second group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Gap message 10 of the second group.', { exact: true })
+        .count(),
+      0,
+      'The first page is the newest 50 messages',
+    )
+    await larkSays({
+      op: 'backlog',
+      chatId: gapProject,
+      texts: Array.from(
+        { length: 60 },
+        (_, index) => `Late message ${index + 61} of the second group.`,
+      ),
+    })
+    // The backlog is stamped after the read that cached 11–60, so the cursor this page
+    // holds cannot reach it: the refresh has to read back to close the gap.
+    await Bun.sleep(2500)
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela gap Lark' }).click()
+    await page
+      .getByText('Late message 120 of the second group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page
+      .getByText('Late message 65 of the second group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Gap message 10 of the second group.', { exact: true })
+        .count(),
+      0,
+      'The page still starts where the person had paged to',
+    )
+    await page
+      .getByText('Gap message 60 of the second group.', { exact: true })
+      .waitFor()
+    checks.push(
+      'After a long disconnect the refresh reads back to the page on screen, so the messages in between are not skipped.',
+    )
+    // One page further reaches the start of the group, and the button goes away.
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Gap message 1 of the second group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page.getByRole('button', { name: 'Show earlier messages' }).count(),
+      0,
+      'The oldest page is the end of the history',
+    )
+    await larkSays({
+      op: 'say',
+      chatId: gapProject,
+      text: 'A new message after reaching the oldest page',
+    })
+    await page
+      .getByText('Noted, the oldest page is still the end.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page.getByRole('button', { name: 'Show earlier messages' }).count(),
+      0,
+      'A live refresh does not restore paging after reaching the oldest message',
+    )
+    checks.push(
+      'Paging reaches the oldest message after reconnect and stays exhausted after a live refresh.',
+    )
+
+    // Ordinary activity must not reset paging: a live message overlaps the page on
+    // screen, so Show earlier still reaches the oldest history.
+    await sidebar.getByRole('button', { name: 'Vela live Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela live', exact: true })
+      .waitFor()
+    await page
+      .getByText('Live message 120 of the third group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Live message 70 of the third group.', { exact: true })
+        .count(),
+      0,
+      'The first page is the newest 50 messages',
+    )
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Live message 21 of the third group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await larkSays({
+      op: 'say',
+      chatId: liveProject,
+      text: 'A live message in the busy group',
+    })
+    await page
+      .getByText('A live message in the busy group', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page
+      .getByText('Noted, the busy group is answered.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Live message 21 of the third group.', { exact: true })
+        .count(),
+      1,
+      'The refresh kept what the person had already paged to',
+    )
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Live message 1 of the third group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'An ordinary live message does not reset paging: Show earlier still reaches the oldest history.',
+    )
+
+    // A newest page the host filtered to nothing carries no range, so it cannot mean
+    // the older history was recalled: the page keeps what it shows.
+    await larkSays({ op: 'filterNewest', chatId: liveProject, count: 51 })
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela live Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela live', exact: true })
+      .waitFor()
+    await page
+      .getByText('Live message 1 of the third group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page
+      .getByText('Live message 21 of the third group.', { exact: true })
+      .waitFor()
+    checks.push(
+      'A newest page with no visible rows never erases the history the page already read.',
+    )
+
+    // A filtered page inside the gap a long absence leaves: the refresh must read past
+    // it, or the messages after it never appear and Show earlier jumps over them.
+    await sidebar.getByRole('button', { name: 'Vela jump Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela jump', exact: true })
+      .waitFor()
+    await page
+      .getByText('Jump message 100 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await larkSays({
+      op: 'backlog',
+      chatId: jumpProject,
+      texts: Array.from(
+        { length: 120 },
+        (_, index) => `New message ${index + 101} of the fourth group.`,
+      ),
+    })
+    await larkSays({
+      op: 'filterText',
+      chatId: jumpProject,
+      texts: Array.from(
+        { length: 50 },
+        (_, index) => `New message ${index + 121} of the fourth group.`,
+      ),
+    })
+    await Bun.sleep(2500)
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela jump Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela jump', exact: true })
+      .waitFor()
+    await page
+      .getByText('New message 220 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page
+      .getByText('New message 120 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Jump message 15 of the fourth group.', { exact: true })
+        .count(),
+      0,
+      'The refresh stops where the person had paged to',
+    )
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Jump message 21 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Jump message 1 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page.getByRole('button', { name: 'Show earlier messages' }).count(),
+      0,
+      'The oldest page is the end of the history',
+    )
+    checks.push(
+      'A filtered page inside a disconnect gap is read past, so the messages after it appear and paging still reaches the oldest.',
+    )
+    await sidebar.getByRole('button', { name: 'Vela dev Lark' }).click()
+    await page
+      .getByText('Old message 55 of the group backlog.', { exact: true })
+      .waitFor()
+    await noOverflow(page)
+    await themes(page, 'lark-journey-chat')
+
+    // A session started from Home opens a topic, runs and finishes, then continues.
+    await page.getByRole('button', { name: 'Home', exact: true }).click()
+    await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
+    assert.equal(
+      await page.getByLabel('Project', { exact: true }).inputValue(),
+      liveProject,
+      'Home defaults to the last project used',
+    )
+    await page.getByLabel('Project', { exact: true }).selectOption(larkProject)
+    await page
+      .getByText('Vela opens a topic in Vela dev for it, started by you.')
+      .waitFor()
+    checks.push(
+      'Home starts a session in the Lark project by opening a topic in the group.',
+    )
+    await sendIn(page, 'Message Vela', 'Check the deploy script')
+    await page.getByRole('heading', { name: 'Vela dev', exact: true }).waitFor()
+    const card = cardIn(page, 'Check the deploy script')
+    await card.waitFor({ timeout: 30_000 })
+    const topic = await waitForSessionState(
+      page,
+      larkProject,
+      'Check the deploy script',
+      'running',
+      30_000,
+      'lark',
+    )
+    await card.click()
+    await panel
+      .getByRole('heading', { name: 'Check the deploy script', exact: true })
+      .waitFor()
+    await panel.getByText('Running', { exact: true }).waitFor()
+    await waitForSessionState(
+      page,
+      larkProject,
+      'Check the deploy script',
+      'done',
+      30_000,
+      'lark',
+    )
+    await panel.getByText('Done', { exact: true }).waitFor()
+    await panel
+      .getByText('I will read the deploy script first.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'Starting a session from Home opens a topic: the panel shows it running and then done, with its reply.',
+    )
+
+    await waitForIdle(page, topic.sessionId, 30_000, 'lark')
+    await sendIn(page, 'Message Vela in this topic', 'What does it deploy?')
+    await panel
+      .getByText('The deploy script still points at staging.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    const settled = await waitForSessionState(
+      page,
+      larkProject,
+      'Check the deploy script',
+      'done',
+      30_000,
+      'lark',
+    )
+    assert.equal(settled.sessionId, topic.sessionId, 'The same topic continued')
+    const topics = await page.evaluate(
+      (chatId) => window.vela.sessions('lark', chatId),
+      larkProject,
+    )
+    assert.equal(
+      topics.filter((session) => session.topic).length,
+      1,
+      'The reply did not open another topic',
+    )
+    checks.push(
+      'A reply sent in the app continues the same topic and opens no second one.',
+    )
+    await panel
+      .getByRole('button', { name: 'Open the group in Lark' })
+      .waitFor()
+    await themes(page, 'lark-journey-topic')
+
+    // A topic whose next history read fails says why, and the read after that shows
+    // the conversation: the panel never sits on an unexplained empty conversation.
+    const threadIdent = (
+      await page.evaluate(
+        (chatId) => window.vela.sessions('lark', chatId),
+        larkProject,
+      )
+    ).find((session) => session.sessionId === topic.sessionId)!.topic!
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+    // Development StrictMode can mount the detail twice. Both mounts must see the
+    // same service failure until the test explicitly restores the transport.
+    await larkSays({
+      op: 'setTopicHistoryFailure',
+      threadId: threadIdent.threadId,
+      active: true,
+    })
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .getByRole('alert')
+      .filter({ hasText: 'Fake Lark denied the topic history' })
+      .waitFor({ timeout: 30_000 })
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+    await larkSays({
+      op: 'setTopicHistoryFailure',
+      threadId: threadIdent.threadId,
+      active: false,
+    })
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .getByText('I will read the deploy script first.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'A topic whose history read fails shows the reason, and the next read shows the conversation.',
+    )
+
+    // A card in the middle of a topic: the host filters it out of its page, and the
+    // read must continue to the text behind it.
+    await larkSays({
+      op: 'cardInTopic',
+      chatId: larkProject,
+      threadId: threadIdent.threadId,
+      after: 'Check the deploy script',
+    })
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .getByText('The deploy script still points at staging.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await panel.getByText('progress', { exact: true }).count(),
+      0,
+      'A card is not shown as text',
+    )
+    checks.push('A page the host filters to nothing does not end a topic read.')
+
+    // A recalled message leaves the panel on the next complete read.
+    await larkSays({
+      op: 'recall',
+      text: 'The deploy script still points at staging.',
+    })
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .locator('[data-role="assistant"]')
+      .getByText('The deploy script still points at staging.', { exact: true })
+      .waitFor({ state: 'detached', timeout: 30_000 })
+    checks.push('A message recalled in Lark leaves the topic on the next read.')
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+
+    // A topic that cannot start after the signed message reached Lark: re-read and say
+    // so, restore nothing, and never resend on its own.
+    const signedCopies = (text: string) =>
+      page.evaluate(
+        async ({ chatId, text }) => {
+          const project = (await window.vela.projects()).find(
+            (item) => item.channel === 'lark' && item.id === chatId,
+          )!
+          const listing = await window.vela.larkMessages({
+            chatId,
+            sessionId: project.sessionId,
+          })
+          return listing.messages.filter(
+            (message) => message.text === `Vela app: ${text}`,
+          ).length
+        },
+        { chatId: larkProject, text },
+      )
+    await page.getByRole('button', { name: 'Home', exact: true }).click()
+    await larkSays({ op: 'failNextTopicStart' })
+    await sendIn(page, 'Message Vela', 'A question that will not start a topic')
+    await page.getByRole('heading', { name: 'Vela dev', exact: true }).waitFor()
+    const posted = page.getByRole('alert')
+    await posted.waitFor({ timeout: 30_000 })
+    const postedText = (await posted.textContent()) ?? ''
+    assert(
+      postedText.includes('Vela posted it in the group'),
+      `The page says the message is in the group: ${postedText}`,
+    )
+    assert(
+      postedText.includes('check the group'),
+      `The page says where to check: ${postedText}`,
+    )
+    assert.equal(
+      await page.getByLabel('Message Vela in this group').inputValue(),
+      '',
+      'A posted send does not restore the draft',
+    )
+    assert.equal(
+      await signedCopies('A question that will not start a topic'),
+      1,
+      'Exactly one signed copy reached the group',
+    )
+    const afterTopic = await page.evaluate(
+      (chatId) => window.vela.sessions('lark', chatId),
+      larkProject,
+    )
+    assert(
+      !afterTopic.some(
+        (session) =>
+          session.topic &&
+          session.task === 'A question that will not start a topic',
+      ),
+      'A topic that did not start has no session',
+    )
+    assert.equal(
+      await panel
+        .getByText('A question that will not start a topic', { exact: true })
+        .count(),
+      0,
+      'The panel invented no session for the failed topic',
+    )
+    checks.push(
+      'A topic that fails after the bot posted re-reads the group, says the message is there, keeps no draft and opens no session.',
+    )
+    await themes(page, 'lark-journey-posted')
+
+    // A send with no receipt: the same re-read, and the draft is not offered again.
+    await larkSays({ op: 'failNextSend' })
+    await sendIn(
+      page,
+      'Message Vela in this group',
+      'A question with no send receipt',
+    )
+    const uncertain = page.getByRole('alert').filter({
+      hasText: 'may have been posted',
+    })
+    await uncertain.waitFor({ timeout: 30_000 })
+    assert(
+      ((await uncertain.textContent()) ?? '').includes('check the group'),
+      'The page says where to check',
+    )
+    assert.equal(
+      await page.getByLabel('Message Vela in this group').inputValue(),
+      '',
+      'An uncertain send does not restore the draft',
+    )
+    assert.equal(
+      await signedCopies('A question with no send receipt'),
+      1,
+      'The signed message is in the group once',
+    )
+    const composerForm = page.locator('form').filter({
+      has: page.getByLabel('Message Vela in this group'),
+    })
+    assert.equal(
+      await composerForm.getByRole('button', { name: 'Send' }).isDisabled(),
+      true,
+      'An empty composer cannot resend',
+    )
+    await Bun.sleep(300)
+    assert.equal(
+      await signedCopies('A question with no send receipt'),
+      1,
+      'Nothing resent the message',
+    )
+    checks.push(
+      'A send with no receipt re-reads the group, says it may have been posted, keeps no draft and does not resend.',
+    )
+    await themes(page, 'lark-journey-uncertain')
+
+    // A waiting topic joins Home's Needs you, and an answer clears it.
+    await page.getByRole('button', { name: 'Home', exact: true }).click()
+    await sendIn(page, 'Message Vela', 'Ask me which colour to use')
+    await page.getByRole('heading', { name: 'Vela dev', exact: true }).waitFor()
+    await waitForSessionState(
+      page,
+      larkProject,
+      'Ask me which colour to use',
+      'waiting',
+      30_000,
+      'lark',
+    )
+    await panel
+      .getByRole('region', { name: 'Needs you' })
+      .getByRole('button', { name: /Ask me which colour to use/ })
+      .waitFor()
+    checks.push('The panel lists the waiting Lark topic under Needs you.')
+    await page.getByRole('button', { name: 'Home', exact: true }).click()
+    const need = page.getByRole('button', {
+      name: /Which colour should I use\?/,
+    })
+    await need.waitFor({ timeout: 30_000 })
+    const needText = (await need.textContent()) ?? ''
+    assert(needText.includes('Ask me which colour to use'), needText)
+    assert(needText.includes('Vela dev'), needText)
+    assert(needText.includes('Lark'), needText)
+    checks.push(
+      'Home leads with the waiting Lark topic, naming its project and tag.',
+    )
+    await need.click()
+    await page.getByRole('heading', { name: 'Vela dev', exact: true }).waitFor()
+    await panel
+      .getByRole('heading', { name: 'Ask me which colour to use', exact: true })
+      .waitFor()
+    await panel.getByText('Waiting for an answer', { exact: true }).waitFor()
+    await panel
+      .getByText('Which colour should I use?', { exact: true })
+      .waitFor()
+    checks.push('Opening it from Home shows the question in its topic.')
+    await waitForIdle(
+      page,
+      (
+        await waitForSessionState(
+          page,
+          larkProject,
+          'Ask me which colour to use',
+          'waiting',
+          30_000,
+          'lark',
+        )
+      ).sessionId,
+      30_000,
+      'lark',
+    )
+    await sendIn(page, 'Message Vela in this topic', 'Blue')
+    await panel
+      .getByText('Blue it is.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await waitForSessionState(
+      page,
+      larkProject,
+      'Ask me which colour to use',
+      'done',
+      30_000,
+      'lark',
+    )
+    await page.getByRole('button', { name: 'Home', exact: true }).click()
+    await page.getByText('Nothing needs you right now.').waitFor()
+    assert.equal(
+      await page
+        .getByRole('button', { name: /Which colour should I use\?/ })
+        .count(),
+      0,
+    )
+    checks.push(
+      'Answering the waiting topic in the app clears it from Home and finishes it.',
+    )
+
+    // A group nobody has written in yet finishes its first read: the page shows its
+    // empty state and composer instead of a loading placeholder forever.
+    await sidebar.getByRole('button', { name: 'Vela empty Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela empty', exact: true })
+      .waitFor()
+    await page.getByLabel('Message Vela in this group').waitFor({
+      timeout: 30_000,
+    })
+    await page.getByText(/Ask Vela a short question here/).waitFor()
+    assert.equal(
+      await page.locator('[aria-busy="true"]').count(),
+      0,
+      'The empty group left its loading state',
+    )
+    checks.push(
+      'A group with no messages shows its empty state and composer on the first open.',
+    )
+    await themes(page, 'lark-journey-empty')
+
+    // A first read that fails leaves the loading state too, with its reason on screen.
+    await larkSays({ op: 'failNextGroupHistory' })
+    await sidebar.getByRole('button', { name: 'Vela deny Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela deny', exact: true })
+      .waitFor()
+    await page
+      .getByRole('alert')
+      .filter({ hasText: 'Fake Lark dropped the group history read' })
+      .waitFor({ timeout: 30_000 })
+    await page.getByLabel('Message Vela in this group').waitFor()
+    assert.equal(
+      await page.locator('[aria-busy="true"]').count(),
+      0,
+      'The failed first read left its loading state',
+    )
+    // The next read is a normal one and shows the group.
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela deny Lark' }).click()
+    await page
+      .getByText('Deny message 1 of the sixth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'A group whose first read fails shows the reason and the composer, and reads normally after that.',
+    )
+
+    // An older page that lands while a refresh reads is not dropped when the refresh
+    // applies: the refresh merges into what the page shows now, not into its snapshot.
+    await sidebar.getByRole('button', { name: 'Vela race Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela race', exact: true })
+      .waitFor()
+    await page
+      .getByText('Race message 160 of the seventh group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Race message 60 of the seventh group.', { exact: true })
+        .count(),
+      0,
+      'The first page is the newest 50 messages',
+    )
+    const refreshedText = 'The delayed refresh has updated the newest message.'
+    await larkSays({
+      op: 'holdGroupRefresh',
+      chatId: raceProject,
+      refreshedText,
+    })
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela race Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela race', exact: true })
+      .waitFor()
+    const olderRaceMessage = page.getByText(
+      'Race message 61 of the seventh group.',
+      { exact: true },
+    )
+    await olderRaceMessage.waitFor({ timeout: 30_000 })
+    await larkSays({ op: 'releaseGroupRefresh' })
+    await page
+      .getByText(refreshedText, { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await olderRaceMessage.isVisible(),
+      true,
+      'The older page is still visible after the refresh marker appears',
+    )
+    checks.push(
+      'An older page that arrives during a refresh stays on the page when the refresh applies.',
+    )
+
+    // The group is visible, but its previously opened topic is not.
+    await sidebar.getByRole('button', { name: 'Vela dev Lark' }).click()
+    await page.getByRole('heading', { name: 'Vela dev', exact: true }).waitFor()
+    await page
+      .getByText('The retry test now covers a 429.', { exact: true })
+      .waitFor()
+    await larkSays({ op: 'recordHistoryReads' })
+    const historyReads = resolve(larkDir, 'history-reads.log')
+    await Bun.write(historyReads, '')
+    // Wait for the UI's subscription to observe each real Lark history event.
+    const observe = (chatId: string, sessionId?: string) =>
+      page.evaluate(
+        ({ chatId, sessionId }) => {
+          const observed = new Promise<void>((resolve, reject) => {
+            let changes = 0
+            const timer = window.setTimeout(() => {
+              off()
+              reject(new Error('Lark did not send both history changes'))
+            }, 15_000)
+            const off = window.vela.onEvent((event) => {
+              if (
+                event.type !== 'lark' ||
+                event.value.type !== 'history_changed' ||
+                event.value.chatId !== chatId ||
+                event.value.sessionId !== sessionId
+              )
+                return
+              if (++changes < 2) return
+              window.clearTimeout(timer)
+              off()
+              resolve()
+            })
+          })
+          Object.assign(window, { observedHistoryChange: observed })
+        },
+        { chatId, sessionId },
+      )
+    const seen = () =>
+      page.evaluate(
+        () =>
+          (window as Window & { observedHistoryChange?: Promise<void> })
+            .observedHistoryChange,
+      )
+    await observe(gapProject)
+    await larkSays({
+      op: 'say',
+      chatId: gapProject,
+      text: 'Message in the unopened group',
+    })
+    await seen()
+    await observe(larkProject, topic.sessionId)
+    await larkSays({
+      op: 'say',
+      chatId: larkProject,
+      threadId: threadIdent.threadId,
+      text: 'Message in the unopened topic',
+    })
+    await seen()
+    const loggedReads = Bun.file(historyReads)
+    const deadline = Date.now() + 10_000
+    while (
+      !(await loggedReads.text()).includes(`group:${larkProject}\n`) &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(20)
+    assert(
+      (await loggedReads.text()).includes(`group:${larkProject}\n`),
+      'The open group is refreshed',
+    )
+    const reads = await loggedReads.text()
+    assert(
+      !reads.includes(`group:${gapProject}\n`),
+      'No reads for an unopened group',
+    )
+    assert(
+      !reads.includes(`topic:${threadIdent.threadId}\n`),
+      'No reads for an unopened topic',
+    )
+    checks.push(
+      'Live Lark history reads are limited to the open group and topic.',
+    )
+
+    // Switching projects and sessions in one running app, with no reload.
+    await page.evaluate(() => {
+      Object.assign(window, { switchedWithoutReload: true })
+    })
+    await sidebar.getByRole('button', { name: 'Vela dev Lark' }).click()
+    await page
+      .getByText('The retry test now covers a 429.', { exact: true })
+      .waitFor()
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .getByText('I will read the deploy script first.', { exact: true })
+      .waitFor()
+    await sidebar.getByRole('button', { name: 'New project' }).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByLabel('Folder path').fill(larkWorkspace)
+    await dialog.getByLabel('Name').fill('Local side')
+    await dialog.getByRole('button', { name: 'Create project' }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    await page
+      .getByRole('heading', { name: 'Local side', exact: true })
+      .waitFor()
+    await sendIn(
+      page,
+      'Message Vela in this project',
+      'A question on the Local side',
+    )
+    await page
+      .getByText('Local answer in the same window.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push('A Local project works in the same window as a Lark one.')
+    await sidebar.getByRole('button', { name: 'Vela dev Lark' }).click()
+    await page
+      .getByText('The retry test now covers a 429.', { exact: true })
+      .waitFor()
+    // Opening a project shows its session list; the topic opens from there.
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .getByText('I will read the deploy script first.', { exact: true })
+      .waitFor()
+    await sidebar.getByRole('button', { name: 'Local side Local' }).click()
+    await page
+      .getByText('A question on the Local side', { exact: true })
+      .waitFor()
+    assert.equal(
+      await page.evaluate(
+        () =>
+          (window as Window & { switchedWithoutReload?: boolean })
+            .switchedWithoutReload,
+      ),
+      true,
+      'The window never reloaded',
+    )
+    await page.getByText('Lark · on', { exact: true }).waitFor()
+    await noOverflow(page)
+    await themes(page, 'lark-journey-switch')
+    checks.push(
+      'Moving between a Lark project, a Local project and their sessions works in one running app, with Lark still on.',
+    )
+  } finally {
+    await lark.close()
+  }
+}
+
+/**
+ * A Lark group that is configured but not connected: the project stays listed, its
+ * page says Lark is off, and a Local project keeps answering in the same window.
+ */
+async function larkOffJourney() {
+  const dir = await mkdtemp(resolve(dataParent, 'vela-lark-off-'))
+  larkOffData = dir
+  await Bun.write(
+    resolve(dir, 'settings.json'),
+    JSON.stringify({
+      shellPath: shell,
+      extensionConfig: { lark: { chats: [larkProject] } },
+    }),
+  )
+  await Bun.write(
+    larkOffScenario,
+    JSON.stringify({
+      responses: [{ text: 'Local answer while Lark is off.' }],
+      generate: Array.from({ length: 20 }, () => ({
+        text: 'Compacted history',
+      })),
+    }),
+  )
+  console.log('Desktop verification: starting the Lark-off journey')
+  const app = await launchDev({
+    VELA_DIR: dir,
+    VELA_MODEL: `faux:${larkOffScenario}`,
+    VELA_DESKTOP_LARK: undefined,
+    VELA_DESKTOP_LARK_DIR: undefined,
+    LARK_APP_ID: '',
+    LARK_APP_SECRET: '',
+  })
+  try {
+    const { page } = app
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.goto(new URL('index.html', page.url()).href)
+    await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
+    await page.getByText('Lark · off', { exact: true }).waitFor()
+    // With no connection the group has no readable name, so it shows its chat id.
+    const group = page
+      .getByLabel('Sidebar')
+      .getByRole('button', { name: `${larkProject} Lark` })
+    await group.waitFor()
+    checks.push(
+      'A configured group with Lark off stays listed by its chat id, and the sidebar says Lark · off.',
+    )
+    await group.click()
+    await page.getByText('Lark is off.', { exact: true }).waitFor()
+    await page.getByText(/Local projects keep working/).waitFor()
+    assert.equal(
+      await page.getByLabel('Message Vela in this group').count(),
+      0,
+      'A Lark project with no connection offers no composer',
+    )
+    await themes(page, 'lark-off')
+    checks.push(
+      'A Lark project while Lark is off says so and offers no composer.',
+    )
+
+    await page
+      .getByLabel('Sidebar')
+      .getByRole('button', { name: 'New project' })
+      .click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByLabel('Folder path').fill(larkWorkspace)
+    await dialog.getByLabel('Name').fill('Off Local')
+    await dialog.getByRole('button', { name: 'Create project' }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    await page
+      .getByRole('heading', { name: 'Off Local', exact: true })
+      .waitFor()
+    await sendIn(page, 'Message Vela in this project', 'Does Local still work?')
+    await page
+      .getByText('Local answer while Lark is off.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page.getByText('Lark · off', { exact: true }).waitFor()
+    checks.push(
+      'With Lark off, a Local project still answers in the same window.',
+    )
+
+    // A send to the group is refused before anything is posted: the reason shows and
+    // the draft comes back (the `not-sent` outcome, never a resend).
+    await page.getByRole('button', { name: 'Home', exact: true }).click()
+    await page.getByLabel('Project', { exact: true }).selectOption(larkProject)
+    const homeComposer = page.getByLabel('Message Vela', { exact: true })
+    await homeComposer.fill('A question while Lark is off')
+    await page.getByRole('button', { name: 'Send' }).click()
+    const refused = page.getByRole('alert')
+    await refused.waitFor({ timeout: 30_000 })
+    assert(
+      ((await refused.textContent()) ?? '').includes('Lark is not connected'),
+      'The refusal carries the host reason',
+    )
+    // The composer clears on submit and puts the text back when the send is refused.
+    await page.waitForFunction(
+      (text) =>
+        document.querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Message Vela"]',
+        )?.value === text,
+      'A question while Lark is off',
+      { timeout: 5_000 },
+    )
+    checks.push('A message that was not sent keeps its draft in the composer.')
+    assert.deepEqual(
+      await page.evaluate(
+        (chatId) => window.vela.sessions('lark', chatId),
+        larkProject,
+      ),
+      [],
+      'The refused send created no session',
+    )
+    checks.push(
+      'A send to a Lark project while Lark is off shows the reason and returns its draft.',
+    )
+    await noOverflow(page)
+  } finally {
+    await app.close()
+  }
+}
+
 /** Journeys 4 and 5 end by starting the app again on the same scratch data. */
 async function restartJourney() {
   console.log('Desktop verification: restarting Electron')
@@ -1959,5 +3160,7 @@ try {
 } finally {
   await rm(data, { recursive: true, force: true })
   if (firstRunData) await rm(firstRunData, { recursive: true, force: true })
+  if (larkData) await rm(larkData, { recursive: true, force: true })
+  if (larkOffData) await rm(larkOffData, { recursive: true, force: true })
   await rm(scratch, { recursive: true, force: true })
 }

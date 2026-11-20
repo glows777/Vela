@@ -1,9 +1,24 @@
 import type { IncomingMessage } from '@glows777/vela-channels'
-import { createChannelVela, local } from '@glows777/vela-channels'
+import {
+  channelSessionId,
+  createChannelVela,
+  local,
+} from '@glows777/vela-channels'
 import { loadConfig, resolveShellPath } from '@glows777/vela-core'
-import { lark, larkConfig } from '@glows777/vela-lark'
-import { BrowserWindow, dialog, ipcMain } from 'electron'
-import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
+import {
+  type LarkHost,
+  LarkSubmitError,
+  lark,
+  larkConfig,
+} from '@glows777/vela-lark'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import {
+  EVENT,
+  type Event,
+  type LarkSubmit,
+  REQUEST,
+  type Request,
+} from '../shared/bridge.ts'
 import { saveModel } from './model-setup.ts'
 import { readSettings } from './settings.ts'
 
@@ -16,6 +31,35 @@ const routineCreator = (channel: string) => {
     throw new Error(`The app has no identity to set routines in ${channel}`)
   return { id: 'local-user', name: 'You' }
 }
+
+/**
+ * What the bot signs a message with when it posts for this app. It names the app, not
+ * a person: the app has no signed-in account and must not borrow the OS user's name.
+ */
+const larkAuthor = { id: 'vela-app', name: 'Vela app' }
+
+/**
+ * `LarkHost.submit` has one overload per shape, so the union is split before the call.
+ * Both carry the app's own author; the host signs the text with it.
+ */
+const submitToLark = (host: LarkHost, input: LarkSubmit) =>
+  'newTopic' in input
+    ? host.submit({
+        chatId: input.chatId,
+        newTopic: input.newTopic,
+        text: input.text,
+        author: larkAuthor,
+      })
+    : host.submit({
+        chatId: input.chatId,
+        sessionId: input.sessionId,
+        text: input.text,
+        author: larkAuthor,
+      })
+
+/** Feishu documents no topic deep link, so the app opens the group it does document. */
+const larkChatLink = (chatId: string) =>
+  `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(chatId)}`
 
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
 export async function startHost() {
@@ -39,6 +83,13 @@ export async function startHost() {
         process.env.VELA_MODEL.slice(5),
       )
     : config.settings.defaultModel
+  const fakeLark =
+    process.env.VELA_DESKTOP_LARK === 'fake' &&
+    process.env.VELA_DESKTOP_LARK_DIR
+      ? (await import('./testing/lark.ts')).fakeLark(
+          process.env.VELA_DESKTOP_LARK_DIR,
+        )
+      : undefined
   const vela = createChannelVela({
     cwd,
     dataDir: config.dataDir,
@@ -58,7 +109,7 @@ export async function startHost() {
       ...(config.extensions.some(
         (extension) => extension.name === 'lark' && 'builtin' in extension,
       )
-        ? [lark()]
+        ? [lark(fakeLark ? { transport: fakeLark } : {})]
         : []),
       local({}),
     ],
@@ -82,16 +133,37 @@ export async function startHost() {
       for (const window of BrowserWindow.getAllWindows())
         if (!window.isDestroyed()) window.webContents.send(EVENT, event)
     }
-    for (const { name } of vela.channels()) {
+    const names = new Set(vela.channels().map((channel) => channel.name))
+    /** The Lark host's own reads (`chats`, `messages`, `onEvent`); the base contract has no chat list. */
+    const larkHost = names.has('lark')
+      ? (vela.channel('lark') as LarkHost)
+      : undefined
+    for (const name of names) {
       const host = vela.channel(name)
       off.push(
         host.onSession((value) =>
-          publish({ type: 'session', channel: name, value }),
+          publish({
+            type: 'session',
+            channel: name,
+            value: {
+              ...value,
+              session: { ...value.session, channel: name },
+            },
+          }),
         ),
       )
       off.push(
         host.onStatus((value) =>
-          publish({ type: 'status', channel: name, value }),
+          publish({
+            type: 'status',
+            channel: name,
+            value: {
+              ...value,
+              ...(value.rootId && {
+                sessionId: channelSessionId(name, value.chatId, value.rootId),
+              }),
+            },
+          }),
         ),
       )
       off.push(
@@ -106,6 +178,30 @@ export async function startHost() {
         publish({ type: 'local', channel: 'local', value }),
       ),
     )
+    if (larkHost)
+      off.push(
+        larkHost.onEvent((value) =>
+          publish({ type: 'lark', channel: 'lark', value }),
+        ),
+      )
+    /** Every channel's recorded sessions, tagged with the channel that owns them. */
+    const sessions = (channel: string, chatId?: string) =>
+      vela
+        .channel(channel)
+        .sessions(chatId)
+        .map((session) => ({ ...session, channel }))
+    const projects = async () =>
+      larkHost
+        ? [
+            ...localHost.projects(),
+            ...(await larkHost.chats()).map((chat) => ({
+              id: chat.chatId,
+              channel: 'lark' as const,
+              ...(chat.name ? { name: chat.name } : {}),
+              sessionId: channelSessionId('lark', chat.chatId),
+            })),
+          ]
+        : localHost.projects()
     await vela.startChannels()
     ipcMain.handle(REQUEST, async (_event, request: Request) => {
       switch (request.method) {
@@ -128,23 +224,42 @@ export async function startHost() {
           return settings()
         }
         case 'sessions':
-          return vela.channel(request.channel).sessions(request.chatId)
+          return sessions(request.channel, request.chatId)
         case 'connection':
           return vela.channel(request.channel).connection()
         case 'submit':
-          if (request.channel === 'local' && 'projectId' in request.message)
-            return localHost.submit(request.message)
-          if ('channelId' in request.message)
-            return vela
+          if (request.channel === 'local' && 'projectId' in request.message) {
+            const receipt = await localHost.submit(request.message)
+            return { outcome: 'posted' as const, ...receipt }
+          }
+          if (request.channel === 'lark' && 'chatId' in request.message) {
+            if (!larkHost) throw new Error('Lark is not available in this app')
+            try {
+              const receipt = await submitToLark(larkHost, request.message)
+              return { outcome: 'posted' as const, ...receipt }
+            } catch (error) {
+              // The bot may already have posted; the caller re-reads instead of resending.
+              if (!(error instanceof LarkSubmitError)) throw error
+              return {
+                outcome: error.outcome,
+                ...(error.messageId ? { messageId: error.messageId } : {}),
+                error: error.message,
+              }
+            }
+          }
+          if ('channelId' in request.message) {
+            const receipt = await vela
               .channel(request.channel)
               .submit(request.message as IncomingMessage)
+            return { outcome: 'posted' as const, ...receipt }
+          }
           throw new Error('Invalid channel message')
         case 'stop':
           return vela
             .channel(request.channel)
             .stop(request.target, request.runId)
         case 'projects':
-          return localHost.projects()
+          return projects()
         case 'openProject':
           return localHost.openProject(request.input)
         case 'chooseFolder': {
@@ -159,6 +274,22 @@ export async function startHost() {
         }
         case 'messages':
           return localHost.messages(request.input)
+        case 'larkMessages': {
+          if (!larkHost) throw new Error('Lark is not available in this app')
+          const page = await larkHost.messages(request.input)
+          return {
+            messages: page.messages,
+            ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+          }
+        }
+        case 'openLarkChat': {
+          if (!larkHost) throw new Error('Lark is not available in this app')
+          const chats = await larkHost.chats()
+          if (!chats.some((chat) => chat.chatId === request.chatId))
+            throw new Error('Open a Lark group that is enabled in this app')
+          await shell.openExternal(larkChatLink(request.chatId))
+          return
+        }
         case 'listRoutines':
           return vela
             .channel(request.channel)

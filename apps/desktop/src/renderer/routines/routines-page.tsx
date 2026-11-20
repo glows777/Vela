@@ -49,7 +49,12 @@ async function loadGroup(project: Project): Promise<Group> {
 
 /** Every routine Vela will send, grouped by the project it answers in. */
 export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
-  const projects = snapshot.projects
+  // Routines are Local-only in this issue: the host has no identity to set a Lark one.
+  // The list keeps its identity between renders, or the load effect below loops.
+  const projects = useMemo(
+    () => snapshot.projects.filter((project) => project.channel === 'local'),
+    [snapshot.projects],
+  )
   const [groups, setGroups] = useState<Group[]>([])
   const [loaded, setLoaded] = useState(false)
   const [creating, setCreating] = useState(false)
