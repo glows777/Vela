@@ -27,7 +27,7 @@ export function NewProjectDialog({
   const [step, setStep] = useState<
     'list' | 'mention' | 'confirm' | 'saving' | 'cancelling'
   >('list')
-  const [chatId, setChatId] = useState('')
+  const [group, setGroup] = useState<{ chatId: string; name?: string }>()
   const active = useRef(false)
   const [folder, setFolder] = useState('')
   const [name, setName] = useState('')
@@ -58,7 +58,7 @@ export function NewProjectDialog({
     try {
       const found = await vela.discoverLarkGroup()
       if (found && active.current) {
-        setChatId(found.chatId)
+        setGroup(found)
         setStep('confirm')
       }
     } catch (cause) {
@@ -88,9 +88,10 @@ export function NewProjectDialog({
   }
 
   const enable = async () => {
+    if (!group) return
     setStep('saving')
     try {
-      const project = await confirmLarkGroup(chatId)
+      const project = await confirmLarkGroup(group.chatId)
       onOpenChange(false)
       onCreated(project)
     } catch (cause) {
@@ -246,13 +247,20 @@ export function NewProjectDialog({
                       time.
                     </p>
                   ) : null}
-                  {step === 'confirm' || step === 'saving' ? (
+                  {group && (step === 'confirm' || step === 'saving') ? (
                     <Field
-                      label="Lark group ID"
+                      label={group.name ? 'Lark group' : 'Lark group ID'}
                       htmlFor="lark-candidate-id"
                       note="Enable this group only if the ID matches the group you intended. Every member will have full access to Vela’s tools, including running commands on this computer."
                     >
-                      <output id="lark-candidate-id">{chatId}</output>
+                      <output id="lark-candidate-id">
+                        {group.name ? (
+                          <>
+                            <span>{group.name}</span>{' '}
+                          </>
+                        ) : null}
+                        <code>{group.chatId}</code>
+                      </output>
                     </Field>
                   ) : null}
                   <footer className={styles.actions}>

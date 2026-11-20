@@ -18,6 +18,7 @@ afterEach(() => {
 })
 function fixture(
   opts: {
+    name?: string
     tokenError?: string
     confirm?: boolean
     cancel?: boolean
@@ -41,6 +42,7 @@ function fixture(
     }),
   )
   const before = readFileSync(settings, 'utf8')
+  const prompts: string[] = []
   const notices: string[] = [],
     sent: string[] = []
   let stopped = false
@@ -48,12 +50,14 @@ function fixture(
     agentDir: dir,
     input: async (title: string) =>
       opts.cancel ? undefined : title.includes('Secret') ? 'secret' : 'app-id',
-    select: async (title: string) =>
-      title.includes('Enable')
+    select: async (title: string) => {
+      prompts.push(title)
+      return title.startsWith('Enable ')
         ? opts.confirm === false
           ? 'no'
           : 'yes'
-        : 'continue',
+        : 'continue'
+    },
     addNotice: (message: string) => notices.push(message),
     setSummary: (message: string) => notices.push(message),
     connect: async () => {
@@ -61,7 +65,7 @@ function fixture(
       return {
         botId: 'bot',
         async waitForMention() {
-          return { chatId: 'new', chatName: 'Test group' }
+          return { chatId: 'new', name: opts.name }
         },
         async send(chatId: string, text: string) {
           sent.push(`${chatId}:${text}`)
@@ -72,7 +76,16 @@ function fixture(
       }
     },
   }
-  return { dir, settings, before, notices, sent, host, stopped: () => stopped }
+  return {
+    dir,
+    settings,
+    before,
+    prompts,
+    notices,
+    sent,
+    host,
+    stopped: () => stopped,
+  }
 }
 
 test('setup lark is parsed as setup, not as a prompt', () => {
@@ -131,17 +144,41 @@ test('confirmed group merges settings, protects secrets, sends and closes', asyn
 })
 
 test.each([
-  { excluded: undefined, expected: 'first' },
-  { excluded: new Set(['first']), expected: 'second' },
+  { name: 'Test group', expected: 'Enable Test group (new)?' },
+  { name: undefined, expected: 'Enable new?' },
+])(
+  'CLI confirms the discovered group: $expected',
+  async ({ name, expected }) => {
+    const f = fixture({ name, confirm: false })
+    expect(await larkSetup(f.host)).toBe(false)
+    expect(f.prompts.at(-1)).toStartWith(expected)
+    expect(readFileSync(f.settings, 'utf8')).toBe(f.before)
+  },
+)
+
+test.each([
+  { excluded: undefined, expected: 'first', lookup: 'missing' },
+  { excluded: new Set(['first']), expected: 'second', lookup: 'named' },
+  { excluded: undefined, expected: 'first', lookup: 'stalled' },
 ])(
   'discovery offers $expected on one listener',
-  async ({ excluded, expected }) => {
+  async ({ excluded, expected, lookup }) => {
     const { discoverLarkGroup } = await import('@glows777/vela-lark')
     // biome-ignore lint/suspicious/noExplicitAny: fake event fixture exercises partial SDK payloads
     let onMessage: ((event: any) => void) | undefined
+    const lookups: string[] = []
     let starts = 0
     let stopped = false
     const transport = {
+      ...(lookup !== 'missing'
+        ? {
+            async getChat(chatId: string) {
+              lookups.push(chatId)
+              if (lookup === 'stalled') return new Promise<never>(() => {})
+              return { name: '  Second group  ' }
+            },
+          }
+        : {}),
       async getBotId() {
         return 'bot'
       },
@@ -180,7 +217,10 @@ test.each([
         },
       })
     }
-    expect((await pending).chatId).toBe(expected)
+    const found = await pending
+    expect(found.chatId).toBe(expected)
+    expect(found.name).toBe(lookup === 'named' ? 'Second group' : undefined)
+    expect(lookups).toEqual(lookup === 'missing' ? [] : [expected])
     expect(starts).toBe(1)
     expect(stopped).toBe(false)
   },

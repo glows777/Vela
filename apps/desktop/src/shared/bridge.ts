@@ -237,7 +237,7 @@ export interface DesktopBridge {
     runId: string,
   ): Promise<boolean>
   /** Wait for a mention. A cancelled wait returns undefined. Only main keeps the group to save. */
-  discoverLarkGroup(): Promise<{ chatId: string } | undefined>
+  discoverLarkGroup(): Promise<{ chatId: string; name?: string } | undefined>
   confirmLarkGroup(): Promise<void>
   cancelLarkSetup(): Promise<void>
   projects(): Promise<Project[]>
