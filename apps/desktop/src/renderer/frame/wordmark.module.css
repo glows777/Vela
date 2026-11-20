@@ -1,19 +1,19 @@
 .base {
-  padding-left: 0.16em;
+  padding-left: 0.14em;
   color: var(--vela-teal);
   font-family: var(--vela-family-display);
   font-weight: 800;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   line-height: 1;
   text-shadow: 0.04em 0.04em 0 var(--vela-wordmark-offset);
 }
 
 h1.base {
   margin: 0;
-  font-size: 26px;
+  font-size: 22px;
 }
 
 .small {
-  font-size: 15px;
-  letter-spacing: 0.16em;
+  font-size: 13px;
+  letter-spacing: 0.14em;
 }

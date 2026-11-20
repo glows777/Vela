@@ -17,44 +17,44 @@
 
 :root, :root[data-theme="light"] {
   --vela-white: #ffffff;
-  --vela-paper: #fffef9;
-  --vela-sidebar: #fffef9;
-  --vela-paper-edge: #d7e5dc;
-  --vela-rule-soft: #dbe8e4;
-  --vela-rule-list: #dfeae6;
-  --vela-line: #b8cfca;
-  --vela-border-strong: #54827c;
-  --vela-menu-hover: #eef6f1;
-  --vela-bubble: #eef6f1;
+  --vela-paper: #fafbfa;
+  --vela-sidebar: #f3f6f4;
+  --vela-paper-edge: #e2eae6;
+  --vela-rule-soft: #e6eeea;
+  --vela-rule-list: #ebf1ee;
+  --vela-line: #d6e2dc;
+  --vela-border-strong: #9ab3ac;
+  --vela-menu-hover: #e7eeea;
+  --vela-bubble: #edf4f0;
   --vela-diff-remove: #edf3ef;
   --vela-mint: #c2efcf;
   --vela-on-mint: #143c3e;
-  --vela-muted: #476865;
+  --vela-muted: #55716e;
   --vela-teal: #376770;
   --vela-ink: #143c3e;
   --vela-inverse: #143c3e;
   --vela-on-inverse: #fffef9;
-  --vela-live: #143c3e;
+  --vela-live: #227a58;
   --vela-accent: #e26044;
   --vela-accent-ink: #c2462b;
   --vela-on-accent: #ffffff;
   --vela-button: #143c3e;
   --vela-on-button: #ffffff;
-  --vela-button-hover: #285d57;
+  --vela-button-hover: #245450;
   --vela-button-hint: #c2efcf;
   --vela-wordmark-offset: #c2efcf;
   --vela-note-paper: #fffbea;
   --vela-note-ink: #173c36;
-  --vela-scrim: #0c232166;
-  --vela-paper-shadow: 0 9px 24px -15px #143c3e60;
-  --vela-dialog-shadow: 0 30px 60px -24px #031b19;
-  --vela-tab-shadow: 0 8px 20px -12px #001d17a0;
+  --vela-scrim: #0c232152;
+  --vela-paper-shadow: 0 1px 2px rgba(20, 60, 62, 0.04), 0 6px 20px -8px rgba(20, 60, 62, 0.09);
+  --vela-dialog-shadow: 0 20px 50px -16px rgba(3, 27, 25, 0.28), 0 0 0 1px rgba(20, 60, 62, 0.08);
+  --vela-tab-shadow: 0 1px 3px rgba(0, 29, 23, 0.12);
   --vela-family-display: BarlowCondensed, "Arial Narrow", sans-serif;
-  --vela-family-sans: Arial, Helvetica, sans-serif;
+  --vela-family-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
   --vela-family-mincho: ShipporiB1, "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
-  --vela-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --vela-family-sans-zh: Arial, Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  --vela-family-sans-ja: Arial, Helvetica, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, "Noto Sans JP", sans-serif;
+  --vela-family-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --vela-family-sans-zh: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --vela-family-sans-ja: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
   --vela-space-1: 4px;
   --vela-space-2: 8px;
   --vela-space-3: 12px;
@@ -64,48 +64,48 @@
   --vela-space-8: 32px;
   --vela-space-10: 40px;
   --vela-space-12: 48px;
-  --vela-radius-sm: 6px;
-  --vela-radius-md: 8px;
-  --vela-radius-inner: 10px;
-  --vela-radius-paper: 12px;
-  --vela-radius-lg: 16px;
-  --vela-radius-bubble: 18px;
-  --vela-radius-xl: 20px;
+  --vela-radius-sm: 5px;
+  --vela-radius-md: 7px;
+  --vela-radius-inner: 8px;
+  --vela-radius-paper: 10px;
+  --vela-radius-lg: 12px;
+  --vela-radius-bubble: 16px;
+  --vela-radius-xl: 14px;
   --vela-radius-pill: 9999px;
   --vela-radius-round: 50%;
-  --vela-control-sm: 32px;
-  --vela-control-md: 36px;
-  --vela-control-lg: 44px;
-  --vela-control-xl: 48px;
+  --vela-control-sm: 28px;
+  --vela-control-md: 32px;
+  --vela-control-lg: 36px;
+  --vela-control-xl: 40px;
   --vela-text-label: 10px;
-  --vela-text-xs: 12px;
-  --vela-text-sm: 13px;
-  --vela-text-md: 14px;
-  --vela-text-base: 15px;
-  --vela-text-lg: 17px;
-  --vela-text-title: 20px;
+  --vela-text-xs: 11.5px;
+  --vela-text-sm: 12.5px;
+  --vela-text-md: 13px;
+  --vela-text-base: 14px;
+  --vela-text-lg: 15px;
+  --vela-text-title: 17px;
   --vela-leading-body: 1.55;
-  --vela-duration-quick: 0.2s;
-  --vela-duration-base: 0.3s;
+  --vela-duration-quick: 0.18s;
+  --vela-duration-base: 0.26s;
   --vela-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --vela-ease-snap: cubic-bezier(0.2, 1.5, 0.35, 1);
 }
 
 :root[data-theme="dark"] {
-  --vela-white: #0f2c2a;
-  --vela-paper: #153835;
-  --vela-sidebar: #0c2523;
-  --vela-paper-edge: #214945;
-  --vela-rule-soft: #1e4441;
-  --vela-rule-list: #1e4441;
-  --vela-line: #2b5550;
-  --vela-border-strong: #7fa79f;
-  --vela-menu-hover: #1b4340;
-  --vela-bubble: #1b4340;
+  --vela-white: #102a28;
+  --vela-paper: #153431;
+  --vela-sidebar: #0b201e;
+  --vela-paper-edge: #214541;
+  --vela-rule-soft: #1c3d3a;
+  --vela-rule-list: #1c3d3a;
+  --vela-line: #274c48;
+  --vela-border-strong: #5c837c;
+  --vela-menu-hover: #1b3e3b;
+  --vela-bubble: #1b3e3b;
   --vela-diff-remove: #133331;
   --vela-mint: #c2efcf;
   --vela-on-mint: #103a37;
-  --vela-muted: #b9c9bf;
+  --vela-muted: #a9bdb4;
   --vela-teal: #9fd3cf;
   --vela-ink: #f2eedf;
   --vela-inverse: #0a201f;
@@ -121,16 +121,16 @@
   --vela-wordmark-offset: #285d57;
   --vela-note-paper: #ebe2c6;
   --vela-note-ink: #173c36;
-  --vela-scrim: #00000099;
-  --vela-paper-shadow: 0 9px 24px -15px #000000c0;
-  --vela-dialog-shadow: 0 30px 60px -24px #000000;
-  --vela-tab-shadow: 0 8px 20px -12px #000000c0;
+  --vela-scrim: #00000088;
+  --vela-paper-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px -8px rgba(0, 0, 0, 0.45);
+  --vela-dialog-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --vela-tab-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 :root[data-theme="high-contrast"] {
   --vela-white: #ffffff;
   --vela-paper: #ffffff;
-  --vela-sidebar: #ffffff;
+  --vela-sidebar: #f2f5f4;
   --vela-paper-edge: #4a6965;
   --vela-rule-soft: #6f8a85;
   --vela-rule-list: #6f8a85;
@@ -158,27 +158,27 @@
   --vela-note-paper: #fffbea;
   --vela-note-ink: #0a1f1c;
   --vela-scrim: #0c232199;
-  --vela-paper-shadow: 0 9px 24px -15px #143c3e60;
-  --vela-dialog-shadow: 0 30px 60px -24px #031b19;
-  --vela-tab-shadow: 0 8px 20px -12px #001d17a0;
+  --vela-paper-shadow: 0 1px 2px rgba(10, 34, 36, 0.12);
+  --vela-dialog-shadow: 0 20px 50px -16px rgba(3, 27, 25, 0.35);
+  --vela-tab-shadow: 0 1px 3px rgba(0, 29, 23, 0.2);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-  --vela-white: #0f2c2a;
-  --vela-paper: #153835;
-  --vela-sidebar: #0c2523;
-  --vela-paper-edge: #214945;
-  --vela-rule-soft: #1e4441;
-  --vela-rule-list: #1e4441;
-  --vela-line: #2b5550;
-  --vela-border-strong: #7fa79f;
-  --vela-menu-hover: #1b4340;
-  --vela-bubble: #1b4340;
+  --vela-white: #102a28;
+  --vela-paper: #153431;
+  --vela-sidebar: #0b201e;
+  --vela-paper-edge: #214541;
+  --vela-rule-soft: #1c3d3a;
+  --vela-rule-list: #1c3d3a;
+  --vela-line: #274c48;
+  --vela-border-strong: #5c837c;
+  --vela-menu-hover: #1b3e3b;
+  --vela-bubble: #1b3e3b;
   --vela-diff-remove: #133331;
   --vela-mint: #c2efcf;
   --vela-on-mint: #103a37;
-  --vela-muted: #b9c9bf;
+  --vela-muted: #a9bdb4;
   --vela-teal: #9fd3cf;
   --vela-ink: #f2eedf;
   --vela-inverse: #0a201f;
@@ -194,10 +194,10 @@
   --vela-wordmark-offset: #285d57;
   --vela-note-paper: #ebe2c6;
   --vela-note-ink: #173c36;
-  --vela-scrim: #00000099;
-  --vela-paper-shadow: 0 9px 24px -15px #000000c0;
-  --vela-dialog-shadow: 0 30px 60px -24px #000000;
-  --vela-tab-shadow: 0 8px 20px -12px #000000c0;
+  --vela-scrim: #00000088;
+  --vela-paper-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px -8px rgba(0, 0, 0, 0.45);
+  --vela-dialog-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --vela-tab-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
 }
 
@@ -205,7 +205,7 @@
   :root:not([data-theme]) {
   --vela-white: #ffffff;
   --vela-paper: #ffffff;
-  --vela-sidebar: #ffffff;
+  --vela-sidebar: #f2f5f4;
   --vela-paper-edge: #4a6965;
   --vela-rule-soft: #6f8a85;
   --vela-rule-list: #6f8a85;
@@ -233,8 +233,8 @@
   --vela-note-paper: #fffbea;
   --vela-note-ink: #0a1f1c;
   --vela-scrim: #0c232199;
-  --vela-paper-shadow: 0 9px 24px -15px #143c3e60;
-  --vela-dialog-shadow: 0 30px 60px -24px #031b19;
-  --vela-tab-shadow: 0 8px 20px -12px #001d17a0;
+  --vela-paper-shadow: 0 1px 2px rgba(10, 34, 36, 0.12);
+  --vela-dialog-shadow: 0 20px 50px -16px rgba(3, 27, 25, 0.35);
+  --vela-tab-shadow: 0 1px 3px rgba(0, 29, 23, 0.2);
   }
 }
