@@ -99,6 +99,12 @@ export function App() {
                 : undefined
           }
           waiting={waiting}
+          panelOpen={project ? panel.open : undefined}
+          onTogglePanel={
+            project
+              ? () => setPanel((cur) => ({ ...cur, open: !cur.open }))
+              : undefined
+          }
         />
         <main className={styles.content}>
           {view.name === 'routines' ? (
