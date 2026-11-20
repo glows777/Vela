@@ -5,7 +5,7 @@ import {
   createChannelVela,
   local,
 } from '@glows777/vela-channels'
-import { background, loadConfig, resolveShellPath } from '@glows777/vela-core'
+import { loadConfig, resolveShellPath } from '@glows777/vela-core'
 import {
   connectLarkSetup,
   discoverLarkGroup,
@@ -108,15 +108,6 @@ export async function createHost() {
     }),
     extensionConfig: { ...config.extensionConfig, lark: larkSettings },
     extensions: [
-      // Only the isolated fake-window background-work journey installs this SDK extension.
-      ...(fakeLark &&
-      process.env.VELA_DESKTOP_VERIFY_BACKGROUND === '1' &&
-      config.extensions.some(
-        (extension) =>
-          extension.name === 'background' && 'builtin' in extension,
-      )
-        ? [background()]
-        : []),
       ...(config.extensions.some(
         (extension) => extension.name === 'lark' && 'builtin' in extension,
       )
@@ -329,10 +320,6 @@ export async function createHost() {
     return {
       handle,
       groupSetup() {
-        if (vela.sessions().some((session) => session.hasWork))
-          throw new Error(
-            'Wait for background commands to finish or stop them before adding a group.',
-          )
         if (
           [...names].some((name) =>
             sessions(name).some((session) => session.runId),
