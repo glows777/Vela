@@ -2633,17 +2633,32 @@ async function larkJourneys() {
       0,
       'The first page is the newest 50 messages',
     )
-    // The older read lands at 300ms; the refresh's read takes 1200ms.
-    await larkSays({ op: 'delayGroupHistory', ms: [300, 1200] })
+    const refreshedText = 'The delayed refresh has updated the newest message.'
+    await larkSays({
+      op: 'holdGroupRefresh',
+      chatId: raceProject,
+      refreshedText,
+    })
     await page.getByRole('button', { name: 'Show earlier messages' }).click()
     await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
     await sidebar.getByRole('button', { name: 'Vela race Lark' }).click()
     await page
       .getByRole('heading', { name: 'Vela race', exact: true })
       .waitFor()
+    const olderRaceMessage = page.getByText(
+      'Race message 61 of the seventh group.',
+      { exact: true },
+    )
+    await olderRaceMessage.waitFor({ timeout: 30_000 })
+    await larkSays({ op: 'releaseGroupRefresh' })
     await page
-      .getByText('Race message 61 of the seventh group.', { exact: true })
+      .getByText(refreshedText, { exact: true })
       .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await olderRaceMessage.isVisible(),
+      true,
+      'The older page is still visible after the refresh marker appears',
+    )
     checks.push(
       'An older page that arrives during a refresh stays on the page when the refresh applies.',
     )

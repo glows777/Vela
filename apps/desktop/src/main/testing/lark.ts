@@ -55,14 +55,22 @@ type Control =
   | { op: 'filterNewest'; chatId: string; count: number }
   /** Named messages become cards: they fill a page with no visible text. */
   | { op: 'filterText'; chatId: string; texts: string[] }
-  /** The next group history reads take these long, so a journey can overlap two. */
-  | { op: 'delayGroupHistory'; ms: number[] }
+  | { op: 'holdGroupRefresh'; chatId: string; refreshedText: string }
+  | { op: 'releaseGroupRefresh' }
   /** The next group history read fails, as a dropped connection would. */
   | { op: 'failNextGroupHistory' }
 
 const botId = 'cli_desktop_fake'
 const botName = 'Vela'
 const poll = 40
+
+function gate() {
+  let release: () => void = () => {}
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
+}
 
 /** The transport the verify script drives through seed.json and control.jsonl. */
 type FakeTransport = LarkTransport & {
@@ -80,7 +88,14 @@ export function fakeLark(dir: string): FakeTransport {
   let failNextSend = false
   let failNextTopicHistory = false
   let failNextGroupHistory = false
-  const groupDelays: number[] = []
+  let groupRefresh:
+    | {
+        chatId: string
+        refreshedText: string
+        started: ReturnType<typeof gate>
+        released: ReturnType<typeof gate>
+      }
+    | undefined
   let threads = 0
   const chats = new Map<string, { name?: string; rows: Stored[] }>()
   const threadsById = new Map<string, Stored[]>()
@@ -210,8 +225,16 @@ export function fakeLark(dir: string): FakeTransport {
           for (const stored of rows) stored.row.msg_type = 'interactive'
           break
         }
-        case 'delayGroupHistory':
-          groupDelays.push(...control.ms)
+        case 'holdGroupRefresh':
+          groupRefresh = {
+            chatId: control.chatId,
+            refreshedText: control.refreshedText,
+            started: gate(),
+            released: gate(),
+          }
+          break
+        case 'releaseGroupRefresh':
+          groupRefresh?.released.release()
           break
         case 'failNextGroupHistory':
           failNextGroupHistory = true
@@ -440,8 +463,17 @@ export function fakeLark(dir: string): FakeTransport {
       }
     },
     async searchMessages(chatId, { endTime, limit, pageToken }) {
-      const delay = groupDelays.shift() ?? 0
-      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+      const refresh = groupRefresh?.chatId === chatId ? groupRefresh : undefined
+      if (refresh) {
+        if (pageToken) {
+          // The older page must land after the renderer starts its refresh.
+          await refresh.started.promise
+        } else {
+          refresh.started.release()
+          await refresh.released.promise
+          groupRefresh = undefined
+        }
+      }
       if (failNextGroupHistory) {
         failNextGroupHistory = false
         throw new Error('Fake Lark dropped the group history read')
@@ -456,6 +488,14 @@ export function fakeLark(dir: string): FakeTransport {
         .map((stored) => stored.row)
       const start = pageToken ? Number(pageToken) : 0
       const items = rows.slice(start, start + limit)
+      const newest = items[0]
+      if (refresh && !pageToken && newest) {
+        // The visible marker comes only from the released first-page response.
+        items[0] = {
+          ...newest,
+          body: { content: JSON.stringify({ text: refresh.refreshedText }) },
+        }
+      }
       const next = start + items.length
       return {
         items,
