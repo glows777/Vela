@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--vela-paper-edge);
+  border-right: 1px solid color-mix(in oklab, var(--vela-ink) 7%, transparent);
   background: var(--vela-sidebar);
   color: var(--vela-ink);
 }
@@ -30,56 +30,45 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  padding: 2px 8px 12px;
+  padding: 2px 8px 10px;
 }
 
 .mode {
-  padding: 2px 7px;
-  border-radius: var(--vela-radius-pill);
-  background: var(--vela-menu-hover);
   color: var(--vela-muted);
   font-family: var(--vela-family-mono);
   font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 500;
+  opacity: 0.75;
   -webkit-app-region: no-drag;
 }
 
 .newSession {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--vela-space-2);
+  gap: 8px;
   width: 100%;
-  min-height: 34px;
-  margin-bottom: 10px;
-  padding: 0 11px;
+  min-height: 30px;
+  padding: 0 8px;
   border: 0;
   border-radius: var(--vela-radius-md);
-  background: var(--vela-button);
-  color: var(--vela-on-button);
+  background: transparent;
+  color: var(--vela-ink);
   font-size: var(--vela-text-md);
-  font-weight: 500;
+  text-align: left;
   cursor: pointer;
-  transition: background-color var(--vela-duration-quick) var(--vela-ease-out);
 }
 
 .newSession:hover {
-  background: var(--vela-button-hover);
-}
-
-.newSessionMain {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  background: var(--vela-menu-hover);
 }
 
 .shortcut {
-  color: var(--vela-button-hint);
+  color: var(--vela-muted);
   font-family: var(--vela-family-mono);
   font-size: 11px;
   font-weight: 400;
   line-height: 1;
+  opacity: 0.7;
 }
 
 .nav {
@@ -93,23 +82,21 @@
   flex-direction: column;
   gap: 2px;
   min-height: 0;
-  margin-top: 14px;
+  margin-top: 16px;
 }
 
 .sectionHead {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 4px 2px 8px;
+  padding: 0 4px 4px 8px;
 }
 
 .label {
   margin: 0;
   color: var(--vela-muted);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 11.5px;
+  font-weight: 500;
 }
 
 .add {
@@ -200,6 +187,7 @@
   flex: none;
   color: var(--vela-muted);
   font-size: 10.5px;
+  opacity: 0.8;
 }
 
 .empty {
@@ -215,7 +203,7 @@
   gap: 1px;
   margin-top: auto;
   padding-top: 8px;
-  border-top: 1px solid var(--vela-paper-edge);
+  border-top: 1px solid color-mix(in oklab, var(--vela-ink) 7%, transparent);
 }
 
 .connection {

@@ -1,9 +1,8 @@
 import type { Message } from '../../shared/bridge.ts'
-import { Wordmark } from '../frame/wordmark.tsx'
 import styles from './message.module.css'
 
 /**
- * A person's message is a bubble; Vela answers in plain text under its wordmark. In a
+ * A person's message is a bubble; Vela answers in plain text. In a
  * Lark group every person keeps their name, and the app's own posts are the bot's.
  */
 export function MessageView({
@@ -32,9 +31,6 @@ export function MessageView({
     )
   return (
     <article className={styles.assistant} data-role="assistant">
-      <p className={styles.turn}>
-        <Wordmark small />
-      </p>
       <p className={styles.text}>{message.text}</p>
     </article>
   )

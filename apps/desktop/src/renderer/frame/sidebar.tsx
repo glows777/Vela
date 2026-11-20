@@ -5,6 +5,7 @@ import {
   MessageSquare,
   Plus,
   SlidersHorizontal,
+  SquarePen,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { Connection, Project } from '../../shared/bridge.ts'
@@ -60,7 +61,7 @@ function LarkState({ connection }: { connection: Connection }) {
   )
 }
 
-/** Fixed frame: macOS traffic-light top strip, wordmark, primary action, projects, and Settings. */
+/** Fixed frame: macOS traffic-light top strip, quiet wordmark, lightweight nav, projects, and Settings. */
 export function Sidebar({
   projects,
   connections,
@@ -92,19 +93,19 @@ export function Sidebar({
           <Wordmark heading />
         </div>
         {connections.lark ? <LarkState connection={connections.lark} /> : null}
-        <button
-          type="button"
-          className={styles.newSession}
-          aria-label="New session"
-          onClick={onNewSession}
-        >
-          <span className={styles.newSessionMain}>
-            <Plus size={15} aria-hidden="true" />
-            New session
-          </span>
-          <kbd className={styles.shortcut}>⌘N</kbd>
-        </button>
         <nav className={styles.nav} aria-label="Pages">
+          <button
+            type="button"
+            className={styles.newSession}
+            aria-label="New session"
+            onClick={onNewSession}
+          >
+            <span className={styles.icon} aria-hidden="true">
+              <SquarePen size={15} />
+            </span>
+            <span className={styles.rowLabel}>New session</span>
+            <kbd className={styles.shortcut}>⌘N</kbd>
+          </button>
           <Row
             icon={<House size={15} />}
             label="Home"

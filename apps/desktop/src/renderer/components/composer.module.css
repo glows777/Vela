@@ -1,18 +1,16 @@
-.wrap {
+.composer {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 6px;
-}
-
-.composer {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--vela-line);
-  border-radius: var(--vela-radius-xl);
+  border: 1px solid color-mix(in oklab, var(--vela-ink) 12%, transparent);
+  border-radius: 16px;
   background: var(--vela-paper);
-  box-shadow: var(--vela-paper-shadow);
-  transition: border-color var(--vela-duration-quick) var(--vela-ease-out);
+  box-shadow:
+    0 2px 6px color-mix(in oklab, var(--vela-ink) 4%, transparent),
+    0 10px 28px -12px color-mix(in oklab, var(--vela-ink) 14%, transparent);
+  transition:
+    border-color var(--vela-duration-quick) var(--vela-ease-out),
+    box-shadow var(--vela-duration-quick) var(--vela-ease-out);
 }
 
 .running {
@@ -20,16 +18,16 @@
 }
 
 .composer:has(:focus-visible) {
-  border-color: var(--vela-border-strong);
+  border-color: color-mix(in oklab, var(--vela-ink) 26%, transparent);
   outline: 2px solid var(--vela-accent);
   outline-offset: 2px;
 }
 
 .text {
   width: 100%;
-  min-height: 48px;
+  min-height: 46px;
   max-height: 12rem;
-  padding: 12px 14px 4px;
+  padding: 13px 16px 4px;
   border: 0;
   background: transparent;
   color: var(--vela-ink);
@@ -41,14 +39,31 @@
 
 .text::placeholder {
   color: var(--vela-muted);
+  opacity: 0.72;
 }
 
 .tools {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 8px 10px;
+  padding: 6px 10px 10px 14px;
+}
+
+.hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--vela-muted);
+  font-size: 11.5px;
+  opacity: 0.75;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hint code {
+  font-family: var(--vela-family-mono);
+  font-size: 11px;
 }
 
 .spacer {
@@ -59,15 +74,18 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
   padding: 0;
   border: 0;
-  border-radius: var(--vela-radius-inner);
+  border-radius: var(--vela-radius-pill);
   background: var(--vela-button);
   color: var(--vela-on-button);
   cursor: pointer;
-  transition: background-color var(--vela-duration-quick) var(--vela-ease-out);
+  transition:
+    background-color var(--vela-duration-quick) var(--vela-ease-out),
+    opacity var(--vela-duration-quick) var(--vela-ease-out);
 }
 
 .send:hover:not(:disabled) {
@@ -75,18 +93,6 @@
 }
 
 .send:disabled {
-  opacity: 0.35;
+  opacity: 0.25;
   cursor: not-allowed;
-}
-
-.hint {
-  margin: 0;
-  padding-inline: 2px;
-  color: var(--vela-muted);
-  font-size: var(--vela-text-xs);
-}
-
-.hint code {
-  font-family: var(--vela-family-mono);
-  font-size: 11px;
 }
