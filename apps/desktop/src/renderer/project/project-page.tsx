@@ -30,7 +30,11 @@ export function ProjectPage({
   return (
     <div className={styles.page}>
       <div className={styles.chat}>
-        <Conversation label="Project chat" place={`project:${project.id}`}>
+        <Conversation
+          label="Project chat"
+          place={`project:${project.id}`}
+          centered
+        >
           {timeline.length === 0 ? (
             <p className={styles.empty}>
               Ask Vela about this folder. Short questions are answered here;
@@ -52,22 +56,24 @@ export function ProjectPage({
             )
           )}
         </Conversation>
-        <Composer
-          key={project.id}
-          label="Message Vela in this project"
-          draftKey={`project:${project.id}`}
-          hint={
-            <>
-              Runs in <code>{project.cwd}</code> on this computer.
-            </>
-          }
-          onSend={(text) => send(project.id, project.sessionId, text)}
-        />
-        {snapshot.error ? (
-          <p className={styles.error} role="alert">
-            {snapshot.error}
-          </p>
-        ) : null}
+        <div className={styles.composerDock}>
+          <Composer
+            key={project.id}
+            label="Message Vela in this project"
+            draftKey={`project:${project.id}`}
+            hint={
+              <>
+                Runs in <code>{project.cwd}</code> on this computer.
+              </>
+            }
+            onSend={(text) => send(project.id, project.sessionId, text)}
+          />
+          {snapshot.error ? (
+            <p className={styles.error} role="alert">
+              {snapshot.error}
+            </p>
+          ) : null}
+        </div>
       </div>
       <SessionPanel
         snapshot={snapshot}

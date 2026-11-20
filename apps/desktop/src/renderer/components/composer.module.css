@@ -2,7 +2,7 @@
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: var(--vela-space-2);
+  gap: 6px;
 }
 
 .composer {
@@ -12,6 +12,7 @@
   border-radius: var(--vela-radius-xl);
   background: var(--vela-paper);
   box-shadow: var(--vela-paper-shadow);
+  transition: border-color var(--vela-duration-quick) var(--vela-ease-out);
 }
 
 .running {
@@ -19,15 +20,16 @@
 }
 
 .composer:has(:focus-visible) {
-  outline: 3px solid var(--vela-accent);
-  outline-offset: 4px;
+  border-color: var(--vela-border-strong);
+  outline: 2px solid var(--vela-accent);
+  outline-offset: 2px;
 }
 
 .text {
   width: 100%;
-  min-height: 64px;
+  min-height: 48px;
   max-height: 12rem;
-  padding: 18px 20px 8px;
+  padding: 12px 14px 4px;
   border: 0;
   background: transparent;
   color: var(--vela-ink);
@@ -45,8 +47,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--vela-space-2);
-  padding: 10px 12px 12px;
+  gap: 8px;
+  padding: 6px 8px 8px 10px;
 }
 
 .spacer {
@@ -57,11 +59,11 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: var(--vela-control-lg);
-  height: var(--vela-control-lg);
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: 0;
-  border-radius: var(--vela-radius-paper);
+  border-radius: var(--vela-radius-inner);
   background: var(--vela-button);
   color: var(--vela-on-button);
   cursor: pointer;
@@ -73,18 +75,18 @@
 }
 
 .send:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
 .hint {
   margin: 0;
-  padding-inline: var(--vela-space-1);
+  padding-inline: 2px;
   color: var(--vela-muted);
-  font-size: var(--vela-text-sm);
+  font-size: var(--vela-text-xs);
 }
 
 .hint code {
   font-family: var(--vela-family-mono);
-  font-size: var(--vela-text-xs);
+  font-size: 11px;
 }

@@ -4,23 +4,25 @@
 }
 
 .bubble {
-  max-width: 80%;
+  max-width: 78%;
   margin: 0;
-  padding: 14px 18px;
+  padding: 8px 13px;
   border-radius: var(--vela-radius-bubble) var(--vela-radius-bubble)
     var(--vela-radius-sm) var(--vela-radius-bubble);
   background: var(--vela-bubble);
   color: var(--vela-ink);
   font-size: var(--vela-text-base);
-  line-height: var(--vela-leading-body);
+  line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .assistant {
   display: flex;
   flex-direction: column;
-  gap: var(--vela-space-2);
+  gap: 5px;
 }
 
 .turn {
@@ -34,10 +36,14 @@
   line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .system {
   margin: 0;
   color: var(--vela-muted);
   font-size: var(--vela-text-sm);
+  user-select: text;
+  -webkit-user-select: text;
 }

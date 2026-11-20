@@ -12,6 +12,7 @@ const createWindow = (hostError = false) => {
   const theme = nativeTheme.shouldUseHighContrastColors
     ? 'high-contrast'
     : colorScheme
+  const isMac = process.platform === 'darwin'
   const window = new BrowserWindow({
     title: 'Vela',
     width: 1180,
@@ -19,6 +20,12 @@ const createWindow = (hostError = false) => {
     minWidth: 800,
     minHeight: 600,
     backgroundColor: canvas[theme],
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 16, y: 15 },
+        }
+      : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

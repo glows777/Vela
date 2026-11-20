@@ -1,6 +1,6 @@
 .app {
   display: grid;
-  grid-template-columns: 272px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
   background: var(--vela-white);
@@ -12,6 +12,7 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  background: var(--vela-white);
 }
 
 .content {
@@ -26,6 +27,7 @@
   margin: 0 auto;
   overflow-wrap: anywhere;
   font-size: var(--vela-text-sm);
+  user-select: text;
 }
 
 .hint {
