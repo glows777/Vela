@@ -223,14 +223,33 @@ async function loadMessages(
 }
 
 /** Reads one session's whole history; the panel needs it when a session opens. */
+let visibleLarkGroup: Project | undefined
+let visibleLarkTopic: { projectId: string; session: Session } | undefined
+
+/** Only the mounted group page receives automatic history refreshes. */
+export function watchLarkProject(project: Project) {
+  if (project.channel !== 'lark') return
+  visibleLarkGroup = project
+  return () => {
+    if (visibleLarkGroup === project) visibleLarkGroup = undefined
+  }
+}
+
 export function loadSession(projectId: string, sessionId: string) {
   const project = snapshot.projects.find((item) => item.id === projectId)
   const session = snapshot.sessions[sessionId]
-  if (project?.channel === 'lark' && session?.channel === 'lark')
-    void history.loadTopic(project.id, session).then((error) => {
-      if (error) publish({ error })
-    })
-  else void loadMessages(projectId, sessionId)
+  if (project?.channel !== 'lark' || session?.channel !== 'lark') {
+    void loadMessages(projectId, sessionId)
+    return
+  }
+  const topic = { projectId, session }
+  visibleLarkTopic = topic
+  void history.loadTopic(projectId, session).then((error) => {
+    if (error && visibleLarkTopic === topic) publish({ error })
+  })
+  return () => {
+    if (visibleLarkTopic === topic) visibleLarkTopic = undefined
+  }
 }
 
 /** Reads the project chat and the first message of every started session, which anchors its card. */
@@ -238,13 +257,7 @@ export async function loadProject(projectId: string) {
   const project = snapshot.projects.find((item) => item.id === projectId)
   if (!project) return
   if (project.channel === 'lark') {
-    // The read registers itself even while off: Lark's `reset` when it connects runs it,
-    // so a page opened during a reconnect leaves its loading state without another click.
-    if (snapshot.connections.lark?.connected !== true) {
-      // Register it, but read nothing: with Lark off the reason is on the page.
-      history.watch(project)
-      return
-    }
+    if (snapshot.connections.lark?.connected !== true) return
     try {
       mergeSessions(await vela.sessions('lark', project.id))
     } catch (cause) {
@@ -582,24 +595,24 @@ function apply(value: Extract<Event, { type: 'local' }>['value']) {
 
 /** Re-reads the Lark history the page shows after Lark says it changed. */
 function applyLark(value: Extract<Event, { type: 'lark' }>['value']) {
-  if (value.type === 'reset') {
-    history.reread()
-    void refresh()
-    return
-  }
-  const project = snapshot.projects.find(
-    (item) => item.channel === 'lark' && item.id === value.chatId,
-  )
-  if (project)
-    void history.load(project).then((error) => {
-      if (error) publish({ error })
+  const reset = value.type === 'reset'
+  if (reset) void refresh()
+
+  const group = visibleLarkGroup
+  if (group && (reset || value.chatId === group.id))
+    void history.load(group).then((error) => {
+      if (error && visibleLarkGroup === group) publish({ error })
     })
-  const session = value.sessionId
-    ? snapshot.sessions[value.sessionId]
-    : undefined
-  if (session?.topic)
-    void history.loadTopic(value.chatId, session).then((error) => {
-      if (error) publish({ error })
+
+  const topic = visibleLarkTopic
+  if (
+    topic &&
+    (reset ||
+      (value.chatId === topic.projectId &&
+        value.sessionId === topic.session.sessionId))
+  )
+    void history.loadTopic(topic.projectId, topic.session).then((error) => {
+      if (error && visibleLarkTopic === topic) publish({ error })
     })
 }
 

@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import type { Project } from '../../shared/bridge.ts'
 import { Button } from '../components/arc/button/button.tsx'
 import { Composer } from '../components/composer.tsx'
@@ -7,7 +8,7 @@ import { larkGroupComposer, projectName, projectTimeline } from '../format.ts'
 import type { Panel } from '../panel.ts'
 import { SessionPanel } from '../session/session-panel.tsx'
 import type { Snapshot } from '../store.ts'
-import { loadEarlierLark, sendInProject } from '../store.ts'
+import { loadEarlierLark, sendInProject, watchLarkProject } from '../store.ts'
 import styles from './project-page.module.css'
 import { SessionCard } from './session-card.tsx'
 
@@ -24,6 +25,7 @@ export function ProjectPage({
   panel: Panel
   onPanel: (panel: Panel) => void
 }) {
+  useEffect(() => watchLarkProject(project), [project])
   const lark = project.channel === 'lark'
   if (lark && snapshot.connections.lark?.connected === false)
     return <LarkOff snapshot={snapshot} project={project} />

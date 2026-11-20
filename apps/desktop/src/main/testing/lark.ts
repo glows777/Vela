@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   LarkHistoryMessage,
@@ -34,6 +34,7 @@ type Control =
       chatId: string
       text: string
       senderName?: string
+      threadId?: string
     }
   | { op: 'failNextTopicStart' }
   | { op: 'failNextSend' }
@@ -57,6 +58,7 @@ type Control =
   | { op: 'filterText'; chatId: string; texts: string[] }
   | { op: 'holdGroupRefresh'; chatId: string; refreshedText: string }
   | { op: 'releaseGroupRefresh' }
+  | { op: 'recordHistoryReads' }
   /** The next group history read fails, as a dropped connection would. */
   | { op: 'failNextGroupHistory' }
 
@@ -96,6 +98,7 @@ export function fakeLark(dir: string): FakeTransport {
         released: ReturnType<typeof gate>
       }
     | undefined
+  let recordHistoryReads = false
   let threads = 0
   const chats = new Map<string, { name?: string; rows: Stored[] }>()
   const threadsById = new Map<string, Stored[]>()
@@ -172,12 +175,25 @@ export function fakeLark(dir: string): FakeTransport {
   const senderId = (senderName: string) =>
     `ou_${senderName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`
 
-  function say(chatId: string, text: string, senderName: string) {
+  function say(
+    chatId: string,
+    text: string,
+    senderName: string,
+    threadId?: string,
+  ) {
+    const root = threadId ? threadsById.get(threadId)?.[0] : undefined
+    if (threadId && !root?.rootId) throw new Error('Unknown fake Lark topic')
     const id = senderId(senderName)
     const key = `@_user_${byId.size + 1}`
     const content = `${key} ${text}`
     const mentions = [{ key, id: { open_id: botId } }]
-    const stored = add(chatId, content, { id, app: false }, undefined, mentions)
+    const stored = add(
+      chatId,
+      content,
+      { id, app: false },
+      threadId && root?.rootId ? { rootId: root.rootId, threadId } : undefined,
+      mentions,
+    )
     names.set(id, senderName)
     onMessage?.(event(stored, content, mentions))
   }
@@ -274,8 +290,16 @@ export function fakeLark(dir: string): FakeTransport {
           thread.splice(at < 0 ? thread.length : at + 1, 0, card)
           break
         }
+        case 'recordHistoryReads':
+          recordHistoryReads = true
+          break
         case 'say':
-          say(control.chatId, control.text, control.senderName ?? 'Alice')
+          say(
+            control.chatId,
+            control.text,
+            control.senderName ?? 'Alice',
+            control.threadId,
+          )
           break
       }
     }
@@ -448,6 +472,8 @@ export function fakeLark(dir: string): FakeTransport {
       return chat ? { name: chat.name } : undefined
     },
     async listTopicMessages(threadId, pageToken) {
+      if (recordHistoryReads)
+        await appendFile(join(dir, 'history-reads.log'), `topic:${threadId}\n`)
       if (failNextTopicHistory) {
         failNextTopicHistory = false
         throw new Error('Fake Lark denied the topic history')
@@ -463,6 +489,8 @@ export function fakeLark(dir: string): FakeTransport {
       }
     },
     async searchMessages(chatId, { endTime, limit, pageToken }) {
+      if (recordHistoryReads)
+        await appendFile(join(dir, 'history-reads.log'), `group:${chatId}\n`)
       const refresh = groupRefresh?.chatId === chatId ? groupRefresh : undefined
       if (refresh) {
         if (pageToken) {

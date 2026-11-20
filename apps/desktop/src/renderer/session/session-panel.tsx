@@ -176,7 +176,7 @@ function SessionDetail({
   onClose: () => void
 }) {
   useEffect(() => {
-    loadSession(project.id, session.sessionId)
+    return loadSession(project.id, session.sessionId)
   }, [project.id, session.sessionId])
 
   const progress = snapshot.progress[session.sessionId]

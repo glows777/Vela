@@ -75,8 +75,6 @@ const merge = (shown: Message[], incoming: Message[]) =>
 export function larkHistory(host: LarkHistoryHost) {
   /** The cursor of the next older page per session, absent when nothing is older. */
   const cursors = new Map<string, string>()
-  /** The histories the page currently shows, so Lark's `reset` re-reads exactly those. */
-  const reads = new Map<string, () => Promise<void>>()
 
   const remember = (sessionId: string, next: string | undefined) => {
     if (next === undefined) cursors.delete(sessionId)
@@ -88,21 +86,11 @@ export function larkHistory(host: LarkHistoryHost) {
    * A group's newest history, or one older page when the person asks for it. Returns
    * the reason a read failed so the caller can keep its own wording.
    */
-  /** Registers a group's history as one Lark's `reset` re-reads, without reading now. */
-  const watch = (project: Project) => {
-    if (project.channel !== 'lark') return
-    reads.set(`group:${project.id}`, async () => {
-      const error = await load(project)
-      if (error) host.fail(error)
-    })
-  }
-
   const load = async (
     project: Project,
     older = false,
   ): Promise<string | undefined> => {
     if (project.channel !== 'lark') return undefined
-    watch(project)
     const sessionId = project.sessionId
     const read = (cursor?: string) =>
       host.read({
@@ -147,6 +135,7 @@ export function larkHistory(host: LarkHistoryHost) {
       const shownIds = new Set(
         host.shown(sessionId).map((message) => message.id),
       )
+      let overlaps = false
       const next = await walk(
         undefined,
         (page, first) =>
@@ -156,12 +145,13 @@ export function larkHistory(host: LarkHistoryHost) {
               ? reconcile(host.shown(sessionId), page.messages, false)
               : merge(host.shown(sessionId), page.messages),
           ),
-        (page) =>
-          shownIds.size === 0 ||
-          page.messages.some((message) => shownIds.has(message.id)),
+        (page) => {
+          overlaps = page.messages.some((message) => shownIds.has(message.id))
+          return shownIds.size === 0 || overlaps
+        },
       )
-      // The first page already holds what is on screen: the deeper cursor stays.
-      if (!walked && cursors.has(sessionId)) return undefined
+      // An overlapping first page preserves paging progress, including a known end.
+      if (!walked && (overlaps || cursors.has(sessionId))) return undefined
       remember(sessionId, next)
       return undefined
     } catch (cause) {
@@ -180,11 +170,6 @@ export function larkHistory(host: LarkHistoryHost) {
     session: Session,
   ): Promise<string | undefined> => {
     if (session.channel !== 'lark') return undefined
-    const reread = async () => {
-      const error = await loadTopic(projectId, session)
-      if (error) host.fail(error)
-    }
-    reads.set(`topic:${session.sessionId}`, reread)
     try {
       const collected: Message[] = []
       let cursor: string | undefined
@@ -208,10 +193,5 @@ export function larkHistory(host: LarkHistoryHost) {
     }
   }
 
-  /** Re-reads every Lark history the page shows; Lark's `reset` is the only trigger. */
-  const reread = () => {
-    for (const read of [...reads.values()]) void read()
-  }
-
-  return { load, loadTopic, watch, reread }
+  return { load, loadTopic }
 }

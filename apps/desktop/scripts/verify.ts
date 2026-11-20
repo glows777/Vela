@@ -1915,6 +1915,7 @@ async function larkJourneys() {
         // A person asking in the group.
         { text: 'Only the deploy step changed.' },
         // The busy group's live message.
+        { text: 'Noted, the oldest page is still the end.' },
         { text: 'Noted, the busy group is answered.' },
         // Starting a topic from Home: a slow step keeps it visibly running.
         { toolCalls: [{ name: 'bash', input: { command: 'sleep 3' } }] },
@@ -1932,6 +1933,8 @@ async function larkJourneys() {
         },
         { text: 'Which colour should I use?' },
         { text: 'Blue it is.' },
+        { text: 'The unopened group received its answer.' },
+        { text: 'The unopened topic received its answer.' },
         // A Local question in the same window.
         { text: 'Local answer in the same window.' },
       ],
@@ -2106,8 +2109,21 @@ async function larkJourneys() {
       0,
       'The oldest page is the end of the history',
     )
+    await larkSays({
+      op: 'say',
+      chatId: gapProject,
+      text: 'A new message after reaching the oldest page',
+    })
+    await page
+      .getByText('Noted, the oldest page is still the end.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page.getByRole('button', { name: 'Show earlier messages' }).count(),
+      0,
+      'A live refresh does not restore paging after reaching the oldest message',
+    )
     checks.push(
-      'Paging keeps reaching back to the oldest message after the gap was filled.',
+      'Paging reaches the oldest message after reconnect and stays exhausted after a live refresh.',
     )
 
     // Ordinary activity must not reset paging: a live message overlaps the page on
@@ -2661,6 +2677,88 @@ async function larkJourneys() {
     )
     checks.push(
       'An older page that arrives during a refresh stays on the page when the refresh applies.',
+    )
+
+    // The group is visible, but its previously opened topic is not.
+    await sidebar.getByRole('button', { name: 'Vela dev Lark' }).click()
+    await page.getByRole('heading', { name: 'Vela dev', exact: true }).waitFor()
+    await page
+      .getByText('The retry test now covers a 429.', { exact: true })
+      .waitFor()
+    await larkSays({ op: 'recordHistoryReads' })
+    const historyReads = resolve(larkDir, 'history-reads.log')
+    await Bun.write(historyReads, '')
+    // Wait for the UI's subscription to observe each real Lark history event.
+    const observe = (chatId: string, sessionId?: string) =>
+      page.evaluate(
+        ({ chatId, sessionId }) => {
+          const observed = new Promise<void>((resolve, reject) => {
+            let changes = 0
+            const timer = window.setTimeout(() => {
+              off()
+              reject(new Error('Lark did not send both history changes'))
+            }, 15_000)
+            const off = window.vela.onEvent((event) => {
+              if (
+                event.type !== 'lark' ||
+                event.value.type !== 'history_changed' ||
+                event.value.chatId !== chatId ||
+                event.value.sessionId !== sessionId
+              )
+                return
+              if (++changes < 2) return
+              window.clearTimeout(timer)
+              off()
+              resolve()
+            })
+          })
+          Object.assign(window, { observedHistoryChange: observed })
+        },
+        { chatId, sessionId },
+      )
+    const seen = () =>
+      page.evaluate(
+        () =>
+          (window as Window & { observedHistoryChange?: Promise<void> })
+            .observedHistoryChange,
+      )
+    await observe(gapProject)
+    await larkSays({
+      op: 'say',
+      chatId: gapProject,
+      text: 'Message in the unopened group',
+    })
+    await seen()
+    await observe(larkProject, topic.sessionId)
+    await larkSays({
+      op: 'say',
+      chatId: larkProject,
+      threadId: threadIdent.threadId,
+      text: 'Message in the unopened topic',
+    })
+    await seen()
+    const loggedReads = Bun.file(historyReads)
+    const deadline = Date.now() + 10_000
+    while (
+      !(await loggedReads.text()).includes(`group:${larkProject}\n`) &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(20)
+    assert(
+      (await loggedReads.text()).includes(`group:${larkProject}\n`),
+      'The open group is refreshed',
+    )
+    const reads = await loggedReads.text()
+    assert(
+      !reads.includes(`group:${gapProject}\n`),
+      'No reads for an unopened group',
+    )
+    assert(
+      !reads.includes(`topic:${threadIdent.threadId}\n`),
+      'No reads for an unopened topic',
+    )
+    checks.push(
+      'Live Lark history reads are limited to the open group and topic.',
     )
 
     // Switching projects and sessions in one running app, with no reload.
