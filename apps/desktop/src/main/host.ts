@@ -204,6 +204,10 @@ export async function createHost() {
             })),
           ]
         : localHost.projects()
+    // Before starting channels, chats() returns configured IDs without any name lookups.
+    const enabledChatIds = new Set(
+      (await larkHost?.chats())?.map((chat) => chat.chatId),
+    )
     await vela.startChannels()
     const handle = async (request: Request) => {
       switch (request.method) {
@@ -348,7 +352,11 @@ export async function createHost() {
                 join(process.env.VELA_DESKTOP_LARK_DIR!, 'discovery'),
               )
               try {
-                return await discoverLarkGroup(transport, signal)
+                return await discoverLarkGroup(
+                  transport,
+                  signal,
+                  enabledChatIds,
+                )
               } finally {
                 transport.stop()
               }
@@ -360,7 +368,7 @@ export async function createHost() {
                 signal,
               )
               try {
-                return await connection.waitForMention()
+                return await connection.waitForMention(enabledChatIds)
               } finally {
                 connection.stop()
               }

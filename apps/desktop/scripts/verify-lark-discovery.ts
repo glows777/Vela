@@ -103,6 +103,7 @@ export async function verifyLarkDiscovery(
     await themes(page, 'lark-new-project-groups')
     if (process.env.VELA_DESKTOP_VERIFY_DISCOVERY_TIMEOUT === '1') {
       await add.click()
+      await mention(oldChat)
       await dialog
         .getByRole('alert')
         .filter({ hasText: /No group mention received/ })
@@ -123,9 +124,16 @@ export async function verifyLarkDiscovery(
     await dialog.getByRole('button', { name: 'Cancel' }).click()
     assert.equal(await readFile(settings, 'utf8'), original)
     await add.click()
+    await mention(oldChat)
     await mention()
     await dialog.getByRole('button', { name: 'Enable group' }).waitFor()
+    assert.equal(
+      await dialog.getByText(oldChat, { exact: true }).count(),
+      0,
+      'A mention from the already enabled group must not become the approval candidate',
+    )
     assert.equal(await dialog.getByLabel('Lark group ID').innerText(), 'oc_new')
+    assert.equal(await readFile(settings, 'utf8'), original)
     await dialog.getByText(/only if the ID matches/).waitFor()
     await dialog.getByText(/running commands on this computer/).waitFor()
     await page.waitForFunction(() => {

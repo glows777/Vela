@@ -130,47 +130,58 @@ test('confirmed group merges settings, protects secrets, sends and closes', asyn
   expect(f.notices.join('\n')).not.toContain('secret')
 })
 
-test('discovery ignores a DM and group non-mention before a human mention', async () => {
-  const { discoverLarkGroup } = await import('@glows777/vela-lark')
-  // biome-ignore lint/suspicious/noExplicitAny: fake event fixture exercises partial SDK payloads
-  let onMessage: ((event: any) => void) | undefined
-  let stopped = false
-  const transport = {
-    async getBotId() {
-      return 'bot'
-    },
+test.each([
+  { excluded: undefined, expected: 'first' },
+  { excluded: new Set(['first']), expected: 'second' },
+])(
+  'discovery offers $expected on one listener',
+  async ({ excluded, expected }) => {
+    const { discoverLarkGroup } = await import('@glows777/vela-lark')
     // biome-ignore lint/suspicious/noExplicitAny: fake event fixture exercises partial SDK payloads
-    async start(callback: (event: any) => void) {
-      onMessage = callback
-    },
-    async send() {},
-    stop() {
-      stopped = true
-    },
-  }
-  // biome-ignore lint/suspicious/noExplicitAny: fake transport implements only the used methods
-  const pending = discoverLarkGroup(transport as any)
-  await new Promise((r) => setTimeout(r, 0))
-  onMessage!({
-    sender: { sender_type: 'user' },
-    message: {
-      chat_type: 'p2p',
-      chat_id: 'dm',
-      mentions: [{ id: { open_id: 'bot' } }],
-    },
-  })
-  onMessage!({
-    sender: { sender_type: 'user' },
-    message: { chat_type: 'group', chat_id: 'wrong', mentions: [] },
-  })
-  onMessage!({
-    sender: { sender_type: 'user' },
-    message: {
-      chat_type: 'group',
-      chat_id: 'right',
-      mentions: [{ id: { open_id: 'bot' } }],
-    },
-  })
-  expect((await pending).chatId).toBe('right')
-  expect(stopped).toBe(false)
-})
+    let onMessage: ((event: any) => void) | undefined
+    let starts = 0
+    let stopped = false
+    const transport = {
+      async getBotId() {
+        return 'bot'
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: fake event fixture exercises partial SDK payloads
+      async start(callback: (event: any) => void) {
+        starts++
+        onMessage = callback
+      },
+      async send() {},
+      stop() {
+        stopped = true
+      },
+    }
+    // biome-ignore lint/suspicious/noExplicitAny: fake transport implements only the used methods
+    const pending = discoverLarkGroup(transport as any, undefined, excluded)
+    await new Promise((r) => setTimeout(r, 0))
+    onMessage!({
+      sender: { sender_type: 'user' },
+      message: {
+        chat_type: 'p2p',
+        chat_id: 'dm',
+        mentions: [{ id: { open_id: 'bot' } }],
+      },
+    })
+    onMessage!({
+      sender: { sender_type: 'user' },
+      message: { chat_type: 'group', chat_id: 'wrong', mentions: [] },
+    })
+    for (const chatId of ['first', 'second']) {
+      onMessage!({
+        sender: { sender_type: 'user' },
+        message: {
+          chat_type: 'group',
+          chat_id: chatId,
+          mentions: [{ id: { open_id: 'bot' } }],
+        },
+      })
+    }
+    expect((await pending).chatId).toBe(expected)
+    expect(starts).toBe(1)
+    expect(stopped).toBe(false)
+  },
+)
