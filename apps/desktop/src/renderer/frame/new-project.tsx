@@ -240,17 +240,20 @@ export function NewProjectDialog({
                 <>
                   {step === 'mention' ? (
                     <p role="status">
-                      Mention the bot in the Lark group you want to enable.
+                      Mention the bot in the new Lark group. Until a new group
+                      is found or you cancel, Local and Lark are paused. Vela
+                      won’t answer messages sent to enabled groups during this
+                      time.
                     </p>
                   ) : null}
                   {step === 'confirm' || step === 'saving' ? (
-                    <div>
-                      <code>{chatId}</code>
-                      <p>
-                        Every member of this group will have full access to
-                        Vela’s tools.
-                      </p>
-                    </div>
+                    <Field
+                      label="Lark group ID"
+                      htmlFor="lark-candidate-id"
+                      note="Enable this group only if the ID matches the group you intended. Every member will have full access to Vela’s tools, including running commands on this computer."
+                    >
+                      <output id="lark-candidate-id">{chatId}</output>
+                    </Field>
                   ) : null}
                   <footer className={styles.actions}>
                     <Button

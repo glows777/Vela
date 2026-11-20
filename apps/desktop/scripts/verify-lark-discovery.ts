@@ -113,12 +113,21 @@ export async function verifyLarkDiscovery(
       )
     }
     await add.click()
-    await dialog.getByText(/Mention the bot/).waitFor()
+    await dialog
+      .getByRole('status')
+      .filter({ hasText: /Local and Lark are paused/ })
+      .waitFor()
+    await dialog
+      .getByText(/won’t answer messages sent to enabled groups/)
+      .waitFor()
     await dialog.getByRole('button', { name: 'Cancel' }).click()
     assert.equal(await readFile(settings, 'utf8'), original)
     await add.click()
     await mention()
-    await dialog.getByText('oc_new', { exact: true }).waitFor()
+    await dialog.getByRole('button', { name: 'Enable group' }).waitFor()
+    assert.equal(await dialog.getByLabel('Lark group ID').innerText(), 'oc_new')
+    await dialog.getByText(/only if the ID matches/).waitFor()
+    await dialog.getByText(/running commands on this computer/).waitFor()
     await page.waitForFunction(() => {
       const dialog = document.querySelector('[role="dialog"]')!
       const button = Array.from(dialog.querySelectorAll('button')).find(
