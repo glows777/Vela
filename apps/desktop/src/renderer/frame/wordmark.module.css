@@ -5,15 +5,15 @@
   font-weight: 800;
   letter-spacing: 0.16em;
   line-height: 1;
-  text-shadow: 0.04em 0.04em var(--vela-wordmark-offset);
+  text-shadow: 0.04em 0.04em 0 var(--vela-wordmark-offset);
 }
 
 h1.base {
   margin: 0;
-  font-size: 30px;
+  font-size: 26px;
 }
 
 .small {
-  font-size: 11px;
-  letter-spacing: 0.18em;
+  font-size: 15px;
+  letter-spacing: 0.16em;
 }

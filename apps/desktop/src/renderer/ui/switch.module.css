@@ -1,0 +1,56 @@
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--vela-space-3);
+}
+
+.track {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  width: 48px;
+  height: 28px;
+  padding: 3px;
+  border: 1px solid var(--vela-border-strong);
+  border-radius: var(--vela-radius-pill);
+  background: var(--vela-white);
+  cursor: pointer;
+  transition:
+    background-color var(--vela-duration-quick) var(--vela-ease-out),
+    border-color var(--vela-duration-quick) var(--vela-ease-out);
+}
+
+.track[data-state="checked"] {
+  border-color: var(--vela-button);
+  background: var(--vela-button);
+}
+
+.thumb {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--vela-radius-round);
+  background: var(--vela-border-strong);
+  transition:
+    transform var(--vela-duration-quick) var(--vela-ease-out),
+    background-color var(--vela-duration-quick) var(--vela-ease-out);
+}
+
+.thumb[data-state="checked"] {
+  background: var(--vela-button-hint);
+  transform: translateX(20px);
+}
+
+.label {
+  color: var(--vela-ink);
+  font-size: var(--vela-text-md);
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .track,
+  .thumb {
+    transition: none;
+  }
+}

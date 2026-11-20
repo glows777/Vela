@@ -1,7 +1,7 @@
 import { Clock, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { Project, Routine } from '../../shared/bridge.ts'
-import { Button } from '../components/arc/button/button.tsx'
+import { Button } from '../ui/button.tsx'
 import { errorMessage, type Snapshot } from '../store.ts'
 import { vela } from '../vela.ts'
 import { RoutineDialog } from './routine-dialog.tsx'

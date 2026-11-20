@@ -1,18 +1,18 @@
 .specimen {
   max-width: 1080px;
   margin: auto;
-  padding: var(--space-12) var(--space-10) var(--space-6);
+  padding: var(--vela-space-12) var(--vela-space-10) var(--vela-space-6);
 }
 .specimen-header {
   display: flex;
   justify-content: space-between;
   align-items: start;
-  gap: var(--space-6);
+  gap: var(--vela-space-6);
 }
 .eyebrow {
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--vela-space-3);
   color: var(--vela-teal);
-  font-size: 12px;
+  font-size: var(--vela-text-xs);
   font-weight: 700;
   letter-spacing: 0.12em;
 }
@@ -27,34 +27,34 @@
   font-size: 52px;
 }
 .specimen h2 {
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--vela-space-4);
   font-size: 28px;
 }
 .specimen-intro {
   max-width: 540px;
-  margin: var(--space-5) 0 var(--space-10);
-  color: var(--text-secondary);
+  margin: var(--vela-space-5) 0 var(--vela-space-10);
+  color: var(--vela-muted);
   line-height: 1.5;
 }
 .specimen section {
-  padding: var(--space-6) 0;
-  border-top: 1px solid var(--border-subtle);
+  padding: var(--vela-space-6) 0;
+  border-top: 1px solid var(--vela-rule-list);
 }
 .type-specimen {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: var(--space-6);
+  gap: var(--vela-space-6);
 }
 .muted {
-  color: var(--text-secondary);
-  font-size: 14px;
+  color: var(--vela-muted);
+  font-size: var(--vela-text-md);
   line-height: 1.5;
 }
 .specimen code {
-  color: var(--text-secondary);
+  color: var(--vela-muted);
   font-family: var(--vela-family-mono);
-  font-size: 12px;
+  font-size: var(--vela-text-xs);
 }
 .seal {
   display: grid;
@@ -62,8 +62,8 @@
   width: 124px;
   height: 124px;
   flex-shrink: 0;
-  border: 1px solid var(--vela-accent-ink);
-  border-radius: var(--radius-panel);
+  border: 2px solid var(--vela-accent-ink);
+  border-radius: var(--vela-radius-paper);
   color: var(--vela-accent-ink);
   font: 800 26px / 1 var(--vela-family-mincho);
   writing-mode: vertical-rl;
@@ -75,41 +75,41 @@
   border: 0;
 }
 .specimen legend {
-  margin-bottom: var(--space-2);
-  color: var(--text-secondary);
-  font-size: 12px;
+  margin-bottom: var(--vela-space-2);
+  color: var(--vela-muted);
+  font-size: var(--vela-text-xs);
 }
 .themes,
 .control-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--vela-space-2);
 }
 
 .swatches {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  gap: var(--space-3);
+  gap: var(--vela-space-3);
 }
 .swatch > div {
   height: 52px;
-  margin-bottom: var(--space-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
+  margin-bottom: var(--vela-space-2);
+  border: 1px solid var(--vela-border-strong);
+  border-radius: var(--vela-radius-md);
 }
 .specimen footer {
   display: flex;
   justify-content: space-between;
-  gap: var(--space-5);
-  padding-top: var(--space-6);
-  border-top: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-size: 12px;
+  gap: var(--vela-space-5);
+  padding-top: var(--vela-space-6);
+  border-top: 1px solid var(--vela-rule-list);
+  color: var(--vela-muted);
+  font-size: var(--vela-text-xs);
 }
 @media (width <= 900px) {
   .specimen {
-    padding: var(--space-6);
+    padding: var(--vela-space-6);
   }
   .specimen-header {
     flex-direction: column;

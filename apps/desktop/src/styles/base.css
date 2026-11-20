@@ -1,34 +1,65 @@
-@import "../renderer/components/arc/foundation.css";
 @import "./tokens.generated.css";
-@import "./arc-theme.css";
+
+:root,
+:root[data-theme="light"],
+:root[data-theme="high-contrast"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) and (prefers-contrast: no-preference) and (
+    forced-colors: none
+  ) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+  }
+}
 
 :root {
   font-family: var(--vela-family-sans);
-  color: var(--foreground);
-  background: var(--background);
+  color: var(--vela-ink);
+  background: var(--vela-white);
+  font-synthesis: none;
 }
+
 :lang(zh) {
   font-family: var(--vela-family-sans-zh);
 }
+
 :lang(ja) {
   font-family: var(--vela-family-sans-ja);
 }
+
 * {
   box-sizing: border-box;
 }
+
 body {
   margin: 0;
   min-width: 320px;
+  color: var(--vela-ink);
+  background: var(--vela-white);
 }
+
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
 :focus-visible {
-  outline: 2px solid var(--focus-outline);
+  outline: 3px solid var(--vela-accent);
   outline-offset: 4px;
 }
+
 ::selection {
   color: var(--vela-on-mint);
   background: var(--vela-mint);

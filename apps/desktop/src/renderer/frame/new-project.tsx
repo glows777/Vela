@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { Project } from '../../shared/bridge.ts'
-import { Button } from '../components/arc/button/button.tsx'
+import { Button } from '../ui/button.tsx'
 import {
   Dialog,
   DialogClose,
   DialogContent,
-} from '../components/arc/dialog/dialog.tsx'
+} from '../ui/dialog.tsx'
 import { Field, Input } from '../components/field.tsx'
 import { errorMessage, openProject } from '../store.ts'
 import { vela } from '../vela.ts'
