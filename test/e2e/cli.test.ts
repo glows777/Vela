@@ -1058,6 +1058,146 @@ test.concurrent('--mode json writes a session header and one JSON event per line
   expect(records.at(-1)).toEqual({ type: 'agent_settled', sessionId: id })
 })
 
+for (const [mode, command, chunkDelayMs] of [
+  ['text', 'sleep 1; printf done > finished.txt', 0],
+  ['json', 'sleep 1; printf done > finished.txt', 0],
+  ['text-fast-job', 'printf done > finished.txt', 60],
+] as const) {
+  test.concurrent(`print background (${mode}) keeps the job and its delivery before exit`, async () => {
+    const dir = tempDir('vela-cli-background-')
+    dirs.push(dir)
+    const scenarioFile = join(dir.path, 'scenario.json')
+    await Bun.write(
+      scenarioFile,
+      JSON.stringify({
+        chunkDelayMs,
+        responses: [
+          {
+            toolCalls: [
+              {
+                name: 'bash',
+                input: {
+                  command,
+                  run_in_background: true,
+                },
+              },
+            ],
+          },
+          { text: 'Original answer' },
+          { text: 'Background delivery answer' },
+        ],
+      }),
+    )
+    const { stdout, code, dataDir } = await cli(
+      [...(mode === 'json' ? ['--mode', 'json'] : ['-p']), 'Run it'],
+      { cwd: dir.path, model: `faux:${scenarioFile}` },
+    )
+    expect(code).toBe(0)
+    if (mode !== 'json') {
+      expect(stdout).toBe('Original answer\n')
+    } else {
+      const records = stdout
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      const messages = records
+        .filter((record) => record.type === 'message_end')
+        .map((record) => JSON.stringify(record.message))
+      for (const text of [
+        'Original answer',
+        'Background command bg-1 finished',
+        'Background delivery answer',
+      ])
+        expect(
+          messages.filter((message) => message.includes(text)),
+        ).toHaveLength(1)
+    }
+    expect(await Bun.file(join(dir.path, 'finished.txt')).exists()).toBe(true)
+    expect(await Bun.file(sessionFiles(dataDir)[0]!).text()).toContain(
+      'Background delivery answer',
+    )
+  })
+}
+
+for (const { name, delay, input } of [
+  { name: 'default', delay: 1_800_000, input: { run_in_background: true } },
+  {
+    name: 'requested',
+    delay: 900_000,
+    input: { run_in_background: true, timeout: 900 },
+  },
+  {
+    name: 'maximum',
+    delay: 7_200_000,
+    input: { run_in_background: true, timeout: 7_201 },
+  },
+  { name: 'post-escalation', delay: 1_800_000, input: { timeout: 0.1 } },
+]) {
+  test.concurrent(`print background applies the ${name} deadline and delivers one limit result`, async () => {
+    const dir = tempDir('vela-cli-background-limit-')
+    dirs.push(dir)
+    const file = join(dir.path, 'scenario.json')
+    await Bun.write(
+      file,
+      JSON.stringify({
+        responses: [
+          {
+            toolCalls: [
+              {
+                name: 'bash',
+                input: {
+                  command:
+                    'printf started; sleep 3; printf done > finished.txt',
+                  ...input,
+                },
+              },
+            ],
+          },
+          { text: 'Original answer' },
+          { text: 'Limit delivered' },
+        ],
+      }),
+    )
+    const { stdout, code } = await cli(['--mode', 'json', 'Run it'], {
+      cwd: dir.path,
+      model: `faux:${file}`,
+      preload: 'short-background-deadline.ts',
+      files: {
+        'short-background-deadline.ts': `
+          const schedule = globalThis.setTimeout
+          globalThis.setTimeout = ((fn, delay, ...args) =>
+            schedule(fn, delay === ${delay} ? 350 : delay, ...args)
+          ) as typeof setTimeout
+        `,
+      },
+    })
+    expect(code).toBe(0)
+    if (name === 'post-escalation')
+      expect(stdout).toContain('was moved to the background')
+    const records = stdout
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    const messages = records
+      .filter((record) => record.type === 'message_end')
+      .map((record) => record.message)
+    expect(
+      messages.filter(
+        (message) =>
+          typeof message.content === 'string' &&
+          message.content.split('\n')[0] ===
+            'Background command "bg-1" was stopped after reaching its background time limit.',
+      ),
+    ).toHaveLength(1)
+    expect(
+      messages.filter((message) =>
+        JSON.stringify(message).includes('Limit delivered'),
+      ),
+    ).toHaveLength(1)
+    expect(await Bun.file(join(dir.path, 'finished.txt')).exists()).toBe(false)
+  })
+}
+
 test.concurrent('--mode json reports a model error in agent_end and exits 1', async () => {
   const { stdout, code, stderr } = await cli(['--mode', 'json', 'hi'], {
     model: `faux:${scenario('bad-request')}`,

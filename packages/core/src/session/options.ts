@@ -86,6 +86,8 @@ export interface SessionOptions {
   thinkingLevel?: ThinkingLevel
   /** Automatic compaction, default Vela's (on unless createVela({ autoCompaction: false })) */
   autoCompaction?: boolean
+  /** Opt into background command deadlines for an unattended run. Defaults to false. */
+  unattended?: boolean
   /**
    * Where a result this session produces outside a turn goes, when a host owns a queue for it: a
    * channel supplies its topic's input queue, so a background command's exit arrives like any other

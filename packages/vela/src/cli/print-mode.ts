@@ -85,6 +85,7 @@ export async function runPrintMode(options: {
     )
   }
   let exitCode = 0
+  if (mode === 'text') session.backgroundWork.holdDeliveries()
   try {
     for (const [index, message] of messages.entries())
       await session.prompt(message, {
@@ -95,6 +96,7 @@ export async function runPrintMode(options: {
       const text = answer ? lastAssistantText([answer]) : ''
       if (text) await writeStdout(`${text}\n`)
     }
+    await session.backgroundWork.settle(() => session.waitForIdle())
   } catch (error) {
     console.error(
       '[Agent] Turn stopped:',
@@ -104,6 +106,7 @@ export async function runPrintMode(options: {
     if (mode === 'text' && hint) console.error(hint)
     exitCode = 1
   } finally {
+    session.backgroundWork.discardHeld()
     off()
     offAnswer()
     await writing

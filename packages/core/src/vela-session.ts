@@ -89,6 +89,7 @@ import {
   sessionArtifactsUseDataDir,
 } from './session/storage.ts'
 import { UserBash } from './session/user-bash.ts'
+import { SessionWork } from './session/work.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import type { BashResult } from './tools/shell.ts'
 import { getToolListError, isToolModifier } from './tools/tool-selection.ts'
@@ -226,6 +227,7 @@ export class VelaSession {
       )
     this.deps = deps
     this.options = options
+    this.backgroundWork = new SessionWork(options.unattended === true)
     this.defaults = new SessionDefaultState(deps, options)
     this.limits = limitsForModel({}, deps.limitOverrides)
     this.builder = deps.builder
@@ -429,18 +431,16 @@ export class VelaSession {
   get host(): SessionOptions['host'] {
     return routing.sessionHost(this)
   }
+  /** @internal Work outside a turn; idle cleanup keeps the session open while it runs. */
+  readonly backgroundWork: SessionWork
   /** @internal */
   trackWork(work: Promise<unknown>): void {
-    this.work.add(work)
-    void work.catch(() => {}).finally(() => this.work.delete(work))
+    this.backgroundWork.track(work)
   }
-  /** Whether work outside a turn (a background command) is still running */
+  /** Whether work outside a turn (a background command) is still running. */
   get hasWork(): boolean {
-    return this.work.size > 0
+    return this.backgroundWork.active
   }
-  /** @internal Work outside a turn; idle cleanup keeps the session open while it runs */
-  private readonly work = new Set<Promise<unknown>>()
-
   /** Tool names the model can currently see (after tool selection and deferred loading). */
   getActiveTools(): string[] {
     return this.registry.getActiveTools().map((tool) => tool.name)
