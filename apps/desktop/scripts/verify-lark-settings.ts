@@ -60,12 +60,7 @@ export async function verifyLarkSettings(
 
   await submit('Can Local answer while Lark needs repair?')
   await page.getByText('Local answer', { exact: true }).nth(1).waitFor()
-  await page.waitForFunction(
-    async () =>
-      !(await window.vela.sessions('local')).some(
-        (s) => s.state === 'running' || s.state === 'queued',
-      ),
-  )
+  await waitForLocalWork(page, false)
   await open()
   await toggle.click()
   await page.getByText('Off in this app', { exact: true }).waitFor()
@@ -79,8 +74,9 @@ export async function verifyLarkSettings(
     .getByText('oc_duplicate', { exact: true })
     .waitFor({ state: 'detached' })
   await toggle.click()
-  await page.waitForFunction(
-    async () => (await window.vela.settings()).lark.loaded,
+  await waitForState(
+    () => page.evaluate(async () => (await window.vela.settings()).lark.loaded),
+    'Lark did not load',
   )
   assert.equal(await input.getAttribute('type'), 'password')
   await page.getByLabel('App ID', { exact: true }).fill('verify-app')
@@ -127,21 +123,14 @@ export async function verifyLarkSettings(
   await themes(page, 'lark-settings-off')
   await submit('Does Local still work?')
   await page.getByText('Local answer', { exact: true }).nth(2).waitFor()
-  await page.waitForFunction(
-    async () =>
-      !(await window.vela.sessions('local')).some(
-        (s) => s.state === 'running' || s.state === 'queued',
-      ),
-  )
+  await waitForLocalWork(page, false)
   await open()
   await toggle.click()
   await connected.waitFor()
   const release = hold()
   try {
     await submit('Keep this session running')
-    await page.waitForFunction(async () =>
-      (await window.vela.sessions('local')).some((s) => s.state === 'running'),
-    )
+    await waitForLocalWork(page, true)
     await open()
     await toggle.click()
     await page
@@ -153,12 +142,7 @@ export async function verifyLarkSettings(
   } finally {
     release()
   }
-  await page.waitForFunction(
-    async () =>
-      !(await window.vela.sessions('local')).some(
-        (s) => s.state === 'running' || s.state === 'queued',
-      ),
-  )
+  await waitForLocalWork(page, false)
   await page.getByRole('button', { name: 'Remove oc_settings' }).click()
   await page.getByText('No enabled chats.', { exact: true }).waitFor()
   const saved = (await disk()).extensionConfig.lark
@@ -195,26 +179,10 @@ export async function verifyLarkSettings(
       ),
       ['local'],
     )
-    await submit('Can Local answer after the replacement failed?')
-    await page.waitForFunction(async () => {
-      const project = (await window.vela.projects()).find(
-        (p) => p.name === 'Setup project',
-      )!
-      const { messages } = await window.vela.messages({
-        projectId: project.id,
-        sessionId: project.sessionId,
-      })
-      return (
-        messages.at(-2)?.text ===
-          'Can Local answer after the replacement failed?' &&
-        messages.at(-1)?.text === 'Local answer'
-      )
-    })
-    await page.waitForFunction(
-      async () =>
-        !(await window.vela.sessions('local')).some(
-          (s) => s.state === 'running' || s.state === 'queued',
-        ),
+    await verifyReply(
+      page,
+      submit,
+      'Can Local answer after the replacement failed?',
     )
   } finally {
     const repaired = await disk()
@@ -238,6 +206,46 @@ export async function verifyLarkSettings(
   ]
 }
 
+async function waitForState(check: () => Promise<boolean>, failure: string) {
+  const deadline = Date.now() + 10_000
+  while (!(await check())) {
+    assert(Date.now() < deadline, failure)
+    await Bun.sleep(50)
+  }
+}
+
+function waitForLocalWork(page: Page, busy: boolean) {
+  return waitForState(
+    () =>
+      page.evaluate(async (expected) => {
+        const sessions = await window.vela.sessions('local')
+        return (
+          sessions.some(
+            (s) => s.state === 'running' || s.state === 'queued',
+          ) === expected
+        )
+      }, busy),
+    `Local did not become ${busy ? 'busy' : 'idle'}`,
+  )
+}
+
+async function verifyReply(
+  page: Page,
+  submit: (text: string) => Promise<void>,
+  message: string,
+) {
+  await submit(message)
+  const chat = page.getByLabel('Project chat')
+  const submitted = chat
+    .locator('[data-role="user"]')
+    .filter({ hasText: message })
+  await submitted
+    .locator('+ [data-role="assistant"]')
+    .getByText('Local answer', { exact: true })
+    .waitFor({ timeout: 5000 })
+  await waitForLocalWork(page, false)
+}
+
 /** Hold a fake token request while the same window sends and reads a real Local reply. */
 async function pendingCredentialJourney(
   page: Page,
@@ -259,28 +267,10 @@ async function pendingCredentialJourney(
       assert(Date.now() < deadline, 'The fake credential check did not start')
       await Bun.sleep(50)
     }
-    const message = 'Can Local answer before credential validation finishes?'
-    await submit(message)
-    await page.waitForFunction(
-      async (text) => {
-        const project = (await window.vela.projects()).find(
-          (p) => p.name === 'Setup project',
-        )!
-        const { messages } = await window.vela.messages({
-          projectId: project.id,
-          sessionId: project.sessionId,
-        })
-        const session = (await window.vela.sessions('local')).find(
-          (s) => s.sessionId === project.sessionId,
-        )
-        return (
-          messages.at(-2)?.text === text &&
-          messages.at(-1)?.text === 'Local answer' &&
-          session?.state === 'done'
-        )
-      },
-      message,
-      { timeout: 5000 },
+    await verifyReply(
+      page,
+      submit,
+      'Can Local answer before credential validation finishes?',
     )
     // A second credential edit wins while the first is still verifying the old saved secret.
     await page.evaluate(
@@ -289,6 +279,7 @@ async function pendingCredentialJourney(
     )
   } finally {
     await writeFile(join(dir, 'release-verification'), '')
+    await attempt
   }
   assert.match(await attempt, /credentials changed during verification/i)
   assert.equal(
