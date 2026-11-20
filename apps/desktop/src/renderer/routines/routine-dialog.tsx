@@ -5,12 +5,12 @@ import type {
   RoutineSchedule,
   Weekday,
 } from '../../shared/bridge.ts'
-import { Button } from '../components/arc/button/button.tsx'
+import { Button } from '../ui/button.tsx'
 import {
   Dialog,
   DialogClose,
   DialogContent,
-} from '../components/arc/dialog/dialog.tsx'
+} from '../ui/dialog.tsx'
 import { errorMessage } from '../store.ts'
 import { vela } from '../vela.ts'
 import styles from './routine-dialog.module.css'

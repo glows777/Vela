@@ -1,13 +1,13 @@
 .page {
   width: 100%;
   overflow-y: auto;
-  padding: var(--space-8) var(--space-6) var(--space-10);
+  padding: var(--vela-space-8) var(--vela-space-6) var(--vela-space-10);
 }
 
 .column {
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
+  gap: var(--vela-space-8);
   width: 100%;
   max-width: 920px;
   margin: 0 auto;
@@ -17,42 +17,42 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--vela-space-4);
 }
 
 .lead {
   max-width: 62ch;
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-base);
+  font-size: var(--vela-text-base);
   line-height: 1.55;
 }
 
 .note {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
 }
 
 .error {
   margin: 0;
   color: var(--vela-accent-ink);
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
 }
 
 .group {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--vela-space-2);
 }
 
 .groupHead {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin: 0 0 0 var(--space-1);
+  gap: var(--vela-space-2);
+  margin: 0 0 0 var(--vela-space-1);
   color: var(--vela-muted);
-  font-size: var(--text-xs);
+  font-size: var(--vela-text-xs);
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -76,20 +76,20 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--vela-line);
-  border-radius: var(--radius-panel);
+  border: 1px solid var(--vela-paper-edge);
+  border-radius: var(--vela-radius-paper);
   background: var(--vela-paper);
 }
 
 .row {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--vela-space-3);
+  padding: var(--vela-space-3) var(--vela-space-4);
 }
 
 .row + .row {
-  border-top: 1px solid var(--vela-line);
+  border-top: 1px solid var(--vela-rule-list);
 }
 
 .clock {
@@ -108,14 +108,14 @@
 .message {
   margin: 0;
   color: var(--vela-ink);
-  font-size: var(--text-base);
+  font-size: var(--vela-text-base);
   font-weight: 600;
 }
 
 .meta {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-xs);
+  font-size: var(--vela-text-xs);
 }
 
 .when {
@@ -129,5 +129,5 @@
 .schedule {
   margin: 0;
   color: var(--vela-ink);
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
 }

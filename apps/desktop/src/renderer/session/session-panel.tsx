@@ -2,8 +2,6 @@ import { ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useEffect } from 'react'
 import type { Project, Session } from '../../shared/bridge.ts'
-import { Button } from '../components/arc/button/button.tsx'
-import { motionTokens } from '../components/arc/motion-tokens.ts'
 import { Composer } from '../components/composer.tsx'
 import { Conversation } from '../components/conversation.tsx'
 import { MessageView } from '../components/message.tsx'
@@ -17,6 +15,8 @@ import {
 } from '../format.ts'
 import type { Snapshot } from '../store.ts'
 import { loadSession, openLarkChat, sendInSession, stop } from '../store.ts'
+import { Button } from '../ui/button.tsx'
+import { velaMotion } from '../ui/motion.ts'
 import styles from './session-panel.module.css'
 
 /**
@@ -57,14 +57,14 @@ export function SessionPanel({
           animate={{ opacity: 1, x: 0 }}
           exit={{
             opacity: 0,
-            transition: { duration: motionTokens.duration.exit },
+            transition: { duration: velaMotion.duration.quick },
           }}
           transition={
             reduced
-              ? { duration: motionTokens.duration.standard }
+              ? { duration: velaMotion.duration.base }
               : {
-                  duration: motionTokens.duration.standard,
-                  ease: [...motionTokens.ease.enter],
+                  duration: velaMotion.duration.base,
+                  ease: [...velaMotion.ease.out],
                 }
           }
         >

@@ -1,6 +1,6 @@
+import { ArrowRight, ChevronDown } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Composer } from '../components/composer.tsx'
-import { StateMark } from '../components/state-mark.tsx'
 import {
   larkStartHint,
   lastUsedProject,
@@ -15,7 +15,7 @@ import type { Snapshot } from '../store.ts'
 import { startSession } from '../store.ts'
 import styles from './home.module.css'
 
-/** What needs you, then recent sessions, then the composer that starts work in a project. */
+/** Desktop workbench: compact attention & recent sessions above, anchored composer dock below. */
 export function Home({
   snapshot,
   focusSignal,
@@ -45,91 +45,116 @@ export function Home({
 
   return (
     <div className={styles.page}>
-      <div className={styles.column}>
-        <section className={styles.section} aria-labelledby="needs-you">
-          <h2 id="needs-you" className={styles.label}>
-            Needs you
-          </h2>
-          {needs.length === 0 ? (
-            <p className={styles.note}>Nothing needs you right now.</p>
-          ) : (
-            <ul className={styles.list}>
-              {needs.map((session) => {
-                const owner = projectOf(snapshot, session)
-                return (
-                  <li key={session.sessionId}>
-                    <button
-                      type="button"
-                      className={styles.need}
-                      onClick={() =>
-                        onOpenSession(session.chatId, session.sessionId)
-                      }
-                    >
-                      <span className={styles.needLabel}>
-                        <StateMark state="waiting" />
-                        Waiting for you
-                      </span>
-                      <span className={styles.question}>
-                        {session.waitingReason}
-                      </span>
-                      <span className={styles.meta}>
-                        {[
-                          session.task,
-                          owner ? projectName(owner) : undefined,
-                          owner ? projectTag(owner) : undefined,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </section>
+      <div className={styles.scroll}>
+        <div className={styles.column}>
+          <section className={styles.section} aria-labelledby="needs-you">
+            <div className={styles.sectionBar}>
+              <h3 id="needs-you" className={styles.label}>
+                Needs you
+              </h3>
+              {needs.length > 0 ? (
+                <span className={styles.count}>{needs.length}</span>
+              ) : null}
+            </div>
+            {needs.length === 0 ? (
+              <p className={styles.emptyLine}>Nothing needs you right now.</p>
+            ) : (
+              <ul className={styles.attentionList}>
+                {needs.map((session) => {
+                  const owner = projectOf(snapshot, session)
+                  return (
+                    <li key={session.sessionId}>
+                      <button
+                        type="button"
+                        className={styles.attention}
+                        onClick={() =>
+                          onOpenSession(session.chatId, session.sessionId)
+                        }
+                      >
+                        <span className={styles.glyph} aria-hidden="true">
+                          ?
+                        </span>
+                        <span className={styles.what}>
+                          <span className={styles.attentionMeta}>
+                            {[
+                              'Waiting for you',
+                              owner ? projectName(owner) : undefined,
+                              owner ? projectTag(owner) : undefined,
+                              session.task,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </span>
+                          <span className={styles.question}>
+                            {session.waitingReason}
+                          </span>
+                        </span>
+                        <span className={styles.go}>
+                          Open
+                          <ArrowRight size={14} aria-hidden="true" />
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </section>
 
-        <section className={styles.section} aria-labelledby="recent">
-          <h2 id="recent" className={styles.label}>
-            Recent sessions
-          </h2>
-          {recent.length === 0 ? (
-            <p className={styles.note}>No sessions yet.</p>
-          ) : (
-            <ul className={styles.list}>
-              {recent.map((session) => {
-                const owner = projectOf(snapshot, session)
-                return (
-                  <li key={session.sessionId}>
-                    <button
-                      type="button"
-                      className={styles.row}
-                      onClick={() =>
-                        onOpenSession(session.chatId, session.sessionId)
-                      }
-                    >
-                      <StateMark state={session.state} />
-                      <span className={styles.rowTitle}>{session.task}</span>
-                      <span className={styles.meta}>
-                        {owner
-                          ? `${projectName(owner)} · ${projectTag(owner)}`
-                          : 'Local'}
-                      </span>
-                      <span className={styles.word}>
-                        {stateWord[session.state]}
-                      </span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </section>
+          <section className={styles.section} aria-labelledby="recent">
+            <h3 id="recent" className={styles.label}>
+              Recent sessions
+            </h3>
+            {recent.length === 0 ? (
+              <p className={styles.emptyLine}>No sessions yet.</p>
+            ) : (
+              <ul className={styles.listCard}>
+                {recent.map((session) => {
+                  const owner = projectOf(snapshot, session)
+                  return (
+                    <li key={session.sessionId} className={styles.listItem}>
+                      <button
+                        type="button"
+                        className={styles.row}
+                        onClick={() =>
+                          onOpenSession(session.chatId, session.sessionId)
+                        }
+                      >
+                        <span
+                          className={[
+                            styles.dot,
+                            session.state === 'waiting'
+                              ? styles.dotWaiting
+                              : session.state === 'running'
+                                ? styles.dotRunning
+                                : styles.dotIdle,
+                          ].join(' ')}
+                          aria-hidden="true"
+                        />
+                        <span className={styles.rowTitle}>{session.task}</span>
+                        <span className={styles.meta}>
+                          {owner
+                            ? `${projectName(owner)} · ${projectTag(owner)}`
+                            : 'Local'}
+                        </span>
+                        <span className={styles.word}>
+                          {stateWord[session.state]}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </section>
+        </div>
+      </div>
 
-        <section className={styles.section} aria-labelledby="start">
-          <h2 id="start" className={styles.label}>
+      <section className={styles.dock} aria-labelledby="start">
+        <div className={styles.dockInner}>
+          <h3 id="start" className={styles.srOnly}>
             Start a session
-          </h2>
+          </h3>
           {project ? (
             <Composer
               key={project.id}
@@ -151,9 +176,10 @@ export function Home({
                 return accepted
               }}
             >
-              <label className={styles.picker}>
-                <span>Project</span>
+              <div className={styles.pickerWrap}>
+                <span className={styles.pickerDot} aria-hidden="true" />
                 <select
+                  className={styles.picker}
                   aria-label="Project"
                   value={project.id}
                   onChange={(event) => setPicked(event.target.value)}
@@ -164,10 +190,15 @@ export function Home({
                     </option>
                   ))}
                 </select>
-              </label>
+                <ChevronDown
+                  className={styles.pickerChevron}
+                  size={13}
+                  aria-hidden="true"
+                />
+              </div>
             </Composer>
           ) : (
-            <p className={styles.note}>
+            <p className={styles.emptyLine}>
               Create a project to start a session in a folder.
             </p>
           )}
@@ -176,8 +207,8 @@ export function Home({
               {snapshot.error}
             </p>
           ) : null}
-        </section>
-      </div>
+        </div>
+      </section>
     </div>
   )
 }

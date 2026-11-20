@@ -1,3 +1,4 @@
+import { handoffToolNames, topicToolNames } from '@glows777/vela-channels'
 import type { ThinkingLevel } from '@glows777/vela-core'
 import { THINKING_LEVELS } from '@glows777/vela-core/diagnostics'
 import { z } from 'zod'
@@ -5,6 +6,7 @@ import { z } from 'zod'
 const chatSchema = z
   .object({
     id: z.string().trim().min(1),
+    environment: z.string().trim().min(1).optional(),
     tools: z.array(z.string().min(1)).optional(),
     readUntagged: z.boolean().optional(),
     /** `provider/id` for the group session. */
@@ -55,6 +57,35 @@ export function parseChats(value: unknown): LarkChat[] {
     throw new Error('Duplicate Lark chat id')
   for (const chat of chats) validateThinkingLevel(chat)
   return chats as LarkChat[]
+}
+
+export function groupSessionOptions(
+  chat: LarkChat,
+  cwd: string,
+  topic: boolean,
+) {
+  const environment = chat.environment ?? 'local'
+  return {
+    cwd,
+    location: {
+      environment,
+      cwd: environment === 'local' ? cwd : '/workspace',
+    },
+    model: (topic ? chat.topicModel : undefined) ?? chat.model,
+    thinkingLevel:
+      (topic ? chat.topicThinkingLevel : undefined) ?? chat.thinkingLevel,
+    tools:
+      chat.tools === undefined
+        ? undefined
+        : [
+            ...new Set([
+              ...chat.tools,
+              ...topicToolNames,
+              ...handoffToolNames,
+              ...(topic ? ['channel_wait_for_input'] : []),
+            ]),
+          ],
+  }
 }
 
 /** A chat's configured tools must exist after extensions load; a typo fails startup. */

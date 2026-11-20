@@ -4,22 +4,25 @@
 }
 
 .bubble {
-  max-width: 80%;
+  max-width: 78%;
   margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-panel);
-  background: var(--vela-menu-hover);
+  padding: 8px 13px;
+  border-radius: var(--vela-radius-bubble) var(--vela-radius-bubble)
+    var(--vela-radius-sm) var(--vela-radius-bubble);
+  background: var(--vela-bubble);
   color: var(--vela-ink);
-  font-size: var(--text-base);
-  line-height: var(--leading-body);
+  font-size: var(--vela-text-base);
+  line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .assistant {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 5px;
 }
 
 .turn {
@@ -29,16 +32,20 @@
 .text {
   margin: 0;
   color: var(--vela-ink);
-  font-size: var(--text-base);
+  font-size: var(--vela-text-base);
   line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .system {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .person {

@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir, symlink } from 'node:fs/promises'
+import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tempDir } from '@glows777/vela/testing'
-import type { ExecutionEnv, Result } from '@glows777/vela-core'
+import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
+import { createVela, type ExecutionEnv, type Result } from '@glows777/vela-core'
 import { buildDockerAdapter } from '../../extensions/docker/build.ts'
 import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
 import { dockerOperations } from '../../extensions/docker/operations.ts'
@@ -16,6 +16,7 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
       !process.getgid?.(),
   )
   let dir: ReturnType<typeof tempDir>
+  const operations: string[] = []
   let resultRoot: string
   let env: ExecutionEnv
   function value<T>(r: Result<T, Error>): T {
@@ -29,18 +30,67 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
     await buildDockerAdapter(dir.path)
     const guest = readFileSync(join(dir.path, 'guest.cjs'), 'utf8')
     // Exercise the identical per-operation guest offline. Docker lifecycle is tested separately.
-    env = dockerOperations('offline-guest', dir.path, (op, cwd) =>
-      spawn('node', ['-e', guest, '--', op, cwd, resultRoot], {
+    env = dockerOperations('offline-guest', dir.path, (op, cwd) => {
+      operations.push(op)
+      return spawn('node', ['-e', guest, '--', op, cwd, resultRoot], {
         cwd: dir.path,
         env: { PATH: process.env.PATH, HOME: dir.path },
         stdio: 'pipe',
-      }),
-    )
+      })
+    })
   })
   afterAll(async () => {
     await env?.cleanup()
     dir.cleanup()
   })
+
+  test('one transient discovery reads workspace instructions, skills and templates; a warm wake opens no guest', async () => {
+    for (const name of ['alpha', 'beta', 'gamma']) {
+      const path = join(dir.path, '.skills', name)
+      await mkdir(path, { recursive: true })
+      await writeFile(
+        join(path, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${name} fixture\n---\nbody`,
+      )
+    }
+    await writeFile(join(dir.path, 'AGENTS.md'), 'guest instruction')
+    const prompts = join(dir.path, '.vela/prompts')
+    await mkdir(prompts, { recursive: true })
+    await writeFile(join(prompts, 'check.md'), 'check fixture')
+    const model = createFauxModel({
+      cache: true,
+      responses: [fauxText('one'), fauxText('two')],
+    })
+    const vela = createVela({
+      model,
+      dataDir: join(dir.path, 'data'),
+      env: () => env,
+    })
+    try {
+      const s = vela.session('resources', {
+        location: { cwd: dir.path, environment: 'guest' },
+      })
+      operations.length = 0
+      await s.prompt('cold')
+      const inventory = await s.resources()
+      expect(inventory.contextFiles.map((f) => f.content)).toContain(
+        'guest instruction',
+      )
+      expect(inventory.skills.map((s) => s.name)).toEqual([
+        'alpha',
+        'beta',
+        'gamma',
+      ])
+      expect(inventory.promptTemplates.map((t) => t.name)).toEqual(['check'])
+      expect(operations).toEqual(['discoverWorkspace'])
+      operations.length = 0
+      await s.prompt('warm')
+      expect(operations).toEqual([])
+      expect(model.calls[1]!.system).toBe(model.calls[0]!.system)
+    } finally {
+      await vela.dispose()
+    }
+  }, 60000)
 
   test('one binary reader keeps its open file for ranges, scans and metadata across replacement', async () => {
     const original = `${'A'.repeat(65535)}一\ntwo🙂\n末`
@@ -303,7 +353,7 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
     },
   )
 
-  test('the current SDK keeps nonlocal sessions closed until E3b', async () => {
+  test('the SDK rejects adapters that do not match the requested cwd or local identity', async () => {
     const { createVela } = await import('@glows777/vela')
     const { createFauxModel, fauxText } = await import('@glows777/vela/testing')
     const model = createFauxModel({ responses: [fauxText('unexpected')] })
@@ -314,11 +364,10 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
       env: () => env,
     })
     try {
-      expect(() =>
-        vela.session('docker', {
-          location: { environment: 'docker-test', cwd: '/workspace' },
-        }),
-      ).toThrow('only local locations')
+      const wrong = vela.session('docker', {
+        location: { environment: 'docker-test', cwd: '/different-cwd' },
+      })
+      await expect(wrong.prompt('test')).rejects.toThrow('unavailable')
       await expect(vela.session('local').prompt('test')).rejects.toThrow(
         'unavailable',
       )

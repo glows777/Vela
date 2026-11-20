@@ -81,6 +81,17 @@ export class SessionDefaultState {
       this.modelPinned = true
   }
 
+  applyOpenChoices(
+    options: SessionOptions,
+    selectModel: (model: string | LanguageModel) => void,
+  ) {
+    // A model or thinking level given at open (a channel's current chat entry) wins over the saved choice
+    if (options.thinkingLevel !== undefined)
+      this.thinking = options.thinkingLevel
+    if (options.model !== undefined && options.model !== this.modelChoice)
+      selectModel(options.model)
+  }
+
   apply(
     defaults: SessionDefaults | undefined,
     store: SessionStore,

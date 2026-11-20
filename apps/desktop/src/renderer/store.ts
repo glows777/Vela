@@ -222,7 +222,6 @@ async function loadMessages(
   }
 }
 
-/** Reads one session's whole history; the panel needs it when a session opens. */
 let visibleLarkGroup: Project | undefined
 let visibleLarkTopic: { projectId: string; session: Session } | undefined
 
@@ -235,6 +234,7 @@ export function watchLarkProject(project: Project) {
   }
 }
 
+/** Reads one session's whole history; the panel needs it when a session opens. */
 export function loadSession(projectId: string, sessionId: string) {
   const project = snapshot.projects.find((item) => item.id === projectId)
   const session = snapshot.sessions[sessionId]

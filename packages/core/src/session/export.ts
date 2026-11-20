@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
+import type { ExecutionLocation } from '../execution/types.ts'
 import {
   SESSION_FORMAT_VERSION,
   type SessionEntry,
@@ -9,14 +10,18 @@ import {
 import { renderSessionHtml } from './export-html.ts'
 
 /** The current branch as JSONL lines (like pi's exportToJsonl): a header, then the entries re-chained. */
-function branchJsonl(id: string, cwd: string, entries: SessionEntry[]): string {
+function branchJsonl(
+  id: string,
+  location: ExecutionLocation,
+  entries: SessionEntry[],
+): string {
   const header: SessionHeader = {
     type: 'session',
     version: SESSION_FORMAT_VERSION,
     id: id,
     timestamp: new Date().toISOString(),
-    cwd: cwd,
-    location: { environment: 'local', cwd },
+    cwd: location.cwd,
+    location,
   }
   const lines: object[] = [header]
   let parentId: string | null = null
@@ -48,7 +53,7 @@ async function writeExport(
 export function exportBranch(options: {
   id: string
   baseCwd?: string
-  sessionCwd: string
+  location: ExecutionLocation
   path?: string
   entries: SessionEntry[]
   name?: string
@@ -57,7 +62,7 @@ export function exportBranch(options: {
 }): Promise<string> {
   const content =
     options.format === 'jsonl'
-      ? branchJsonl(options.id, options.sessionCwd, options.entries)
+      ? branchJsonl(options.id, options.location, options.entries)
       : renderSessionHtml({
           id: options.id,
           name: options.name,

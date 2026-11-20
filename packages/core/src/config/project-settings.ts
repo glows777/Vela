@@ -1,6 +1,7 @@
 import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
 import { interpolateDeep } from './interpolate.ts'
 import {
+  omitProjectLocation,
   parseSettings,
   RESOURCE_KEYS,
   type VelaSettings,
@@ -49,6 +50,7 @@ export async function loadProjectSettings(
     throw content.error
   }
   const settings = parseSettings(content.value, file)
+  omitProjectLocation(settings)
   for (const key of RESOURCE_KEYS) {
     const entries = settings[key]
     if (!entries) continue

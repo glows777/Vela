@@ -1,10 +1,10 @@
 import { rmSync } from 'node:fs'
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve, sep } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import { validateStoredLocation } from '../execution/location.ts'
-import type { ExecutionLocation } from '../execution/types.ts'
+import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
@@ -31,12 +31,14 @@ import {
   type SessionTreeNode,
   summarizeSession,
 } from './entries.ts'
+import { inheritToolResultPaths } from './fork-files.ts'
 import {
   fileSessionStorage,
   type SessionStorage,
   sessionArtifactsUseDataDir,
 } from './storage.ts'
 import { getStoredResult, ToolResultStore } from './tool-results.ts'
+import { SessionUploads } from './uploads.ts'
 
 export interface SessionState {
   messages: ModelMessage[]
@@ -56,6 +58,7 @@ const SESSION_DIR = 'sessions'
  */
 export class SessionStore {
   readonly results: ToolResultStore
+  readonly uploads: SessionUploads
   /** Tool history and long output for `--no-session`, outside the data directory. */
   private transientDir?: string
   private readonly storage: SessionStorage
@@ -75,6 +78,7 @@ export class SessionStore {
   private started = false
   /** Whether storage was checked for (or loaded) an earlier session with this id */
   private checked = false
+  private unknownLocation?: Error
   /** Entries waiting to be written, in order */
   private readonly pending: SessionFileEntry[] = []
   private writing: Promise<void> = Promise.resolve()
@@ -88,7 +92,7 @@ export class SessionStore {
     /** Tool history lives in a temp dir (custom storage without dataDir): if it is gone on resume, start over instead of failing */
     private readonly temporaryResults = false,
     private readonly cwd?: string,
-    private readonly location?: ExecutionLocation,
+    private location?: ExecutionLocation,
     /** Internal notification after an actual storage write (not an empty flush). */
     private readonly onSaved?: () => void,
   ) {
@@ -106,6 +110,10 @@ export class SessionStore {
         join(this.transientDir, 'tool-results'),
       )
     }
+    this.uploads = new SessionUploads(
+      sessionId,
+      join(dirname(this.results.dir), 'upload-sources'),
+    )
   }
 
   /** Deletes tool history and long output kept outside the data directory. */
@@ -148,6 +156,58 @@ export class SessionStore {
       return this.flush()
     this.append({ type: 'session_archived', archived })
     await this.flush()
+  }
+
+  assertLocationKnown(): void {
+    if (this.unknownLocation) throw this.unknownLocation
+  }
+
+  /** Write a relocation outside the normal retry queue: a rejected move must never replay on save. */
+  async persistLocation(location: ExecutionLocation): Promise<void> {
+    if (!this.started) {
+      await this.checkNew()
+      if (!this.started) this.startTranscript()
+    }
+    // Reserve a slot on the same write chain as names, routing and transcript entries.
+    // A rejected move releases that slot without adding its marker to the retry queue.
+    const parentId = this.leafId
+    const commit = this.flush().then(() =>
+      this.appendLocation(location, parentId),
+    )
+    this.writing = commit.catch(() => {})
+    await commit
+  }
+
+  private async appendLocation(
+    location: ExecutionLocation,
+    parentId: string | null,
+  ): Promise<void> {
+    // Session-wide metadata uses a separate ID namespace from ordinary branch entries.
+    const marker = {
+      type: 'custom' as const,
+      customType: 'vela.session.location',
+      data: location,
+      id: `location:${crypto.randomUUID()}`,
+      parentId,
+      timestamp: new Date().toISOString(),
+    }
+    try {
+      await this.storage.append(this.sessionId, [marker])
+    } catch (error) {
+      // A storage implementation can lose the acknowledgement after a successful write.
+      const saved = await this.storage
+        .load(this.sessionId)
+        .catch((readError) => {
+          this.unknownLocation = new Error(
+            'Session location is unknown. Call resume() when storage is available.',
+            { cause: new AggregateError([error, readError]) },
+          )
+          throw this.unknownLocation
+        })
+      if (!saved?.some((entry) => entry.id === marker.id)) throw error
+    }
+    this.location = location
+    this.saved()
   }
 
   /** The current leaf (like pi's getLeafId); null when the session has no entries or the leaf was reset. */
@@ -252,15 +312,21 @@ export class SessionStore {
    */
   async seedFrom(
     branch: SessionEntry[],
-    parent: { id: string; results: ToolResultStore },
+    parent: { id: string; store: SessionStore },
+    resolveEnv: () => Promise<ExecutionEnv>,
   ): Promise<void> {
     // Setup entries the new session holds in memory are replaced by the branch's own
     if (this.started)
       throw new Error('Only a new session can be seeded from another branch')
     await this.checkNew()
+    const uploads = await this.uploads.inherit(
+      parent.store.uploads,
+      branch,
+      resolveEnv,
+    )
     const entries = copyBranch(structuredClone(branch))
     const context = buildSessionContext(entries)
-    const source = parent.results.history.path
+    const source = parent.store.results.history.path
     const target = join(
       this.results.dir,
       '..',
@@ -278,11 +344,12 @@ export class SessionStore {
     }
     const inherited = await inheritToolResultPaths(
       entries,
-      parent.results,
+      parent.store.results,
       this.results.dir,
       resolve(target),
       copiedHistory,
       target,
+      uploads,
     )
     await this.results.resumeHistory(
       this.results.historyId,
@@ -345,20 +412,24 @@ export class SessionStore {
       // Like pi: setup entries (model, thinking level, name) and extension state stay in memory until there is
       // a conversation
       if (!startsConversation(entry)) return
-      this.started = true
-      this.header ??= {
-        type: 'session',
-        version: SESSION_FORMAT_VERSION,
-        id: this.sessionId,
-        timestamp: new Date().toISOString(),
-        ...(this.cwd ? { cwd: this.cwd } : {}),
-        ...(this.location ? { location: this.location } : {}),
-        ...(this.channel ? { channel: this.channel } : {}),
-        toolHistoryId: this.results.historyId,
-      }
-      this.pending.push(this.header, ...this.entries)
+      this.startTranscript()
     } else this.pending.push(entry)
     this.writing = this.writing.then(() => this.write())
+  }
+
+  private startTranscript() {
+    this.started = true
+    this.header ??= {
+      type: 'session',
+      version: SESSION_FORMAT_VERSION,
+      id: this.sessionId,
+      timestamp: new Date().toISOString(),
+      ...(this.cwd ? { cwd: this.cwd } : {}),
+      ...(this.location ? { location: this.location } : {}),
+      ...(this.channel ? { channel: this.channel } : {}),
+      toolHistoryId: this.results.historyId,
+    }
+    this.pending.push(this.header, ...this.entries)
   }
 
   /** Appends what is pending; on failure keeps it for the next attempt (never rejects). */
@@ -541,6 +612,7 @@ export class SessionStore {
   > {
     const loaded = await this.storage.load(this.sessionId)
     if (!loaded?.length) {
+      this.assertLocationKnown()
       this.checked = true
       return
     }
@@ -558,12 +630,34 @@ export class SessionStore {
       )
     if ('location' in header) validateStoredLocation(header.location)
     // A write retried after it failed part way can repeat entries: the first copy of each id counts
+    let location = header.location
     const seen = new Set<string>()
-    const entries = (loaded.slice(1) as SessionEntry[]).filter(
-      (entry) =>
-        typeof entry.id !== 'string' ||
-        (!seen.has(entry.id) && !!seen.add(entry.id)),
-    )
+    const markerParents = new Map<string, string | null>()
+    const entries: SessionEntry[] = []
+    for (const entry of loaded.slice(1) as SessionEntry[]) {
+      if (typeof entry.id === 'string') {
+        if (seen.has(entry.id)) continue
+        seen.add(entry.id)
+      }
+      // External storage consumers (such as archive) may append under the last physical
+      // record. Reconnect that edge when removing session metadata from the branch.
+      const parentId =
+        entry.parentId && markerParents.has(entry.parentId)
+          ? markerParents.get(entry.parentId)!
+          : entry.parentId
+      if (
+        entry.type === 'custom' &&
+        entry.customType === 'vela.session.location' &&
+        entry.id?.startsWith('location:')
+      ) {
+        validateStoredLocation(entry.data)
+        location = entry.data
+        markerParents.set(entry.id, parentId)
+      } else
+        entries.push(
+          entry.parentId === parentId ? entry : { ...entry, parentId },
+        )
+    }
     // Like pi: the leaf is the last entry
     const context = buildSessionContext(entries, entries.at(-1)?.id ?? null)
     if (header.toolHistoryId) {
@@ -582,6 +676,7 @@ export class SessionStore {
       }
     }
     this.header = header
+    this.location = location
     const channel = summarizeSession(this.sessionId, [
       header,
       ...entries,
@@ -593,80 +688,10 @@ export class SessionStore {
     this.producers = context.producers
     this.started = true
     this.checked = true
+    this.unknownLocation = undefined
     this.pending.length = 0
-    return { ...context, channel, location: header.location }
+    return { ...context, channel, location }
   }
-}
-
-const RESULT_FILE =
-  /^(?:vela-(?:output|result|micro)-)?[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.(?:txt|log)/i
-
-function replacePaths(text: string, pairs: [string, string][]): string {
-  return pairs.reduce(
-    (out, [from, to]) => (from && from !== to ? out.replaceAll(from, to) : out),
-    text,
-  )
-}
-
-function rewritePaths<T>(value: T, pairs: [string, string][]): T {
-  if (typeof value === 'string') return replacePaths(value, pairs) as T
-  if (Array.isArray(value))
-    return value.map((item) => rewritePaths(item, pairs)) as T
-  if (value && typeof value === 'object') {
-    const copy: Record<string, unknown> = {}
-    for (const [key, item] of Object.entries(value))
-      copy[key] = rewritePaths(item, pairs)
-    return copy as T
-  }
-  return value
-}
-
-function referencedResultFiles(text: string, dir: string): string[] {
-  const prefix = dir.endsWith(sep) ? dir : `${dir}${sep}`
-  const found = new Set<string>()
-  let from = 0
-  while (from < text.length) {
-    const at = text.indexOf(prefix, from)
-    if (at < 0) break
-    const match = RESULT_FILE.exec(text.slice(at + prefix.length))
-    if (match) found.add(prefix + match[0])
-    from = at + prefix.length
-  }
-  return [...found]
-}
-
-async function inheritToolResultPaths(
-  entries: SessionEntry[],
-  parent: ToolResultStore,
-  childDir: string,
-  childHistoryPath: string,
-  historyText: string | undefined,
-  historyFile: string,
-): Promise<SessionEntry[]> {
-  const blob = `${JSON.stringify(entries)}\n${historyText ?? ''}`
-  const files = referencedResultFiles(blob, parent.dir)
-  if (files.length) await mkdir(childDir, { recursive: true, mode: 0o700 })
-  for (const file of files) {
-    try {
-      await copyFile(file, join(childDir, basename(file)))
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-  }
-  const pairs: [string, string][] = [
-    [parent.history.path, childHistoryPath],
-    [
-      join(dirname(parent.history.path), 'snapshots'),
-      join(dirname(childHistoryPath), 'snapshots'),
-    ],
-    [parent.dir, childDir],
-  ]
-  if (historyText !== undefined) {
-    const rewritten = replacePaths(historyText, pairs)
-    if (rewritten !== historyText)
-      await writeFile(historyFile, rewritten, { mode: 0o600 })
-  }
-  return rewritePaths(entries, pairs)
 }
 
 /** Whether an entry is conversation: a user or assistant message, or what enters the context like one (an extension's custom message, a `!` command). */

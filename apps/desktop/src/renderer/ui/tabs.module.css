@@ -1,0 +1,35 @@
+.list {
+  display: inline-flex;
+  gap: var(--vela-space-1);
+  padding: var(--vela-space-1);
+  border-radius: var(--vela-radius-paper);
+  background: var(--vela-diff-remove);
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--vela-space-2);
+  height: 34px;
+  padding: 0 var(--vela-space-3);
+  border: 0;
+  border-radius: var(--vela-radius-inner);
+  background: transparent;
+  color: var(--vela-ink);
+  font: inherit;
+  font-size: var(--vela-text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.trigger[data-state="active"] {
+  background: var(--vela-white);
+  box-shadow: var(--vela-tab-shadow);
+}
+
+.content {
+  margin-top: var(--vela-space-4);
+  color: var(--vela-ink);
+  font-size: var(--vela-text-md);
+  line-height: var(--vela-leading-body);
+}

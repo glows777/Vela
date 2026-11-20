@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import type { Project } from '../../shared/bridge.ts'
-import { Button } from '../components/arc/button/button.tsx'
 import { Composer } from '../components/composer.tsx'
 import { Conversation } from '../components/conversation.tsx'
 import { MessageView } from '../components/message.tsx'
@@ -9,6 +8,7 @@ import type { Panel } from '../panel.ts'
 import { SessionPanel } from '../session/session-panel.tsx'
 import type { Snapshot } from '../store.ts'
 import { loadEarlierLark, sendInProject, watchLarkProject } from '../store.ts'
+import { Button } from '../ui/button.tsx'
 import styles from './project-page.module.css'
 import { SessionCard } from './session-card.tsx'
 
@@ -37,7 +37,11 @@ export function ProjectPage({
   return (
     <div className={styles.page}>
       <div className={styles.chat}>
-        <Conversation label="Project chat" place={`project:${project.id}`}>
+        <Conversation
+          label="Project chat"
+          place={`project:${project.id}`}
+          centered
+        >
           {earlier ? (
             <Button
               type="button"
@@ -74,28 +78,32 @@ export function ProjectPage({
             )
           )}
         </Conversation>
-        <Composer
-          key={project.id}
-          label={
-            lark ? 'Message Vela in this group' : 'Message Vela in this project'
-          }
-          draftKey={`project:${project.id}`}
-          hint={
-            lark ? (
-              larkGroupComposer
-            ) : (
-              <>
-                Runs in <code>{project.cwd}</code> on this computer.
-              </>
-            )
-          }
-          onSend={(text) => sendInProject(project, text)}
-        />
-        {snapshot.error ? (
-          <p className={styles.error} role="alert">
-            {snapshot.error}
-          </p>
-        ) : null}
+        <div className={styles.composerDock}>
+          <Composer
+            key={project.id}
+            label={
+              lark
+                ? 'Message Vela in this group'
+                : 'Message Vela in this project'
+            }
+            draftKey={`project:${project.id}`}
+            hint={
+              lark ? (
+                larkGroupComposer
+              ) : (
+                <>
+                  Runs in <code>{project.cwd}</code> on this computer.
+                </>
+              )
+            }
+            onSend={(text) => sendInProject(project, text)}
+          />
+          {snapshot.error ? (
+            <p className={styles.error} role="alert">
+              {snapshot.error}
+            </p>
+          ) : null}
+        </div>
       </div>
       <SessionPanel
         snapshot={snapshot}

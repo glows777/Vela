@@ -11,10 +11,13 @@ const places = new Map<string, number>()
 export function Conversation({
   label,
   place,
+  centered = false,
   children,
 }: {
   label: string
   place: string
+  /** Centers messages in a 720px reading column while keeping the scrollbar at the pane edge. */
+  centered?: boolean
   children: ReactNode
 }) {
   const box = useRef<HTMLElement>(null)
@@ -38,7 +41,9 @@ export function Conversation({
   return (
     <section
       ref={box}
-      className={styles.conversation}
+      className={[styles.conversation, centered ? styles.centered : '']
+        .filter(Boolean)
+        .join(' ')}
       aria-label={label}
       onScroll={(event) => {
         const node = event.currentTarget

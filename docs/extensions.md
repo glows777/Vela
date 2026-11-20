@@ -50,7 +50,7 @@ The CLI composes two sources:
 
 Handlers run in stable **host → matching project → core** order. Core audit handlers remain last. Compared with the old flat startup list, user-listed host extensions now precede project-discovered extensions. Opening B does not dispatch A's project handlers for B or change A's registrations.
 
-Project preparation happens at start, resume and relocation, not every wake. An open session keeps its snapshot when settings or MCP configuration changes; a new session gets the new snapshot. The CLI loader keeps the available built-ins in a non-local snapshot, but skips project code and scoped MCP with a diagnostic; neither imports nor spawns on the host. This does not enable remote execution environments (E3).
+Project preparation happens at start, resume and relocation, not every wake. An open session keeps its snapshot when settings or MCP configuration changes; a new session gets the new snapshot. The CLI loader keeps the available built-ins in a non-local snapshot, but skips project code and scoped MCP with a diagnostic; neither imports nor spawns on the host. The CLI resolves Docker environments from owner settings. See [group environment configuration](channels.md).
 
 In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension (`*.d.ts` is skipped), and each subdirectory with an `index.ts`, `index.js` or `index.mjs` is one extension. A directory that itself has an index file is a single extension. Repeated discovered/listed file paths are deduplicated within their source scope; explicitly loaded CLI extension names take precedence over configurable discovery. The auto-discovered directories may be missing.
 

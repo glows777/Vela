@@ -36,13 +36,13 @@ async function themeColors(page: Page, theme: Theme) {
   )
   assert.equal(
     await dialog.evaluate((element) =>
-      getComputedStyle(element).getPropertyValue('--foreground').trim(),
+      getComputedStyle(element).getPropertyValue('--vela-ink').trim(),
     ),
     expected,
   )
   assert.equal(
     await dialog.evaluate((element) =>
-      getComputedStyle(element).getPropertyValue('--surface-raised').trim(),
+      getComputedStyle(element).getPropertyValue('--vela-paper').trim(),
     ),
     tokens.tokens['vela-paper'][theme],
   )

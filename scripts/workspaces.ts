@@ -113,6 +113,9 @@ export async function packWorkspaces(root: string, work: string) {
       'package/README.md',
       'package/dist/index.js',
       'package/dist/index.d.ts',
+      ...(pkg.key === 'vela'
+        ? ['package/dist/docker/adapter.mjs', 'package/dist/docker/guest.cjs']
+        : []),
     ])
       if (!contents.includes(file))
         throw new Error(`${pkg.name} missing ${file}`)
