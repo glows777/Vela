@@ -38,6 +38,8 @@ const bridge: DesktopBridge = {
   openProject: (input) => invoke({ method: 'openProject', input }),
   chooseFolder: () => invoke({ method: 'chooseFolder' }),
   messages: (input) => invoke({ method: 'messages', input }),
+  larkMessages: (input) => invoke({ method: 'larkMessages', input }),
+  openLarkChat: (chatId) => invoke({ method: 'openLarkChat', chatId }),
   listRoutines: (channel, chatId) =>
     invoke({ method: 'listRoutines', channel, chatId }),
   createRoutine: (channel, target, input) =>

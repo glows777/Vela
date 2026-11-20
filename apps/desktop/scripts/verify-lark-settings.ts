@@ -194,7 +194,7 @@ export async function verifyLarkSettings(
   await connected.waitFor()
   assert.equal(
     (await page.evaluate(() => window.vela.projects())).some(
-      (p) => p.cwd === project,
+      (p) => p.channel === 'local' && p.cwd === project,
     ),
     true,
   )

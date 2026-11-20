@@ -77,6 +77,7 @@ export function App() {
     <div className={styles.app}>
       <Sidebar
         projects={snapshot.projects}
+        connections={snapshot.connections}
         current={view.name === 'project' ? view.projectId : view.name}
         onHome={() => setView({ name: 'home' })}
         onRoutines={() => setView({ name: 'routines' })}

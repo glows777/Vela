@@ -1,6 +1,8 @@
 /** Serializable desktop host contract. No SDK or Electron objects cross this boundary. */
-type Connection = { connected: boolean; error?: string }
+export type Connection = { connected: boolean; error?: string }
 export type Session = {
+  /** The channel that owns it: `local` or `lark`. */
+  channel: string
   sessionId: string
   chatId: string
   chatKind: 'group' | 'direct'
@@ -12,20 +14,47 @@ export type Session = {
   waitingReason?: string
   runId?: string
 }
-export type Project = {
+/** A folder on this computer, named by its folder. */
+type LocalProject = {
   id: string
   channel: 'local'
   cwd: string
   name: string
   sessionId: string
 }
+/** A Lark group. `id` is its chat id; a group with no readable name shows it. */
+type LarkProject = {
+  id: string
+  channel: 'lark'
+  name?: string
+  sessionId: string
+}
+export type Project = LocalProject | LarkProject
 export type Message = {
   id: string
   sessionId: string
   role: 'user' | 'assistant' | 'system'
   text: string
   createdAt: string
+  /** Who wrote it in a Lark group; absent in a Local project. */
+  senderName?: string
   clientMessageId?: string
+}
+/**
+ * A group message from this app: the bot posts it in the group, signed with the
+ * `Vela app` constant, so Lark records it as the bot's own message.
+ */
+export type LarkSubmit =
+  | { chatId: string; sessionId: string; text: string }
+  | { chatId: string; newTopic: { title: string }; text: string }
+export type SubmitReceipt = {
+  /** `posted`: it is in Lark. `uncertain`: it may be. `not-sent`: nothing was posted. */
+  outcome: 'posted' | 'uncertain' | 'not-sent'
+  sessionId?: string
+  messageId?: string
+  topic?: { rootId: string; threadId: string }
+  /** Why a submission did not finish: a plain `posted` carries none. */
+  error?: string
 }
 /** One model a provider offers, without anything that would name a key. */
 type SettingsModel = {
@@ -136,10 +165,21 @@ export type Event =
   | {
       type: 'status'
       channel: string
-      value: { chatId: string; rootId: string; text: string }
+      value: {
+        chatId: string
+        rootId: string
+        text: string
+        /** The logical session the line belongs to, for the page to file it. */
+        sessionId?: string
+      }
     }
   | { type: 'connection'; channel: string; value: Connection }
   | { type: 'local'; channel: 'local'; value: LocalEvent }
+  /** Lark history is read, not streamed: re-read on `reset` or after a change. */
+  | { type: 'lark'; channel: 'lark'; value: LarkEvent }
+type LarkEvent =
+  | { type: 'reset' }
+  | { type: 'history_changed'; chatId: string; sessionId?: string }
 type LocalEvent = {
   version: 1
   id: string
@@ -183,20 +223,21 @@ export interface DesktopBridge {
     channel: string,
     message:
       | ChannelInput
+      | LarkSubmit
       | {
           projectId: string
           sessionId: string
           text: string
           clientMessageId?: string
         },
-  ): Promise<{ sessionId: string; messageId?: string }>
+  ): Promise<SubmitReceipt>
   stop(
     channel: string,
     target: { chatId: string; rootId?: string },
     runId: string,
   ): Promise<boolean>
   projects(): Promise<Project[]>
-  openProject(input: { cwd: string; name?: string }): Promise<Project>
+  openProject(input: { cwd: string; name?: string }): Promise<LocalProject>
   /** Native folder picker in main. Cancel and dismissal both return undefined. */
   chooseFolder(): Promise<string | undefined>
   messages(input: {
@@ -205,6 +246,15 @@ export interface DesktopBridge {
     after?: string
     limit?: number
   }): Promise<{ messages: Message[]; nextCursor?: string }>
+  /** Group history newest first, topic history oldest first. */
+  larkMessages(input: {
+    chatId: string
+    sessionId: string
+    cursor?: string
+    limit?: number
+  }): Promise<{ messages: Message[]; nextCursor?: string }>
+  /** Opens the enabled group in Lark. A topic has no documented deep link. */
+  openLarkChat(chatId: string): Promise<void>
   listRoutines(
     channel: string,
     chatId: string,
@@ -238,6 +288,7 @@ export type Request =
       channel: string
       message:
         | ChannelInput
+        | LarkSubmit
         | {
             projectId: string
             sessionId: string
@@ -263,6 +314,16 @@ export type Request =
         limit?: number
       }
     }
+  | {
+      method: 'larkMessages'
+      input: {
+        chatId: string
+        sessionId: string
+        cursor?: string
+        limit?: number
+      }
+    }
+  | { method: 'openLarkChat'; chatId: string }
   | { method: 'listRoutines'; channel: string; chatId: string }
   | {
       method: 'createRoutine'

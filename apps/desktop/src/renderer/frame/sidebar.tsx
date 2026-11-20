@@ -1,6 +1,15 @@
-import { Clock, House, Plus, SlidersHorizontal, SquarePen } from 'lucide-react'
+import {
+  Clock,
+  Folder,
+  House,
+  MessageSquare,
+  Plus,
+  SlidersHorizontal,
+  SquarePen,
+} from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { Project } from '../../shared/bridge.ts'
+import type { Connection, Project } from '../../shared/bridge.ts'
+import { projectName, projectNameIsId, projectTag } from '../format.ts'
 import styles from './sidebar.module.css'
 import { Wordmark } from './wordmark.tsx'
 
@@ -33,9 +42,29 @@ function Row({
   )
 }
 
+/** The Lark connection line under the wordmark: on, or off with the host's reason. */
+function LarkState({ connection }: { connection: Connection }) {
+  return (
+    <div className={styles.connection}>
+      <p
+        className={styles.connectionLine}
+        title={connection.error}
+        data-connected={connection.connected}
+      >
+        <span className={styles.connectionDot} aria-hidden="true" />
+        Lark · {connection.connected ? 'on' : 'off'}
+      </p>
+      {!connection.connected && connection.error ? (
+        <p className={styles.connectionError}>{connection.error}</p>
+      ) : null}
+    </div>
+  )
+}
+
 /** Fixed frame: macOS traffic-light top strip, quiet wordmark, lightweight nav, projects, and Settings. */
 export function Sidebar({
   projects,
+  connections,
   current,
   onHome,
   onRoutines,
@@ -45,6 +74,7 @@ export function Sidebar({
   onNewProject,
 }: {
   projects: Project[]
+  connections: Record<string, Connection>
   current: string
   onHome: () => void
   onRoutines: () => void
@@ -62,6 +92,7 @@ export function Sidebar({
         <div className={styles.brand}>
           <Wordmark heading />
         </div>
+        {connections.lark ? <LarkState connection={connections.lark} /> : null}
         <nav className={styles.nav} aria-label="Pages">
           <button
             type="button"
@@ -112,9 +143,20 @@ export function Sidebar({
                     aria-current={current === project.id ? 'page' : undefined}
                     onClick={() => onProject(project.id)}
                   >
-                    <span className={styles.dot} aria-hidden="true" />
-                    <span className={styles.rowLabel}>{project.name}</span>
-                    <span className={styles.tag}>Local</span>
+                    {project.channel === 'lark' ? (
+                      <MessageSquare size={15} aria-hidden="true" />
+                    ) : (
+                      <Folder size={15} aria-hidden="true" />
+                    )}
+                    <span
+                      className={[
+                        styles.rowLabel,
+                        projectNameIsId(project) ? styles.mono : '',
+                      ].join(' ')}
+                    >
+                      {projectName(project)}
+                    </span>
+                    <span className={styles.tag}>{projectTag(project)}</span>
                   </button>
                 </li>
               ))}

@@ -1,16 +1,18 @@
+import { useEffect } from 'react'
 import type { Project } from '../../shared/bridge.ts'
 import { Composer } from '../components/composer.tsx'
 import { Conversation } from '../components/conversation.tsx'
 import { MessageView } from '../components/message.tsx'
-import { projectTimeline } from '../format.ts'
+import { larkGroupComposer, projectName, projectTimeline } from '../format.ts'
 import type { Panel } from '../panel.ts'
 import { SessionPanel } from '../session/session-panel.tsx'
 import type { Snapshot } from '../store.ts'
-import { send } from '../store.ts'
+import { loadEarlierLark, sendInProject, watchLarkProject } from '../store.ts'
+import { Button } from '../ui/button.tsx'
 import styles from './project-page.module.css'
 import { SessionCard } from './session-card.tsx'
 
-/** The folder's chat: short questions are answered here, bigger work shows up as a session card. */
+/** The project chat: short questions are answered here, bigger work shows up as a session card. */
 export function ProjectPage({
   snapshot,
   project,
@@ -23,10 +25,15 @@ export function ProjectPage({
   panel: Panel
   onPanel: (panel: Panel) => void
 }) {
+  useEffect(() => watchLarkProject(project), [project])
+  const lark = project.channel === 'lark'
+  if (lark && snapshot.connections.lark?.connected === false)
+    return <LarkOff snapshot={snapshot} project={project} />
   if (snapshot.messages[project.sessionId] === undefined)
     return <div className={styles.page} aria-busy="true" />
 
   const timeline = projectTimeline(snapshot, project)
+  const earlier = snapshot.earlier[project.sessionId] === true
   return (
     <div className={styles.page}>
       <div className={styles.chat}>
@@ -35,15 +42,30 @@ export function ProjectPage({
           place={`project:${project.id}`}
           centered
         >
+          {earlier ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => loadEarlierLark(project)}
+            >
+              Show earlier messages
+            </Button>
+          ) : null}
           {timeline.length === 0 ? (
             <p className={styles.empty}>
-              Ask Vela about this folder. Short questions are answered here;
-              bigger work starts a session.
+              {lark
+                ? 'Ask Vela a short question here. It posts in the group as the bot; bigger work opens a topic.'
+                : 'Ask Vela about this folder. Short questions are answered here; bigger work starts a session.'}
             </p>
           ) : (
             timeline.map((item) =>
               item.kind === 'message' ? (
-                <MessageView key={item.message.id} message={item.message} />
+                <MessageView
+                  key={item.message.id}
+                  message={item.message}
+                  group={lark}
+                />
               ) : (
                 <SessionCard
                   key={item.session.sessionId}
@@ -59,14 +81,22 @@ export function ProjectPage({
         <div className={styles.composerDock}>
           <Composer
             key={project.id}
-            label="Message Vela in this project"
+            label={
+              lark
+                ? 'Message Vela in this group'
+                : 'Message Vela in this project'
+            }
             draftKey={`project:${project.id}`}
             hint={
-              <>
-                Runs in <code>{project.cwd}</code> on this computer.
-              </>
+              lark ? (
+                larkGroupComposer
+              ) : (
+                <>
+                  Runs in <code>{project.cwd}</code> on this computer.
+                </>
+              )
             }
-            onSend={(text) => send(project.id, project.sessionId, text)}
+            onSend={(text) => sendInProject(project, text)}
           />
           {snapshot.error ? (
             <p className={styles.error} role="alert">
@@ -85,6 +115,36 @@ export function ProjectPage({
         }
         onClose={() => onPanel({ open: false, sessionId: panel.sessionId })}
       />
+    </div>
+  )
+}
+
+/** A Lark project while its connection is down: no reads, no sends, Local keeps working. */
+function LarkOff({
+  snapshot,
+  project,
+}: {
+  snapshot: Snapshot
+  project: Project
+}) {
+  const error = snapshot.connections.lark?.error
+  return (
+    <div className={styles.page}>
+      <div className={styles.chat}>
+        <section className={styles.empty} role="status">
+          <h2 className={styles.offTitle}>Lark is off.</h2>
+          <p>
+            {projectName(project)} is a Lark group, and this app cannot reach
+            Lark right now, so it does not read the group or its topics. Local
+            projects keep working.
+          </p>
+          {error ? (
+            <p className={styles.error} role="alert">
+              {error}
+            </p>
+          ) : null}
+        </section>
+      </div>
     </div>
   )
 }
