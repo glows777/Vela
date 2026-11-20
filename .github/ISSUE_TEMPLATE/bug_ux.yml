@@ -21,3 +21,10 @@ body:
         - post-merge
     validations:
       required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How we will know this is done.
+    validations:
+      required: true

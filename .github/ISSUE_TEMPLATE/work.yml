@@ -1,0 +1,23 @@
+name: Work
+description: Start a piece of work from a Goal and Acceptance.
+labels: ["status:draft"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: The user-visible change.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How we will know this is done.
+    validations:
+      required: true
+  - type: textarea
+    id: process-suggestions
+    attributes:
+      label: Process suggestions
+      description: Labels or implementation notes. These are suggestions, not the goal.
