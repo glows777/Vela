@@ -1,6 +1,11 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import {
+  AnimatePresence,
+  motion,
+  type Transition,
+  useReducedMotion,
+} from 'motion/react'
 import type { ComponentPropsWithoutRef, ReactNode } from 'react'
 import { createContext, useCallback, useContext, useState } from 'react'
 import styles from './dialog.module.css'
@@ -86,7 +91,7 @@ export function DialogContent({
     )
   }
 
-  const transition = {
+  const transition: Transition = {
     duration: velaMotion.duration.quick,
     ease: [...velaMotion.ease.out],
   }

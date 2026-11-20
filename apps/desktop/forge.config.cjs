@@ -7,7 +7,6 @@ module.exports = {
     extraResource: [
       'src/assets/fonts/Barlow-LICENSE.txt',
       'src/assets/fonts/JapaneseFonts-LICENSE.txt',
-      'src/renderer/components/arc/LICENSE.txt',
       join(
         dirname(require.resolve('@silvia-odwyer/photon-node')),
         'LICENSE.md',
