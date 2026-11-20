@@ -151,6 +151,7 @@ export async function verifyLarkDiscovery(
     assert.equal(await readFile(settings, 'utf8'), original)
     await Bun.write(join(discovery, 'control.jsonl'), '')
     await dialog.getByRole('button', { name: 'Enabled group' }).click()
+    await page.getByRole('button', { name: 'Close sessions' }).click()
     await send(
       page,
       'Message Vela in this group',
@@ -204,6 +205,42 @@ export async function verifyLarkDiscovery(
     await page.waitForFunction(
       async () => !(await window.vela.sessions('local')).some((s) => s.runId),
     )
+    // The host is live during confirmation. A run started there also vetoes a save.
+    await Bun.write(scenario, JSON.stringify({ responses: [{ hang: true }] }))
+    await add.click()
+    await mention()
+    await dialog.getByRole('button', { name: 'Enable group' }).waitFor()
+    await Bun.write(
+      join(transport, 'control.jsonl'),
+      `${JSON.stringify({
+        op: 'say',
+        chatId: oldChat,
+        text: 'Keep the group busy',
+        senderName: 'Mira',
+      })}\n`,
+    )
+    const live = await page.waitForFunction(async () =>
+      (await window.vela.sessions('lark')).find((s) => s.runId),
+    )
+    await dialog.getByRole('button', { name: 'Enable group' }).click()
+    await dialog
+      .getByRole('alert')
+      .filter({ hasText: /stop|finish/i })
+      .waitFor()
+    assert.equal(await readFile(settings, 'utf8'), original)
+    const groupRun = await live.jsonValue()
+    assert(groupRun?.runId)
+    assert(
+      await page.evaluate(
+        (s) => window.vela.stop('lark', { chatId: s.chatId }, s.runId!),
+        groupRun,
+      ),
+    )
+    await page.waitForFunction(
+      async () => !(await window.vela.sessions('lark')).some((s) => s.runId),
+    )
+    await Bun.write(join(transport, 'control.jsonl'), '')
+    await Bun.write(join(discovery, 'control.jsonl'), '')
     // The shared helper refuses to rewrite an environment expression. The original
     // group remains active when the host comes back, and the dialog can retry.
     const expression = JSON.stringify({
