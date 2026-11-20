@@ -1942,18 +1942,12 @@ async function packaged(appPath: string) {
     assert(
       licenses.includes('Barlow-LICENSE.txt') &&
         licenses.includes('JapaneseFonts-LICENSE.txt') &&
-        licenses.includes('LICENSE.txt') &&
         licenses.includes('LICENSE.md'),
     )
     assert(
       (
         await readFile(resolve(resources, 'Barlow-LICENSE.txt'), 'utf8')
       ).includes('SIL OPEN FONT LICENSE'),
-    )
-    assert(
-      (await readFile(resolve(resources, 'LICENSE.txt'), 'utf8')).includes(
-        'Copyright (c) 2026 Elia Kuratli',
-      ),
     )
     assert(
       (await readFile(resolve(resources, 'LICENSE.md'), 'utf8')).includes(

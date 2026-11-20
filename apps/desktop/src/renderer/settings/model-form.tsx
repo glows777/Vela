@@ -4,10 +4,10 @@ import type {
   ProviderApi,
   SettingsState,
 } from '../../shared/bridge.ts'
-import { Button } from '../ui/button.tsx'
 import { Field, Input, Select } from '../components/field.tsx'
 import { fileName, providerOf } from '../format.ts'
 import { errorMessage, saveModel } from '../store.ts'
+import { Button } from '../ui/button.tsx'
 import styles from './model-form.module.css'
 
 /** The select value for a provider models.json doesn't define yet. */
