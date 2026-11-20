@@ -91,8 +91,8 @@ export async function verifyLarkSettings(
   await input.fill(secret)
   await save.click()
   await connected.waitFor()
-  assert(
-    (await input.inputValue()) === '',
+  await waitForState(
+    async () => (await input.inputValue()) === '',
     'A saved secret leaves the password field empty',
   )
   assert(
