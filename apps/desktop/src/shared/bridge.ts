@@ -86,8 +86,21 @@ export type SettingsState = {
   /** The saved default model, `provider/id`. */
   model?: string
   thinkingLevel?: string
+  lark: {
+    appId: string
+    appSecretSaved: boolean
+    chats: string[]
+    envExpression: boolean
+    runInApp: boolean
+    loaded: boolean
+    startupError?: string
+  }
   providers: SettingsProvider[]
 }
+export type LarkSetup =
+  | { appId: string; appSecret?: string }
+  | { removeChat: string }
+  | { runInApp: boolean }
 export type ProviderApi =
   | 'openai-completions'
   | 'openai-responses'
@@ -203,6 +216,7 @@ export interface DesktopBridge {
   settings(): Promise<SettingsState>
   /** Checks the key with one small request, then saves the choice; returns the new state. */
   saveModel(input: ModelSetup): Promise<SettingsState>
+  saveLark(input: LarkSetup): Promise<SettingsState>
   sessions(channel: string, chatId?: string): Promise<Session[]>
   connection(channel: string): Promise<Connection>
   submit(
@@ -265,6 +279,7 @@ export const EVENT = 'vela:event'
 export type Request =
   | { method: 'channels' }
   | { method: 'settings' }
+  | { method: 'saveLark'; input: LarkSetup }
   | { method: 'saveModel'; input: ModelSetup }
   | { method: 'sessions'; channel: string; chatId?: string }
   | { method: 'connection'; channel: string }

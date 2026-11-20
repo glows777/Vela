@@ -665,3 +665,12 @@ export async function start() {
   })()
   return starting
 }
+
+/** Refresh the Local frame and the settings after the main process replaces the host. */
+export async function saveLark(input: Parameters<typeof vela.saveLark>[0]) {
+  try {
+    publish({ settings: await vela.saveLark(input) })
+  } finally {
+    await reload()
+  }
+}
