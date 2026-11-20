@@ -1,55 +1,151 @@
 import { saveLarkSection } from '@glows777/vela'
 import { ipcMain, type WebContents } from 'electron'
 import { REQUEST, type Request } from '../shared/bridge.ts'
-import { createHost } from './host.ts'
+import { openAvailableHost, openHost } from './host.ts'
+import { prepareLarkWrite, verifyCredentials } from './lark-settings.ts'
+import { loadDesktopConfig } from './settings.ts'
 
-type Host = Awaited<ReturnType<typeof createHost>>
 type Setup = {
   owner: WebContents
   controller: AbortController
   chatId?: string
+  confirming?: boolean
   clear(): void
 }
 
-/** Own one host and one request handler across the temporary discovery connection. */
-export async function startHost() {
-  let host: Host | undefined = await createHost()
-  let closing = false
-  const requests = new Set<Promise<unknown>>()
-  let restarting: Promise<void> | undefined
-  let setup: Setup | undefined
+const reloadDiagnostic =
+  'The app could not reload Lark settings. Check the data directory and settings.json, then try again.'
 
-  async function restartHost<T>(
+/** Only writing settings and replacing the host require exclusive access. */
+export async function startHost() {
+  let workingConfig = loadDesktopConfig(process.cwd())
+  type Host = Awaited<ReturnType<typeof openHost>>
+  let host: Promise<Host> | undefined = Promise.resolve(
+    await openAvailableHost(workingConfig),
+  )
+  let barrier = Promise.resolve()
+  const active = new Set<Promise<unknown>>()
+  let closing = false
+  let setup: Setup | undefined
+  const verify =
+    process.env.VELA_DESKTOP_LARK === 'fake'
+      ? (await import('./settings-transport.ts')).verifySettingsCredentials
+      : verifyCredentials
+
+  // All readers share one recovery attempt. A repaired directory can be retried on the next request.
+  const restoreLocal = () =>
+    openHost(workingConfig, false, reloadDiagnostic).catch(() => {
+      host = undefined
+      throw new Error(
+        'Could not restore Local. Check the data directory and settings.json, then try again.',
+      )
+    })
+  const current = () => (host ??= restoreLocal())
+  const read = <T>(operation: (live: Host) => T) => {
+    const pending = barrier.then(current).then(operation)
+    const settled = pending.then(
+      () => {},
+      () => {},
+    )
+    active.add(settled)
+    void settled.then(() => active.delete(settled))
+    return pending
+  }
+  const section = () => {
+    try {
+      return (
+        loadDesktopConfig(workingConfig.cwd, workingConfig.agentDir)
+          .extensionConfig.lark ?? {}
+      )
+    } catch {
+      throw new Error(
+        'Could not read Lark settings. Check settings.json and try again.',
+      )
+    }
+  }
+  function exclusive<T>(operation: (previous: Host) => Promise<T>) {
+    const work = Promise.all([barrier, ...active]).then(async () => {
+      if (closing) throw new Error('The app is closing.')
+      return operation(await current())
+    })
+    barrier = work.then(
+      () => {},
+      () => {},
+    )
+    return work
+  }
+
+  async function stop(previous: Host) {
+    try {
+      await previous.dispose()
+      host = undefined
+    } catch {
+      // Ownership is uncertain. Never open another connection in this process.
+      host = Promise.reject(
+        new Error(
+          'Could not safely stop the desktop host. Quit and reopen Vela before changing Lark settings.',
+        ),
+      )
+      await host
+    }
+  }
+
+  async function reload() {
+    try {
+      const config = loadDesktopConfig(
+        workingConfig.cwd,
+        workingConfig.agentDir,
+      )
+      const next = await openAvailableHost(config)
+      workingConfig = config
+      return next
+    } catch {
+      return restoreLocal()
+    }
+  }
+  const save = async (
+    input: Extract<Request, { method: 'saveLark' }>['input'],
+  ) => {
+    const before = await read((live) => {
+      live.checkIdle()
+      return section()
+    })
+    const write = await prepareLarkWrite(
+      workingConfig.agentDir,
+      before,
+      input,
+      verify,
+    )
+    return exclusive(async (previous) => {
+      previous.checkIdle()
+      await write(section())
+      // Approval belongs to the configuration in which the mention was observed.
+      if (setup?.chatId) setup.clear()
+      await stop(previous)
+      host = reload()
+      return (await host).settings()
+    })
+  }
+
+  function restartHost<T>(
     signal: AbortSignal,
     whileStopped: (source: ReturnType<Host['groupSetup']>) => Promise<T>,
   ) {
-    if (restarting) throw new Error('The desktop host is restarting.')
-    const work = (async () => {
-      // Wait for admitted calls (including submit), then check run IDs before disposing.
-      await Promise.allSettled(requests)
+    return exclusive(async (previous) => {
       signal.throwIfAborted()
-      if (!host)
-        throw new Error('The desktop host is unavailable. Reopen the app.')
-      const source = host.groupSetup()
-      const previous = host
-      host = undefined
-      await previous.dispose()
+      const source = previous.groupSetup()
+      previous.checkIdle()
+      await stop(previous)
       try {
         signal.throwIfAborted()
         return await whileStopped(source)
       } finally {
-        if (!closing) host = await createHost()
+        if (!closing) {
+          host = reload()
+          await host
+        }
       }
-    })()
-    restarting = work
-      .then(
-        () => {},
-        () => {},
-      )
-      .finally(() => {
-        restarting = undefined
-      })
-    return work
+    })
   }
 
   async function discover(owner: WebContents) {
@@ -98,15 +194,16 @@ export async function startHost() {
         throw new Error('No group discovery in this window.')
       if (request.method === 'cancelLarkSetup') {
         attempt.clear()
-        await restarting
+        await barrier
         if (!host && !closing)
           throw new Error('The desktop host is unavailable. Reopen the app.')
         return
       }
       const chatId = attempt.chatId
-      if (!chatId) throw new Error('Mention the bot in the group first.')
+      if (!chatId || attempt.confirming)
+        throw new Error('No pending group approval in this window.')
       // A session may have started while confirmation was open. Check again before saving.
-      attempt.chatId = undefined
+      attempt.confirming = true
       try {
         await restartHost(attempt.controller.signal, ({ agentDir }) =>
           saveLarkSection({ agentDir, addChat: chatId, env: process.env }),
@@ -116,22 +213,14 @@ export async function startHost() {
       }
       return
     }
-    while (restarting) await restarting
-    if (!host || closing)
-      throw new Error('The desktop host is unavailable. Reopen the app.')
-    const pending = host.handle(request)
-    requests.add(pending)
-    try {
-      return await pending
-    } finally {
-      requests.delete(pending)
-    }
+    if (request.method === 'saveLark') return save(request.input)
+    return read((live) => live.handle(request))
   })
   return async () => {
     closing = true
     ipcMain.removeHandler(REQUEST)
     setup?.clear()
-    await restarting
-    await host?.dispose()
+    await Promise.all([barrier, ...active])
+    await (await host?.catch(() => undefined))?.dispose()
   }
 }

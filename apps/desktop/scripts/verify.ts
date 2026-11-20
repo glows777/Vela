@@ -18,6 +18,7 @@ import tokens from '../design/tokens.json'
 import type { DesktopBridge } from '../src/shared/bridge.ts'
 import { verifyControls } from './verify-controls.ts'
 import { verifyLarkDiscovery } from './verify-lark-discovery.ts'
+import { seedLarkChat, verifyLarkSettings } from './verify-lark-settings.ts'
 import { GOOD_KEY, startVerifyProvider } from './verify-provider.ts'
 
 declare global {
@@ -1792,8 +1793,41 @@ async function firstRunJourney() {
       'The CLI reads the same directory: vela --list-models prints faux faux-model.',
     )
     console.log('Desktop verification: journey 6 passed')
+  } catch (cause) {
+    provider.stop()
+    throw cause
   } finally {
     await third.close()
+  }
+  try {
+    const testSecret = crypto.randomUUID()
+    await seedLarkChat(dir, testSecret)
+    const fourth = await launchDev({
+      VELA_DIR: dir,
+      VELA_MODEL: undefined,
+      VELA_DESKTOP_LARK: 'fake',
+      VELA_DESKTOP_LARK_DIR: undefined,
+    })
+    try {
+      checks.push(
+        ...(await verifyLarkSettings(
+          fourth.page,
+          dir,
+          project,
+          themes,
+          provider.hold,
+          testSecret,
+        )),
+      )
+    } finally {
+      await fourth.close()
+    }
+    const output = await readFile(resolve(evidence, 'forge.log'), 'utf8')
+    assert(
+      !output.includes(testSecret),
+      'Desktop process output excludes the saved secret',
+    )
+  } finally {
     provider.stop()
   }
 }
@@ -3134,7 +3168,7 @@ async function packaged(appPath: string) {
 async function groupDiscoveryJourney() {
   await verifyLarkDiscovery(scratch, launchDev, themes, sendIn)
   checks.push(
-    'New project lists enabled groups, cancels without writing, restores Lark and Local, protects running sessions, and saves the confirmed mention.',
+    'Settings Off refuses discovery and preserves a running Local turn. After Settings On, New project lists enabled groups, cancels without writing, protects running sessions, and saves only the confirmed new group.',
   )
 }
 try {

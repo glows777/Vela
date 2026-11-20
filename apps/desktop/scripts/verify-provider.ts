@@ -28,6 +28,7 @@ function stream(reply: { model?: string }, text: string): Response {
 }
 
 export function startVerifyProvider() {
+  let held: Promise<void> | undefined
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
@@ -58,10 +59,19 @@ export function startVerifyProvider() {
         ],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
       }
+      if (body.stream) await held
       return body.stream ? stream(body, 'Local answer') : Response.json(answer)
     },
   })
   return {
+    hold() {
+      const gate = Promise.withResolvers<void>()
+      held = gate.promise
+      return () => {
+        held = undefined
+        gate.resolve()
+      }
+    },
     baseUrl: `http://127.0.0.1:${server.port}/v1`,
     stop: () => {
       server.stop(true)

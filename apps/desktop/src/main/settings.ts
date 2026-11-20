@@ -7,7 +7,21 @@ import {
   type ProviderDefinition,
 } from '@glows777/vela-core'
 import { resolveModel } from '@glows777/vela-core/diagnostics'
+import { larkConfig } from '@glows777/vela-lark'
 import type { SettingsProvider, SettingsState } from '../shared/bridge.ts'
+import { larkState } from './lark-settings.ts'
+
+export function loadDesktopConfig(cwd: string, agentDir?: string) {
+  return loadConfig({
+    deferSystemFiles: true,
+    cwd,
+    agentDir,
+    env: process.env,
+    trusted: false,
+    extensionConfigs: [larkConfig],
+    builtins: ['background', 'memory', 'rag', 'web', 'lark', 'mcp', 'todo'],
+  })
+}
 
 /**
  * Whether a saved `provider/id` names something a session could use: the same resolution a session
@@ -48,16 +62,12 @@ function customProviders(agentDir: string): Set<string> {
 export function readSettings(options: {
   agentDir: string
   cwd: string
+  larkLoaded: boolean
+  larkStartupError?: string
   directModel: boolean
   hasAvailableModel: boolean
 }): SettingsState {
-  const config = loadConfig({
-    deferSystemFiles: true,
-    cwd: options.cwd,
-    agentDir: options.agentDir,
-    env: process.env,
-    trusted: false,
-  })
+  const config = loadDesktopConfig(options.cwd, options.agentDir)
   const custom = customProviders(config.agentDir)
   const providers: SettingsProvider[] = Object.entries(config.providers).map(
     ([name, definition]: [string, ProviderDefinition]) => ({
@@ -78,6 +88,12 @@ export function readSettings(options: {
   const model = config.settings.defaultModel
   return {
     folder: config.agentDir,
+    lark: larkState(
+      config.settings.extensionConfig?.lark ?? {},
+      config.extensionConfig.lark ?? {},
+      options.larkLoaded,
+      options.larkStartupError,
+    ),
     files: {
       settings: join(config.agentDir, 'settings.json'),
       models: join(config.agentDir, 'models.json'),

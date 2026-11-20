@@ -85,6 +85,67 @@ export async function verifyLarkDiscovery(
           text: 'Enable this group',
         })}\n`,
       )
+    // The normal Settings switch owns Off/On. An Off discovery must not replace
+    // the Local host, consume a queued mention, or touch the saved configuration.
+    const larkSettings = async () => {
+      await sidebar
+        .getByRole('button', { name: 'Settings', exact: true })
+        .click()
+      await page
+        .getByLabel('Settings sections')
+        .getByRole('button', { name: 'Lark' })
+        .click()
+    }
+    const toggle = page.getByRole('switch', { name: 'Run Lark in this app' })
+    const normalScenario = await readFile(scenario, 'utf8')
+    await Bun.write(scenario, JSON.stringify({ responses: [{ hang: true }] }))
+    await larkSettings()
+    await toggle.click()
+    await page.getByText('Off in this app', { exact: true }).waitFor()
+    const offSettings = await readFile(settings, 'utf8')
+    assert.equal(JSON.parse(offSettings).extensionConfig.lark.runInApp, false)
+    await sidebar.getByRole('button', { name: 'New project' }).click()
+    await dialog.getByLabel('Folder path').fill(dir)
+    await dialog.getByRole('button', { name: 'Create project' }).click()
+    await send(
+      page,
+      'Message Vela in this project',
+      'Keep Local running with Lark off',
+    )
+    const activeLocal = async () =>
+      (await window.vela.sessions('local')).find((session) => session.runId)
+    await waitForBridge(page, activeLocal)
+    const active = await page.evaluate(activeLocal)
+    assert(active?.runId)
+    await mention('oc_off_probe')
+    await open()
+    await add.click()
+    await dialog
+      .getByRole('alert')
+      .filter({ hasText: /Configure Lark to run in this app/ })
+      .waitFor()
+    assert.equal(await readFile(settings, 'utf8'), offSettings)
+    assert.equal(
+      await Bun.file(join(discovery, 'handled.json')).exists(),
+      false,
+    )
+    assert.equal((await page.evaluate(activeLocal))?.runId, active.runId)
+    assert(
+      await page.evaluate(
+        ({ chatId, runId }) => window.vela.stop('local', { chatId }, runId),
+        { chatId: active.chatId, runId: active.runId },
+      ),
+    )
+    await waitForBridge(
+      page,
+      async () => !(await window.vela.sessions('local')).some((s) => s.runId),
+    )
+    await dialog.getByRole('button', { name: 'Close dialog' }).click()
+    await Bun.write(join(discovery, 'control.jsonl'), '')
+    await Bun.write(scenario, normalScenario)
+    await larkSettings()
+    await toggle.click()
+    await page.getByText('Connected', { exact: true }).waitFor()
     await open()
     assert.equal(
       await dialog.getByRole('button', { name: 'Enabled group' }).count(),

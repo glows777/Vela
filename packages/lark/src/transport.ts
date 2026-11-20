@@ -139,10 +139,11 @@ export function larkTransport(
   onConnection?: (connection: ChannelConnection) => void,
 ): LarkTransport & LarkChatNames {
   const silent = { error() {}, warn() {}, info() {}, debug() {}, trace() {} }
+  // SDK diagnostics can print the entire token request. The channel reports connection state itself.
   const client = new lark.Client({
     appId,
     appSecret,
-    ...(quiet ? { logger: silent } : {}),
+    logger: silent,
   })
   let wsClient: lark.WSClient | undefined
   let lifetime = 0
@@ -158,10 +159,9 @@ export function larkTransport(
       wsClient = new lark.WSClient({
         appId,
         appSecret,
-        loggerLevel: lark.LoggerLevel.warn,
+        logger: silent,
         ...(quiet
           ? {
-              logger: silent,
               autoReconnect: true,
               handshakeTimeoutMs: 15000,
             }
