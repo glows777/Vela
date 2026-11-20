@@ -22,6 +22,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- Lark setup shows the discovered group name and chat ID before granting access, with an ID-only fallback.
+
 - Print mode waits for background work and its result turns before exiting. Text mode keeps the printed answer, and JSON mode includes the result events. Unattended background jobs have a 30-minute default deadline and a two-hour maximum ([#433](https://github.com/glows777/Vela/issues/433)).
 
 - New project → Lark lists enabled groups and can add a group after you mention the bot and confirm access for its members. The Lark setup helpers now accept an optional set of group IDs to ignore during discovery ([#418](https://github.com/glows777/Vela/issues/418)).

@@ -4,7 +4,7 @@ import { connectLarkSetup } from '@glows777/vela-lark'
 import { saveLarkSection } from '../../settings.ts'
 
 interface Connection {
-  waitForMention(): Promise<{ chatId: string; chatName?: string }>
+  waitForMention(): Promise<{ chatId: string; name?: string }>
   send(chatId: string, text: string): Promise<unknown>
   stop(): void
 }
@@ -93,8 +93,9 @@ export async function larkSetup(host: Host): Promise<boolean> {
       'Credentials verified. Mention the bot in the group to enable (Ctrl+C twice to cancel).',
     )
     const group = await connection.waitForMention()
+    const label = group.name ? `${group.name} (${group.chatId})` : group.chatId
     const confirmed = await host.select(
-      `Enable ${group.chatName ?? group.chatId} (${group.chatId})? Every member of an enabled group has full access to Vela tools.`,
+      `Enable ${label}? Every member of an enabled group has full access to Vela tools.`,
       [
         { value: 'yes', label: 'Enable group' },
         { value: 'no', label: 'Cancel' },

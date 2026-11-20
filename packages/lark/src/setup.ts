@@ -1,11 +1,11 @@
-import { type LarkTransport, larkTransport } from './transport.ts'
+import { type LarkTransport, larkChatName, larkTransport } from './transport.ts'
 
 /** Wait for a human to mention this bot in a group on the temporary connection. */
 export async function discoverLarkGroup(
   transport: LarkTransport,
   signal?: AbortSignal,
   excludedChatIds?: ReadonlySet<string>,
-): Promise<{ chatId: string }> {
+): Promise<{ chatId: string; name?: string }> {
   if (signal?.aborted) throw new Error('Lark setup cancelled')
   const botId = await new Promise<string>((resolve, reject) => {
     const abort = () => reject(new Error('Lark setup cancelled'))
@@ -22,6 +22,7 @@ export async function discoverLarkGroup(
     )
   })
   return new Promise((resolve, reject) => {
+    let selected = false
     const abort = () => reject(new Error('Lark setup cancelled'))
     if (signal?.aborted) return abort()
     signal?.addEventListener('abort', abort, { once: true })
@@ -30,18 +31,32 @@ export async function discoverLarkGroup(
         (event) => {
           const message = event.message
           if (
+            selected ||
             event.sender.sender_type !== 'user' ||
             message.chat_type !== 'group' ||
             excludedChatIds?.has(message.chat_id) ||
             !message.mentions?.some((item) => item.id?.open_id === botId)
           )
             return
-          signal?.removeEventListener('abort', abort)
-          resolve({ chatId: message.chat_id })
+          selected = true
+          const chatId = message.chat_id
+          // A slow display-only lookup must not block confirmation of the ID.
+          let timer: ReturnType<typeof setTimeout> | undefined
+          const deadline = new Promise<undefined>((finish) => {
+            timer = setTimeout(() => finish(undefined), 2_000)
+          })
+          void Promise.race([larkChatName(transport, chatId), deadline]).then(
+            (name) => {
+              clearTimeout(timer)
+              signal?.removeEventListener('abort', abort)
+              resolve(name ? { chatId, name } : { chatId })
+            },
+          )
         },
         () => ({ toast: { type: 'info', content: 'Setup in progress' } }),
       )
       .catch((error) => {
+        if (selected) return
         signal?.removeEventListener('abort', abort)
         reject(error)
       })

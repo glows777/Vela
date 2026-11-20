@@ -42,6 +42,10 @@ export async function verifyLarkDiscovery(
       },
     }),
   )
+  await Bun.write(
+    join(discovery, 'seed.json'),
+    JSON.stringify({ chats: { oc_new: { name: 'New group' } } }),
+  )
   const scenario = join(dir, 'faux.json')
   await Bun.write(
     scenario,
@@ -153,6 +157,11 @@ export async function verifyLarkDiscovery(
     )
     await add.click()
     await mention(oldChat)
+    await dialog.getByText(oldChat, { exact: true }).waitFor()
+    assert.equal(
+      await dialog.getByText('Enabled group', { exact: true }).count(),
+      0,
+    )
     await dialog.getByRole('button', { name: 'Enable group' }).click()
     await sidebar.getByRole('button', { name: 'Enabled group Lark' }).waitFor()
     const original = await readFile(settings, 'utf8')
@@ -193,7 +202,8 @@ export async function verifyLarkDiscovery(
       0,
       'A mention from the already enabled group must not become the approval candidate',
     )
-    assert.equal(await dialog.getByLabel('Lark group ID').innerText(), 'oc_new')
+    await dialog.getByText('New group', { exact: true }).waitFor()
+    assert.equal(await dialog.locator('output code').innerText(), 'oc_new')
     assert.equal(await readFile(settings, 'utf8'), original)
     await dialog.getByText(/only if the ID matches/).waitFor()
     await dialog.getByText(/running commands on this computer/).waitFor()
