@@ -26,7 +26,7 @@ For runtime evidence, including the packaged pass and scratch directory options,
 bun run desktop:package
 ```
 
-Forge prints the output directory under `apps/desktop/out/`. macOS packages are unsigned and unnotarized. Signing, installers, updates, and acceptance on Windows or Linux are separate work. The package includes the Photon Apache 2.0 license, Arc MIT license, and both font licenses.
+Forge prints the output directory under `apps/desktop/out/`. macOS packages are unsigned and unnotarized. Signing, installers, updates, and acceptance on Windows or Linux are separate work. The package includes the Photon Apache 2.0 license and both font licenses.
 
 ## Adopt or update Arc components
 

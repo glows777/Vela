@@ -52,7 +52,9 @@ export function SessionPanel({
             .filter(Boolean)
             .join(' ')}
           aria-label="Sessions"
-          initial={reduced ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.98 }}
+          initial={
+            reduced ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.98 }
+          }
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{
             opacity: 0,

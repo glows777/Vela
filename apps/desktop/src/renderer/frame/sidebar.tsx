@@ -66,15 +66,14 @@ export function Sidebar({
           <button
             type="button"
             className={styles.newSession}
+            aria-label="New session"
             onClick={onNewSession}
           >
             <span className={styles.icon} aria-hidden="true">
               <SquarePen size={15} />
             </span>
             <span className={styles.rowLabel}>New session</span>
-            <kbd className={styles.shortcut} aria-hidden="true">
-              ⌘N
-            </kbd>
+            <kbd className={styles.shortcut}>⌘N</kbd>
           </button>
           <Row
             icon={<House size={15} />}
