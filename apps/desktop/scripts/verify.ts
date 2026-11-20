@@ -588,6 +588,7 @@ const journeyOne = async (page: Page) => {
     'The composer names the folder where Vela runs, in light and dark, with no horizontal overflow.',
   )
   await longPathHeader(page)
+  await longNameHeader(page)
 }
 
 /** The 44px header's name, tag and folder, as the layout resolved them. */
@@ -601,7 +602,8 @@ const headerLayout = (page: Page, cwd: string) =>
     lines.selectNodeContents(title)
     return {
       name: title.textContent,
-      lines: lines.getClientRects().length,
+      lines: new Set([...lines.getClientRects()].map(({ top }) => top)).size,
+      titleClipped: title.scrollWidth > title.clientWidth,
       textOverflow: getComputedStyle(path).textOverflow,
       clipped: path.scrollWidth > path.clientWidth,
       hover: path.title,
@@ -670,6 +672,7 @@ const longPathHeader = async (page: Page) => {
       1,
       `The project name stays on one line at ${width}×${height}`,
     )
+    assert(!header.titleClipped, 'The short title remains fully visible')
     assert.equal(
       header.textOverflow,
       'ellipsis',
@@ -695,6 +698,66 @@ const longPathHeader = async (page: Page) => {
     'A long folder path ellipsizes in the header while the project name stays on one line, at 800×600 and wider.',
   )
 }
+/** A long name must not push the project tag or folder out of the header. */
+const longNameHeader = async (page: Page) => {
+  const name =
+    'Northwind Retail Platform Migration Planning Workspace for European Tenants'
+  const folder = resolve(scratch, 'short')
+  await mkdir(folder, { recursive: true })
+  const sidebar = page.getByLabel('Sidebar')
+  await sidebar.getByRole('button', { name: 'New project' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Folder path').fill(folder)
+  await dialog.getByLabel('Name').fill(name)
+  await dialog.getByRole('button', { name: 'Create project' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+
+  await page.setViewportSize({ width: 800, height: 600 })
+  const bar = page.getByRole('banner')
+  await bar.getByRole('heading', { name, exact: true }).waitFor()
+  const layout = await bar.evaluate((bar, folder) => {
+    const title = bar.querySelector('h2')!
+    const spans = [...bar.querySelectorAll('span')]
+    const tag = spans.find((span) => span.textContent === 'Local')!
+    const path = spans.find((span) => span.textContent === folder)!
+    const range = document.createRange()
+    range.selectNodeContents(title)
+    const barBox = bar.getBoundingClientRect()
+    return {
+      lines: new Set([...range.getClientRects()].map(({ top }) => top)).size,
+      ellipsis: getComputedStyle(title).textOverflow,
+      titleOverflow: getComputedStyle(title).overflowX,
+      clipped: title.scrollWidth > title.clientWidth,
+      overflow: bar.scrollWidth > bar.clientWidth,
+      inside: [title, tag, path].every((element) => {
+        const box = element.getBoundingClientRect()
+        return (
+          box.width > 0 &&
+          box.left >= barBox.left &&
+          box.right <= Math.min(barBox.right, innerWidth)
+        )
+      }),
+    }
+  }, folder)
+  assert.deepEqual(layout, {
+    lines: 1,
+    ellipsis: 'ellipsis',
+    titleOverflow: 'hidden',
+    clipped: true,
+    overflow: false,
+    inside: true,
+  })
+  await noOverflow(page)
+  await themes(page, 'journey-1-long-name-minimum')
+
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+  await page.getByRole('heading', { name: 'Alpha', exact: true }).waitFor()
+  checks.push(
+    'A long name ellipsizes on one line at 800×600 without pushing the tag or folder out of the header.',
+  )
+}
+
 /** The same screen in light and dark, each once the tokens have switched. */
 const themes = async (page: Page, name: string) => {
   await page.emulateMedia({
@@ -1612,7 +1675,26 @@ async function firstRunJourney() {
     await page.getByLabel('Base URL').fill(provider.baseUrl)
     await page.getByLabel('Model ID').fill('faux-model')
     await page.getByLabel('API key').fill('wrong-key')
-    await page.getByRole('button', { name: 'Verify and save' }).click()
+    assert.equal(
+      await page.evaluate(() => scrollY),
+      0,
+      'Setup has not scrolled',
+    )
+    const inViewport = (element: typeof submit) =>
+      element.evaluate((node) => {
+        const { top, bottom, left, right, width, height } =
+          node.getBoundingClientRect()
+        return (
+          width > 0 &&
+          height > 0 &&
+          top >= 0 &&
+          left >= 0 &&
+          bottom <= innerHeight &&
+          right <= innerWidth
+        )
+      })
+    assert(await inViewport(submit), 'Custom setup action fits at 1280×800')
+    await submit.click()
     const alert = page.getByRole('alert')
     await alert.waitFor({ timeout: 60_000 })
     const reason = (await alert.textContent()) ?? ''
@@ -1620,6 +1702,11 @@ async function firstRunJourney() {
       reason,
       'invalid api key',
       `The alert carries the provider's reason alone, got: ${reason}`,
+    )
+    assert(await inViewport(alert), 'The refusal is visible at 1280×800')
+    assert(
+      await inViewport(submit),
+      'The retry action stays visible at 1280×800',
     )
     for (const name of ['settings.json', 'models.json', 'auth.json'])
       assert.equal(
