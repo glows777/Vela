@@ -59,6 +59,12 @@ const gapProject = 'oc_gap'
 const liveProject = 'oc_live'
 /** A fourth group: a filtered page sits inside the gap a long absence leaves. */
 const jumpProject = 'oc_jump'
+/** A group nobody has written in yet. */
+const emptyProject = 'oc_empty'
+/** A group whose first read the fake refuses, as a dropped connection would. */
+const denyProject = 'oc_deny'
+/** A busy group: paging and a refresh can overlap. */
+const raceProject = 'oc_race'
 const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
@@ -1825,7 +1831,17 @@ async function larkJourneys() {
     JSON.stringify({
       shellPath: shell,
       extensionConfig: {
-        lark: { chats: [larkProject, gapProject, liveProject, jumpProject] },
+        lark: {
+          chats: [
+            larkProject,
+            gapProject,
+            liveProject,
+            jumpProject,
+            emptyProject,
+            denyProject,
+            raceProject,
+          ],
+        },
       },
     }),
   )
@@ -1852,6 +1868,21 @@ async function larkJourneys() {
           messages: Array.from({ length: 100 }, (_, index) => ({
             sender: 'Bob',
             text: `Jump message ${index + 1} of the fourth group.`,
+          })),
+        },
+        [emptyProject]: { name: 'Vela empty' },
+        [denyProject]: {
+          name: 'Vela deny',
+          messages: Array.from({ length: 3 }, (_, index) => ({
+            sender: 'Bob',
+            text: `Deny message ${index + 1} of the sixth group.`,
+          })),
+        },
+        [raceProject]: {
+          name: 'Vela race',
+          messages: Array.from({ length: 160 }, (_, index) => ({
+            sender: 'Bob',
+            text: `Race message ${index + 1} of the seventh group.`,
           })),
         },
         [larkProject]: {
@@ -2538,6 +2569,83 @@ async function larkJourneys() {
     )
     checks.push(
       'Answering the waiting topic in the app clears it from Home and finishes it.',
+    )
+
+    // A group nobody has written in yet finishes its first read: the page shows its
+    // empty state and composer instead of a loading placeholder forever.
+    await sidebar.getByRole('button', { name: 'Vela empty Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela empty', exact: true })
+      .waitFor()
+    await page.getByLabel('Message Vela in this group').waitFor({
+      timeout: 30_000,
+    })
+    await page.getByText(/Ask Vela a short question here/).waitFor()
+    assert.equal(
+      await page.locator('[aria-busy="true"]').count(),
+      0,
+      'The empty group left its loading state',
+    )
+    checks.push(
+      'A group with no messages shows its empty state and composer on the first open.',
+    )
+    await themes(page, 'lark-journey-empty')
+
+    // A first read that fails leaves the loading state too, with its reason on screen.
+    await larkSays({ op: 'failNextGroupHistory' })
+    await sidebar.getByRole('button', { name: 'Vela deny Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela deny', exact: true })
+      .waitFor()
+    await page
+      .getByRole('alert')
+      .filter({ hasText: 'Fake Lark dropped the group history read' })
+      .waitFor({ timeout: 30_000 })
+    await page.getByLabel('Message Vela in this group').waitFor()
+    assert.equal(
+      await page.locator('[aria-busy="true"]').count(),
+      0,
+      'The failed first read left its loading state',
+    )
+    // The next read is a normal one and shows the group.
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela deny Lark' }).click()
+    await page
+      .getByText('Deny message 1 of the sixth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'A group whose first read fails shows the reason and the composer, and reads normally after that.',
+    )
+
+    // An older page that lands while a refresh reads is not dropped when the refresh
+    // applies: the refresh merges into what the page shows now, not into its snapshot.
+    await sidebar.getByRole('button', { name: 'Vela race Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela race', exact: true })
+      .waitFor()
+    await page
+      .getByText('Race message 160 of the seventh group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Race message 60 of the seventh group.', { exact: true })
+        .count(),
+      0,
+      'The first page is the newest 50 messages',
+    )
+    // The older read lands at 300ms; the refresh's read takes 1200ms.
+    await larkSays({ op: 'delayGroupHistory', ms: [300, 1200] })
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela race Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela race', exact: true })
+      .waitFor()
+    await page
+      .getByText('Race message 61 of the seventh group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'An older page that arrives during a refresh stays on the page when the refresh applies.',
     )
 
     // Switching projects and sessions in one running app, with no reload.

@@ -55,6 +55,10 @@ type Control =
   | { op: 'filterNewest'; chatId: string; count: number }
   /** Named messages become cards: they fill a page with no visible text. */
   | { op: 'filterText'; chatId: string; texts: string[] }
+  /** The next group history reads take these long, so a journey can overlap two. */
+  | { op: 'delayGroupHistory'; ms: number[] }
+  /** The next group history read fails, as a dropped connection would. */
+  | { op: 'failNextGroupHistory' }
 
 const botId = 'cli_desktop_fake'
 const botName = 'Vela'
@@ -75,6 +79,8 @@ export function fakeLark(dir: string): FakeTransport {
   let failNextTopicStart = false
   let failNextSend = false
   let failNextTopicHistory = false
+  let failNextGroupHistory = false
+  const groupDelays: number[] = []
   let threads = 0
   const chats = new Map<string, { name?: string; rows: Stored[] }>()
   const threadsById = new Map<string, Stored[]>()
@@ -204,6 +210,12 @@ export function fakeLark(dir: string): FakeTransport {
           for (const stored of rows) stored.row.msg_type = 'interactive'
           break
         }
+        case 'delayGroupHistory':
+          groupDelays.push(...control.ms)
+          break
+        case 'failNextGroupHistory':
+          failNextGroupHistory = true
+          break
         case 'filterText': {
           const wanted = new Set(control.texts)
           for (const stored of chats.get(control.chatId)?.rows ?? [])
@@ -428,6 +440,12 @@ export function fakeLark(dir: string): FakeTransport {
       }
     },
     async searchMessages(chatId, { endTime, limit, pageToken }) {
+      const delay = groupDelays.shift() ?? 0
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+      if (failNextGroupHistory) {
+        failNextGroupHistory = false
+        throw new Error('Fake Lark dropped the group history read')
+      }
       const before = Number(endTime) * 1000
       const rows = (chats.get(chatId)?.rows ?? [])
         .filter((stored) => Number(stored.row.create_time) <= before)

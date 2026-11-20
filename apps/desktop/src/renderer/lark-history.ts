@@ -47,6 +47,8 @@ const reconcile = (
   incoming: Message[],
   complete: boolean,
 ) => {
+  // A partial page with no visible rows covers no range, so it removes nothing.
+  if (!complete && incoming.length === 0) return shown
   const fresh = new Map(incoming.map((message) => [message.id, message]))
   const times = incoming.map((message) => message.createdAt).sort()
   const oldest = times[0]
@@ -118,7 +120,7 @@ export function larkHistory(host: LarkHistoryHost) {
     ) => {
       for (;;) {
         const page = await read(cursor)
-        if (page.messages.length > 0) take(page, cursor === undefined)
+        take(page, cursor === undefined)
         if (done(page) || !page.nextCursor) return page.nextCursor
         walked = true
         cursor = page.nextCursor
@@ -142,15 +144,16 @@ export function larkHistory(host: LarkHistoryHost) {
       // history this session already shows. Ordinary activity overlaps at once and
       // leaves the paging the person reached; a long absence leaves a gap that is
       // filled here instead of being skipped by an older cursor.
-      const shown = host.shown(sessionId)
-      const shownIds = new Set(shown.map((message) => message.id))
+      const shownIds = new Set(
+        host.shown(sessionId).map((message) => message.id),
+      )
       const next = await walk(
         undefined,
         (page, first) =>
           host.set(
             sessionId,
             first
-              ? reconcile(shown, page.messages, false)
+              ? reconcile(host.shown(sessionId), page.messages, false)
               : merge(host.shown(sessionId), page.messages),
           ),
         (page) =>
@@ -162,6 +165,9 @@ export function larkHistory(host: LarkHistoryHost) {
       remember(sessionId, next)
       return undefined
     } catch (cause) {
+      // A read that failed still happened: the page leaves its loading state with
+      // whatever it already showed, and the reason goes next to it.
+      host.set(sessionId, host.shown(sessionId))
       const error = errorMessage(cause)
       host.fail(error)
       return error
