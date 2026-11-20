@@ -236,7 +236,7 @@ fi
 
 The built-in `lark` extension uses Lark's long connection (WebSocket), so no public URL is needed. It is loaded by default in the CLI.
 
-Run `vela setup lark` in an interactive terminal to configure a group. The wizard validates the app credentials, waits for a human to mention the bot in a group, and asks for confirmation before enabling it. Every member of an enabled group has full access to Vela tools. It saves credentials in user-level `settings.json` (mode 0600), sends a connection message, and instructs you to run `vela serve`. Card callbacks and other permissions are checklist items, not verified by setup; use the manual reference below. Project settings can override user-level values.
+Run `vela setup lark` in an interactive terminal to configure a group. The wizard validates the app credentials, waits for a human to mention the bot in a group, and asks for confirmation before enabling it. The confirmation shows the chat ID and, when available, the group name. If Vela cannot retrieve the name, you can confirm using the ID alone. Every member of an enabled group has full access to Vela tools. It saves credentials in user-level `settings.json` (mode 0600), sends a connection message, and instructs you to run `vela serve`. Card callbacks and other permissions are checklist items, not verified by setup; use the manual reference below. Project settings can override user-level values.
 
 After setup, run `vela serve` and mention the bot again to check a real model-backed reply.
 
