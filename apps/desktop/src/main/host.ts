@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import type { IncomingMessage } from '@glows777/vela-channels'
 import {
   channelSessionId,
@@ -6,17 +7,18 @@ import {
 } from '@glows777/vela-channels'
 import { loadConfig, resolveShellPath } from '@glows777/vela-core'
 import {
+  connectLarkSetup,
+  discoverLarkGroup,
   type LarkHost,
   LarkSubmitError,
   lark,
   larkConfig,
 } from '@glows777/vela-lark'
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, dialog, shell } from 'electron'
 import {
   EVENT,
   type Event,
   type LarkSubmit,
-  REQUEST,
   type Request,
 } from '../shared/bridge.ts'
 import { saveModel } from './model-setup.ts'
@@ -62,7 +64,7 @@ const larkChatLink = (chatId: string) =>
   `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(chatId)}`
 
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
-export async function startHost() {
+export async function createHost() {
   const cwd = process.cwd()
   const config = loadConfig({
     deferSystemFiles: true,
@@ -203,7 +205,7 @@ export async function startHost() {
           ]
         : localHost.projects()
     await vela.startChannels()
-    ipcMain.handle(REQUEST, async (_event, request: Request) => {
+    const handle = async (request: Request) => {
       switch (request.method) {
         case 'channels':
           return vela.channels()
@@ -314,11 +316,69 @@ export async function startHost() {
         default:
           throw new Error('Unknown desktop request')
       }
-    })
-    return async () => {
-      ipcMain.removeHandler(REQUEST)
-      for (const stop of off) stop()
-      await vela.dispose()
+    }
+    return {
+      handle,
+      groupSetup() {
+        if (
+          [...names].some((name) =>
+            sessions(name).some((session) => session.runId),
+          )
+        )
+          throw new Error(
+            'Wait for running sessions to finish or stop them before adding a group.',
+          )
+        const { appId, appSecret } = larkSettings
+        if (
+          !larkHost ||
+          larkSettings.runInApp === false ||
+          typeof appId !== 'string' ||
+          !appId ||
+          typeof appSecret !== 'string' ||
+          !appSecret
+        )
+          throw new Error(
+            'Configure Lark to run in this app before adding a group.',
+          )
+        return {
+          agentDir: config.agentDir,
+          async discover(signal: AbortSignal) {
+            if (fakeLark) {
+              const transport = (await import('./testing/lark.ts')).fakeLark(
+                join(process.env.VELA_DESKTOP_LARK_DIR!, 'discovery'),
+              )
+              try {
+                return await discoverLarkGroup(transport, signal)
+              } finally {
+                transport.stop()
+              }
+            }
+            try {
+              const connection = await connectLarkSetup(
+                appId,
+                appSecret,
+                signal,
+              )
+              try {
+                return await connection.waitForMention()
+              } finally {
+                connection.stop()
+              }
+            } catch (error) {
+              throw new Error(
+                (error instanceof Error
+                  ? error.message
+                  : String(error)
+                ).replaceAll(appSecret, '[redacted]'),
+              )
+            }
+          },
+        }
+      },
+      async dispose() {
+        for (const stop of off) stop()
+        await vela.dispose()
+      },
     }
   } catch (error) {
     for (const stop of off) stop()

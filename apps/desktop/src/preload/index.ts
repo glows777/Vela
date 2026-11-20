@@ -33,6 +33,9 @@ const bridge: DesktopBridge = {
   submit: (channel, message) => invoke({ method: 'submit', channel, message }),
   stop: (channel, target, runId) =>
     invoke({ method: 'stop', channel, target, runId }),
+  discoverLarkGroup: () => invoke({ method: 'discoverLarkGroup' }),
+  confirmLarkGroup: () => invoke({ method: 'confirmLarkGroup' }),
+  cancelLarkSetup: () => invoke({ method: 'cancelLarkSetup' }),
   projects: () => invoke({ method: 'projects' }),
   openProject: (input) => invoke({ method: 'openProject', input }),
   chooseFolder: () => invoke({ method: 'chooseFolder' }),

@@ -17,6 +17,7 @@ import { _electron, chromium, type Page } from 'playwright'
 import tokens from '../design/tokens.json'
 import type { DesktopBridge } from '../src/shared/bridge.ts'
 import { verifyControls } from './verify-controls.ts'
+import { verifyLarkDiscovery } from './verify-lark-discovery.ts'
 import { GOOD_KEY, startVerifyProvider } from './verify-provider.ts'
 
 declare global {
@@ -1521,6 +1522,7 @@ async function development() {
   await firstRunJourney()
   await larkJourneys()
   await larkOffJourney()
+  await groupDiscoveryJourney()
 }
 
 /**
@@ -3135,12 +3137,20 @@ async function packaged(appPath: string) {
     await app.close()
   }
 }
+async function groupDiscoveryJourney() {
+  await verifyLarkDiscovery(scratch, launchDev, themes, sendIn)
+  checks.push(
+    'New project lists enabled groups, cancels without writing, restores Lark and Local, protects running sessions, and saves the confirmed mention.',
+  )
+}
 try {
   const option = process.argv.indexOf('--packaged')
   if (option >= 0) {
     const path = process.argv[option + 1]
     assert(path, 'Pass the packaged .app path')
     await packaged(resolve(root, '../..', path))
+  } else if (process.env.VELA_DESKTOP_VERIFY_LARK_DISCOVERY === '1') {
+    await groupDiscoveryJourney()
   } else await development()
   assert.deepEqual(errors, [], 'No renderer console, page, or resource errors')
   await Bun.write(

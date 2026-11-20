@@ -351,6 +351,20 @@ export async function saveModel(input: ModelSetup): Promise<SettingsState> {
   return settings
 }
 
+export async function confirmLarkGroup(chatId: string) {
+  await vela.confirmLarkGroup()
+  const projects = await vela.projects()
+  publish({ projects })
+  const project = projects.find(
+    (project) => project.channel === 'lark' && project.id === chatId,
+  )
+  if (!project)
+    throw new Error(
+      'Group saved, but it is missing from the active Lark configuration.',
+    )
+  return project
+}
+
 export async function openProject(input: { cwd: string; name?: string }) {
   const project = await vela.openProject(input)
   await reload()
