@@ -6,12 +6,13 @@
 .bubble {
   max-width: 80%;
   margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-panel);
-  background: var(--vela-menu-hover);
+  padding: 14px 18px;
+  border-radius: var(--vela-radius-bubble) var(--vela-radius-bubble)
+    var(--vela-radius-sm) var(--vela-radius-bubble);
+  background: var(--vela-bubble);
   color: var(--vela-ink);
-  font-size: var(--text-base);
-  line-height: var(--leading-body);
+  font-size: var(--vela-text-base);
+  line-height: var(--vela-leading-body);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -19,7 +20,7 @@
 .assistant {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--vela-space-2);
 }
 
 .turn {
@@ -29,7 +30,7 @@
 .text {
   margin: 0;
   color: var(--vela-ink);
-  font-size: var(--text-base);
+  font-size: var(--vela-text-base);
   line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -38,5 +39,5 @@
 .system {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
 }

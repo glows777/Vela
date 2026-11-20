@@ -1,16 +1,16 @@
 .card {
   display: flex;
-  font: inherit;
+  flex-direction: column;
+  gap: var(--vela-space-2);
+  width: min(460px, 100%);
+  padding: 14px 16px;
+  border: 1px solid var(--vela-paper-edge);
+  border-radius: var(--vela-radius-paper);
+  background: var(--vela-white);
   color: var(--vela-ink);
+  box-shadow: var(--vela-paper-shadow);
   text-align: left;
   cursor: pointer;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4);
-  border: 1px solid var(--vela-line);
-  border-radius: var(--radius-panel);
-  background: var(--vela-paper);
-  box-shadow: var(--shadow-resting);
 }
 
 .card:hover {
@@ -18,21 +18,22 @@
 }
 
 .waiting {
-  border-left: 3px solid var(--vela-accent);
+  border: 1.5px solid var(--vela-accent);
+  background: var(--vela-paper);
 }
 
 .head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 10px;
   margin: 0;
 }
 
 .title {
   min-width: 0;
   overflow: hidden;
-  font-size: var(--text-base);
-  font-weight: 600;
+  font-size: var(--vela-text-md);
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -41,12 +42,12 @@
   flex: none;
   margin-left: auto;
   color: var(--vela-muted);
-  font-size: var(--text-xs);
+  font-size: var(--vela-text-xs);
 }
 
 .question {
   margin: 0;
   color: var(--vela-ink);
-  font-size: var(--text-base);
-  line-height: var(--leading-body);
+  font-size: var(--vela-text-md);
+  line-height: 1.5;
 }

@@ -1,20 +1,20 @@
 import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import tokens from '../../design/tokens.json'
-import { Button } from './components/arc/button/button.tsx'
+import { Button } from './ui/button.tsx'
 import {
   Dialog,
   DialogClose,
   DialogContent,
   DialogTrigger,
-} from './components/arc/dialog/dialog.tsx'
-import { Switch } from './components/arc/switch/switch.tsx'
+} from './ui/dialog.tsx'
+import { Switch } from './ui/switch.tsx'
 import {
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-} from './components/arc/tabs/tabs.tsx'
+} from './ui/tabs.tsx'
 import '../styles/base.css'
 import '../styles/specimen.css'
 
@@ -27,7 +27,7 @@ function Specimen() {
     <main className="specimen">
       <header className="specimen-header">
         <div>
-          <p className="eyebrow">VELA / ARC FOUNDATION</p>
+          <p className="eyebrow">VELA FOUNDATION</p>
           <h1>Vela design foundation</h1>
         </div>
         <fieldset>
@@ -53,7 +53,7 @@ function Specimen() {
         </fieldset>
       </header>
       <p className="specimen-intro">
-        Vela brand, Arc controls and motion. Development samples keep no product
+        Vela brand, native controls and motion. Development samples keep no product
         data.
       </p>
       <section aria-labelledby="type-heading" className="type-specimen">
@@ -93,7 +93,7 @@ function Specimen() {
             </DialogTrigger>
             <DialogContent
               title="Sample dialog"
-              description="A development sample with Arc motion and keyboard focus."
+              description="A development sample with Vela motion and keyboard focus."
             >
               <p>The dialog inherits the document theme through its portal.</p>
               <DialogClose asChild>
@@ -115,7 +115,7 @@ function Specimen() {
             <TabsTrigger value="preferences">Preferences</TabsTrigger>
           </TabsList>
           <TabsContent value="overview">
-            Arc moves the selection and panel together.
+            Vela segmented tabs switch panels directly.
           </TabsContent>
           <TabsContent value="preferences">
             <Switch label="Sample preference" defaultChecked />
@@ -145,7 +145,7 @@ function Specimen() {
       </section>
       <footer>
         <span>
-          {tokens.themes.length} themes · local assets · free Arc components
+          {tokens.themes.length} themes · local assets · native Vela controls
         </span>
         <span>Development only</span>
       </footer>

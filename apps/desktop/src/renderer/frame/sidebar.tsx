@@ -1,8 +1,6 @@
-import { Clock, Folder, House, Plus, SlidersHorizontal } from 'lucide-react'
+import { Clock, House, Plus, SlidersHorizontal } from 'lucide-react'
 import type { ReactNode } from 'react'
-import icon from '../../assets/vela-icon-180.png'
 import type { Project } from '../../shared/bridge.ts'
-import { Button } from '../components/arc/button/button.tsx'
 import styles from './sidebar.module.css'
 import { Wordmark } from './wordmark.tsx'
 
@@ -27,13 +25,15 @@ function Row({
       disabled={disabled}
       onClick={onClick}
     >
-      {icon}
+      <span className={styles.icon} aria-hidden="true">
+        {icon}
+      </span>
       <span className={styles.rowLabel}>{label}</span>
     </button>
   )
 }
 
-/** Fixed frame: the wordmark, the two ways to create, projects, and the pages under them. */
+/** Fixed frame: the wordmark, the two ways to create, projects, and Settings at the foot. */
 export function Sidebar({
   projects,
   current,
@@ -56,18 +56,34 @@ export function Sidebar({
   return (
     <aside className={styles.sidebar} aria-label="Sidebar">
       <div className={styles.brand}>
-        <img className={styles.mark} src={icon} width={36} height={36} alt="" />
         <Wordmark heading />
+        <span className={styles.mode}>Local</span>
       </div>
-      <Button size="lg" onClick={onNewSession}>
-        New session
-      </Button>
+      <button
+        type="button"
+        className={styles.newSession}
+        onClick={onNewSession}
+      >
+        <span className={styles.newSessionMain}>
+          <Plus size={16} aria-hidden="true" />
+          New session
+        </span>
+        <kbd className={styles.shortcut} aria-hidden="true">
+          Ctrl N
+        </kbd>
+      </button>
       <nav className={styles.nav} aria-label="Pages">
         <Row
-          icon={<House size={16} aria-hidden="true" />}
+          icon={<House size={16} />}
           label="Home"
           current={current === 'home'}
           onClick={onHome}
+        />
+        <Row
+          icon={<Clock size={16} />}
+          label="Routines"
+          current={current === 'routines'}
+          onClick={onRoutines}
         />
       </nav>
       <section className={styles.projects} aria-label="Projects">
@@ -94,7 +110,7 @@ export function Sidebar({
                   aria-current={current === project.id ? 'page' : undefined}
                   onClick={() => onProject(project.id)}
                 >
-                  <Folder size={16} aria-hidden="true" />
+                  <span className={styles.dot} aria-hidden="true" />
                   <span className={styles.rowLabel}>{project.name}</span>
                   <span className={styles.tag}>Local</span>
                 </button>
@@ -105,13 +121,7 @@ export function Sidebar({
       </section>
       <div className={styles.footer}>
         <Row
-          icon={<Clock size={16} aria-hidden="true" />}
-          label="Routines"
-          current={current === 'routines'}
-          onClick={onRoutines}
-        />
-        <Row
-          icon={<SlidersHorizontal size={16} aria-hidden="true" />}
+          icon={<SlidersHorizontal size={16} />}
           label="Settings"
           current={current === 'settings'}
           onClick={onSettings}

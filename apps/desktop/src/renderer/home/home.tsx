@@ -1,6 +1,6 @@
+import { ArrowRight, ChevronDown } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Composer } from '../components/composer.tsx'
-import { StateMark } from '../components/state-mark.tsx'
 import {
   lastUsedProject,
   needsYou,
@@ -37,42 +37,63 @@ export function Home({
   }, [picked, snapshot])
 
   const project = snapshot.projects.find((item) => item.id === picked)
+  const headline =
+    needs.length === 1
+      ? 'One session needs you.'
+      : needs.length > 1
+        ? `${needs.length} sessions need you.`
+        : 'Give Vela a task.'
 
   if (!snapshot.ready) return <div className={styles.page} aria-busy="true" />
 
   return (
     <div className={styles.page}>
       <div className={styles.column}>
+        <div className={styles.hero}>
+          <span className={styles.signal} aria-hidden="true" />
+          <h2 className={styles.headline}>{headline}</h2>
+        </div>
+
         <section className={styles.section} aria-labelledby="needs-you">
-          <h2 id="needs-you" className={styles.label}>
+          <h3 id="needs-you" className={styles.label}>
             Needs you
-          </h2>
+          </h3>
           {needs.length === 0 ? (
             <p className={styles.note}>Nothing needs you right now.</p>
           ) : (
-            <ul className={styles.list}>
+            <ul className={styles.attentionList}>
               {needs.map((session) => {
                 const owner = projectOf(snapshot, session)
                 return (
                   <li key={session.sessionId}>
                     <button
                       type="button"
-                      className={styles.need}
+                      className={styles.attention}
                       onClick={() =>
                         onOpenSession(session.chatId, session.sessionId)
                       }
                     >
-                      <span className={styles.needLabel}>
-                        <StateMark state="waiting" />
-                        Waiting for you
+                      <span className={styles.glyph} aria-hidden="true">
+                        ?
                       </span>
-                      <span className={styles.question}>
-                        {session.waitingReason}
+                      <span className={styles.what}>
+                        <span className={styles.attentionMeta}>
+                          {[
+                            'Waiting for you',
+                            owner?.name,
+                            'Local',
+                            session.task,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                        <span className={styles.question}>
+                          {session.waitingReason}
+                        </span>
                       </span>
-                      <span className={styles.meta}>
-                        {[session.task, owner?.name, 'Local']
-                          .filter(Boolean)
-                          .join(' · ')}
+                      <span className={styles.go}>
+                        Open
+                        <ArrowRight size={16} aria-hidden="true" />
                       </span>
                     </button>
                   </li>
@@ -83,17 +104,17 @@ export function Home({
         </section>
 
         <section className={styles.section} aria-labelledby="recent">
-          <h2 id="recent" className={styles.label}>
+          <h3 id="recent" className={styles.label}>
             Recent sessions
-          </h2>
+          </h3>
           {recent.length === 0 ? (
             <p className={styles.note}>No sessions yet.</p>
           ) : (
-            <ul className={styles.list}>
+            <ul className={styles.listCard}>
               {recent.map((session) => {
                 const owner = projectOf(snapshot, session)
                 return (
-                  <li key={session.sessionId}>
+                  <li key={session.sessionId} className={styles.listItem}>
                     <button
                       type="button"
                       className={styles.row}
@@ -101,10 +122,28 @@ export function Home({
                         onOpenSession(session.chatId, session.sessionId)
                       }
                     >
-                      <StateMark state={session.state} />
-                      <span className={styles.rowTitle}>{session.task}</span>
-                      <span className={styles.meta}>
-                        {owner ? `${owner.name} · Local` : 'Local'}
+                      <span
+                        className={[
+                          styles.dot,
+                          session.state === 'waiting'
+                            ? styles.dotWaiting
+                            : session.state === 'running'
+                              ? styles.dotRunning
+                              : styles.dotIdle,
+                        ].join(' ')}
+                        aria-hidden="true"
+                      />
+                      <span className={styles.rowBody}>
+                        <span className={styles.rowTitle}>{session.task}</span>
+                        <span className={styles.meta}>
+                          {[
+                            owner?.name,
+                            'Local',
+                            stateWord[session.state],
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
                       </span>
                       <span className={styles.word}>
                         {stateWord[session.state]}
@@ -118,9 +157,9 @@ export function Home({
         </section>
 
         <section className={styles.section} aria-labelledby="start">
-          <h2 id="start" className={styles.label}>
+          <h3 id="start" className={styles.label}>
             Start a session
-          </h2>
+          </h3>
           {project ? (
             <Composer
               key={project.id}
@@ -138,9 +177,10 @@ export function Home({
                 return accepted
               }}
             >
-              <label className={styles.picker}>
-                <span>Project</span>
+              <div className={styles.pickerWrap}>
+                <span className={styles.pickerDot} aria-hidden="true" />
                 <select
+                  className={styles.picker}
                   aria-label="Project"
                   value={project.id}
                   onChange={(event) => setPicked(event.target.value)}
@@ -151,7 +191,12 @@ export function Home({
                     </option>
                   ))}
                 </select>
-              </label>
+                <ChevronDown
+                  className={styles.pickerChevron}
+                  size={14}
+                  aria-hidden="true"
+                />
+              </div>
             </Composer>
           ) : (
             <p className={styles.note}>

@@ -1,13 +1,13 @@
 .page {
   width: 100%;
   overflow-y: auto;
-  padding: var(--space-8) var(--space-6) var(--space-10);
+  padding: var(--vela-space-8) var(--vela-space-6) var(--vela-space-10);
 }
 
 .column {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--vela-space-6);
   width: 100%;
   max-width: 820px;
   margin: 0 auto;
@@ -26,7 +26,7 @@
 .body {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
-  gap: var(--space-8);
+  gap: var(--vela-space-8);
   align-items: start;
 }
 
@@ -37,13 +37,13 @@
 }
 
 .navRow {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--vela-space-2) var(--vela-space-3);
   border: none;
-  border-radius: var(--radius-control);
+  border-radius: var(--vela-radius-md);
   background: transparent;
   color: var(--vela-ink);
   font: inherit;
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -60,7 +60,7 @@
 .panel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--vela-space-5);
   min-width: 0;
 }
 
@@ -68,26 +68,26 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--vela-space-4);
 }
 
 .heading {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--vela-space-1);
 }
 
 .title2 {
   margin: 0;
   color: var(--vela-ink);
-  font-size: var(--text-lg);
+  font-size: var(--vela-text-lg);
   font-weight: 600;
 }
 
 .note {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
 }
 
 .rows {
@@ -97,7 +97,7 @@
 @media (max-width: 900px) {
   .body {
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--space-4);
+    gap: var(--vela-space-4);
   }
 
   .nav {

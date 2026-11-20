@@ -4,7 +4,7 @@ import type {
   ProviderApi,
   SettingsState,
 } from '../../shared/bridge.ts'
-import { Button } from '../components/arc/button/button.tsx'
+import { Button } from '../ui/button.tsx'
 import { Field, Input, Select } from '../components/field.tsx'
 import { fileName, providerOf } from '../format.ts'
 import { errorMessage, saveModel } from '../store.ts'
