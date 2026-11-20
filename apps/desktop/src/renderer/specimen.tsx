@@ -9,12 +9,7 @@ import {
   DialogTrigger,
 } from './ui/dialog.tsx'
 import { Switch } from './ui/switch.tsx'
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from './ui/tabs.tsx'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs.tsx'
 import '../styles/base.css'
 import '../styles/specimen.css'
 
@@ -53,8 +48,8 @@ function Specimen() {
         </fieldset>
       </header>
       <p className="specimen-intro">
-        Vela brand, native controls and motion. Development samples keep no product
-        data.
+        Vela brand, native controls and motion. Development samples keep no
+        product data.
       </p>
       <section aria-labelledby="type-heading" className="type-specimen">
         <div>

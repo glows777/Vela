@@ -1,29 +1,41 @@
-/*
- * Below 1180px the sidebar, a 720px chat and a 480px panel do not fit, so the panel
- * floats over the chat. From 1180px up it takes its own column and the chat resizes
- * at once (app.md, Motion).
- */
-@media (max-width: 1179px) {
-  .panel {
-    position: absolute;
-    z-index: 20;
-    inset-block: 0;
-    inset-inline-end: 0;
-    box-shadow: var(--vela-dialog-shadow);
-  }
+.panel {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 280px;
+  max-height: calc(100% - 24px);
+  padding: 14px 16px;
+  border: 1px solid color-mix(in oklab, var(--vela-ink) 10%, transparent);
+  border-radius: 14px;
+  background: var(--vela-paper);
+  box-shadow: var(--vela-paper-shadow);
 }
 
-.panel {
-  display: flex;
+/* When a session conversation is open, keep the rounded floating-card look in flex flow so it never overlaps the project chat. */
+.detail {
+  position: relative;
+  top: auto;
+  right: auto;
   flex: none;
-  flex-direction: column;
-  gap: var(--vela-space-3);
-  width: 340px;
-  min-width: 0;
-  min-height: 0;
-  padding: var(--vela-space-4) var(--vela-space-5);
-  border-left: 1px solid var(--vela-paper-edge);
-  background: var(--vela-paper);
+  width: 380px;
+  max-height: none;
+  margin: 12px 16px 16px 0;
+}
+
+@media (max-width: 1120px) {
+  .detail {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    bottom: 16px;
+    margin: 0;
+    width: min(380px, calc(100% - 32px));
+    box-shadow: var(--vela-dialog-shadow);
+  }
 }
 
 .head {
@@ -31,14 +43,14 @@
   flex: none;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--vela-space-3);
+  gap: var(--vela-space-2);
 }
 
 .path {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: var(--vela-space-1);
+  gap: 2px;
 }
 
 .crumb {
@@ -61,24 +73,24 @@
   margin: 0;
   overflow: hidden;
   color: var(--vela-ink);
-  font-size: var(--vela-text-lg);
-  font-weight: 700;
+  font-size: var(--vela-text-base);
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .subtle {
-  margin: 0;
+  margin: 2px 0 0;
   color: var(--vela-muted);
-  font-size: var(--vela-text-sm);
-  line-height: var(--vela-leading-body);
+  font-size: var(--vela-text-xs);
+  line-height: 1.5;
 }
 
 .actions {
   display: flex;
   flex: none;
   align-items: center;
-  gap: var(--vela-space-2);
+  gap: var(--vela-space-1);
 }
 
 .state {
@@ -114,25 +126,23 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--vela-space-3);
+  gap: var(--vela-space-2);
   min-height: 0;
   overflow-y: auto;
 }
 
 .label {
-  margin: 0 0 var(--vela-space-2);
+  margin: 4px 0;
   color: var(--vela-muted);
-  font-size: var(--vela-text-label);
-  font-weight: 700;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 0 0 var(--vela-space-4);
+  margin: 0 0 var(--vela-space-2);
   padding: 0;
   list-style: none;
 }
@@ -142,12 +152,12 @@
   align-items: center;
   gap: var(--vela-space-2);
   width: 100%;
-  padding: var(--vela-space-2) var(--vela-space-3);
+  padding: 6px 8px;
   border: 0;
   border-radius: var(--vela-radius-md);
   background: transparent;
   color: var(--vela-ink);
-  font-size: var(--vela-text-md);
+  font-size: var(--vela-text-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -169,29 +179,29 @@
   flex: none;
   flex-direction: column;
   gap: var(--vela-space-2);
-  padding: var(--vela-space-4);
-  border: 1.5px solid var(--vela-accent);
+  padding: var(--vela-space-3);
+  border: 1px solid var(--vela-accent);
   border-radius: var(--vela-radius-paper);
-  background: var(--vela-paper);
+  background: var(--vela-white);
 }
 
 .errorTitle {
   margin: 0;
   color: var(--vela-ink);
-  font-size: var(--vela-text-base);
-  font-weight: 700;
+  font-size: var(--vela-text-md);
+  font-weight: 600;
 }
 
 .errorText {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--vela-text-sm);
-  line-height: var(--vela-leading-body);
+  font-size: var(--vela-text-xs);
+  line-height: 1.5;
 }
 
 .raw {
   margin: 0;
-  padding: var(--vela-space-3);
+  padding: var(--vela-space-2);
   overflow-x: auto;
   border-radius: var(--vela-radius-inner);
   background: var(--vela-inverse);
