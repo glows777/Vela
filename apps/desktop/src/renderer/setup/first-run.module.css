@@ -2,7 +2,7 @@
   display: grid;
   place-items: start center;
   min-height: 100dvh;
-  padding: var(--vela-space-12) var(--vela-space-6) var(--vela-space-10);
+  padding: var(--vela-space-6) var(--vela-space-6) var(--vela-space-10);
   overflow-y: auto;
   background: var(--vela-white);
   color: var(--vela-ink);
@@ -11,7 +11,7 @@
 .column {
   display: flex;
   flex-direction: column;
-  gap: var(--vela-space-6);
+  gap: var(--vela-space-4);
   width: 100%;
   max-width: 460px;
 }

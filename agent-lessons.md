@@ -10,6 +10,12 @@ For Agent runtime designs, assess the full request prefix and ordering, not just
 
 The prevention mechanism is the Agent runtime prompt-cache review check in [REVIEW.md](REVIEW.md). [#444](https://github.com/glows777/Vela/pull/444) has merged the branch-injection fix; [#445](https://github.com/glows777/Vela/issues/445) tracks the remaining wake-kind handling. A faux cache scenario can guard prefix stability, but it does not prove a real-provider hit or savings.
 
+## Check the header itself at the minimum window size
+
+[Issue #470](https://github.com/glows777/Vela/issues/470) found that a long folder path could wrap a short project title in a fixed-height header. Document-level overflow stayed clear. Check the actual header at the minimum window size: the title stays on one line and a long path truncates with an ellipsis. [Desktop verification journey 1](.skills/verify-vela/desktop.md) opens a folder with a path about 200 characters long and checks both points at 800×600 and 1280×800.
+
+[Issue #498](https://github.com/glows777/Vela/issues/498) exposed the converse: a long title clipped at the window edge and pushed the tag and path out of view. The same journey now also checks the header's own width, that a long name ellipsizes and that the tag and folder are still on screen at 800×600.
+
 ## Background memory work must respect tool availability and atomic merges
 
 [PR #307's review](https://github.com/glows777/Vela/pull/307#discussion_r4504727382) found that a deny-only background gate let `memory: ask` sessions consolidate without approval. The pre-PR tests covered `deny`, but not the approval-required path or an already-due shared inbox. That fix required `allow` for collection and both automatic and manual runs. Since [#348](https://github.com/glows777/Vela/issues/348) removed the permission API, dream follows the memory tool's availability: a session with `tools: ['-memory']` neither collects nor consolidates. User extensions handle confirmation for ordinary tool calls.
