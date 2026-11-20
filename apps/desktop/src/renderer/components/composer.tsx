@@ -1,4 +1,4 @@
-import { ArrowRight } from 'lucide-react'
+import { ArrowUp } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { restoreDraft } from '../../shared/draft.ts'
 import styles from './composer.module.css'
@@ -55,46 +55,44 @@ export function Composer({
   }
 
   return (
-    <div className={styles.wrap}>
-      <form
-        className={[styles.composer, running ? styles.running : '']
-          .filter(Boolean)
-          .join(' ')}
-        onSubmit={(event) => {
-          event.preventDefault()
-          submit()
+    <form
+      className={[styles.composer, running ? styles.running : '']
+        .filter(Boolean)
+        .join(' ')}
+      onSubmit={(event) => {
+        event.preventDefault()
+        submit()
+      }}
+    >
+      <textarea
+        ref={field}
+        className={styles.text}
+        aria-label={label}
+        placeholder={label}
+        rows={2}
+        value={text}
+        onChange={(event) => write(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault()
+            submit()
+          }
         }}
-      >
-        <textarea
-          ref={field}
-          className={styles.text}
-          aria-label={label}
-          placeholder={label}
-          rows={2}
-          value={text}
-          onChange={(event) => write(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.nativeEvent.isComposing) return
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault()
-              submit()
-            }
-          }}
-        />
-        <div className={styles.tools}>
-          {children}
-          <span className={styles.spacer} />
-          <button
-            type="submit"
-            className={styles.send}
-            aria-label="Send"
-            disabled={text.trim() === ''}
-          >
-            <ArrowRight size={20} aria-hidden="true" />
-          </button>
-        </div>
-      </form>
-      {hint ? <p className={styles.hint}>{hint}</p> : null}
-    </div>
+      />
+      <div className={styles.tools}>
+        {children}
+        {hint ? <p className={styles.hint}>{hint}</p> : null}
+        <span className={styles.spacer} />
+        <button
+          type="submit"
+          className={styles.send}
+          aria-label="Send"
+          disabled={text.trim() === ''}
+        >
+          <ArrowUp size={16} strokeWidth={2.25} aria-hidden="true" />
+        </button>
+      </div>
+    </form>
   )
 }

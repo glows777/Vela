@@ -4,8 +4,8 @@
   align-items: center;
   gap: 10px;
   height: 44px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--vela-paper-edge);
+  padding: 0 14px 0 18px;
+  border-bottom: 1px solid color-mix(in oklab, var(--vela-ink) 6%, transparent);
   background: var(--vela-white);
   -webkit-app-region: drag;
 }
@@ -39,8 +39,18 @@
   color: var(--vela-muted);
   font-family: var(--vela-family-mono);
   font-size: var(--vela-text-xs);
+  opacity: 0.78;
   text-overflow: ellipsis;
   white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.right {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
   -webkit-app-region: no-drag;
 }
 
@@ -48,13 +58,12 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin: 0 0 0 auto;
+  margin: 0;
   color: var(--vela-accent-ink);
   font-size: var(--vela-text-label);
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  -webkit-app-region: no-drag;
 }
 
 .dot {
@@ -62,4 +71,23 @@
   height: 6px;
   border-radius: var(--vela-radius-round);
   background: var(--vela-accent);
+}
+
+.toggle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--vela-radius-md);
+  background: transparent;
+  color: var(--vela-muted);
+  cursor: pointer;
+}
+
+.toggle:hover,
+.toggle[aria-pressed="true"] {
+  background: var(--vela-menu-hover);
+  color: var(--vela-ink);
 }

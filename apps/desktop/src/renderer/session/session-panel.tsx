@@ -2,8 +2,6 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useEffect } from 'react'
 import type { Project, Session } from '../../shared/bridge.ts'
-import { Button } from '../ui/button.tsx'
-import { velaMotion } from '../ui/motion.ts'
 import { Composer } from '../components/composer.tsx'
 import { Conversation } from '../components/conversation.tsx'
 import { MessageView } from '../components/message.tsx'
@@ -16,11 +14,13 @@ import {
 } from '../format.ts'
 import type { Snapshot } from '../store.ts'
 import { loadSession, send, stop } from '../store.ts'
+import { Button } from '../ui/button.tsx'
+import { velaMotion } from '../ui/motion.ts'
 import styles from './session-panel.module.css'
 
 /**
- * The 480px panel on the right of a project: the session list at its root, and one
- * session's conversation when opened. Never a page of its own, so the chat stays in view.
+ * Floating rounded Sessions card anchored to the top-right of the project canvas:
+ * compact when showing the session list, taller when inspecting a session conversation.
  */
 export function SessionPanel({
   snapshot,
@@ -42,23 +42,27 @@ export function SessionPanel({
   // A session belongs to the project whose chat started it.
   const session =
     candidate && candidate.chatId === project.id ? candidate : undefined
+  const detail = Boolean(session && started(session))
+
   return (
     <AnimatePresence>
       {open ? (
         <motion.aside
-          className={styles.panel}
+          className={[styles.panel, detail ? styles.detail : '']
+            .filter(Boolean)
+            .join(' ')}
           aria-label="Sessions"
-          initial={reduced ? { opacity: 0 } : { opacity: 0, x: 24 }}
-          animate={{ opacity: 1, x: 0 }}
+          initial={reduced ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{
             opacity: 0,
             transition: { duration: velaMotion.duration.quick },
           }}
           transition={
             reduced
-              ? { duration: velaMotion.duration.base }
+              ? { duration: velaMotion.duration.quick }
               : {
-                  duration: velaMotion.duration.base,
+                  duration: velaMotion.duration.quick,
                   ease: [...velaMotion.ease.out],
                 }
           }
@@ -110,7 +114,7 @@ function SessionList({
           aria-label="Close sessions"
           onClick={onClose}
         >
-          <X size={16} aria-hidden="true" />
+          <X size={15} aria-hidden="true" />
         </Button>
       </header>
       <div className={styles.body}>
@@ -137,7 +141,7 @@ function SessionList({
                     >
                       <StateMark state={session.state} />
                       <span className={styles.rowTitle}>{session.task}</span>
-                      <ChevronRight size={16} aria-hidden="true" />
+                      <ChevronRight size={15} aria-hidden="true" />
                     </button>
                   </li>
                 ))}
@@ -180,7 +184,7 @@ function SessionDetail({
             onClick={onBack}
             aria-label="All sessions"
           >
-            <ChevronLeft size={16} aria-hidden="true" />
+            <ChevronLeft size={15} aria-hidden="true" />
             Sessions
           </button>
           <h2 className={styles.title}>{session.task}</h2>
@@ -201,7 +205,7 @@ function SessionDetail({
             aria-label="Close sessions"
             onClick={onClose}
           >
-            <X size={16} aria-hidden="true" />
+            <X size={15} aria-hidden="true" />
           </Button>
         </div>
       </header>

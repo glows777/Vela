@@ -1,4 +1,4 @@
-import { Clock, House, Plus, SlidersHorizontal } from 'lucide-react'
+import { Clock, House, Plus, SlidersHorizontal, SquarePen } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { Project } from '../../shared/bridge.ts'
 import styles from './sidebar.module.css'
@@ -33,7 +33,7 @@ function Row({
   )
 }
 
-/** Fixed frame: macOS traffic-light top strip, wordmark, primary action, projects, and Settings. */
+/** Fixed frame: macOS traffic-light top strip, quiet wordmark, lightweight nav, projects, and Settings. */
 export function Sidebar({
   projects,
   current,
@@ -62,20 +62,20 @@ export function Sidebar({
         <div className={styles.brand}>
           <Wordmark heading />
         </div>
-        <button
-          type="button"
-          className={styles.newSession}
-          onClick={onNewSession}
-        >
-          <span className={styles.newSessionMain}>
-            <Plus size={15} aria-hidden="true" />
-            New session
-          </span>
-          <kbd className={styles.shortcut} aria-hidden="true">
-            ⌘N
-          </kbd>
-        </button>
         <nav className={styles.nav} aria-label="Pages">
+          <button
+            type="button"
+            className={styles.newSession}
+            onClick={onNewSession}
+          >
+            <span className={styles.icon} aria-hidden="true">
+              <SquarePen size={15} />
+            </span>
+            <span className={styles.rowLabel}>New session</span>
+            <kbd className={styles.shortcut} aria-hidden="true">
+              ⌘N
+            </kbd>
+          </button>
           <Row
             icon={<House size={15} />}
             label="Home"
