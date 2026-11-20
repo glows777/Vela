@@ -38,7 +38,7 @@ type Control =
     }
   | { op: 'failNextTopicStart' }
   | { op: 'failNextSend' }
-  | { op: 'failNextTopicHistory' }
+  | { op: 'setTopicHistoryFailure'; threadId: string; active: boolean }
   /** A card Vela posted in a topic, after the row whose text matches `after`. */
   | { op: 'cardInTopic'; chatId: string; threadId: string; after: string }
   /** A person recalls a message in Lark: history stops returning it. */
@@ -88,7 +88,7 @@ export function fakeLark(dir: string): FakeTransport {
   let clock = Date.now() - 1000
   let failNextTopicStart = false
   let failNextSend = false
-  let failNextTopicHistory = false
+  const topicHistoryFailures = new Set<string>()
   let failNextGroupHistory = false
   let groupRefresh:
     | {
@@ -222,8 +222,9 @@ export function fakeLark(dir: string): FakeTransport {
         case 'failNextSend':
           failNextSend = true
           break
-        case 'failNextTopicHistory':
-          failNextTopicHistory = true
+        case 'setTopicHistoryFailure':
+          if (control.active) topicHistoryFailures.add(control.threadId)
+          else topicHistoryFailures.delete(control.threadId)
           break
         case 'backlog': {
           // No event: the next read, or the person leaving and returning, sees them.
@@ -474,10 +475,8 @@ export function fakeLark(dir: string): FakeTransport {
     async listTopicMessages(threadId, pageToken) {
       if (recordHistoryReads)
         await appendFile(join(dir, 'history-reads.log'), `topic:${threadId}\n`)
-      if (failNextTopicHistory) {
-        failNextTopicHistory = false
+      if (topicHistoryFailures.has(threadId))
         throw new Error('Fake Lark denied the topic history')
-      }
       // One row per page: a page the host filters to nothing must not end the read.
       const rows = threadsById.get(threadId) ?? []
       const start = pageToken ? Number(pageToken) : 0

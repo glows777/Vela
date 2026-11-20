@@ -2344,18 +2344,25 @@ async function larkJourneys() {
         larkProject,
       )
     ).find((session) => session.sessionId === topic.sessionId)!.topic!
-    await larkSays({ op: 'failNextTopicHistory' })
     await panel.getByRole('button', { name: 'All sessions' }).click()
+    // Development StrictMode can mount the detail twice. Both mounts must see the
+    // same service failure until the test explicitly restores the transport.
+    await larkSays({
+      op: 'setTopicHistoryFailure',
+      threadId: threadIdent.threadId,
+      active: true,
+    })
     await panel.getByRole('button', { name: /Check the deploy script/ }).click()
-    const topicAlert = panel.getByRole('alert')
-    await topicAlert.waitFor({ timeout: 30_000 })
-    assert(
-      ((await topicAlert.textContent()) ?? '').includes(
-        'Fake Lark denied the topic history',
-      ),
-      "The panel carries the history read's reason",
-    )
+    await panel
+      .getByRole('alert')
+      .filter({ hasText: 'Fake Lark denied the topic history' })
+      .waitFor({ timeout: 30_000 })
     await panel.getByRole('button', { name: 'All sessions' }).click()
+    await larkSays({
+      op: 'setTopicHistoryFailure',
+      threadId: threadIdent.threadId,
+      active: false,
+    })
     await panel.getByRole('button', { name: /Check the deploy script/ }).click()
     await panel
       .getByText('I will read the deploy script first.', { exact: true })
