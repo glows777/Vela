@@ -2,10 +2,23 @@ import { saveLarkSection } from '@glows777/vela'
 import { connectLarkSetup } from '@glows777/vela-lark'
 import type { LarkSetup, SettingsState } from '../shared/bridge.ts'
 
+/** SDK errors may contain configuration values. Only fixed diagnostic text crosses IPC. */
+export function larkStartupDiagnostic(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : ''
+  if (message === 'Duplicate Lark chat id')
+    return 'Lark could not start. Remove duplicate chat IDs from extensionConfig.lark.chats in settings.json.'
+  if (message.startsWith('Unknown Lark tool '))
+    return 'Lark could not start. Check the tools for enabled chats in settings.json.'
+  if (message.startsWith('Unknown Lark thinking level '))
+    return 'Lark could not start. Check the thinking levels for enabled chats in settings.json.'
+  return 'Lark could not start. Check extensionConfig.lark in settings.json, then restart the app.'
+}
+
 export function larkState(
   raw: Record<string, unknown>,
   section: Record<string, unknown>,
   loaded: boolean,
+  startupError?: string,
 ): SettingsState['lark'] {
   const entries =
     typeof section.chats === 'string' ? section.chats.split(',') : section.chats
@@ -20,10 +33,11 @@ export function larkState(
     appId: typeof section.appId === 'string' ? section.appId : '',
     appSecretSaved:
       typeof section.appSecret === 'string' && !!section.appSecret,
-    chats,
+    chats: [...new Set(chats)],
     envExpression: typeof raw.chats === 'string' && raw.chats.includes('$'),
     runInApp: section.runInApp !== false,
     loaded,
+    ...(startupError ? { startupError } : {}),
   }
 }
 

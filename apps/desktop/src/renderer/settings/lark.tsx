@@ -56,13 +56,19 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
     <>
       <div className={styles.heading}>
         <h2 className={styles.title2}>Lark</h2>
-        <p role="status">
-          {settings.loaded
-            ? status
-            : settings.runInApp
-              ? 'Lark is not loaded in this app'
-              : 'Off in this app'}
-        </p>
+        {settings.startupError ? (
+          <p className={form.error} role="alert">
+            {settings.startupError} Local is available.
+          </p>
+        ) : (
+          <p role="status">
+            {settings.loaded
+              ? status
+              : settings.runInApp
+                ? 'Lark is not loaded in this app'
+                : 'Off in this app'}
+          </p>
+        )}
       </div>
       <div className={styles.heading}>
         <Switch

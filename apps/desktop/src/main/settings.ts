@@ -63,6 +63,7 @@ export function readSettings(options: {
   agentDir: string
   cwd: string
   larkLoaded: boolean
+  larkStartupError?: string
   directModel: boolean
   hasAvailableModel: boolean
 }): SettingsState {
@@ -91,6 +92,7 @@ export function readSettings(options: {
       config.settings.extensionConfig?.lark ?? {},
       config.extensionConfig.lark ?? {},
       options.larkLoaded,
+      options.larkStartupError,
     ),
     files: {
       settings: join(config.agentDir, 'settings.json'),

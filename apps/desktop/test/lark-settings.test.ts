@@ -2,7 +2,11 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { larkState, writeLark } from '../src/main/lark-settings.ts'
+import {
+  larkStartupDiagnostic,
+  larkState,
+  writeLark,
+} from '../src/main/lark-settings.ts'
 
 test('an ID-only edit verifies with the saved secret and keeps its expression on disk', async () => {
   const agentDir = await mkdtemp(join(tmpdir(), 'vela-lark-settings-'))
@@ -48,4 +52,17 @@ test('an ID-only edit verifies with the saved secret and keeps its expression on
   } finally {
     await rm(agentDir, { recursive: true, force: true })
   }
+})
+
+test('a startup diagnostic gives a repair step without returning untrusted error details', () => {
+  const secret = crypto.randomUUID()
+  const reason = larkStartupDiagnostic(
+    new Error(`Unknown Lark tool "${secret}" for chat example`),
+  )
+  expect(reason).toContain('tools')
+  expect(reason).toContain('settings.json')
+  expect(reason.includes(secret)).toBe(false)
+  const generic = larkStartupDiagnostic(new Error(secret))
+  expect(generic).toContain('extensionConfig.lark')
+  expect(generic.includes(secret)).toBe(false)
 })

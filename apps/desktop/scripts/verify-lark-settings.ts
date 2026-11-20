@@ -42,6 +42,46 @@ export async function verifyLarkSettings(
   await page.goto(new URL('index.html', page.url()).href)
   await open()
   await page.getByText('oc_settings', { exact: true }).waitFor()
+  const startup = page
+    .getByRole('alert')
+    .filter({ hasText: /duplicate chat IDs.*settings.json/i })
+  await startup.waitFor({ timeout: 7000 })
+  assert(
+    await toggle.isChecked(),
+    'A failed startup preserves desktop ownership',
+  )
+  assert(
+    !JSON.stringify(await page.evaluate(() => window.vela.settings())).includes(
+      secret,
+    ),
+  )
+  assert(!(await startup.innerText()).includes(secret))
+  await themes(page, 'lark-settings-startup-error')
+
+  await submit('Can Local answer while Lark needs repair?')
+  await page.getByText('Local answer', { exact: true }).nth(1).waitFor()
+  await page.waitForFunction(
+    async () =>
+      !(await window.vela.sessions('local')).some(
+        (s) => s.state === 'running' || s.state === 'queued',
+      ),
+  )
+  await open()
+  await toggle.click()
+  await page.getByText('Off in this app', { exact: true }).waitFor()
+  assert.equal(
+    await startup.count(),
+    0,
+    'Turning ownership off clears the startup diagnostic even with the same invalid chats',
+  )
+  await page.getByRole('button', { name: 'Remove oc_duplicate' }).click()
+  await page
+    .getByText('oc_duplicate', { exact: true })
+    .waitFor({ state: 'detached' })
+  await toggle.click()
+  await page.waitForFunction(
+    async () => (await window.vela.settings()).lark.loaded,
+  )
   assert.equal(await input.getAttribute('type'), 'password')
   await page.getByLabel('App ID', { exact: true }).fill('verify-app')
   await input.fill('invalid')
@@ -86,7 +126,7 @@ export async function verifyLarkSettings(
   assert.equal((await disk()).extensions, undefined)
   await themes(page, 'lark-settings-off')
   await submit('Does Local still work?')
-  await page.getByText('Local answer', { exact: true }).nth(1).waitFor()
+  await page.getByText('Local answer', { exact: true }).nth(2).waitFor()
   await page.waitForFunction(
     async () =>
       !(await window.vela.sessions('local')).some(
@@ -136,11 +176,19 @@ export async function verifyLarkSettings(
   )
 }
 
-export async function seedLarkChat(dir: string) {
+export async function seedLarkChat(dir: string, secret: string) {
   const path = join(dir, 'settings.json')
   const settings = JSON.parse(await readFile(path, 'utf8'))
   settings.extensionConfig = {
-    lark: { chats: [{ id: 'oc_settings', readUntagged: false }] },
+    lark: {
+      appId: 'not-configured',
+      appSecret: secret,
+      chats: [
+        'oc_duplicate',
+        'oc_duplicate',
+        { id: 'oc_settings', readUntagged: false },
+      ],
+    },
   }
   await writeFile(path, JSON.stringify(settings))
 }

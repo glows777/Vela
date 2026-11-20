@@ -64,6 +64,7 @@ export type SettingsState = {
     envExpression: boolean
     runInApp: boolean
     loaded: boolean
+    startupError?: string
   }
   providers: SettingsProvider[]
 }

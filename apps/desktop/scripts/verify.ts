@@ -1753,7 +1753,7 @@ async function firstRunJourney() {
   }
   try {
     const testSecret = crypto.randomUUID()
-    await seedLarkChat(dir)
+    await seedLarkChat(dir, testSecret)
     const fourth = await launchDev({
       VELA_DIR: dir,
       VELA_MODEL: undefined,
@@ -1769,6 +1769,7 @@ async function firstRunJourney() {
         testSecret,
       )
       checks.push(
+        'A duplicate enabled chat at startup shows the setting to fix; Local answers, and turning ownership off clears the diagnostic.',
         'Lark settings verify credentials, hide both secrets, disconnect and reconnect the desktop host, protect a running Local session, and remove an enabled chat.',
       )
     } finally {

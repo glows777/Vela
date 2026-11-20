@@ -4,7 +4,11 @@ import { resolveShellPath } from '@glows777/vela-core'
 import { lark } from '@glows777/vela-lark'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
-import { verifyCredentials, writeLark } from './lark-settings.ts'
+import {
+  larkStartupDiagnostic,
+  verifyCredentials,
+  writeLark,
+} from './lark-settings.ts'
 import { saveModel } from './model-setup.ts'
 import { loadDesktopConfig, readSettings } from './settings.ts'
 
@@ -19,16 +23,13 @@ const routineCreator = (channel: string) => {
 }
 
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
-async function openHost(localOnly = false) {
-  const cwd = process.cwd()
-  const config = loadDesktopConfig(cwd)
+async function openHost(
+  config: ReturnType<typeof loadDesktopConfig>,
+  loadLark: boolean,
+  larkStartupError?: string,
+) {
+  const cwd = config.cwd
   const larkSettings = config.extensionConfig.lark ?? {}
-  const loadLark =
-    !localOnly &&
-    larkSettings.runInApp !== false &&
-    config.extensions.some(
-      (extension) => extension.name === 'lark' && 'builtin' in extension,
-    )
   const fake =
     process.env.VELA_DESKTOP_LARK === 'fake'
       ? await import('./settings-transport.ts')
@@ -82,6 +83,7 @@ async function openHost(localOnly = false) {
       cwd,
       directModel,
       larkLoaded: loadLark,
+      larkStartupError,
       hasAvailableModel: vela.models().length > 0,
     })
   const off: (() => void)[] = []
@@ -196,7 +198,6 @@ async function openHost(localOnly = false) {
       }
     }
     return {
-      localOnly,
       settings,
       handle,
       saveLark: (input: Extract<Request, { method: 'saveLark' }>['input']) =>
@@ -236,7 +237,18 @@ async function openHost(localOnly = false) {
 
 /** Invalid Lark configuration must leave Settings and Local available across launches. */
 function openAvailableHost() {
-  return openHost().catch(() => openHost(true))
+  const config = loadDesktopConfig(process.cwd())
+  const loadLark =
+    config.extensionConfig.lark?.runInApp !== false &&
+    config.extensions.some(
+      (extension) => extension.name === 'lark' && 'builtin' in extension,
+    )
+  const opening = openHost(config, loadLark)
+  return loadLark
+    ? opening.catch((cause) =>
+        openHost(config, false, larkStartupDiagnostic(cause)),
+      )
+    : opening
 }
 
 /** A save waits for admitted requests and owns the host until its replacement is ready. */
@@ -250,10 +262,6 @@ export async function startHost() {
         await host.saveLark(request.input)
         await host.dispose()
         host = await openAvailableHost()
-        if (host.localOnly)
-          throw new Error(
-            'Lark settings were saved, but Lark could not start. Check settings.json. Local is available.',
-          )
         return host.settings()
       })
       barrier = saved.then(
