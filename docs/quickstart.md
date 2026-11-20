@@ -96,13 +96,15 @@ The wizard asks, in order:
 
    Mention the bot in the group you want it in. Ctrl+C twice cancels setup.
 
-5. **Enable the group.** The wizard names the group and its chat ID and asks for confirmation:
+5. **Enable the group.** The wizard shows the chat ID and, when available, the group name before asking for confirmation:
 
    ```text
    Enable <group> (<chat id>)? Every member of an enabled group has full access to Vela tools.
      Enable group
      Cancel
    ```
+
+   If Vela cannot retrieve the group name, the prompt starts with `Enable <chat id>?` instead. Check the ID before enabling the group.
 
    Enabling a group trusts everyone in it with this machine. There is no sandbox or per-member boundary; read [Security](security.md#channel-senders) before enabling a group.
 
