@@ -128,7 +128,7 @@ function issueNote(body: string, labels: IssueLabel[]) {
 }
 
 async function proveIssueLabelAllowlist(
-  issueLabels: readonly string[],
+  issueLabels: string[] | { all: string[] },
   slug: string,
 ): Promise<void> {
   const feedLogs: string[] = []
@@ -159,7 +159,7 @@ async function proveIssueLabelAllowlist(
           github: {
             secret,
             repositories: ['owner/repo'],
-            issueLabels: [...issueLabels],
+            issueLabels,
           },
         },
       },
@@ -178,8 +178,9 @@ async function proveIssueLabelAllowlist(
       }),
     ],
   })
-  const allows = (labels: IssueLabel[]) =>
-    labels.some((each) => issueLabels.includes(each.name))
+  const legacyVela =
+    Array.isArray(issueLabels) && issueLabels.includes('to:vela')
+  const strict = !Array.isArray(issueLabels)
   const prRoot = `${slug}-root`
   try {
     await feed.startChannels()
@@ -243,19 +244,19 @@ async function proveIssueLabelAllowlist(
         id: `${slug}-opened-other`,
         payload: issueBody('opened', [{ name: 'bug' }]),
         event: 'issues',
-        wake: allows([{ name: 'bug' }]),
+        wake: false,
       },
       {
         id: `${slug}-opened-labeled`,
         payload: issueBody('opened', [{ name: 'to:vela' }]),
         event: 'issues',
-        wake: allows([{ name: 'to:vela' }]),
+        wake: legacyVela,
       },
       {
         id: `${slug}-closed-labeled`,
         payload: issueBody('closed', [{ name: 'to:vela' }]),
         event: 'issues',
-        wake: allows([{ name: 'to:vela' }]),
+        wake: legacyVela,
       },
       {
         id: `${slug}-action-labeled`,
@@ -263,7 +264,7 @@ async function proveIssueLabelAllowlist(
           label: { name: 'to:vela' },
         }),
         event: 'issues',
-        wake: issueLabels.includes('to:vela'),
+        wake: legacyVela,
       },
       {
         id: `${slug}-comment-plain`,
@@ -275,9 +276,62 @@ async function proveIssueLabelAllowlist(
         id: `${slug}-comment-labeled`,
         payload: issueNote('Labeled issue comment', [{ name: 'to:vela' }]),
         event: 'issue_comment',
-        wake: allows([{ name: 'to:vela' }]),
+        wake: legacyVela,
       },
     ]
+    if (strict) {
+      const assigned = { name: 'to:vela' }
+      const ready = { name: 'status:ready' }
+      const other = { name: 'to:friday' }
+      const priority = { name: 'P1' }
+      const both = [assigned, ready]
+      rows.push(
+        {
+          id: 'all-opened',
+          payload: issueBody('opened', both),
+          event: 'issues',
+          wake: true,
+        },
+        {
+          id: 'all-closed',
+          payload: issueBody('closed', both),
+          event: 'issues',
+          wake: true,
+        },
+        {
+          id: 'all-comment',
+          payload: issueNote('Ready for Vela', both),
+          event: 'issue_comment',
+          wake: true,
+        },
+        {
+          id: 'ready-only',
+          payload: issueBody('opened', [ready]),
+          event: 'issues',
+          wake: false,
+        },
+        {
+          id: 'all-applied',
+          payload: issueBody('labeled', both, { label: ready }),
+          event: 'issues',
+          wake: true,
+        },
+        {
+          id: 'friday-applied',
+          payload: issueBody('labeled', [other, ready], { label: ready }),
+          event: 'issues',
+          wake: false,
+        },
+        {
+          id: 'priority-applied',
+          payload: issueBody('labeled', [...both, priority], {
+            label: priority,
+          }),
+          event: 'issues',
+          wake: false,
+        },
+      )
+    }
     for (const row of rows) {
       if (row.wake) feedModel.push(fauxText(`${row.id} handled`))
       assert.equal((await post(row.payload, row.event, row.id)).status, 202)
@@ -340,9 +394,7 @@ async function proveIssueLabelAllowlist(
         .lastUserText.includes('github:owner/repo#issues'),
     )
     console.log(
-      issueLabels.length
-        ? `PASS ${issueLabels.join(',')} allowlist wakes a labeled Issue and its comment, drops an unlabeled Issue, and keeps a PR comment on its topic`
-        : 'PASS empty issueLabels accepts no Issue event and keeps a PR comment on its topic',
+      `PASS ${slug} Issue label filter; PR comments still reach only their topic`,
     )
   } finally {
     await feed.dispose()
@@ -545,6 +597,7 @@ try {
   )
   await proveIssueLabelAllowlist([], 'empty')
   await proveIssueLabelAllowlist(['to:vela'], 'allow')
+  await proveIssueLabelAllowlist({ all: ['to:vela', 'status:ready'] }, 'all')
 
   model.push(fauxText('Fixture closure handled'))
   assert.equal(

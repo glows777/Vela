@@ -90,7 +90,9 @@ function issueComment(
 async function fixture(
   options: {
     apps?: string[]
-    issueLabels?: string[]
+    issueLabels?:
+      | readonly string[]
+      | { all?: readonly string[]; any?: readonly string[] }
     receiver?: boolean
     enabled?: Set<string>
     cwd?: string
@@ -450,6 +452,91 @@ test('an empty issueLabels list accepts no Issue event', async () => {
   await drainChannels(f.vela)
   expect(f.model.calls.length).toBe(before)
 })
+
+test('all-of Issue labels gate lifecycle, comments and meaningful label applications', async () => {
+  const f = await fixture({ issueLabels: { all: ['to:vela', 'status:ready'] } })
+  await f.subscribeFeed()
+  const vela = { name: 'to:vela' }
+  const ready = { name: 'status:ready' }
+  const friday = { name: 'to:friday' }
+  const bug = { name: 'bug' }
+  const both = [vela, ready]
+  const cases = [
+    [issuePayload('opened', {}, both), 'issues', true],
+    [issuePayload('closed', {}, both), 'issues', true],
+    [issueComment('both', false, both), 'issue_comment', true],
+    [issuePayload('opened', {}, [ready]), 'issues', false],
+    [issuePayload('closed', {}, [vela]), 'issues', false],
+    [
+      issueComment('Friday issue', false, [friday, ready]),
+      'issue_comment',
+      false,
+    ],
+    [issuePayload('labeled', { label: ready }, both), 'issues', true],
+    [
+      issuePayload('labeled', { label: ready }, [friday, ready]),
+      'issues',
+      false,
+    ],
+    [issuePayload('labeled', { label: bug }, [...both, bug]), 'issues', false],
+  ] as const
+  for (const [index, [payload, event, wake]] of cases.entries()) {
+    const before = f.model.calls.length
+    const replies = f.replies.length
+    if (wake) f.model.push(fauxText(`Issue ${index} handled`))
+    expect((await send(f.url, payload, event, `all-${index}`)).status).toBe(202)
+    await drainChannels(f.vela)
+    expect(f.model.calls.length).toBe(before + Number(wake))
+    expect(f.replies.length).toBe(replies + Number(wake))
+    if (wake) expect(f.replies.at(-1)?.text).toBe(`Issue ${index} handled`)
+  }
+})
+
+test.each([
+  [
+    'combined',
+    { all: ['to:vela'], any: ['bug', 'enhancement'] },
+    ['to:vela', 'enhancement'],
+    'enhancement',
+    true,
+  ],
+  [
+    'missing any',
+    { all: ['to:vela'], any: ['bug'] },
+    ['to:vela'],
+    'to:vela',
+    false,
+  ],
+  ['missing all', { all: ['to:vela'], any: ['bug'] }, ['bug'], 'bug', false],
+  ['legacy any', ['to:vela', 'bug'], ['to:vela'], 'bug', true],
+  [
+    'object any',
+    { all: [], any: ['to:vela', 'bug'] },
+    ['to:vela'],
+    'bug',
+    true,
+  ],
+  ['empty object', {}, ['to:vela'], 'to:vela', false],
+  ['empty groups', { all: [], any: [] }, ['to:vela'], 'to:vela', false],
+] as const)(
+  'issueLabels %s preserves meaningful label behavior',
+  async (_name, issueLabels, names, name, wake) => {
+    const f = await fixture({ issueLabels })
+    await f.subscribeFeed()
+    const before = f.replies.length
+    if (wake) f.model.push(fauxText('Matched'))
+    const payload = issuePayload(
+      'labeled',
+      { label: { name } },
+      names.map((name) => ({ name })),
+    )
+    expect(
+      (await send(f.url, payload, 'issues', 'matching-label')).status,
+    ).toBe(202)
+    await drainChannels(f.vela)
+    expect(f.replies.length).toBe(before + Number(wake))
+  },
+)
 
 test('issueLabels leaves PR events alone', async () => {
   const f = await fixture({ issueLabels: [] })
@@ -897,6 +984,12 @@ test.each([
   { github: { secret, repositories: [repo], apps: [''] } },
   { github: { secret, repositories: [repo], issueLabels: [''] } },
   { github: { secret, repositories: [repo], issueLabels: 'to:vela' } },
+  { github: { secret, repositories: [repo], issueLabels: { all: [' '] } } },
+  {
+    github: { secret, repositories: [repo], issueLabels: { any: ['bug', 1] } },
+  },
+  { github: { secret, repositories: [repo], issueLabels: { all: 'to:vela' } } },
+  { github: { secret, repositories: [repo], issueLabels: { neither: [] } } },
 ])(
   'invalid receiver configuration fails before listening: %j',
   async (eventReceiver) => {
