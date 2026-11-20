@@ -11,6 +11,7 @@ For human and bot reviewers alike. Repo conventions are in [CONTRIBUTING.md](CON
 - A user- or model-visible change without the docs pages that describe that behavior updated in the same change as the CHANGELOG entry. Leftover wording is the same miss wherever it sits: search the whole changed file, the rest of `docs/`, the Unreleased changelog and `agent-lessons.md` for the old statement — a table cell, a later section about the same path, or a present-tense lesson sentence — not only the paragraph being edited. It still counts when that wording calls the shipped slice a follow-up or says the slice is not in this PR.
 - A new public method on `ChannelVela` or the umbrella `Vela` that is absent from the Vela member table in [docs/sdk.md](docs/sdk.md), with no decision on that page to leave the method out.
 - Behavior that departs from pi without the PR saying why.
+- An unreferenced working `*.patch` file at the repository root. Check that a newly added root patch has a named consumer in code, configuration or documentation; an already-applied diff is not a consumer.
 - Security: channel access outside the enabled-chat list, path or command injection, secrets in logs. These are never optional.
 
 ## How to write a finding

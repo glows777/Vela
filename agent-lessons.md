@@ -16,6 +16,14 @@ The prevention mechanism is the Agent runtime prompt-cache review check in [REVI
 
 [Issue #498](https://github.com/glows777/Vela/issues/498) exposed the converse: a long title clipped at the window edge and pushed the tag and path out of view. The same journey now also checks the header's own width, that a long name ellipsizes and that the tag and folder are still on screen at 800×600.
 
+## Verify the setup action in the viewport
+
+[Issue #505](https://github.com/glows777/Vela/issues/505) found that the custom-provider setup form could put **Verify and save** below the fold at the default 1280×800 window size. A `fullPage` screenshot can include controls outside the viewport, so it cannot establish that an action is on screen. Check the control itself before scrolling; after a refused key, check both the provider’s reason and the retry action in the same viewport. Pre-PR verification should have caught this. [Desktop verification journey 6](.skills/verify-vela/desktop.md#what-the-driver-asserts) now asserts both states.
+
+## Review desktop refactors for build readiness and stray artifacts
+
+[PR #508](https://github.com/glows777/Vela/pull/508) landed generated CSS without its token source, a Dialog transition that did not type-check, a packaging reference to a deleted Arc license, and an already-applied working patch at the repository root. [Issue #511](https://github.com/glows777/Vela/issues/511) records the failures and the follow-up. Change `tokens.json` and its generated CSS together, remove packaging references with the bundled file, and wait for successful desktop check and package jobs for the current head. CI covered the build failures, not the stray file. The corresponding [review rule](REVIEW.md#what-a-bug-looks-like-here) catches root-level working patches without banning patches the repository actually references.
+
 ## Background memory work must respect tool availability and atomic merges
 
 [PR #307's review](https://github.com/glows777/Vela/pull/307#discussion_r4504727382) found that a deny-only background gate let `memory: ask` sessions consolidate without approval. The pre-PR tests covered `deny`, but not the approval-required path or an already-due shared inbox. That fix required `allow` for collection and both automatic and manual runs. Since [#348](https://github.com/glows777/Vela/issues/348) removed the permission API, dream follows the memory tool's availability: a session with `tools: ['-memory']` neither collects nor consolidates. User extensions handle confirmation for ordinary tool calls.

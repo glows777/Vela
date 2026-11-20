@@ -27,17 +27,3 @@ bun run desktop:package
 ```
 
 Forge prints the output directory under `apps/desktop/out/`. macOS packages are unsigned and unnotarized. Signing, installers, updates, and acceptance on Windows or Linux are separate work. The package includes the Photon Apache 2.0 license and both font licenses.
-
-## Adopt or update Arc components
-
-Read the candidate's registry source and dependency closure, then use the configured public registry with stock shadcn.
-
-```sh
-cd apps/desktop
-bunx shadcn@4.23.0 view @uiarc/COMPONENT
-bunx shadcn@4.23.0 add @uiarc/COMPONENT
-```
-
-Replace `COMPONENT` with the free item's name. Review the installed changes and follow the [design ownership rules](AGENTS.md#design-ownership). Arc uses CSS Modules without a Tailwind dependency or plugin; the retained `tailwind` metadata is shadcn's configuration schema.
-
-For an update, inspect `bunx shadcn@4.23.0 add @uiarc/COMPONENT --dry-run` and `--diff FILE` before applying changes. Run desktop checks and the runtime driver after adoption or an update.
