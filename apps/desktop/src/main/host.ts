@@ -1,6 +1,6 @@
 import type { IncomingMessage } from '@glows777/vela-channels'
 import { createChannelVela, local } from '@glows777/vela-channels'
-import { resolveShellPath } from '@glows777/vela-core'
+import { background, resolveShellPath } from '@glows777/vela-core'
 import { lark } from '@glows777/vela-lark'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
@@ -55,6 +55,11 @@ async function openHost(
     }),
     extensionConfig: config.extensionConfig,
     extensions: [
+      ...(fake &&
+      process.env.VELA_DESKTOP_VERIFY_BACKGROUND === '1' &&
+      config.extensions.some((e) => e.name === 'background' && 'builtin' in e)
+        ? [background()]
+        : []),
       ...(loadLark
         ? [
             lark(
@@ -207,6 +212,10 @@ async function openHost(
           input,
           fake?.verifySettingsCredentials ?? verifyCredentials,
           () => {
+            if (vela.sessions().some((session) => session.hasWork))
+              throw new Error(
+                'Wait for background commands to finish or stop them before changing Lark settings.',
+              )
             if (
               vela.channels().some(({ name }) =>
                 vela
