@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import type { SettingsState } from '../../shared/bridge.ts'
 import { General } from './general.tsx'
+import { Lark } from './lark.tsx'
 import { Models } from './models.tsx'
 import styles from './settings-page.module.css'
 
-type Section = 'general' | 'models'
+type Section = 'general' | 'models' | 'lark'
 const SECTIONS: { id: Section; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'models', label: 'Models' },
+  { id: 'lark', label: 'Lark' },
 ]
 
 /** Settings: one left nav, and only the pages this issue needs. */
@@ -32,7 +34,9 @@ export function SettingsPage({ settings }: { settings: SettingsState }) {
             ))}
           </nav>
           <section className={styles.panel}>
-            {section === 'models' ? (
+            {section === 'lark' ? (
+              <Lark settings={settings.lark} />
+            ) : section === 'models' ? (
               <Models settings={settings} />
             ) : (
               <General settings={settings} />

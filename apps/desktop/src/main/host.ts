@@ -1,11 +1,12 @@
 import type { IncomingMessage } from '@glows777/vela-channels'
 import { createChannelVela, local } from '@glows777/vela-channels'
-import { loadConfig, resolveShellPath } from '@glows777/vela-core'
-import { lark, larkConfig } from '@glows777/vela-lark'
+import { resolveShellPath } from '@glows777/vela-core'
+import { lark } from '@glows777/vela-lark'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
+import { verifyCredentials, writeLark } from './lark-settings.ts'
 import { saveModel } from './model-setup.ts'
-import { readSettings } from './settings.ts'
+import { loadDesktopConfig, readSettings } from './settings.ts'
 
 /**
  * Local attributes every input to this one person, and the app has no signed-in user,
@@ -18,22 +19,20 @@ const routineCreator = (channel: string) => {
 }
 
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
-export async function startHost() {
+async function openHost(localOnly = false) {
   const cwd = process.cwd()
-  const config = loadConfig({
-    deferSystemFiles: true,
-    cwd,
-    env: process.env,
-    trusted: false,
-    builtins: ['background', 'memory', 'rag', 'web', 'lark', 'mcp', 'todo'],
-  })
-  const larkSettings = larkConfig.resolve(config.extensionConfig.lark ?? {}, {
-    cwd,
-    agentDir: config.agentDir,
-    projectDir: cwd,
-    trusted: false,
-    env: process.env,
-  })
+  const config = loadDesktopConfig(cwd)
+  const larkSettings = config.extensionConfig.lark ?? {}
+  const loadLark =
+    !localOnly &&
+    larkSettings.runInApp !== false &&
+    config.extensions.some(
+      (extension) => extension.name === 'lark' && 'builtin' in extension,
+    )
+  const fake =
+    process.env.VELA_DESKTOP_LARK === 'fake'
+      ? await import('./settings-transport.ts')
+      : undefined
   const model = process.env.VELA_MODEL?.startsWith('faux:')
     ? await (await import('@glows777/vela-core/testing')).loadFauxScenario(
         process.env.VELA_MODEL.slice(5),
@@ -53,12 +52,21 @@ export async function startHost() {
       env: process.env,
       platform: process.platform,
     }),
-    extensionConfig: { ...config.extensionConfig, lark: larkSettings },
+    extensionConfig: config.extensionConfig,
     extensions: [
-      ...(config.extensions.some(
-        (extension) => extension.name === 'lark' && 'builtin' in extension,
-      )
-        ? [lark()]
+      ...(loadLark
+        ? [
+            lark(
+              fake
+                ? {
+                    transport: fake.settingsTransport(
+                      larkSettings.appId,
+                      larkSettings.appSecret,
+                    ),
+                  }
+                : {},
+            ),
+          ]
         : []),
       local({}),
     ],
@@ -73,6 +81,7 @@ export async function startHost() {
       agentDir: config.agentDir,
       cwd,
       directModel,
+      larkLoaded: loadLark,
       hasAvailableModel: vela.models().length > 0,
     })
   const off: (() => void)[] = []
@@ -107,7 +116,9 @@ export async function startHost() {
       ),
     )
     await vela.startChannels()
-    ipcMain.handle(REQUEST, async (_event, request: Request) => {
+    const handle = async (
+      request: Exclude<Request, { method: 'saveLark' }>,
+    ) => {
       switch (request.method) {
         case 'channels':
           return vela.channels()
@@ -183,15 +194,86 @@ export async function startHost() {
         default:
           throw new Error('Unknown desktop request')
       }
-    })
-    return async () => {
-      ipcMain.removeHandler(REQUEST)
-      for (const stop of off) stop()
-      await vela.dispose()
+    }
+    return {
+      localOnly,
+      settings,
+      handle,
+      saveLark: (input: Extract<Request, { method: 'saveLark' }>['input']) =>
+        writeLark(
+          config.agentDir,
+          loadDesktopConfig(cwd, config.agentDir).extensionConfig.lark ?? {},
+          input,
+          fake?.verifySettingsCredentials ?? verifyCredentials,
+          () => {
+            if (
+              vela.channels().some(({ name }) =>
+                vela
+                  .channel(name)
+                  .sessions()
+                  .some(
+                    (session) =>
+                      session.state === 'running' || session.state === 'queued',
+                  ),
+              )
+            )
+              throw new Error(
+                'A session is still running or queued. Wait for it to finish before changing Lark settings.',
+              )
+          },
+        ),
+      dispose: async () => {
+        for (const stop of off) stop()
+        await vela.dispose()
+      },
     }
   } catch (error) {
     for (const stop of off) stop()
     await vela.dispose().catch(() => {})
     throw error
+  }
+}
+
+/** Invalid Lark configuration must leave Settings and Local available across launches. */
+function openAvailableHost() {
+  return openHost().catch(() => openHost(true))
+}
+
+/** A save waits for admitted requests and owns the host until its replacement is ready. */
+export async function startHost() {
+  let host = await openAvailableHost()
+  let barrier = Promise.resolve()
+  const active = new Set<Promise<unknown>>()
+  ipcMain.handle(REQUEST, (_event, request: Request) => {
+    if (request.method === 'saveLark') {
+      const saved = Promise.all([barrier, ...active]).then(async () => {
+        await host.saveLark(request.input)
+        await host.dispose()
+        host = await openAvailableHost()
+        if (host.localOnly)
+          throw new Error(
+            'Lark settings were saved, but Lark could not start. Check settings.json. Local is available.',
+          )
+        return host.settings()
+      })
+      barrier = saved.then(
+        () => {},
+        () => {},
+      )
+      return saved
+    }
+    const pending = barrier.then(() => host.handle(request))
+    const settled = pending.then(
+      () => {},
+      () => {},
+    )
+    active.add(settled)
+    void settled.then(() => active.delete(settled))
+    return pending
+  })
+  return async () => {
+    ipcMain.removeHandler(REQUEST)
+    await Promise.all([barrier, ...active])
+    await host.dispose()
   }
 }

@@ -11,9 +11,9 @@ Vela desktop brings Local projects, Local sessions, Lark projects, and Lark sess
 - `src/preload/` owns that bridge and imports no SDK. Expose typed operations rather than generic IPC access. No other IPC channels.
 - `src/shared/` owns the bridge contract in one TypeScript file. It stays browser-safe and imports no main, preload, Node, Electron, or SDK code, so shared types cannot carry privileges into the renderer.
 
-Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The SDK host, shared contract, preload bridge, and real-window assertions are connected. Home, the Local project page, the session side panel, the New project dialog, the Routines page, first-run setup and Settings › General/Models are product screens; the remaining Lark pages depend on host calls that land with them and are not built yet.
+Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The SDK host, shared contract, preload bridge, and real-window assertions are connected. Home, the Local project page, the session side panel, the New project dialog, the Routines page, first-run setup and Settings › General/Models/Lark are product screens; the remaining Lark pages depend on host calls that land with them and are not built yet.
 
-While open, the app owns its Lark connection. Never use the same Lark app credentials concurrently with `vela serve`, because the two hosts would compete for one connection and persisted channel state.
+While “Run Lark in this app” is on, the app owns its Lark connection. Never use the same Lark app credentials concurrently with `vela serve`, because the two hosts would compete for one connection and persisted channel state.
 
 Keep `sandbox`, `contextIsolation`, and disabled `nodeIntegration`. Deny new windows, page navigation, and permission requests. Keep the strict CSP in both HTML entries. These limits contain renderer content as product functionality grows.
 

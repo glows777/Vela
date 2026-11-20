@@ -104,3 +104,18 @@
     flex-direction: row;
   }
 }
+
+.chats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chats li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vela-space-2);
+  padding-block: var(--vela-space-2);
+  overflow-wrap: anywhere;
+}

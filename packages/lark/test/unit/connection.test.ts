@@ -249,3 +249,30 @@ test('real SDK text create, reply and topic requests receive the channel deliver
     await c.stop()
   }
 })
+
+test('SDK token request errors keep credential payloads out of console output', async () => {
+  const secret = crypto.randomUUID()
+  const printed: string[] = []
+  const originalLog = console.log
+  const originalError = console.error
+  const originalWarn = console.warn
+  const capture = (...args: unknown[]) => {
+    printed.push(Bun.inspect(args))
+  }
+  intercept()
+  console.log = capture
+  console.error = capture
+  console.warn = capture
+  sdk.defaultHttpInstance.defaults.adapter = async () => {
+    throw new Error(`Rejected request body: ${secret}`)
+  }
+  try {
+    const transport = larkTransport(crypto.randomUUID(), secret)
+    await expect(transport.getBotId()).rejects.toThrow()
+    expect(printed.some((line) => line.includes(secret))).toBe(false)
+  } finally {
+    console.log = originalLog
+    console.error = originalError
+    console.warn = originalWarn
+  }
+})
