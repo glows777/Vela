@@ -3,6 +3,17 @@ import { appendFile, mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Page } from 'playwright'
 
+// A bridge read is asynchronous. Playwright's DOM predicate checks the returned
+// promise for truthiness, so poll the value after the IPC reply instead.
+async function waitForBridge(page: Page, read: () => Promise<unknown>) {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    if (await page.evaluate(read)) return
+    await Bun.sleep(50)
+  }
+  throw new Error(`Timed out waiting for the bridge: ${read}`)
+}
+
 /** A separate host, transport, scenario and settings file from the Lark history journeys. */
 export async function verifyLarkDiscovery(
   scratch: string,
@@ -130,7 +141,7 @@ export async function verifyLarkDiscovery(
         senderName: 'Mira',
       })}\n`,
     )
-    await page.waitForFunction(async () => {
+    await waitForBridge(page, async () => {
       const project = (await window.vela.projects()).find(
         (p) => p.id === 'oc_enabled',
       )
@@ -143,7 +154,8 @@ export async function verifyLarkDiscovery(
         (message) => message.text === 'Still listening during confirmation.',
       )
     })
-    await page.waitForFunction(
+    await waitForBridge(
+      page,
       async () => !(await window.vela.sessions('lark')).some((s) => s.runId),
     )
     await dialog.getByRole('button', { name: 'Cancel' }).click()
@@ -184,7 +196,7 @@ export async function verifyLarkDiscovery(
       .waitFor()
 
     await send(page, 'Message Vela in this project', 'Keep this run active')
-    await page.waitForFunction(async () =>
+    await waitForBridge(page, async () =>
       (await window.vela.sessions('local')).find((s) => s.runId),
     )
     await open()
@@ -209,7 +221,8 @@ export async function verifyLarkDiscovery(
         )
       }),
     )
-    await page.waitForFunction(
+    await waitForBridge(
+      page,
       async () => !(await window.vela.sessions('local')).some((s) => s.runId),
     )
     // The host is live during confirmation. A run started there also vetoes a save.
@@ -226,7 +239,7 @@ export async function verifyLarkDiscovery(
         senderName: 'Mira',
       })}\n`,
     )
-    await page.waitForFunction(async () =>
+    await waitForBridge(page, async () =>
       (await window.vela.sessions('lark')).find((s) => s.runId),
     )
     await dialog.getByRole('button', { name: 'Enable group' }).click()
@@ -248,7 +261,8 @@ export async function verifyLarkDiscovery(
         )
       }),
     )
-    await page.waitForFunction(
+    await waitForBridge(
+      page,
       async () => !(await window.vela.sessions('lark')).some((s) => s.runId),
     )
     await Bun.write(join(transport, 'control.jsonl'), '')
