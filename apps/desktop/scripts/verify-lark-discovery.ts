@@ -17,11 +17,11 @@ export async function verifyLarkDiscovery(
   const discovery = join(transport, 'discovery')
   await mkdir(discovery, { recursive: true })
   const settings = join(dir, 'settings.json')
-  const oldChat = { id: 'oc_enabled', readUntagged: false }
-  const original = JSON.stringify({
-    extensionConfig: { lark: { chats: [oldChat] } },
-  })
-  await Bun.write(settings, original)
+  const oldChat = 'oc_enabled'
+  await Bun.write(
+    settings,
+    JSON.stringify({ extensionConfig: { lark: { chats: [] } } }),
+  )
   await Bun.write(
     join(transport, 'seed.json'),
     JSON.stringify({
@@ -37,6 +37,7 @@ export async function verifyLarkDiscovery(
     JSON.stringify({
       generate: [{ text: 'Compacted history' }],
       responses: [
+        { text: 'Still listening during confirmation.' },
         { text: 'Group answer after cancel.' },
         { text: 'Incoming mention received.' },
         { text: 'Local answer after cancel.' },
@@ -64,15 +65,27 @@ export async function verifyLarkDiscovery(
       await dialog.getByRole('tab', { name: 'Lark' }).click()
     }
     const add = dialog.getByRole('button', { name: 'Add a group' })
-    const mention = () =>
+    const mention = (chatId = 'oc_new') =>
       appendFile(
         join(discovery, 'control.jsonl'),
         `${JSON.stringify({
           op: 'say',
-          chatId: 'oc_new',
+          chatId,
           text: 'Enable this group',
         })}\n`,
       )
+    await open()
+    assert.equal(
+      await dialog.getByRole('button', { name: 'Enabled group' }).count(),
+      0,
+    )
+    await add.click()
+    await mention(oldChat)
+    await dialog.getByRole('button', { name: 'Enable group' }).click()
+    await sidebar.getByRole('button', { name: 'Enabled group Lark' }).waitFor()
+    const original = await readFile(settings, 'utf8')
+    assert.deepEqual(JSON.parse(original).extensionConfig.lark.chats, [oldChat])
+    await Bun.write(join(discovery, 'control.jsonl'), '')
     await open()
     await dialog.getByRole('button', { name: 'Enabled group' }).waitFor()
     assert.equal(await dialog.getByText('New group').count(), 0)
@@ -107,6 +120,32 @@ export async function verifyLarkDiscovery(
       )
     })
     await themes(page, 'lark-new-project-confirm')
+    // Existing groups keep receiving and answering while the person decides.
+    await appendFile(
+      join(transport, 'control.jsonl'),
+      `${JSON.stringify({
+        op: 'say',
+        chatId: oldChat,
+        text: 'Are you listening?',
+        senderName: 'Mira',
+      })}\n`,
+    )
+    await page.waitForFunction(async () => {
+      const project = (await window.vela.projects()).find(
+        (p) => p.id === 'oc_enabled',
+      )
+      if (!project) return false
+      const history = await window.vela.larkMessages({
+        chatId: project.id,
+        sessionId: project.sessionId,
+      })
+      return history.messages.some(
+        (message) => message.text === 'Still listening during confirmation.',
+      )
+    })
+    await page.waitForFunction(
+      async () => !(await window.vela.sessions('lark')).some((s) => s.runId),
+    )
     await dialog.getByRole('button', { name: 'Cancel' }).click()
     await add.waitFor()
     assert.equal(await readFile(settings, 'utf8'), original)
@@ -121,7 +160,7 @@ export async function verifyLarkDiscovery(
       .getByLabel('Project chat')
       .getByText('Group answer after cancel.', { exact: true })
       .waitFor()
-    await Bun.write(
+    await appendFile(
       join(transport, 'control.jsonl'),
       `${JSON.stringify({
         op: 'say',

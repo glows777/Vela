@@ -225,7 +225,7 @@ export function NewProjectDialog({
               </footer>
             </form>
           </TabsContent>
-          <TabsContent value="lark">
+          <TabsContent value="lark" forceMount hidden={source !== 'lark'}>
             <div className={styles.form}>
               {step === 'list' ? (
                 <>
