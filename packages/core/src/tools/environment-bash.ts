@@ -288,9 +288,10 @@ export async function backgroundBash(
     })
   const { id, output, truncated } = await commands.adopt({
     command,
+    timeout,
     // Cancelling this call during admission starts nothing; the running job gets its own signal.
     signal: context?.signal,
-    start: ({ onOutput, signal, shell }) =>
+    start: ({ onOutput, signal, shell, timeout }) =>
       env.exec(
         // Only a local session has a host shell to honour; other environments run the command.
         shell !== undefined && env.id === 'node:local'

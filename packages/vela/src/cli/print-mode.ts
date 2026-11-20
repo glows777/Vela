@@ -37,14 +37,10 @@ export async function runPrintMode(options: {
   let writing = Promise.resolve()
   // -p prints only answers from this run, not old ones in a resumed session (e.g. `vela -c -p /memory` must not print the previous answer)
   let answer: ModelMessage | undefined
-  let errorKind: AgentErrorKind | undefined
+  let failure: { cause: unknown; kind: AgentErrorKind | undefined } | undefined
   const offAnswer = session.subscribe((event) => {
-    if (
-      event.type === 'agent_end' &&
-      event.reason === 'error' &&
-      errorKind === undefined
-    )
-      errorKind = event.errorKind
+    if (event.type === 'agent_end' && event.reason === 'error' && !failure)
+      failure = { cause: event.error, kind: event.errorKind }
     if (
       event.type === 'message_end' &&
       event.message.role === 'assistant' &&
@@ -85,6 +81,7 @@ export async function runPrintMode(options: {
     )
   }
   let exitCode = 0
+  if (mode === 'text') session.backgroundWork.holdDeliveries()
   try {
     for (const [index, message] of messages.entries())
       await session.prompt(message, {
@@ -95,15 +92,20 @@ export async function runPrintMode(options: {
       const text = answer ? lastAssistantText([answer]) : ''
       if (text) await writeStdout(`${text}\n`)
     }
+    await session.backgroundWork.settle(() => session.waitForIdle())
+    // Background delivery logs its own failures; do not turn an incomplete run into success.
+    if (failure)
+      throw failure.cause ?? new Error('A background result turn failed')
   } catch (error) {
     console.error(
       '[Agent] Turn stopped:',
       error instanceof Error ? error.message : error,
     )
-    const hint = agentErrorHint(errorKind)
+    const hint = agentErrorHint(failure?.kind)
     if (mode === 'text' && hint) console.error(hint)
     exitCode = 1
   } finally {
+    session.backgroundWork.discardHeld()
     off()
     offAnswer()
     await writing

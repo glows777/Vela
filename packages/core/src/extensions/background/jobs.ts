@@ -20,6 +20,8 @@ import type { VelaSession } from '../../vela-session.ts'
 
 /** The command head in a delivery message and in `background_stop`. */
 const COMMAND_HEAD = 160
+const DEFAULT_LIMIT_MS = 30 * 60_000
+const MAX_LIMIT_MS = 2 * 60 * 60_000
 
 interface Job {
   token: string
@@ -28,6 +30,8 @@ interface Job {
   command: string
   startedAt: number
   endedAt?: number
+  deadline?: ReturnType<typeof setTimeout>
+  timedOut?: boolean
   controller: AbortController
   finished: Promise<void>
   output: OutputTail
@@ -112,10 +116,12 @@ export class BackgroundJobs implements BackgroundCommands {
 
   async adopt({
     command,
+    timeout,
     start,
     signal,
   }: {
     command: string
+    timeout?: number
     start: (
       run: BackgroundStart,
     ) => Promise<Result<ShellExecResult, ExecutionError>>
@@ -148,7 +154,7 @@ export class BackgroundJobs implements BackgroundCommands {
       controller.signal.throwIfAborted()
     })
     job.finished = prepared.then(
-      () => this.run(job, start),
+      () => this.run(job, start, timeout),
       () => {
         job.state = 'exited'
       },
@@ -305,6 +311,7 @@ export class BackgroundJobs implements BackgroundCommands {
         'The command finished while it was being moved to the background; its result came from the call.',
       )
     }
+    this.armDeadline(job)
     job.finished = entry.exitResult.then((exit) => this.exited(job, exit))
     this.session.trackWork(job.finished)
     const { text, truncated } = entry.output.read()
@@ -323,12 +330,15 @@ export class BackgroundJobs implements BackgroundCommands {
     start: (
       run: BackgroundStart,
     ) => Promise<Result<ShellExecResult, ExecutionError>>,
+    timeout?: number,
   ): Promise<void> {
     try {
       job.controller.signal.throwIfAborted()
+      this.armDeadline(job, timeout)
       const result = await start({
         onOutput: (chunk) => job.output.append(chunk),
         signal: job.controller.signal,
+        timeout: this.session.backgroundWork.unattended ? undefined : timeout,
         ...(this.shellPath === undefined ? {} : { shell: this.shellPath }),
       })
       this.exited(
@@ -341,17 +351,40 @@ export class BackgroundJobs implements BackgroundCommands {
           : { spillPath: result.error.spillPath, error: result.error.message },
       )
     } catch (error) {
-      this.failed(job, error)
+      this.exited(job, { error: errorMessage(error) })
     }
+  }
+
+  /** Arm only when a job enters the background, not when it first started in the foreground. */
+  private armDeadline(job: Job, seconds?: number): void {
+    if (!this.session.backgroundWork.unattended) return
+    const limit =
+      seconds !== undefined && Number.isFinite(seconds) && seconds > 0
+        ? Math.min(seconds * 1000, MAX_LIMIT_MS)
+        : DEFAULT_LIMIT_MS
+    job.deadline = setTimeout(() => {
+      if (job.controller.signal.aborted) return
+      job.timedOut = true
+      job.stopped = true
+      job.controller.abort()
+    }, limit)
   }
 
   /** A declared or moved command exited the same way: record how, then deliver unless silent. */
   private exited(job: Job, exit: CommandExit): void {
+    clearTimeout(job.deadline)
     job.state = 'exited'
     job.endedAt = Date.now()
     job.fullOutputPath = exit.spillPath
     this.syncStatus()
     if (job.silent) return
+    if (job.timedOut) {
+      this.deliver(
+        `Background command "${job.id}" was stopped after reaching its background time limit.`,
+        job,
+      )
+      return
+    }
     if (exit.error !== undefined) {
       this.deliver(
         `Background command ${job.id} could not start or run: ${exit.error}.`,
@@ -366,17 +399,6 @@ export class BackgroundJobs implements BackgroundCommands {
         : `Background command ${job.id} finished with exit code ${exit.exitCode}.`,
       job,
     )
-  }
-
-  private failed(job: Job, cause: unknown): void {
-    job.state = 'exited'
-    job.endedAt = Date.now()
-    this.syncStatus()
-    if (!job.silent)
-      this.deliver(
-        `Background command ${job.id} could not start or run: ${errorMessage(cause)}.`,
-        job,
-      )
   }
 
   snapshot(id: string): BackgroundSnapshot {
@@ -505,29 +527,31 @@ export class BackgroundJobs implements BackgroundCommands {
       : ''
     const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}${fullOutput}`
     const host = this.session.host
-    const send = host
-      ? Promise.resolve().then(() =>
-          job.silent
-            ? undefined
-            : host.background
-              ? host.background({
-                  type: 'result',
-                  token: job.token,
-                  text: message,
-                })
-              : host.deliver(message),
-        )
-      : this.session.sendMessage(
-          { customType: 'background', content: message, display: false },
-          { triggerTurn: true, deliverAs: 'followUp' },
-        )
-    void send
-      .catch((error) =>
+    const send = async () => {
+      try {
+        if (job.silent) return
+        if (host?.background)
+          await host.background({
+            type: 'result',
+            token: job.token,
+            text: message,
+          })
+        else if (host) await host.deliver(message)
+        else
+          await this.session.sendMessage(
+            { customType: 'background', content: message, display: false },
+            { triggerTurn: true, deliverAs: 'followUp' },
+          )
+      } catch (error) {
         this.logger.error(
           `[background] Could not deliver ${job.id}: ${errorMessage(error)}`,
-        ),
-      )
-      // Delivered or not, the result has left the job: its tail no longer answers for it.
-      .finally(() => this.jobs.delete(job.id))
+        )
+      } finally {
+        // The result has left the job: its tail no longer answers for it.
+        this.jobs.delete(job.id)
+      }
+    }
+    if (host) void Promise.resolve().then(send)
+    else this.session.backgroundWork.deliver(send)
   }
 }

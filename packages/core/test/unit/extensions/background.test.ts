@@ -9,6 +9,7 @@ import { BackgroundJobs } from '../../../src/extensions/background/jobs.ts'
 import { silentLogger } from '../../../src/logger.ts'
 import type { SessionOptions } from '../../../src/session/options.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
+import { SessionWork } from '../../../src/session/work.ts'
 import { fauxText, fauxToolCall } from '../../../src/testing/faux.ts'
 import {
   cleanupTestVelas,
@@ -52,6 +53,7 @@ function sessionStub(
     ...(deliver || background
       ? { host: { deliver: deliver ?? (() => {}), background } }
       : {}),
+    backgroundWork: new SessionWork(false),
     trackWork: () => {},
     sendMessage: async (message: { content: string }) => {
       delivered.push(String(message.content))

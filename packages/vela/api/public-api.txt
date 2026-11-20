@@ -791,6 +791,7 @@
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
     ui?: SessionUI | undefined
+    unattended?: boolean | undefined
   type SessionPersistence = | { readonly type: 'file'; readonly path: string }
       | { readonly type: 'memory' }
       | { readonly type: 'unknown' }

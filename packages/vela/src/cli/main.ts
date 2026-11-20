@@ -540,7 +540,7 @@ if (mode !== 'interactive' && mode !== 'serve') {
 try {
   if (mode === 'print' || mode === 'json') {
     // Print mode has no UI: extension confirms always answer "no" (like pi's print mode)
-    const session = vela.session(sessionId)
+    const session = vela.session(sessionId, { unattended: true })
     if (resume) await session.resume()
     const { defaultTools } = await reportContextFiles(session)
     // Extension providers resolve only after extensions load (if loading fails, prompt reports it)
