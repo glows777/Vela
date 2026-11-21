@@ -66,7 +66,7 @@ export async function openDockerEnvironment(
   const { credentials = [], ...options } = config
   const allow = restrictedAllow(options, credentials)
   if (credentials?.length && options.network === 'off')
-    throw Error('Docker credentials require network on, not off')
+    throw Error('Docker credentials cannot be used with network off')
   const transport = allow
     ? { directory: await restrictedDirectory(options, allow), allow }
     : undefined

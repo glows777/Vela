@@ -12,6 +12,17 @@ export interface DockerOptions {
 const hash = (fields: unknown[]) =>
   createHash('sha256').update(JSON.stringify(fields)).digest('hex')
 
+function validateImage(image: string) {
+  if (
+    typeof image !== 'string' ||
+    !image.trim() ||
+    image.startsWith('-') ||
+    /\s/u.test(image) ||
+    image.includes('\0')
+  )
+    throw Error('A Docker image is required')
+}
+
 export const restrictedGuestDir = '/vela-egress'
 
 export async function restrictedDirectory(
@@ -28,6 +39,7 @@ export async function restrictedDirectory(
     throw Error(
       'A named environment and absolute owner data directory are required',
     )
+  validateImage(o.image)
   await mkdir(o.dataDir, { recursive: true, mode: 0o700 })
   const directory = join(
     '/tmp',
@@ -60,14 +72,7 @@ export async function prepareDocker(
     !process.getgid?.()
   )
     throw Error('Docker requires a non-root Linux or macOS host uid:gid')
-  if (
-    typeof o.image !== 'string' ||
-    !o.image.trim() ||
-    o.image.startsWith('-') ||
-    /\s/u.test(o.image) ||
-    o.image.includes('\0')
-  )
-    throw Error('A Docker image is required')
+  validateImage(o.image)
   if (
     o.network !== undefined &&
     o.network !== 'off' &&

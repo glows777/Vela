@@ -171,7 +171,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
       const options = {
         ...config(name),
         network: 'restricted' as const,
-        allow: [hostname],
+        allow: [hostname.toUpperCase(), hostname],
         credentials: [
           { variable: 'GH_TOKEN', value, origins: [`https://${hostname}`] },
         ],
@@ -224,7 +224,10 @@ describe.skipIf(!image)('prepared Docker image', () => {
         expect(
           (await readdir(source)).filter((file) => file.endsWith('.sock')),
         ).toEqual([])
-        const reopened = await openDockerEnvironment(options)
+        const reopened = await openDockerEnvironment({
+          ...options,
+          allow: [hostname],
+        })
         try {
           expect(await lookup(owner(name))).toBe(id)
           expect(await reopened.readTextFile('note')).toEqual({
