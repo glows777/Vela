@@ -1,0 +1,133 @@
+name: E4 restricted Linux fixture
+on:
+  push:
+    branches: [friday/e4-restricted-preflight-410-9f21058]
+permissions:
+  contents: read
+jobs:
+  restricted-fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 9f21058029297f1c58c7533fb75d92dd0974a690
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.18.0'
+      - name: Verify synthetic Linux Docker isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = "9f21058029297f1c58c7533fb75d92dd0974a690"
+          docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}'
+          export VELA_RESTRICTED_PROBE_IMAGE="vela-restricted-fixture:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export VELA_RESTRICTED_PROBE_BRIDGE="$(docker --host unix:///var/run/docker.sock network inspect bridge --format '{{with index .IPAM.Config 0}}{{.Gateway}}{{end}}')"
+          probe="$(mktemp /tmp/vela-restricted-script-XXXXXX.mjs)"
+          trap 'rm -f "$probe"; docker --host unix:///var/run/docker.sock image rm "$VELA_RESTRICTED_PROBE_IMAGE" >/dev/null 2>&1 || true' EXIT
+          docker --host unix:///var/run/docker.sock build -t "$VELA_RESTRICTED_PROBE_IMAGE" -f extensions/docker/Dockerfile extensions/docker
+          cat >"$probe" <<'VELA_RESTRICTED_FIXTURE'
+          import assert from 'node:assert/strict'
+          import { execFile } from 'node:child_process'
+          import { mkdtemp, mkdir, rm, unlink } from 'node:fs/promises'
+          import { createServer } from 'node:http'
+          import { networkInterfaces } from 'node:os'
+          import { join } from 'node:path'
+          import { promisify } from 'node:util'
+          
+          const run = promisify(execFile)
+          const docker = (...argv) => run('docker', ['--host', 'unix:///var/run/docker.sock', ...argv], { timeout: 30_000 })
+          const root = await mkdtemp('/tmp/vela-restricted-probe-')
+          const image = process.env.VELA_RESTRICTED_PROBE_IMAGE
+          const fixtureHost = 'allowed.test'
+          const ids = []
+          const servers = new Set()
+          const listen = (server, destination, host) => new Promise((resolve, reject) => {
+            servers.add(server)
+            server.once('error', reject)
+            server.listen(destination, host, () => resolve(server.address()))
+          })
+          const close = async (server) => {
+            await new Promise((resolve) => server.close(resolve))
+            servers.delete(server)
+          }
+          const guest = String.raw`
+          const assert = require('node:assert/strict')
+          const http = require('node:http')
+          const fs = require('node:fs')
+          const { networkInterfaces } = require('node:os')
+          const [mode, target, expected] = process.argv.slice(1)
+          assert.deepEqual(Object.keys(networkInterfaces()), ['lo'])
+          assert.throws(() => fs.writeFileSync('/vela-restricted/probe-write', 'test'), {code:'EROFS'})
+          const ordinary = new Promise((resolve, reject) => {
+            const req = http.get({host: target.split(':')[0], port: target.split(':')[1]}, () => reject(new Error('ordinary TCP was reachable')))
+            req.on('error', (error) => ['ENETUNREACH','EHOSTUNREACH'].includes(error.code) ? resolve() : reject(error))
+            req.setTimeout(1000, () => req.destroy(new Error('fixture timeout')))
+          })
+          const through = (host) => new Promise((resolve, reject) => {
+            const req = http.get({socketPath:'/vela-restricted/proxy.sock', path:'/', headers:{Host:host}}, (res) => {
+              res.setEncoding('utf8')
+              let body = ''
+              res.on('data', chunk => body += chunk)
+              res.on('end', () => resolve([res.statusCode, body]))
+            })
+            req.on('error', reject)
+            req.setTimeout(1000, () => req.destroy(new Error('proxy timeout')))
+          })
+          ;(async () => {
+            await ordinary
+            if (mode === 'down') await assert.rejects(through('allowed.test'))
+            else {
+              assert.deepEqual(await through('allowed.test'), [200, expected])
+              assert.deepEqual(await through('denied.test'), [403, 'denied'])
+            }
+          })().catch(err => { console.error(err.message); process.exitCode=1 })
+          `
+          try {
+            assert(image, 'A disposable local image is required')
+            assert(process.getuid() > 0 && process.getgid() > 0, 'Run as a non-root Docker operator')
+            const bridge = Object.values(networkInterfaces()).flat().find((a) => a?.family === 'IPv4' && !a.internal && a.address === process.env.VELA_RESTRICTED_PROBE_BRIDGE)
+            assert(bridge, 'Docker bridge address must be assigned on the test host')
+            const direct = createServer((_request, response) => response.end('synthetic-direct'))
+            const { port } = await listen(direct, 0, bridge.address)
+            const markerAddress = `${bridge.address}:${port}`
+            const owners = []
+            for (const name of ['fixture-A', 'fixture-B']) {
+              const folder = join(root, name)
+              await mkdir(folder, { mode: 0o700 })
+              const path = join(folder, 'proxy.sock')
+              const open = async (marker) => {
+                const proxy = createServer((request, response) => {
+                  if (request.headers.host !== fixtureHost) return response.writeHead(403).end('denied')
+                  response.end(marker)
+                })
+                await listen(proxy, path)
+                return proxy
+              }
+              const proxy = await open(name)
+              const { stdout } = await docker('create', '--pull=never', '--network', 'none', '--user', `${process.getuid()}:${process.getgid()}`, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--mount', `type=bind,src=${folder},dst=/vela-restricted,readonly`, '--entrypoint', 'sleep', image, 'infinity')
+              const id = stdout.trim()
+              ids.push(id)
+              await docker('start', id)
+              owners.push({ name, path, open, proxy, id })
+            }
+            const check = ({ id }, mode, marker) => docker('exec', id, 'node', '-e', guest, '--', mode, markerAddress, marker)
+            for (const owner of owners) await check(owner, 'up', owner.name)
+            const [first, second] = owners
+            await close(first.proxy)
+            await unlink(first.path).catch(error => { if (error.code !== 'ENOENT') throw error })
+            await check(first, 'down', '')
+            await check(second, 'up', second.name)
+            await first.open('fixture-A-restarted')
+            await check(first, 'up', 'fixture-A-restarted')
+            console.log('PASS: separate proxy sockets, restricted namespace, explicit denial and no direct fallback, restart of proxy on same mount')
+          } finally {
+            const removals = await Promise.allSettled(ids.map((id) => docker('rm', '-f', id)))
+            for (const server of [...servers]) await close(server)
+            await rm(root, { force: true, recursive: true })
+            assert(removals.every((entry) => entry.status === 'fulfilled'), 'Disposable container cleanup failed')
+          }
+          VELA_RESTRICTED_FIXTURE
+          node "$probe"
