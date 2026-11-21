@@ -93,7 +93,9 @@ describe.skipIf(!image)('prepared Docker image', () => {
       'const fs=require("node:fs"); const proxy=new URL(HTTPS_PROXY)',
       'const socket=require("node:net").connect(Number(proxy.port),proxy.hostname)',
       'socket.setTimeout(5000, () => socket.destroy(new Error("credential proxy connect timeout")))',
-      'socket.once("connect", () => { socket.end(); console.log(JSON.stringify([GH_TOKEN,HTTPS_PROXY,fs.readFileSync(SSL_CERT_FILE,"utf8").includes("BEGIN CERTIFICATE")])) })',
+      'const ca=fs.readFileSync(SSL_CERT_FILE,"utf8")',
+      'socket.once("connect", () => socket.write("CONNECT github.com:443 HTTP/1.1\\r\\nHost: github.com:443\\r\\n\\r\\n"))',
+      'socket.once("data", (chunk) => { if (!chunk.toString().startsWith("HTTP/1.1 200 ")) throw Error("owner CONNECT failed"); const tls=require("node:tls").connect({socket,servername:"github.com",ca}); tls.once("secureConnect", () => { console.log(JSON.stringify([GH_TOKEN,HTTPS_PROXY,tls.authorized])); tls.destroy() }) })',
     ].join(';')
     const result = await env.exec(['node', '-e', script], {
       onOutput(text, _signal, { stream }) {
@@ -104,7 +106,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
     expect(output).not.toContain(syntheticValue)
     const [token, proxy, hasCa] = JSON.parse(output)
     expect(token).toMatch(/^vela-credential-/)
-    expect(proxy).toMatch(/^http:\/\/[^/:]+:\d+$/)
+    expect(proxy).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
     expect(hasCa).toBe(true)
   }, 240000)
 

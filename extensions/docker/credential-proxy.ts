@@ -86,22 +86,27 @@ async function listen(server: HttpServer, host: string) {
   })
 }
 
+export function credentialOriginHost(origin: string) {
+  const url = URL.parse(origin)
+  if (
+    url?.protocol !== 'https:' ||
+    origin !== url.origin ||
+    url.port ||
+    isIP(url.hostname.replace(/^\[|\]$/g, ''))
+  )
+    throw Error('Invalid Docker credential proxy origin')
+  return url.hostname
+}
+
 /** A CONNECT endpoint only for owner-approved credential origins, not a general forward proxy. */
 export async function openCredentialProxy(options: Options) {
   const byHost = new Map<string, Credential[]>()
   for (const entry of options.credentials) {
     for (const origin of entry.origins) {
-      const url = URL.parse(origin)
-      if (
-        url?.protocol !== 'https:' ||
-        origin !== url.origin ||
-        url.port ||
-        isIP(url.hostname)
-      )
-        throw Error('Invalid Docker credential proxy origin')
-      const list = byHost.get(url.hostname) ?? []
+      const host = credentialOriginHost(origin)
+      const list = byHost.get(host) ?? []
+      byHost.set(host, list)
       list.push(entry)
-      byHost.set(url.hostname, list)
     }
   }
   const owned = new Set<Socket>()

@@ -1,25 +1,54 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { getCACertificates } from 'node:tls'
+import { openGuestHttpsRouter } from './guest-https-router.ts'
 
 export type GuestCredentialConfig = {
   publicCa: string
   proxyUrl: string
+  origins: readonly string[]
   placeholders: Record<string, string>
   githubGit: boolean
 }
 
-export async function prepareGuestCredentials(config: GuestCredentialConfig) {
+export async function prepareGuestCredentials(
+  config: GuestCredentialConfig,
+  cwd: string,
+  caPaths: { SSL_CERT_FILE?: string; GIT_SSL_CAINFO?: string },
+) {
   const dir = await mkdtemp('/tmp/vela-credential-ca-')
   const ca = join(dir, 'ca.pem')
-  const close = () => rm(dir, { force: true, recursive: true })
+  let router: Awaited<ReturnType<typeof openGuestHttpsRouter>> | undefined
+  const close = async () => {
+    try {
+      await router?.close()
+    } finally {
+      await rm(dir, { force: true, recursive: true })
+    }
+  }
   try {
-    await writeFile(ca, config.publicCa, { mode: 0o600 })
+    const systemRoots = () => {
+      const roots = getCACertificates('system')
+      return roots.length ? roots : getCACertificates('bundled')
+    }
+    const writeBundle = async (path: string, input?: string) => {
+      const roots = input
+        ? [await readFile(resolve(cwd, input), 'utf8')]
+        : systemRoots()
+      await writeFile(path, [...roots, config.publicCa].join('\n'), {
+        mode: 0o600,
+      })
+    }
+    const gitCa = caPaths.GIT_SSL_CAINFO ? join(dir, 'git-ca.pem') : ca
+    await writeBundle(ca, caPaths.SSL_CERT_FILE)
+    if (gitCa !== ca) await writeBundle(gitCa, caPaths.GIT_SSL_CAINFO)
+    router = await openGuestHttpsRouter(config.proxyUrl, config.origins)
     const env: Record<string, string> = {
       ...config.placeholders,
-      HTTPS_PROXY: config.proxyUrl,
-      https_proxy: config.proxyUrl,
+      HTTPS_PROXY: router.url,
+      https_proxy: router.url,
       SSL_CERT_FILE: ca,
-      GIT_SSL_CAINFO: ca,
+      GIT_SSL_CAINFO: gitCa,
     }
     if (config.githubGit)
       Object.assign(env, {

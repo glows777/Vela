@@ -2,10 +2,16 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, symlink, writeFile } from 'node:fs/promises'
+import {
+  createServer as createHttpsServer,
+  request as requestHttps,
+} from 'node:https'
 import { join } from 'node:path'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { createVela, type ExecutionEnv, type Result } from '@glows777/vela-core'
 import { buildDockerAdapter } from '../../extensions/docker/build.ts'
+import { createCredentialIdentity } from '../../extensions/docker/credential-identity.ts'
+import { openCredentialProxy } from '../../extensions/docker/credential-proxy.ts'
 import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
 import { dockerOperations } from '../../extensions/docker/operations.ts'
 
@@ -49,6 +55,7 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
     const fixture = {
       publicCa: 'synthetic public CA marker',
       proxyUrl: 'http://host.docker.internal:19443',
+      origins: ['https://github.com'],
       placeholders: { GH_TOKEN: 'vela-synthetic-placeholder' },
       githubGit: true,
     }
@@ -65,27 +72,189 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
     )
     try {
       let output = ''
+      await writeFile(
+        join(dir.path, 'git-trust.pem'),
+        'synthetic Git CA marker',
+      )
       const script =
-        'const e=process.env; console.log(JSON.stringify([e.GH_TOKEN,e.HTTPS_PROXY,e.SSL_CERT_FILE,e.SSL_CERT_FILE && require("node:fs").readFileSync(e.SSL_CERT_FILE,"utf8")]))'
+        'const e=process.env; const read=(p)=>require("node:fs").readFileSync(p,"utf8"); console.log(JSON.stringify([e.GH_TOKEN,e.HTTPS_PROXY,e.SSL_CERT_FILE,read(e.SSL_CERT_FILE),e.GIT_SSL_CAINFO,read(e.GIT_SSL_CAINFO)]))'
       const result = value(
         await isolated.exec([process.execPath, '-e', script], {
+          env: { GIT_SSL_CAINFO: 'git-trust.pem' },
           onOutput(text, _signal, { stream }) {
             if (stream === 'stdout') output += text
           },
         }),
       )
       expect(result.exitCode).toBe(0)
-      const [token, proxy, file, ca] = JSON.parse(output)
-      expect([token, proxy, ca]).toEqual([
-        fixture.placeholders.GH_TOKEN,
-        fixture.proxyUrl,
-        fixture.publicCa,
-      ])
+      const [token, proxy, file, ca, gitFile, gitCa] = JSON.parse(output)
+      expect(token).toBe(fixture.placeholders.GH_TOKEN)
+      expect(proxy).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u)
+      expect(ca).toContain('-----BEGIN CERTIFICATE-----')
+      expect(ca).toContain(fixture.publicCa)
       expect(file).toContain('vela-credential-ca-')
+      expect(gitFile).not.toBe(file)
+      expect(gitCa).toContain(fixture.publicCa)
+      expect(gitCa).toContain('synthetic Git CA marker')
+      expect(ca).not.toContain('synthetic Git CA marker')
       for (let n = 0; n < 50 && existsSync(file); n++) await Bun.sleep(10)
       expect(existsSync(file)).toBe(false)
+      expect(existsSync(gitFile)).toBe(false)
     } finally {
       await isolated.cleanup()
+    }
+  })
+
+  test('installed guest preserves ordinary TLS and mediates only configured synthetic credentials', async () => {
+    const guest = readFileSync(join(dir.path, 'guest.cjs'), 'utf8')
+    const mediation = await createCredentialIdentity([
+      'github.com',
+      'other.example',
+    ])
+    const ordinary = await createCredentialIdentity(['localhost'])
+    const seen: Array<string | undefined> = []
+    const ordinarySeen: Array<string | undefined> = []
+    const upstream = createHttpsServer(ordinary, (incoming, outgoing) => {
+      seen.push(incoming.headers.authorization)
+      outgoing.end('mediated')
+    })
+    const normal = createHttpsServer(ordinary, (incoming, outgoing) => {
+      ordinarySeen.push(incoming.headers.authorization)
+      outgoing.end('ordinary')
+    })
+    const listen = (server: typeof upstream | typeof normal) =>
+      new Promise<number>((resolve) =>
+        server.listen(0, '127.0.0.1', () => {
+          const info = server.address()
+          if (info && typeof info === 'object') resolve(info.port)
+        }),
+      )
+    const upPort = await listen(upstream)
+    const normalPort = await listen(normal)
+    const trustFile = join(dir.path, 'ordinary-ca.pem')
+    const beta = 'synthetic-other-placeholder'
+    const alpha = 'synthetic-github-placeholder'
+    const secret = 'synthetic-github-value'
+    await writeFile(trustFile, ordinary.ca)
+    const proxy = await openCredentialProxy({
+      listenHost: '127.0.0.1',
+      identity: mediation,
+      credentials: [
+        { origins: ['https://github.com'], placeholder: alpha, value: secret },
+        {
+          origins: ['https://other.example'],
+          placeholder: beta,
+          value: 'synthetic-other-value',
+        },
+      ],
+      upstreamRequest: (options, callback) =>
+        requestHttps(
+          {
+            ...options,
+            hostname: '127.0.0.1',
+            port: upPort,
+            ca: ordinary.ca,
+            servername: 'localhost',
+          },
+          callback,
+        ),
+    })
+    const fixture = {
+      publicCa: mediation.ca,
+      proxyUrl: `http://127.0.0.1:${proxy.port}`,
+      origins: ['https://github.com', 'https://other.example'],
+      placeholders: { GH_TOKEN: alpha },
+      githubGit: true,
+    }
+    const isolated = dockerOperations(
+      'credential-routing',
+      dir.path,
+      (op, cwd) =>
+        spawn(
+          'node',
+          ['-e', guest, '--', op, cwd, resultRoot, JSON.stringify(fixture)],
+          {
+            cwd: dir.path,
+            env: {
+              PATH: process.env.PATH,
+              HOME: dir.path,
+              SSL_CERT_FILE: trustFile,
+            },
+            stdio: 'pipe',
+          },
+        ),
+    )
+    try {
+      const fetch = async (
+        url: string,
+        authorization?: string,
+        direct = false,
+      ) => {
+        let output = ''
+        const result = value(
+          await isolated.exec(
+            [
+              'curl',
+              '--silent',
+              '--show-error',
+              '--fail',
+              '--noproxy',
+              direct ? '*' : '',
+              '--max-time',
+              '4',
+              ...(authorization
+                ? ['--header', `Authorization: ${authorization}`]
+                : []),
+              url,
+            ],
+            {
+              onOutput(text) {
+                output += text
+              },
+            },
+          ),
+        )
+        expect(output).toBe(url.includes('localhost') ? 'ordinary' : 'mediated')
+        expect(result.exitCode).toBe(0)
+      }
+      await fetch(`https://localhost:${normalPort}/`)
+      await fetch(`https://localhost:${normalPort}/`, `Bearer ${alpha}`)
+      await fetch(`https://localhost:${normalPort}/`, undefined, true)
+      let helperOutput = ''
+      const helper = value(
+        await isolated.exec(
+          "printf 'protocol=https\\nhost=github.com\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill",
+          {
+            onOutput(text, _signal, { stream }) {
+              if (stream === 'stdout') helperOutput += text
+            },
+          },
+        ),
+      )
+      expect(helper.exitCode).toBe(0)
+      expect(helperOutput).toContain('username=x-access-token\n')
+      expect(helperOutput).toContain(`password=${alpha}\n`)
+      await fetch('https://github.com/', `Bearer ${alpha}`)
+      await fetch('https://github.com/', `token ${alpha}`)
+      await fetch(
+        'https://github.com/',
+        `Basic ${Buffer.from(`x-access-token:${alpha}`).toString('base64')}`,
+      )
+      await fetch('https://other.example/', `Bearer ${alpha}`)
+      expect(ordinarySeen).toEqual([undefined, `Bearer ${alpha}`, undefined])
+      expect(seen).toEqual([
+        `Bearer ${secret}`,
+        `token ${secret}`,
+        `Basic ${Buffer.from(`x-access-token:${secret}`).toString('base64')}`,
+        `Bearer ${alpha}`,
+      ])
+    } finally {
+      await isolated.cleanup()
+      await proxy.close()
+      await Promise.all([
+        new Promise<void>((done) => upstream.close(() => done())),
+        new Promise<void>((done) => normal.close(() => done())),
+      ])
     }
   })
 

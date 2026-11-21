@@ -68,6 +68,8 @@ export function ownerDockerCredentials(
     const host = (match[1] ?? match[2])!
     const value = process.env[host]
     if (!value) return invalid(`host variable ${host} is unset or empty`)
+    if (/[\r\n\0]/u.test(value))
+      return invalid(`host variable ${host} contains invalid header characters`)
     return { variable, value, origins: [...new Set(origins)] }
   })
 }

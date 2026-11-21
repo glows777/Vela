@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { LocalExecutionEnv } from '../../packages/core/src/execution/local.ts'
@@ -53,10 +54,19 @@ async function main() {
   try {
     if (op === 'exec') {
       const [command, options] = args as [string | string[], ShellExecOptions]
-      if (credentialConfig)
+      if (credentialConfig) {
+        const inherited = options.inheritEnv === false ? undefined : process.env
         credentials = await prepareGuestCredentials(
           JSON.parse(credentialConfig) as GuestCredentialConfig,
+          resolve(cwd!, options.cwd ?? '.'),
+          {
+            SSL_CERT_FILE:
+              options.env?.SSL_CERT_FILE ?? inherited?.SSL_CERT_FILE,
+            GIT_SSL_CAINFO:
+              options.env?.GIT_SSL_CAINFO ?? inherited?.GIT_SSL_CAINFO,
+          },
         )
+      }
       const result = await env.exec(
         command,
         {

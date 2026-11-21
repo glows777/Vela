@@ -1,7 +1,10 @@
 import { randomBytes } from 'node:crypto'
 import { isIPv4 } from 'node:net'
 import { createCredentialIdentity } from './credential-identity.ts'
-import { openCredentialProxy } from './credential-proxy.ts'
+import {
+  credentialOriginHost,
+  openCredentialProxy,
+} from './credential-proxy.ts'
 import type { GuestCredentialConfig } from './guest-credential-env.ts'
 
 export type DockerCredential = {
@@ -14,6 +17,8 @@ export async function openDockerCredentialBinding(
   credentials: readonly DockerCredential[],
   docker: (args: string[]) => Promise<string>,
 ) {
+  const origins = [...new Set(credentials.flatMap((entry) => entry.origins))]
+  const hosts = origins.map(credentialOriginHost)
   const bindHost =
     process.platform === 'darwin'
       ? '127.0.0.1'
@@ -34,10 +39,7 @@ export async function openDockerCredentialBinding(
       `vela-credential-${randomBytes(24).toString('hex')}`,
     ]),
   )
-  const origins = credentials.flatMap((entry) => entry.origins)
-  const identity = await createCredentialIdentity([
-    ...new Set(origins.map((origin) => new URL(origin).hostname)),
-  ])
+  const identity = await createCredentialIdentity(hosts)
   const proxy = await openCredentialProxy({
     listenHost: bindHost,
     identity,
@@ -50,6 +52,7 @@ export async function openDockerCredentialBinding(
     publicCa: identity.ca,
     proxyUrl: `http://${guestHost}:${proxy.port}`,
     placeholders,
+    origins,
     githubGit: credentials.some(
       ({ variable, origins }) =>
         variable === 'GH_TOKEN' && origins.includes('https://github.com'),

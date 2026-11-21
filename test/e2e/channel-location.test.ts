@@ -65,10 +65,13 @@ test('project settings cannot redirect an owner environment, group or Docker dat
 
 test('owner Docker credential settings are refused before engine access with safe diagnostics', async () => {
   const dir = tempDir()
+  const key = 'INVALID_VELA_OWNER_CREDENTIAL_TEST'
+  const before = process.env[key]
   try {
     const path = join(dir.path, 'settings.json')
     const origins = ['https://github.com']
     const literal = 'synthetic-do-not-print'
+    process.env[key] = `${literal}\nother-line`
     const cases = [
       [
         {
@@ -90,6 +93,10 @@ test('owner Docker credential settings are refused before engine access with saf
           },
         },
         /MISSING_VELA_OWNER_TEST.*(unset|empty|missing)/i,
+      ],
+      [
+        { credentials: { GH_TOKEN: { value: `$${key}`, origins } } },
+        /INVALID_VELA_OWNER_CREDENTIAL_TEST.*invalid header characters/i,
       ],
     ] as const
     for (const [entry, diagnostic] of cases) {
@@ -120,6 +127,8 @@ test('owner Docker credential settings are refused before engine access with saf
       }
     }
   } finally {
+    if (before === undefined) delete process.env[key]
+    else process.env[key] = before
     dir.cleanup()
   }
 })
