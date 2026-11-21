@@ -4,7 +4,9 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
-- Docker environments can use owner-configured GitHub credentials without putting the original token in the guest. This does not restrict network egress ([#410](https://github.com/glows777/Vela/issues/410)).
+- On Linux Docker, owners can set `network: restricted` and an exact HTTPS host allowlist. Unlisted destinations and direct connections are denied; a proxy outage never reopens networking ([#410](https://github.com/glows777/Vela/issues/410)).
+
+- Docker environments with `network: on` can use owner-configured GitHub credentials without putting the original token in the guest. This mode does not restrict network egress ([#410](https://github.com/glows777/Vela/issues/410)).
 
 - GitHub Issue feeds can require every label in `issueLabels.all` and optionally match one in `issueLabels.any`. Existing label arrays still match any listed label ([#423](https://github.com/glows777/Vela/issues/423)).
 

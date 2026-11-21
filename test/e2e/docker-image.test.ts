@@ -1,12 +1,14 @@
 // Opt in with an owner-provided local image containing node, bash, rg and fd. Never pulls.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { createServer, globalAgent } from 'node:https'
 import { join } from 'node:path'
 import { tempDir } from '@glows777/vela/testing'
 import type { ExecutionEnv } from '@glows777/vela-core'
 import { buildDockerAdapter } from '../../extensions/docker/build.ts'
 import { runDocker } from '../../extensions/docker/container.ts'
+import { createCredentialIdentity } from '../../extensions/docker/credential-identity.ts'
 import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
 import { checkDockerOperations } from '../support/docker-conformance.ts'
 
@@ -109,6 +111,172 @@ describe.skipIf(!image)('prepared Docker image', () => {
     expect(proxy).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
     expect(hasCa).toBe(true)
   }, 240000)
+
+  async function assertRestrictedDenial(env: ExecutionEnv) {
+    let output = ''
+    const script = [
+      'const net = require("node:net")',
+      'const proxy = new URL(process.env.HTTPS_PROXY)',
+      'const socket = net.connect(Number(proxy.port), proxy.hostname)',
+      'socket.setTimeout(5000, () => socket.destroy(new Error("fixture proxy timeout")))',
+      'socket.on("connect", () => socket.write("CONNECT denied.test:443 HTTP/1.1\\r\\nHost: denied.test:443\\r\\n\\r\\n"))',
+      'socket.once("data", (data) => { console.log(data.toString().split("\\r\\n")[0]); socket.destroy() })',
+      'console.log(Object.keys(require("node:os").networkInterfaces()).sort().join(","))',
+    ].join(';')
+    const result = await env.exec(['node', '-e', script], {
+      onOutput(text, _signal, { stream }) {
+        if (stream === 'stdout') output += text
+      },
+    })
+    expect(result).toMatchObject({ ok: true, value: { exitCode: 0 } })
+    expect(output.trim().split('\n')).toEqual(['lo', 'HTTP/1.1 403 Forbidden'])
+  }
+
+  test.skipIf(process.platform !== 'linux')(
+    'the installed restricted adapter mediates allowed HTTPS, denies unlisted destinations and survives reopen',
+    async () => {
+      const name = 'restricted-egress'
+      const hostname = 'allowed.test'
+      const value = 'synthetic-owner-token'
+      const identity = await createCredentialIdentity([hostname])
+      const received: Array<string | undefined> = []
+      const fixture = createServer(identity, (req, res) => {
+        received.push(req.headers.authorization)
+        res.end('synthetic HTTPS response')
+      })
+      await new Promise<void>((resolve, reject) => {
+        fixture.once('error', reject)
+        fixture.listen(0, '127.0.0.1', resolve)
+      })
+      const address = fixture.address()
+      if (!address || typeof address !== 'object')
+        throw Error('No fixture port')
+      const connect = globalAgent.createConnection
+      globalAgent.createConnection = function (options, callback) {
+        // Only the test origin is redirected to the disposable upstream; retain normal TLS verification.
+        return connect.call(
+          this,
+          options.host === hostname
+            ? {
+                ...options,
+                host: '127.0.0.1',
+                port: address.port,
+                ca: identity.ca,
+                servername: hostname,
+              }
+            : options,
+          callback,
+        )
+      }
+      const options = {
+        ...config(name),
+        network: 'restricted' as const,
+        allow: [hostname.toUpperCase(), hostname],
+        credentials: [
+          { variable: 'GH_TOKEN', value, origins: [`https://${hostname}`] },
+        ],
+      }
+      const verify = async (env: ExecutionEnv) => {
+        await assertRestrictedDenial(env)
+        let output = ''
+        const result = await env.exec(
+          `curl --silent --show-error --fail --noproxy '' --max-time 5 --header "Authorization: Bearer $GH_TOKEN" https://${hostname}/`,
+          {
+            onOutput(text, _signal, { stream }) {
+              if (stream === 'stdout') output += text
+            },
+          },
+        )
+        expect(result).toMatchObject({ ok: true, value: { exitCode: 0 } })
+        expect(output).toBe('synthetic HTTPS response')
+      }
+      try {
+        const env = await openDockerEnvironment(options)
+        let id: string
+        let source: string
+        try {
+          id = await lookup(owner(name))
+          expect(id).toMatch(/^[a-f0-9]{64}$/)
+          const mounts = JSON.parse(
+            await runDocker(['inspect', '--format', '{{json .Mounts}}', id]),
+          ) as {
+            Type: string
+            Destination: string
+            Source: string
+            RW: boolean
+          }[]
+          const mount = mounts.find(
+            (item) => item.Destination === '/vela-egress',
+          )
+          expect(mount).toMatchObject({ Type: 'bind', RW: false })
+          if (!mount) throw Error('Missing restricted proxy mount')
+          source = mount.Source
+          expect(
+            (await readdir(source)).filter((file) => file.endsWith('.sock')),
+          ).toHaveLength(1)
+          await verify(env)
+          expect(
+            (await env.writeFile('note', 'fixture before reopen')).ok,
+          ).toBe(true)
+        } finally {
+          await env.cleanup()
+        }
+        expect(
+          (await readdir(source)).filter((file) => file.endsWith('.sock')),
+        ).toEqual([])
+        const reopened = await openDockerEnvironment({
+          ...options,
+          allow: [hostname],
+        })
+        try {
+          expect(await lookup(owner(name))).toBe(id)
+          expect(await reopened.readTextFile('note')).toEqual({
+            ok: true,
+            value: 'fixture before reopen',
+          })
+          await verify(reopened)
+          expect(received).toEqual([`Bearer ${value}`, `Bearer ${value}`])
+        } finally {
+          await reopened.cleanup()
+        }
+      } finally {
+        globalAgent.createConnection = connect
+        fixture.closeAllConnections()
+        await new Promise<void>((resolve) => fixture.close(() => resolve()))
+      }
+    },
+    240000,
+  )
+
+  test.skipIf(process.platform !== 'linux')(
+    'restricted mode refuses an existing off container without changing it',
+    async () => {
+      const name = 'restricted-with-off-container'
+      const existing = await open(name)
+      expect((await existing.writeFile('note', 'off fixture')).ok).toBe(true)
+      const id = await lookup(owner(name))
+      expect(id).toMatch(/^[a-f0-9]{64}$/)
+      await runDocker(['stop', '--timeout', '1', id])
+      await expect(
+        openDockerEnvironment({
+          ...config(name),
+          network: 'restricted',
+          allow: ['allowed.test'],
+        }),
+      ).rejects.toThrow(/explicit owner restart required/)
+      expect(await lookup(owner(name))).toBe(id)
+      expect(
+        await runDocker(['inspect', '--format', '{{.State.Running}}', id]),
+      ).toBe('false')
+      expect(
+        await readFile(
+          join(dir.path, 'environments', owner(name), 'workspace', 'note'),
+          'utf8',
+        ),
+      ).toBe('off fixture')
+    },
+    240000,
+  )
 
   test('credential setup failure does not start an owned container', async () => {
     const name = 'credentials-setup-failed'

@@ -12,6 +12,7 @@ import { createVela, type ExecutionEnv, type Result } from '@glows777/vela-core'
 import { buildDockerAdapter } from '../../extensions/docker/build.ts'
 import { createCredentialIdentity } from '../../extensions/docker/credential-identity.ts'
 import { openCredentialProxy } from '../../extensions/docker/credential-proxy.ts'
+import { openGuestHttpsRouter } from '../../extensions/docker/guest-https-router.ts'
 import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
 import { dockerOperations } from '../../extensions/docker/operations.ts'
 
@@ -49,6 +50,162 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
     await env?.cleanup()
     dir.cleanup()
   })
+
+  test('the installed adapter rejects invalid restricted owner policy before touching Docker', async () => {
+    const { openDockerEnvironment } = (await import(
+      join(dir.path, 'adapter.mjs')
+    )) as typeof import('../../extensions/docker/adapter.ts')
+    const defaults = {
+      dataDir: join(dir.path, 'unused-owner'),
+      name: 'test',
+      image: 'node:22-bookworm',
+    }
+    const network = 'restricted' as const
+    for (const mode of ['on', 'off'] as const)
+      await expect(
+        openDockerEnvironment({
+          ...defaults,
+          network: mode,
+          allow: ['one.test'],
+        }),
+      ).rejects.toThrow(/allow.*only valid.*restricted/)
+    await expect(
+      openDockerEnvironment({ ...defaults, network, allow: [] }),
+    ).rejects.toThrow(/non-empty allow/)
+    for (const host of ['127.0.0.1', '*.test', 'one.test:443', 'one.test/path'])
+      await expect(
+        openDockerEnvironment({ ...defaults, network, allow: [host] }),
+      ).rejects.toThrow(/exact DNS hosts/)
+    await expect(
+      openDockerEnvironment({
+        ...defaults,
+        network,
+        allow: ['one.test'],
+        credentials: [
+          {
+            variable: 'FIXTURE_TOKEN',
+            value: 'synthetic-value',
+            origins: ['https://two.test'],
+          },
+        ],
+      }),
+    ).rejects.toThrow(/origins.*restricted allow list/)
+    if (process.platform !== 'linux')
+      await expect(
+        openDockerEnvironment({ ...defaults, network, allow: ['one.test'] }),
+      ).rejects.toThrow(/Linux host/)
+    expect(existsSync(defaults.dataDir)).toBe(false)
+  })
+
+  test.skipIf(process.platform !== 'linux')(
+    'the restricted HTTPS route is scoped and fails closed without Docker',
+    async () => {
+      const hosts = ['one.test', 'two.test']
+      const identity = await createCredentialIdentity(hosts)
+      const upstreamIdentity = await createCredentialIdentity(['localhost'])
+      const seen: (string | undefined)[] = []
+      const upstream = createHttpsServer(upstreamIdentity, (req, res) => {
+        seen.push(req.headers.authorization)
+        res.end('fixture')
+      })
+      const { port } = await new Promise<{ port: number }>(
+        (resolve, reject) => {
+          upstream.once('error', reject)
+          upstream.listen(0, '127.0.0.1', () => {
+            const address = upstream.address()
+            if (!address || typeof address === 'string')
+              reject(Error('No fixture port'))
+            else resolve(address)
+          })
+        },
+      )
+      const socket = join(dir.path, 'review-proxy.sock')
+      try {
+        const proxy = await openCredentialProxy({
+          socketPath: socket,
+          allowedHosts: hosts,
+          identity,
+          credentials: [
+            {
+              placeholder: 'synthetic-placeholder',
+              value: 'synthetic-secret',
+              origins: ['https://one.test'],
+            },
+          ],
+          upstreamRequest: (options, callback) =>
+            requestHttps(
+              {
+                ...options,
+                hostname: '127.0.0.1',
+                port,
+                ca: upstreamIdentity.ca,
+                servername: 'localhost',
+              },
+              callback,
+            ),
+        })
+        try {
+          const guest = await openGuestHttpsRouter({ socket }, [])
+          const trust = join(dir.path, 'restricted-fixture-ca.pem')
+          try {
+            await writeFile(trust, identity.ca)
+            async function curl(host: string, headers?: string) {
+              const result = spawn(
+                'curl',
+                [
+                  '--silent',
+                  '--show-error',
+                  '--noproxy',
+                  '',
+                  '--max-time',
+                  '3',
+                  '--proxy',
+                  guest.url,
+                  '--cacert',
+                  trust,
+                  '--write-out',
+                  '%{http_connect}',
+                  ...(headers ? ['--header', headers] : []),
+                  `https://${host}/`,
+                ],
+                { stdio: ['ignore', 'pipe', 'ignore'] },
+              )
+              let body = ''
+              result.stdout!.setEncoding('utf8')
+              result.stdout!.on('data', (chunk) => {
+                body += chunk
+              })
+              await new Promise<void>((resolve, reject) => {
+                result.once('error', reject)
+                result.once('close', () => resolve())
+              })
+              return body
+            }
+            expect(
+              await curl(
+                'one.test',
+                'Authorization: Bearer synthetic-placeholder',
+              ),
+            ).toBe('fixture200')
+            expect(await curl('two.test')).toBe('fixture200')
+            expect(await curl('denied.test')).toBe('403')
+            expect(await curl('one.test:8443')).toBe('403')
+            expect(seen).toEqual(['Bearer synthetic-secret', undefined])
+            await proxy.close()
+            expect(await curl('one.test')).toBe('502')
+            expect(seen).toHaveLength(2)
+          } finally {
+            await guest.close()
+          }
+        } finally {
+          await proxy.close()
+        }
+      } finally {
+        upstream.closeAllConnections()
+        await new Promise<void>((resolve) => upstream.close(() => resolve()))
+      }
+    },
+  )
 
   test('guest exec receives its placeholder and public CA for one operation', async () => {
     const guest = readFileSync(join(dir.path, 'guest.cjs'), 'utf8')
@@ -564,6 +721,71 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
       state!.Mounts = []
       await expect(prepareDocker(options, engine)).rejects.toThrow()
       expect(prepares).toBe(3)
+    },
+  )
+
+  test.skipIf(
+    process.platform !== 'linux' || !process.getuid?.() || !process.getgid?.(),
+  )(
+    'a restricted allowlist change refuses the existing named container before start',
+    async () => {
+      const id = '3'.repeat(64)
+      const options = {
+        dataDir: join(dir.path, 'restricted-lifecycle'),
+        name: 'fixture',
+        image: 'node:22-bookworm',
+        network: 'restricted' as const,
+        allow: ['one.test'],
+      }
+      const transport = {
+        directory: join(dir.path, 'engine-proxy-fixture'),
+        socket: '/vela-egress/fixture.sock',
+      }
+      let state: Record<string, unknown> | undefined
+      const calls: string[] = []
+      const engine = async (args: string[]) => {
+        const get = (key: string) => args[args.indexOf(key) + 1]!
+        const entries = (key: string) =>
+          args.flatMap((value, index) =>
+            value === key ? [args[index + 1]!] : [],
+          )
+        calls.push(args[0]!)
+        if (args[0] === 'ps') return state ? id : ''
+        if (args[0] === 'create') {
+          expect(get('--network')).toBe('none')
+          state = {
+            Id: id,
+            Config: {
+              Labels: Object.fromEntries(
+                entries('--label').map((entry) => entry.split('=')),
+              ),
+              User: get('--user'),
+              Image: options.image,
+            },
+            HostConfig: { NetworkMode: 'none', Privileged: false },
+            State: { Running: false },
+            Mounts: entries('--mount').map((entry) => {
+              const [, source, destination, readonly] = entry.split(',')
+              return {
+                Type: 'bind',
+                Source: source?.slice(4),
+                Destination: destination?.slice(4),
+                RW: !readonly,
+              }
+            }),
+          }
+          return id
+        }
+        if (args[0] === 'inspect') return JSON.stringify([state])
+        if (args[0] === 'start' || args[0] === 'exec') return ''
+        throw Error('Unexpected engine mutation')
+      }
+      expect((await prepareDocker(options, engine, transport)).id).toBe(id)
+      calls.length = 0
+      await expect(
+        prepareDocker({ ...options, allow: ['two.test'] }, engine, transport),
+      ).rejects.toThrow(/explicit owner restart required/)
+      expect(calls).toEqual(['ps', 'inspect'])
     },
   )
 

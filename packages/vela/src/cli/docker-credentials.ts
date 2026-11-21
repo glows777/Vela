@@ -30,7 +30,7 @@ function origin(value: unknown) {
 
 export function ownerDockerCredentials(
   credentials: unknown,
-  network: 'on' | 'off' | undefined,
+  network: 'on' | 'off' | 'restricted' | undefined,
   environment: string,
 ): DockerCredential[] {
   const invalid = (description: string): never => {
@@ -39,7 +39,7 @@ export function ownerDockerCredentials(
     )
   }
   if (credentials === undefined) return []
-  if (network === 'off') invalid('credentials require network on, not off')
+  if (network === 'off') invalid('credentials cannot be used with network off')
   if (!record(credentials)) return invalid('credentials must be an object')
 
   return Object.entries(credentials).map(([variable, entry]) => {

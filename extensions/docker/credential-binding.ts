@@ -1,11 +1,13 @@
 import { randomBytes } from 'node:crypto'
 import { isIPv4 } from 'node:net'
+import { join } from 'node:path'
 import { createCredentialIdentity } from './credential-identity.ts'
 import {
   credentialOriginHost,
   openCredentialProxy,
 } from './credential-proxy.ts'
 import type { GuestCredentialConfig } from './guest-credential-env.ts'
+import { restrictedGuestDir } from './lifecycle.ts'
 
 export type DockerCredential = {
   variable: string
@@ -16,11 +18,16 @@ export type DockerCredential = {
 export async function openDockerCredentialBinding(
   credentials: readonly DockerCredential[],
   docker: (args: string[]) => Promise<string>,
+  restricted?: { directory: string; allow: readonly string[] },
 ) {
   const origins = [...new Set(credentials.flatMap((entry) => entry.origins))]
   const hosts = origins.map(credentialOriginHost)
-  const bindHost =
-    process.platform === 'darwin'
+  const socketName = restricted
+    ? `p-${randomBytes(12).toString('hex')}.sock`
+    : undefined
+  const bindHost = restricted
+    ? undefined
+    : process.platform === 'darwin'
       ? '127.0.0.1'
       : await docker([
           'network',
@@ -29,7 +36,7 @@ export async function openDockerCredentialBinding(
           '--format',
           '{{with index .IPAM.Config 0}}{{.Gateway}}{{end}}',
         ])
-  if (!isIPv4(bindHost) || bindHost === '0.0.0.0')
+  if (!restricted && (!bindHost || !isIPv4(bindHost) || bindHost === '0.0.0.0'))
     throw Error('Docker credential proxy needs a local IPv4 bridge gateway')
   const guestHost =
     process.platform === 'darwin' ? 'host.docker.internal' : bindHost
@@ -39,9 +46,14 @@ export async function openDockerCredentialBinding(
       `vela-credential-${randomBytes(24).toString('hex')}`,
     ]),
   )
-  const identity = await createCredentialIdentity(hosts)
+  const identity = await createCredentialIdentity(restricted?.allow ?? hosts)
   const proxy = await openCredentialProxy({
-    listenHost: bindHost,
+    ...(restricted
+      ? {
+          socketPath: join(restricted.directory, socketName!),
+          allowedHosts: restricted.allow,
+        }
+      : { listenHost: bindHost! }),
     identity,
     credentials: credentials.map(({ variable, ...entry }) => ({
       ...entry,
@@ -49,8 +61,10 @@ export async function openDockerCredentialBinding(
     })),
   })
   const guest: GuestCredentialConfig = {
+    ...(socketName
+      ? { proxySocket: join(restrictedGuestDir, socketName) }
+      : { proxyUrl: `http://${guestHost}:${proxy.port}` }),
     publicCa: identity.ca,
-    proxyUrl: `http://${guestHost}:${proxy.port}`,
     placeholders,
     origins,
     githubGit: credentials.some(

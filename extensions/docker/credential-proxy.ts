@@ -19,8 +19,10 @@ type Credential = {
   origins: readonly string[]
 }
 
-type Options = {
-  listenHost: string
+type Options = (
+  | { listenHost: string }
+  | { socketPath: string; allowedHosts: readonly string[] }
+) & {
   identity: { key: string | Buffer; cert: string | Buffer }
   credentials: readonly Credential[]
   upstreamRequest?: (
@@ -101,9 +103,15 @@ export function credentialOriginHost(origin: string) {
 /** A CONNECT endpoint only for owner-approved credential origins, not a general forward proxy. */
 export async function openCredentialProxy(options: Options) {
   const byHost = new Map<string, Credential[]>()
+  if ('allowedHosts' in options)
+    for (const host of options.allowedHosts) byHost.set(host, [])
   for (const entry of options.credentials) {
     for (const origin of entry.origins) {
       const host = credentialOriginHost(origin)
+      if ('allowedHosts' in options && !byHost.has(host))
+        throw Error(
+          'Docker credential origins must be included in the restricted allow list',
+        )
       const list = byHost.get(host) ?? []
       byHost.set(host, list)
       list.push(entry)
@@ -227,6 +235,16 @@ export async function openCredentialProxy(options: Options) {
     return closing
   }
   try {
+    if ('socketPath' in options) {
+      await new Promise<void>((resolve, reject) => {
+        proxy.once('error', reject)
+        proxy.listen(options.socketPath, () => {
+          proxy.off('error', reject)
+          resolve()
+        })
+      })
+      return { close, port: undefined }
+    }
     return { port: await listen(proxy, options.listenHost), close }
   } catch (cause) {
     await close()
