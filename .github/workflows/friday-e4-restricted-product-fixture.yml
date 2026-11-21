@@ -1,0 +1,33 @@
+name: E4 installed restricted fixture
+on:
+  push:
+    branches: [friday/e4-restricted-installed-410-eb4170e]
+permissions:
+  contents: read
+jobs:
+  fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: eb4170e63ef361f84639cfe74c4aceeddbd6452d
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.18.0'
+      - name: Verify the installed adapter with synthetic data
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = "eb4170e63ef361f84639cfe74c4aceeddbd6452d"
+          docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}'
+          bun install --frozen-lockfile --ignore-scripts
+          export VELA_TEST_DOCKER_IMAGE="vela-restricted-installed:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker --host unix:///var/run/docker.sock image rm "$VELA_TEST_DOCKER_IMAGE" >/dev/null 2>&1 || true' EXIT
+          docker --host unix:///var/run/docker.sock build -t "$VELA_TEST_DOCKER_IMAGE" -f extensions/docker/Dockerfile extensions/docker
+          bun test test/e2e/docker-image.test.ts --test-name-pattern 'installed restricted adapter|restricted mode refuses an existing off container'
