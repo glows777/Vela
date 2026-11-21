@@ -72,6 +72,61 @@ describe.skipIf(!image)('prepared Docker image', () => {
     expect(await b.exists('page')).toEqual({ ok: true, value: false })
   }, 240000)
 
+  test('the installed adapter starts credential mediation and offers only a guest placeholder', async () => {
+    const options = config('credentials-on')
+    const syntheticValue = 'host-fixture-value-not-for-the-guest'
+    const env = await openDockerEnvironment({
+      ...options,
+      network: 'on',
+      credentials: [
+        {
+          variable: 'GH_TOKEN',
+          value: syntheticValue,
+          origins: ['https://github.com'],
+        },
+      ],
+    })
+    adapters.push(env)
+    let output = ''
+    const script = [
+      'const {GH_TOKEN,HTTPS_PROXY,SSL_CERT_FILE}=process.env',
+      'const fs=require("node:fs"); const proxy=new URL(HTTPS_PROXY)',
+      'const socket=require("node:net").connect(Number(proxy.port),proxy.hostname)',
+      'socket.setTimeout(5000, () => socket.destroy(new Error("credential proxy connect timeout")))',
+      'socket.once("connect", () => { socket.end(); console.log(JSON.stringify([GH_TOKEN,HTTPS_PROXY,fs.readFileSync(SSL_CERT_FILE,"utf8").includes("BEGIN CERTIFICATE")])) })',
+    ].join(';')
+    const result = await env.exec(['node', '-e', script], {
+      onOutput(text, _signal, { stream }) {
+        if (stream === 'stdout') output += text
+      },
+    })
+    expect(result).toMatchObject({ ok: true, value: { exitCode: 0 } })
+    expect(output).not.toContain(syntheticValue)
+    const [token, proxy, hasCa] = JSON.parse(output)
+    expect(token).toMatch(/^vela-credential-/)
+    expect(proxy).toMatch(/^http:\/\/[^/:]+:\d+$/)
+    expect(hasCa).toBe(true)
+  }, 240000)
+
+  test('credential setup failure does not start an owned container', async () => {
+    const name = 'credentials-setup-failed'
+    const options = config(name)
+    await expect(
+      openDockerEnvironment({
+        ...options,
+        network: 'on',
+        credentials: [
+          {
+            variable: 'GH_TOKEN',
+            value: 'fixture',
+            origins: ['not-an-origin'],
+          },
+        ],
+      }),
+    ).rejects.toThrow()
+    expect(await lookup(owner(name))).toBe('')
+  }, 240000)
+
   test('the host owner can edit a file created in the isolated workspace', async () => {
     const name = 'ownership'
     const env = await open(name)

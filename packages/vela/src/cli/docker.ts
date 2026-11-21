@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 import type { ExecutionEnv, VelaOptions } from '@glows777/vela-core'
 import type { VelaConfig } from '../config/index.ts'
+import { ownerDockerCredentials } from './docker-credentials.ts'
 
 const require = createRequire(import.meta.url)
 
@@ -23,7 +24,9 @@ export function ownerDocker(config: VelaConfig) {
     if (
       !record(entry) ||
       typeof entry.image !== 'string' ||
-      Object.keys(entry).some((key) => !['image', 'network'].includes(key)) ||
+      Object.keys(entry).some(
+        (key) => !['image', 'network', 'credentials'].includes(key),
+      ) ||
       (entry.network !== undefined &&
         entry.network !== 'on' &&
         entry.network !== 'off')
@@ -39,6 +42,11 @@ export function ownerDocker(config: VelaConfig) {
         dataDir: config.dataDir,
         image: entry.image,
         network: entry.network,
+        credentials: ownerDockerCredentials(
+          entry.credentials,
+          entry.network,
+          name,
+        ),
       } as const
       // Source-only CLI consumers need the built guest only when opening a Docker location.
       const adapter: typeof import('#docker-adapter') = require('#docker-adapter')

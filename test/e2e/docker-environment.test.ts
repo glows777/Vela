@@ -44,6 +44,51 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
     dir.cleanup()
   })
 
+  test('guest exec receives its placeholder and public CA for one operation', async () => {
+    const guest = readFileSync(join(dir.path, 'guest.cjs'), 'utf8')
+    const fixture = {
+      publicCa: 'synthetic public CA marker',
+      proxyUrl: 'http://host.docker.internal:19443',
+      placeholders: { GH_TOKEN: 'vela-synthetic-placeholder' },
+      githubGit: true,
+    }
+    const isolated = dockerOperations('credential-guest', dir.path, (op, cwd) =>
+      spawn(
+        'node',
+        ['-e', guest, '--', op, cwd, resultRoot, JSON.stringify(fixture)],
+        {
+          cwd: dir.path,
+          env: { PATH: process.env.PATH, HOME: dir.path },
+          stdio: 'pipe',
+        },
+      ),
+    )
+    try {
+      let output = ''
+      const script =
+        'const e=process.env; console.log(JSON.stringify([e.GH_TOKEN,e.HTTPS_PROXY,e.SSL_CERT_FILE,e.SSL_CERT_FILE && require("node:fs").readFileSync(e.SSL_CERT_FILE,"utf8")]))'
+      const result = value(
+        await isolated.exec([process.execPath, '-e', script], {
+          onOutput(text, _signal, { stream }) {
+            if (stream === 'stdout') output += text
+          },
+        }),
+      )
+      expect(result.exitCode).toBe(0)
+      const [token, proxy, file, ca] = JSON.parse(output)
+      expect([token, proxy, ca]).toEqual([
+        fixture.placeholders.GH_TOKEN,
+        fixture.proxyUrl,
+        fixture.publicCa,
+      ])
+      expect(file).toContain('vela-credential-ca-')
+      for (let n = 0; n < 50 && existsSync(file); n++) await Bun.sleep(10)
+      expect(existsSync(file)).toBe(false)
+    } finally {
+      await isolated.cleanup()
+    }
+  })
+
   test('one transient discovery reads workspace instructions, skills and templates; a warm wake opens no guest', async () => {
     for (const name of ['alpha', 'beta', 'gamma']) {
       const path = join(dir.path, '.skills', name)
