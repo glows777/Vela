@@ -10,25 +10,48 @@
 
 ## Work loop
 
-GitHub issues and PRs are the source of truth. A piece of work starts with a Goal (the user-visible change) and Acceptance (how we will know it is done). Labels such as `to:vela` and implementation notes are process suggestions, not the goal.
+GitHub issues and PRs are the source of truth. A piece of work starts with a **Goal** (the user-visible change), **Non-goals** (scope boundary), and **Acceptance** (how we will know it is done). Labels such as `to:vela` and implementation notes are process suggestions, not the goal.
 
 - `status:draft` means Goal or Acceptance is still missing or contested. Do not start implementation, and do not treat a verbal clarification in chat as enough until it is written on the issue.
-- `status:ready` means Goal and Acceptance are clear enough to start. It is not permission to invent the design only in the PR.
-- Every PR has a source issue. Before opening a PR, the implementer comments on that issue, restating Goal and Acceptance in their own words. If that restatement does not match, ask on the issue; do not open the PR yet.
-- Merging a PR is not done. Done requires the agreed verification (tests, verify-vela, or the acceptance checks), posted on the original issue or PR, with evidence someone else can rerun. If acceptance is unmet, the work is not delivered.
-- After a UX miss, eval failure, or a repeated incident, open two issues when both apply: one to fix the product, and one to change the process (AGENTS.md, templates, or REVIEW.md). Agents may propose process changes; Claude reviews them; Liam decides whether they land.
+- `status:ready` means Goal and Acceptance are clear enough to start. For enhancements and larger UX changes, only **Leader** applies `to:*` + `status:ready` after reviewing scope; implementers do not self-ready unreviewed features. `status:ready` is not permission to invent the design only in the PR.
+- **Source issue & restatement (tiered by change size)**:
+  - Features, UX changes, and non-trivial bugs must have a source issue.
+  - For small features and ordinary bugs, comment on the source issue restating Goal and Acceptance in your own words before opening the PR (if it does not match, ask first).
+  - For larger work with an approved plan on the source issue, that plan approval already establishes alignment—do not repeat a boilerplate restatement before opening each PR.
+  - Pure doc fixes, typos, and urgent red-`main` CI fixes may open a PR directly without creating a source issue first.
+- **Merging a PR is not done.** Done requires the agreed verification (tests, `verify-vela`, or the acceptance checks) posted on the original issue or PR with evidence someone else can rerun. For multi-PR slices (`Part of #N`), the final slice PR must verify every Acceptance item on `#N` and close it (`Closes #N`).
+- After a UX miss, eval failure, or repeated incident, open two issues when both apply: one to fix the product, and one to change the process (`AGENTS.md`, templates, or `REVIEW.md`). Agents may propose process changes; Leader reviews them; Liam decides whether they land.
 
-Roles stay as they are: Liam sets direction and merges high-risk work; Claude gates large enhancements and UX; Vela is the default implementer for `to:vela` + `status:ready`; Friday handles work Vela should not take and reviews Vela PRs; Forge handles small bugs and reviews Friday PRs; Taste files UX and bug issues after merges.
+### Roles
 
-### Decisions that need Liam
+- **Liam**: sets product direction, resolves deadlocks, and approves merges that touch the high-risk gate below.
+- **Leader** (team leader, model-agnostic): gates enhancements and larger UX changes, reviews Friday's plans and PRs (assisted by Codex and Cursor Bugbot), and watches overall repo health.
+- **Vela**: default implementer for `to:vela` + `status:ready` (including small bugs); does not review or merge.
+- **Friday**: takes cross-module, public-API, security/permissions, and real-environment work; reviews Vela's plans, acceptance, and PRs, plus `To WCG` and external PRs.
+- **Forge**: optional helper (files issues and may review when quota allows); does not handle bugs and is not a merge blocker.
+- **Taste**: exercises merged user-facing changes and files UX/bug issues.
+- **Prism**: tracks comparable products and files high-value feature gap issues.
 
-Ask Liam, and do not proceed, for: merging to `main`, public API or eval-baseline changes he has not already authorized, and operations that can lose user or production data.
+### Merge gate & decisions that need Liam
 
-Friday or Claude may block a change without asking Liam first when the risk is already covered by repo rules, such as a missing Evidence section, or a worktree force-push that could overwrite work.
+Ask Liam, and do not merge without his explicit confirmation, when a PR:
+- changes the public API (`api/public-api.txt`) or eval baselines without prior authorization,
+- carries data-loss or security risk,
+- modifies `.github/` workflows/templates,
+- lands an enhancement whose scope/plan was not previously approved, or
+- was authored by Leader.
+
+For routine bug fixes, pure docs/tests, and slice PRs inside an already-approved plan—when the reviewer (Friday for Vela/external PRs, Leader for Friday PRs) has reviewed the current head with no remaining blockers, CI is green, and rerun-able Evidence is posted—the reviewer or Leader may squash-merge directly (using `--match-head-commit` with the full SHA) and leave a brief merge note.
+
+Friday or Leader may block a change without asking Liam first when the risk is already covered by repo rules, such as a missing Evidence section, or a worktree force-push that could overwrite work.
+
+### Prompt cache discipline
+
+Any change touching what the model sees (system prompt, tool definitions, injected context) must account for prompt-cache stability. Keep cross-turn rules in the stable prefix; carry per-input, per-wake, or mutable runtime facts with the message instead of mutating the system prompt. State in the plan/PR what stays in the cached prefix and what rides on messages.
 
 ### Anti-examples
 
-- Merging because CI is green and a reviewer is ready, without Liam's own words, when the change is high-risk or the author was told not to self-merge.
+- Merging a PR that hits Liam's high-risk gate without his explicit words, or self-merging your own PR.
 - Treating "open an issue", "wait for review", or "add a label" as the goal, instead of the user-visible acceptance.
 - Force-pushing a worktree or shared branch in a way that can discard someone else's commits, instead of stopping and reporting the risk.
 
@@ -70,4 +93,4 @@ After implementing or changing user-facing CLI/TUI/SDK behavior, **follow** [`.s
 
 "tests passed" and "looks good" are not evidence. Claiming done requires command results someone else can rerun. User-visible CLI/TUI/SDK changes still go through the verify-vela skill above.
 
-Before opening a pull request, the implementer verifies the change and does one fresh-context self-review in a new thread that sees only the diff. Vela is the default implementer. Friday follows the same rules.
+Before opening a pull request, the implementer reviews their own diff, runs the verification matching the risk, and fills in the PR template (including Evidence and the test-to-acceptance table); a PR missing Evidence is bounced without counting as a review round. Vela is the default implementer. Friday follows the same rules.

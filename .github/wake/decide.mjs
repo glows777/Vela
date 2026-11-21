@@ -17,12 +17,6 @@ const ROUTES = [
     labels: ['Taste'],
     tokens: ['Taste'],
   },
-  {
-    id: 'vela',
-    sink: 'lark',
-    labels: ['to:vela'],
-    tokens: ['to:vela', '@vela'],
-  },
 ]
 
 const EVENT_ACTIONS = {
@@ -264,10 +258,6 @@ function reasonOf(event, selection) {
   return event.action
 }
 
-function oneLine(title) {
-  return title.replace(/[\r\n]+/g, ' ')
-}
-
 function grokBody(event, route, id, reason) {
   return {
     delivery_id: id,
@@ -281,16 +271,6 @@ function grokBody(event, route, id, reason) {
     route,
     reason,
   }
-}
-
-function larkBody(event, id) {
-  const text = [
-    `Look at #${event.item.number}`,
-    oneLine(event.item.title),
-    event.item.htmlUrl,
-    `delivery_id: ${id}`,
-  ].join('\n')
-  return { msg_type: 'text', content: { text } }
 }
 
 function decide(input) {
@@ -354,10 +334,7 @@ function decide(input) {
       })
       continue
     }
-    const body =
-      route.sink === 'lark'
-        ? larkBody(event, id)
-        : grokBody(event, route.id, id, reason)
+    const body = grokBody(event, route.id, id, reason)
     posts.push({
       sink: route.sink,
       route: route.id,

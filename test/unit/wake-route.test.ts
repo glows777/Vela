@@ -163,25 +163,30 @@ test('to:forge and Taste post two bodies with different ids', () => {
   expect(plan.posts[0]?.deliveryId).not.toBe(plan.posts[1]?.deliveryId)
 })
 
-test('to:vela posts a Lark text summary and not the Grok object', () => {
-  const { plan } = run(
+test('to:vela and @vela are not routed by this workflow', () => {
+  const byLabel = run(
     'issues',
     issue({ labels: ['to:vela'], added: 'to:vela' }),
   )
-  const body = plan.posts[0]?.body
-  expect(plan.posts[0]).toMatchObject({ sink: 'lark', route: 'vela' })
-  expect(Object.keys(body ?? {}).sort()).toEqual(['content', 'msg_type'])
-  expect(body).toEqual({
-    msg_type: 'text',
-    content: {
-      text: [
-        'Look at #1284',
-        'Debounce wake posts',
-        'https://github.com/acme/vela/issues/1284',
-        `delivery_id: ${plan.posts[0]?.deliveryId}`,
-      ].join('\n'),
+  expect(byLabel.plan.posts).toHaveLength(0)
+  expect(byLabel.plan.skips[0]?.code).toBe('no-route')
+
+  const byComment = run('issue_comment', {
+    action: 'created',
+    repository: { full_name: 'acme/vela' },
+    sender: { login: 'liam' },
+    issue: {
+      number: 90,
+      title: 'Review the filter',
+      html_url: 'https://github.com/acme/vela/pull/90',
+      labels: [],
+      state: 'open',
+      updated_at: '2026-10-26T15:04:05Z',
     },
+    comment: { id: 555, body: '@vela', created_at: '2026-10-26T15:04:05Z' },
   })
+  expect(byComment.plan.posts).toHaveLength(0)
+  expect(byComment.plan.skips[0]?.code).toBe('no-route')
 })
 
 test('a bare bug label wakes nobody', () => {
@@ -325,12 +330,12 @@ test('a comment token does not also wake labels on the thread', () => {
       state: 'open',
       updated_at: '2026-10-26T15:04:05Z',
     },
-    comment: { id: 555, body: '@vela', created_at: '2026-10-26T15:04:05Z' },
+    comment: { id: 555, body: 'Taste', created_at: '2026-10-26T15:04:05Z' },
   })
-  expect(plan.posts.map((post) => post.route)).toEqual(['vela'])
+  expect(plan.posts.map((post) => post.route)).toEqual(['taste'])
 })
 
-test('one comment can wake forge and vela from two tokens', () => {
+test('one comment can wake forge and taste from two tokens', () => {
   const { plan } = run('issue_comment', {
     action: 'created',
     repository: { full_name: 'acme/vela' },
@@ -345,11 +350,11 @@ test('one comment can wake forge and vela from two tokens', () => {
     },
     comment: {
       id: 555,
-      body: 'hand this to @forge and to:vela',
+      body: 'hand this to @forge and Taste',
       created_at: '2026-10-26T15:04:05Z',
     },
   })
-  expect(plan.posts.map((post) => post.route)).toEqual(['forge', 'vela'])
+  expect(plan.posts.map((post) => post.route)).toEqual(['forge', 'taste'])
 })
 
 test('assigned wakes only when a route label is already present', () => {
@@ -359,11 +364,6 @@ test('assigned wakes only when a route label is already present', () => {
   )
   expect(bare.plan.posts).toHaveLength(0)
   expect(bare.plan.skips[0]?.code).toBe('no-route')
-  const vela = run(
-    'issues',
-    issue({ action: 'assigned', labels: ['to:vela'], assignee: 'liam' }),
-  )
-  expect(vela.plan.posts[0]).toMatchObject({ route: 'vela', sink: 'lark' })
   const forge = run(
     'issues',
     issue({ action: 'assigned', labels: ['to:forge'], assignee: 'liam' }),
@@ -420,13 +420,13 @@ test('a new route in the same bucket still posts when an older route is debounce
   const added = run(
     'issues',
     issue({
-      labels: ['to:forge', 'to:vela'],
-      added: 'to:vela',
+      labels: ['to:forge', 'Taste'],
+      added: 'Taste',
       updatedAt: '2026-10-26T15:04:28Z',
     }),
     JSON.stringify({ forge: bucket }),
   )
-  expect(added.plan.posts.map((post) => post.route)).toEqual(['vela'])
+  expect(added.plan.posts.map((post) => post.route)).toEqual(['taste'])
   expect(
     added.plan.skips.some(
       (skip) => skip.route === 'forge' && skip.code === 'debounced',
