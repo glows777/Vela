@@ -24,7 +24,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "9f21058029297f1c58c7533fb75d92dd0974a690"
           docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}'
           export VELA_RESTRICTED_PROBE_IMAGE="vela-restricted-fixture:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          export VELA_RESTRICTED_PROBE_BRIDGE="$(docker --host unix:///var/run/docker.sock network inspect bridge --format '{{with index .IPAM.Config 0}}{{.Gateway}}{{end}}')"
           probe="$(mktemp /tmp/vela-restricted-script-XXXXXX.mjs)"
           trap 'rm -f "$probe"; docker --host unix:///var/run/docker.sock image rm "$VELA_RESTRICTED_PROBE_IMAGE" >/dev/null 2>&1 || true' EXIT
           docker --host unix:///var/run/docker.sock build -t "$VELA_RESTRICTED_PROBE_IMAGE" -f extensions/docker/Dockerfile extensions/docker
@@ -88,11 +87,13 @@ jobs:
           try {
             assert(image, 'A disposable local image is required')
             assert(process.getuid() > 0 && process.getgid() > 0, 'Run as a non-root Docker operator')
-            const bridge = Object.values(networkInterfaces()).flat().find((a) => a?.family === 'IPv4' && !a.internal && a.address === process.env.VELA_RESTRICTED_PROBE_BRIDGE)
-            assert(bridge, 'Docker bridge address must be assigned on the test host')
+            const hostInterface = Object.values(networkInterfaces()).flat().find((a) => a?.family === 'IPv4' && !a.internal)
+            assert(hostInterface, 'The runner needs a non-loopback IPv4 interface for its fixture')
             const direct = createServer((_request, response) => response.end('synthetic-direct'))
-            const { port } = await listen(direct, 0, bridge.address)
-            const markerAddress = `${bridge.address}:${port}`
+            const { port } = await listen(direct, 0, hostInterface.address)
+            const markerAddress = `${hostInterface.address}:${port}`
+            const control = await fetch(`http://${markerAddress}/`, { signal: AbortSignal.timeout(3000) })
+            assert.equal(await control.text(), 'synthetic-direct')
             const owners = []
             for (const name of ['fixture-A', 'fixture-B']) {
               const folder = join(root, name)
