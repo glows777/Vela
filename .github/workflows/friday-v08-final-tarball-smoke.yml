@@ -38,19 +38,18 @@ jobs:
           cd "$w/app"
           env -i PATH="$PATH" HOME="$w/install-home" npm install --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$w"/pack/*.tgz
           export VELA_ACCEPTANCE_SHA="$sha"
-          node --input-type=module <<'VERIFY'
+          node --experimental-import-meta-resolve --input-type=module <<'VERIFY'
           import assert from 'node:assert/strict'
-          import { createRequire } from 'node:module'
+          import { fileURLToPath, pathToFileURL } from 'node:url'
           import { readFileSync } from 'node:fs'
-          import { join, resolve } from 'node:path'
+          import { resolve } from 'node:path'
           const names = ['vela-core','vela-channels','vela-mcp','vela-rag','vela-lark','vela'].map(x => '@glows777/'+x)
           for (const pkg of names) {
             const path = resolve('node_modules',pkg,'package.json')
             const data = JSON.parse(readFileSync(path,'utf8'))
             assert.equal(data.gitHead,process.env.VELA_ACCEPTANCE_SHA)
-            const req = createRequire(path)
             for (const name of Object.keys(data.dependencies ?? {}).filter(k => names.includes(k))) {
-              const entry = req.resolve(name)
+              const entry = fileURLToPath(import.meta.resolve(name, pathToFileURL(path).href))
               assert.ok(entry.startsWith(resolve('node_modules',name,'dist')+'/'),`${pkg} resolved wrong copy of ${name}: ${entry}`)
             }
           }
