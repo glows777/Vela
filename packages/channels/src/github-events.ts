@@ -2,6 +2,18 @@ import type { VelaLogger } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
 import type { ChannelEvent } from './types.ts'
 
+const issueLabelNames = z.array(z.string().trim().min(1))
+const issueLabelFilter = z.union([
+  issueLabelNames,
+  z
+    .object({
+      all: issueLabelNames.optional(),
+      any: issueLabelNames.optional(),
+    })
+    .strict(),
+])
+type IssueLabelFilter = z.infer<typeof issueLabelFilter>
+
 export const githubOptions = z
   .object({
     secret: z.string().min(1),
@@ -14,8 +26,8 @@ export const githubOptions = z
       )
       .min(1),
     apps: z.array(z.string().trim().min(1)).default(['github-actions']),
-    /** Issue labels that wake the repository feed; empty ignores every `labeled` action. */
-    issueLabels: z.array(z.string().trim().min(1)).default([]),
+    /** Issue feed guard: legacy any-of array or all/any groups. Empty is silent. */
+    issueLabels: issueLabelFilter.default([]),
   })
   .strict()
 
@@ -75,12 +87,23 @@ function ownBody(body: string): boolean {
   return body.trimEnd().split(/\r?\n/).at(-1) === '<!-- vela:event-origin -->'
 }
 
-/** Every Issue event needs one of the configured labels; an empty list accepts none. */
 function allowedByLabels(
   item: { labels: readonly { name: string }[] },
-  allowlist: readonly string[],
+  filter: IssueLabelFilter,
+  applied?: string,
 ): boolean {
-  return item.labels.some((each) => allowlist.includes(each.name))
+  const all = Array.isArray(filter) ? [] : (filter.all ?? [])
+  const any = Array.isArray(filter) ? filter : (filter.any ?? [])
+  if (applied !== undefined) {
+    // Legacy labeled events check the applied label only.
+    if (!all.length) return any.includes(applied)
+    if (!all.includes(applied) && !any.includes(applied)) return false
+  }
+  if (!all.length && !any.length) return false
+  return (
+    all.every((name) => item.labels.some((label) => label.name === name)) &&
+    (!any.length || item.labels.some((label) => any.includes(label.name)))
+  )
 }
 
 /** Pure mapping after authentication. Never fetches payload links or guesses missing PR mappings. */
@@ -158,7 +181,7 @@ export function githubEvents(
     const details = `Issue: #${item.number} ${item.title}\nAuthor: ${item.user.login}\n${item.html_url}`
     if (raw.action === 'labeled') {
       const { name } = label.parse(raw.label)
-      if (!options.issueLabels.includes(name)) return []
+      if (!allowedByLabels(item, options.issueLabels, name)) return []
       return [
         feedEvent(
           `GitHub issue #${item.number} labeled ${name}: ${item.title}`,
