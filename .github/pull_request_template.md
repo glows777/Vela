@@ -6,7 +6,7 @@
 
 ## Work loop
 
-<!-- Every PR has a source issue. Link it. Confirm that Goal and Acceptance were restated on that issue before opening this PR. Merge is not done until verification evidence is posted on the issue or this PR. -->
+<!-- Link the source issue (optional for pure doc fixes, typos, or urgent red-main CI fixes). Confirm Goal and Acceptance were restated on the issue (or covered by an approved plan). For multi-PR slices (`Part of #N`), the final slice must check off every Acceptance item and use `Closes #N`. -->
 
 ## How verified
 

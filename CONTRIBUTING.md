@@ -1,6 +1,6 @@
 # Contributing to Vela
 
-Thanks for helping. Bug reports, fixes and small focused features are welcome. Every pull request has a source issue. On that issue, restate the Goal and the Acceptance before you open the pull request.
+Thanks for helping. Bug reports, fixes and small focused features are welcome. Features, UX changes, and non-trivial bugs start from a source issue with Goal and Acceptance (restate them on the issue before opening the PR unless a plan was already approved there). Pure doc fixes, typos, and urgent red-`main` CI fixes may open a PR directly.
 
 ## Setup
 
