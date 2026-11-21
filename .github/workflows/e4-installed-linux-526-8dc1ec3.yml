@@ -1,0 +1,41 @@
+name: Verify E4 installed adapter on Linux
+
+on:
+  push:
+    branches: [friday/e4-installed-linux-526-8dc1ec3]
+
+permissions:
+  contents: read
+
+jobs:
+  installed-docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 8dc1ec30e10a63bc675295e2cd50050bc7a82b1e
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.18.0
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build the repository's disposable test image
+        run: |
+          docker version
+          docker build --tag vela-e4-fixture:pr526-8dc1ec3 --file extensions/docker/Dockerfile extensions/docker
+      - name: Test installed adapter connectivity and startup cleanup
+        env:
+          VELA_TEST_DOCKER_IMAGE: vela-e4-fixture:pr526-8dc1ec3
+          NO_COLOR: '1'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '8dc1ec30e10a63bc675295e2cd50050bc7a82b1e'
+          printf 'Tested product SHA: %s\n' "$(git rev-parse HEAD)"
+          bun test ./test/e2e/docker-image.test.ts --test-name-pattern 'installed adapter starts credential mediation|credential setup failure' 2>&1 | tee "$RUNNER_TEMP/vela-installed-docker-test.log"
+          grep -Eq '^ *2 pass' "$RUNNER_TEMP/vela-installed-docker-test.log"
+          grep -Eq '^ *0 fail' "$RUNNER_TEMP/vela-installed-docker-test.log"
