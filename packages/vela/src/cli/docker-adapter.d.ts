@@ -5,6 +5,7 @@ declare module '#docker-adapter' {
       name: string
       image: string
       network?: 'on' | 'off'
+      credentials?: { variable: string; value: string; origins: string[] }[]
     },
     cwd: string,
   ): Promise<import('@glows777/vela-core').ExecutionEnv>

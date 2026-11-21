@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { ExecutionEnv } from '@glows777/vela-core'
+import type { GuestCredentialConfig } from './guest-credential-env.ts'
 import { dockerOperations } from './operations.ts'
 
 const path = '/usr/local/bin:/usr/bin:/bin'
@@ -33,6 +34,7 @@ export function containerOperations(
   name: string,
   cwd: string,
   guest: string,
+  credentials?: GuestCredentialConfig,
 ): ExecutionEnv {
   return dockerOperations(name, cwd, (op, workdir) =>
     spawn(
@@ -51,6 +53,7 @@ export function containerOperations(
         op,
         workdir,
         '/tmp/vela-results',
+        ...(op === 'exec' && credentials ? [JSON.stringify(credentials)] : []),
       ],
       { ...options, stdio: 'pipe' },
     ),

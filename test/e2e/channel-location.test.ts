@@ -6,6 +6,7 @@ import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { drainChannels } from '@glows777/vela-channels/testing'
 import { createLocalExecutionEnv } from '@glows777/vela-core'
 import { lark } from '@glows777/vela-lark'
+import { ownerDocker } from '../../packages/vela/src/cli/docker.ts'
 import {
   cliHostExtensionConfig,
   cliProjectExtensions,
@@ -58,6 +59,76 @@ test('project settings cannot redirect an owner environment, group or Docker dat
     expect(config.settings).not.toHaveProperty('location')
     expect(config.dataDir).toBe(join(dir.path, 'project/owner-data'))
   } finally {
+    dir.cleanup()
+  }
+})
+
+test('owner Docker credential settings are refused before engine access with safe diagnostics', async () => {
+  const dir = tempDir()
+  const key = 'INVALID_VELA_OWNER_CREDENTIAL_TEST'
+  const before = process.env[key]
+  try {
+    const path = join(dir.path, 'settings.json')
+    const origins = ['https://github.com']
+    const literal = 'synthetic-do-not-print'
+    process.env[key] = `${literal}\nother-line`
+    const cases = [
+      [
+        {
+          network: 'off',
+          credentials: {
+            GH_TOKEN: { value: '$MISSING_VELA_OWNER_TEST', origins },
+          },
+        },
+        /credentials.*network.*off/i,
+      ],
+      [
+        { credentials: { GH_TOKEN: { value: literal, origins } } },
+        /host environment variable reference/i,
+      ],
+      [
+        {
+          credentials: {
+            GH_TOKEN: { value: '$MISSING_VELA_OWNER_TEST', origins },
+          },
+        },
+        /MISSING_VELA_OWNER_TEST.*(unset|empty|missing)/i,
+      ],
+      [
+        { credentials: { GH_TOKEN: { value: `$${key}`, origins } } },
+        /INVALID_VELA_OWNER_CREDENTIAL_TEST.*invalid header characters/i,
+      ],
+    ] as const
+    for (const [entry, diagnostic] of cases) {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          environments: { test: { image: 'node:22-bookworm', ...entry } },
+        }),
+      )
+      const config = loadConfig({
+        cwd: dir.path,
+        agentDir: dir.path,
+        trusted: true,
+      })
+      const host = ownerDocker(config)
+      expect(host).toBeDefined()
+      try {
+        await host!.env({
+          sessionId: 'credentials-settings',
+          location: { environment: 'test', cwd: '/workspace' },
+        })
+        throw Error('expected owner configuration rejection')
+      } catch (failure) {
+        expect(String(failure)).toMatch(diagnostic)
+        expect(String(failure)).not.toContain(literal)
+      } finally {
+        await host?.beforeDispose()
+      }
+    }
+  } finally {
+    if (before === undefined) delete process.env[key]
+    else process.env[key] = before
     dir.cleanup()
   }
 })

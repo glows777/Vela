@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { LocalExecutionEnv } from '../../packages/core/src/execution/local.ts'
@@ -7,10 +8,14 @@ import type {
   ShellExecOptions,
 } from '../../packages/core/src/execution/types.ts'
 import { readEnvironmentInventory } from '../../packages/core/src/session/environment-inventory.ts'
+import {
+  type GuestCredentialConfig,
+  prepareGuestCredentials,
+} from './guest-credential-env.ts'
 
 // This program is supplied by the host on docker exec's argv. Each process owns one operation or reader.
 async function main() {
-  const [op, cwd, tempRoot] = process.argv.slice(1)
+  const [op, cwd, tempRoot, credentialConfig] = process.argv.slice(1)
   const env = new LocalExecutionEnv({ cwd: cwd!, tempRoot: tempRoot! })
   const input = createInterface({ input: process.stdin, terminal: false })
   const lines = input[Symbol.asyncIterator]()
@@ -43,13 +48,30 @@ async function main() {
   if (first.done) return
   const args = JSON.parse(first.value)
   let reader: BinaryReader | undefined
+  let credentials:
+    | Awaited<ReturnType<typeof prepareGuestCredentials>>
+    | undefined
   try {
     if (op === 'exec') {
       const [command, options] = args as [string | string[], ShellExecOptions]
+      if (credentialConfig) {
+        const inherited = options.inheritEnv === false ? undefined : process.env
+        credentials = await prepareGuestCredentials(
+          JSON.parse(credentialConfig) as GuestCredentialConfig,
+          resolve(cwd!, options.cwd ?? '.'),
+          {
+            SSL_CERT_FILE:
+              options.env?.SSL_CERT_FILE ?? inherited?.SSL_CERT_FILE,
+            GIT_SSL_CAINFO:
+              options.env?.GIT_SSL_CAINFO ?? inherited?.GIT_SSL_CAINFO,
+          },
+        )
+      }
       const result = await env.exec(
         command,
         {
           ...options,
+          ...(credentials && { env: { ...options.env, ...credentials.env } }),
           onOutput: (text, _signal, { stream }) => {
             emit({ stream, text })
           },
@@ -150,7 +172,11 @@ async function main() {
     }
   } finally {
     await reader?.close()
-    await env.cleanup()
+    try {
+      await env.cleanup()
+    } finally {
+      await credentials?.close()
+    }
     input.close()
     process.stdin.destroy()
   }
