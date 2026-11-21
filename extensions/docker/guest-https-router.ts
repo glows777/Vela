@@ -6,13 +6,13 @@ const established = 'HTTP/1.1 200 Connection Established\r\n\r\n'
 const denied = 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'
 const unavailable = 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n'
 
-// The broad route runs inside the container, with exactly its normal networking.
-// The owner proxy remains a credential endpoint, never a general tunnel.
+// Open mode routes ordinary HTTPS inside the guest. Restricted mode has one
+// route to the owner proxy; it never attempts an ordinary connection.
 export async function openGuestHttpsRouter(
-  proxyUrl: string,
+  endpoint: { url: string } | { socket: string },
   origins: readonly string[],
 ) {
-  const owner = new URL(proxyUrl)
+  const owner = 'url' in endpoint ? new URL(endpoint.url) : undefined
   const authorized = new Set(origins.map((origin) => new URL(origin).hostname))
   const sockets = new Set<Socket>()
   const own = (socket: Socket) => {
@@ -39,10 +39,17 @@ export async function openGuestHttpsRouter(
       socket.end(denied)
       return
     }
-    const mediated = port === 443 && authorized.has(host)
-    const remote = mediated
-      ? connect(Number(owner.port), owner.hostname)
-      : connect(port, host)
+    const mediated = !owner || (port === 443 && authorized.has(host))
+    if (!owner && port !== 443) {
+      socket.end(denied)
+      return
+    }
+    const remote =
+      'socket' in endpoint
+        ? connect(endpoint.socket)
+        : mediated && owner
+          ? connect(Number(owner.port), owner.hostname)
+          : connect(port, host)
     own(remote)
     socket.pause()
     socket.once('close', () => remote.destroy())

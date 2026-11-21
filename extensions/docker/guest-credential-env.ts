@@ -3,9 +3,11 @@ import { join, resolve } from 'node:path'
 import { getCACertificates } from 'node:tls'
 import { openGuestHttpsRouter } from './guest-https-router.ts'
 
-export type GuestCredentialConfig = {
+export type GuestCredentialConfig = (
+  | { proxyUrl: string }
+  | { proxySocket: string }
+) & {
   publicCa: string
-  proxyUrl: string
   origins: readonly string[]
   placeholders: Record<string, string>
   githubGit: boolean
@@ -42,7 +44,12 @@ export async function prepareGuestCredentials(
     const gitCa = caPaths.GIT_SSL_CAINFO ? join(dir, 'git-ca.pem') : ca
     await writeBundle(ca, caPaths.SSL_CERT_FILE)
     if (gitCa !== ca) await writeBundle(gitCa, caPaths.GIT_SSL_CAINFO)
-    router = await openGuestHttpsRouter(config.proxyUrl, config.origins)
+    router = await openGuestHttpsRouter(
+      'proxySocket' in config
+        ? { socket: config.proxySocket }
+        : { url: config.proxyUrl },
+      config.origins,
+    )
     const env: Record<string, string> = {
       ...config.placeholders,
       HTTPS_PROXY: router.url,

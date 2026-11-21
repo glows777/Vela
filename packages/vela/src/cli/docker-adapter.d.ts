@@ -4,7 +4,8 @@ declare module '#docker-adapter' {
       dataDir: string
       name: string
       image: string
-      network?: 'on' | 'off'
+      network?: 'on' | 'off' | 'restricted'
+      allow?: readonly string[]
       credentials?: { variable: string; value: string; origins: string[] }[]
     },
     cwd: string,

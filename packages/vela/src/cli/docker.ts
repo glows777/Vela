@@ -25,11 +25,15 @@ export function ownerDocker(config: VelaConfig) {
       !record(entry) ||
       typeof entry.image !== 'string' ||
       Object.keys(entry).some(
-        (key) => !['image', 'network', 'credentials'].includes(key),
+        (key) => !['image', 'network', 'allow', 'credentials'].includes(key),
       ) ||
       (entry.network !== undefined &&
         entry.network !== 'on' &&
-        entry.network !== 'off')
+        entry.network !== 'off' &&
+        entry.network !== 'restricted') ||
+      (entry.allow !== undefined &&
+        (!Array.isArray(entry.allow) ||
+          entry.allow.some((host) => typeof host !== 'string')))
     )
       throw Error(
         `Invalid Docker configuration for owner environment "${name}"`,
@@ -42,6 +46,7 @@ export function ownerDocker(config: VelaConfig) {
         dataDir: config.dataDir,
         image: entry.image,
         network: entry.network,
+        allow: entry.allow as string[] | undefined,
         credentials: ownerDockerCredentials(
           entry.credentials,
           entry.network,
