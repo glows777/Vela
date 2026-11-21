@@ -10,6 +10,11 @@ body:
     validations:
       required: true
   - type: textarea
+    id: non-goals
+    attributes:
+      label: Non-goals
+      description: What is explicitly out of scope for this issue.
+  - type: textarea
     id: acceptance
     attributes:
       label: Acceptance
