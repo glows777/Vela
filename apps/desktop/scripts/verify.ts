@@ -3129,17 +3129,59 @@ async function restartJourney() {
   }
 }
 
+async function packagedLarkProject(executablePath: string) {
+  const agentDir = resolve(scratch, 'packaged-lark-data')
+  const chatId = 'oc_packaged'
+  await mkdir(agentDir)
+  await Bun.write(
+    resolve(agentDir, 'settings.json'),
+    JSON.stringify({ extensionConfig: { lark: { chats: [chatId] } } }),
+  )
+  const app = await _electron.launch({
+    executablePath,
+    args: [`--user-data-dir=${resolve(scratch, 'packaged-lark-profile')}`],
+    env: { ...env, VELA_DIR: agentDir },
+    timeout: 30_000,
+  })
+  try {
+    const page = await app.firstWindow()
+    watch(page)
+    await page.getByRole('heading', { name: 'VELA', exact: true }).waitFor()
+    const observed = await page.evaluate(async () => ({
+      settings: await window.vela.settings(),
+      connection: await window.vela.connection('lark'),
+      projects: await window.vela.projects(),
+    }))
+    assert.deepEqual(observed.settings.lark.chats, [chatId])
+    assert.equal(observed.connection.connected, false)
+    assert.deepEqual(
+      observed.projects
+        .filter((project) => project.channel === 'lark')
+        .map((project) => project.id),
+      [chatId],
+      'The packaged host lists the configured Lark project with no credentials',
+    )
+    checks.push(
+      'The packaged host lists the configured Lark project with no credentials.',
+    )
+  } finally {
+    await app.close()
+  }
+}
+
 async function packaged(appPath: string) {
   const appRoot = resolve(appPath)
   const resources = resolve(
     appRoot,
     process.platform === 'darwin' ? 'Contents/Resources' : 'resources',
   )
+  const executablePath = resolve(
+    appRoot,
+    process.platform === 'darwin' ? 'Contents/MacOS/Vela' : 'Vela',
+  )
+  await packagedLarkProject(executablePath)
   const app = await _electron.launch({
-    executablePath: resolve(
-      appRoot,
-      process.platform === 'darwin' ? 'Contents/MacOS/Vela' : 'Vela',
-    ),
+    executablePath,
     args: [`--user-data-dir=${profile}`],
     env,
     timeout: 30_000,
