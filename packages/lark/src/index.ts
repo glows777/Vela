@@ -33,7 +33,7 @@ export interface LarkOptions {
 
 /** Lark bot channel (long-connection mode), one shared session per enabled chat and topic. Options not passed are read from the config section (`extensionConfig.lark`). */
 export function lark(options: LarkOptions = {}): VelaExtension {
-  return function lark(vela) {
+  const extension: VelaExtension = (vela) => {
     const channel = new LarkChannel({
       appId: options.appId ?? configString(vela.config, 'appId') ?? '',
       appSecret:
@@ -48,6 +48,7 @@ export function lark(options: LarkOptions = {}): VelaExtension {
     vela.registerChannel(channel)
     channel.topics.register(vela)
   }
+  return Object.defineProperty(extension, 'name', { value: 'lark' })
 }
 
 export const larkConfig: ExtensionConfigDefinition = {

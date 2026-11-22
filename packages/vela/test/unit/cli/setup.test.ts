@@ -329,7 +329,7 @@ test('an extension that throws or rejects while loading is reported and skipped,
   }
 })
 
-test('the removed supabase built-in is unknown, so an old -builtin:supabase fails loudly', () => {
+test('the removed supabase built-in is unknown, so an old -builtin:supabase fails loudly', async () => {
   expect(Object.keys(BUILTIN_EXTENSIONS)).toEqual([
     'background',
     'memory',
@@ -339,6 +339,18 @@ test('the removed supabase built-in is unknown, so an old -builtin:supabase fail
     'mcp',
     'todo',
   ])
+  for (const [name, factory] of Object.entries(BUILTIN_EXTENSIONS))
+    expect(factory({}).name).toBe(name)
+  const bundled = await Bun.build({
+    entrypoints: [join(import.meta.dir, '../../../src/cli/main.ts')],
+    target: 'bun',
+  })
+  expect(bundled.success).toBe(true)
+  const text = await bundled.outputs[0]!.text()
+  for (const name of [...Object.keys(BUILTIN_EXTENSIONS), 'local'])
+    expect(text).toContain(
+      `Object.defineProperty(extension, "name", { value: "${name}" })`,
+    )
   expect(extensionConfigFromEnv({ SUPABASE_URL: 'u' }, {})).not.toHaveProperty(
     'supabase',
   )

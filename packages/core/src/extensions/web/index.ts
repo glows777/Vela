@@ -17,7 +17,7 @@ export interface WebOptions {
  * Options not passed are read from the config section (`extensionConfig.web`).
  */
 export function web(options: WebOptions = {}): VelaExtension {
-  return function web(vela) {
+  const extension: VelaExtension = (vela) => {
     const tavilyKey =
       options.tavilyKey ?? configString(vela.config, 'tavilyKey')
     const serperKey =
@@ -27,6 +27,7 @@ export function web(options: WebOptions = {}): VelaExtension {
     else if (serperKey) vela.registerTool(serperSearchTool(serperKey))
     else vela.registerTool({ ...tavilySearchTool(''), hostedOnly: true })
   }
+  return Object.defineProperty(extension, 'name', { value: 'web' })
 }
 
 export const webConfig: ExtensionConfigDefinition = {

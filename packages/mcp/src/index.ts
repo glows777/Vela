@@ -48,7 +48,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 /** The built-in MCP extension. Its tools are `mcp__<server>__<tool>`. */
 export function mcp(options: McpOptions = {}): VelaExtension {
-  return function mcp(vela) {
+  const extension: VelaExtension = (vela) => {
     const fromConfig = isRecord(vela.config.mcpServers)
       ? vela.config.mcpServers
       : {}
@@ -234,6 +234,7 @@ export function mcp(options: McpOptions = {}): VelaExtension {
       await Promise.all([...connections.values()].map((c) => c.close()))
     })
   }
+  return Object.defineProperty(extension, 'name', { value: 'mcp' })
 }
 
 /** Whether any of the server's tools may be visible to the model (not all `hidden`). */

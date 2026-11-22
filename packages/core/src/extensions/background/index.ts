@@ -27,7 +27,7 @@ export interface BackgroundOptions {
  * that starts a turn.
  */
 export function background(options: BackgroundOptions = {}): VelaExtension {
-  return function background(vela) {
+  const extension: VelaExtension = (vela) => {
     const table = (current: BackgroundCommands | undefined) => {
       if (!current)
         throw new Error('Background commands require an open session')
@@ -67,4 +67,5 @@ export function background(options: BackgroundOptions = {}): VelaExtension {
       await jobs?.stopAll()
     })
   }
+  return Object.defineProperty(extension, 'name', { value: 'background' })
 }

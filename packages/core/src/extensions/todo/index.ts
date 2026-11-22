@@ -6,7 +6,8 @@ import { createTodoTool } from './tool.ts'
  * every tool call, so the latest call in the session is the current list.
  */
 export function todo(): VelaExtension {
-  return function todo(vela) {
+  const extension: VelaExtension = (vela) => {
     vela.registerTool(createTodoTool())
   }
+  return Object.defineProperty(extension, 'name', { value: 'todo' })
 }

@@ -30,7 +30,7 @@ export interface RagOptions {
  * Without an embedder or `embedding` config, registers only /rag to explain how to configure it.
  */
 export function rag(options: RagOptions = {}): VelaExtension {
-  return function rag(vela) {
+  const extension: VelaExtension = (vela) => {
     const embedding = embeddingConfig(vela.config)
     const embedder =
       options.embedder ?? (embedding && createEmbedder(embedding))
@@ -136,6 +136,7 @@ export function rag(options: RagOptions = {}): VelaExtension {
       },
     })
   }
+  return Object.defineProperty(extension, 'name', { value: 'rag' })
 }
 
 function embeddingConfig(config: Readonly<Record<string, unknown>>) {

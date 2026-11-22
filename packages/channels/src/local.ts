@@ -20,9 +20,10 @@ export function local(options: LocalOptions): ChannelExtension {
   const parsed = optionsSchema.safeParse(options)
   if (!parsed.success)
     throw new Error('Local requires a valid optional token, port and timezone')
-  return function local(vela) {
+  const extension: ChannelExtension = (vela) => {
     vela.registerChannel(
       new LocalChannel(parsed.data, vela.dataDir, vela.logger),
     )
   }
+  return Object.defineProperty(extension, 'name', { value: 'local' })
 }

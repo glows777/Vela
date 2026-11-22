@@ -22,7 +22,7 @@ const EMPTY_MEMORY =
  * Sessions without the memory tool get no index or memory commands.
  */
 export function memory(): VelaExtension {
-  return function memory(vela) {
+  const extension: VelaExtension = (vela) => {
     const store = new MemoryStore(
       join(vela.dataDir, 'memory'),
       vela.logger,
@@ -180,6 +180,7 @@ export function memory(): VelaExtension {
       },
     })
   }
+  return Object.defineProperty(extension, 'name', { value: 'memory' })
 }
 
 function promptLayer(label: string, store: MemoryStore): string | null {
