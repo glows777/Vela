@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -25,7 +26,7 @@ afterEach(() => {
     rmSync(cwd, { recursive: true, force: true })
 })
 async function crash() {
-  const cwd = mkdtempSync(join(tmpdir(), 'vela-resume-prompt-'))
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'vela-resume-prompt-')))
   roots.push(cwd)
   const child = Bun.spawn([process.execPath, fixture, cwd, 'start'], {
     stdout: 'pipe',
