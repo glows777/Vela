@@ -29,6 +29,7 @@ export async function createCredentialIdentity(hosts: readonly string[]) {
         '[ca]',
         'basicConstraints=critical,CA:TRUE,pathlen:0',
         'keyUsage=critical,keyCertSign',
+        'subjectKeyIdentifier=hash',
       ].join('\n'),
     )
     await writeFile(
@@ -37,6 +38,8 @@ export async function createCredentialIdentity(hosts: readonly string[]) {
         'basicConstraints=critical,CA:FALSE',
         'keyUsage=critical,digitalSignature',
         'extendedKeyUsage=serverAuth',
+        'subjectKeyIdentifier=hash',
+        'authorityKeyIdentifier=keyid:always',
         `subjectAltName=${hosts.map((name) => `DNS:${name}`).join(',')}`,
       ].join('\n'),
     )
