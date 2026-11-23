@@ -150,6 +150,7 @@ export async function verifyLarkSettings(
   }
   await waitForLocalWork(page, false)
   const removeChat = page.getByRole('button', { name: 'Remove oc_settings' })
+  const beforeRemove = await readFile(path, 'utf8')
   await removeChat.click()
   const confirm = page.getByRole('dialog')
   const cancel = confirm.getByRole('button', { name: 'Cancel', exact: true })
@@ -157,7 +158,11 @@ export async function verifyLarkSettings(
   assert(await cancel.evaluate((node) => node === document.activeElement))
   await cancel.click()
   await confirm.waitFor({ state: 'hidden' })
-  assert.deepEqual((await disk()).extensionConfig.lark.chats, ['oc_settings'])
+  assert.equal(
+    await readFile(path, 'utf8'),
+    beforeRemove,
+    'Cancel leaves settings intact',
+  )
   await removeChat.click()
   await confirm
     .getByRole('button', { name: 'Remove chat', exact: true })
