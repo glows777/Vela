@@ -6,6 +6,7 @@ import {
 } from '@earendil-works/pi-tui'
 import type { SessionPersistence } from '../driver/index.ts'
 import { presentPath } from './context-display.ts'
+import { cliVersion } from './version.ts'
 
 export { formatContextFileList } from './context-display.ts'
 
@@ -35,6 +36,14 @@ export function formatStatusPath(input: StatusPathInput): string {
   const shown = presentPath(where.path, input.homeDir, input.agentDir)
   if (input.isFile(where.path)) return shown
   return `${PENDING_OPEN}${shown})`
+}
+
+/**
+ * The header's session label, `v0.8.1 · session <id>`: the running CLI version next to the id, so a
+ * session says which build it is. The header applies its own colors to the result.
+ */
+export function headerSessionLabel(sessionId: string): string {
+  return `v${cliVersion()} · session ${sessionId}`
 }
 
 /**

@@ -8,6 +8,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Vela now publishes a single npm package (`@glows777/vela`) and removes the built-in `rag` extension.** `@glows777/vela-core`, `@glows777/vela-channels`, `@glows777/vela-lark`, `@glows777/vela-mcp`, and `@glows777/vela-rag` (along with `sqlite-vec`, `rag`, `ragConfig`, `createEmbedder`, `EmbeddingFn`, and `createFauxEmbedder`) are retired. Import SDK APIs from `@glows777/vela`, extension authoring helpers from `@glows777/vela/extension-api`, and offline test helpers from `@glows777/vela/testing`. Heavy optional dependencies (`@larksuiteoapi/node-sdk`, `@modelcontextprotocol/sdk`, `@earendil-works/pi-tui`, `@silvia-odwyer/photon-node`) stay lazy-loaded off the cold-start graph ([#535](https://github.com/glows777/Vela/issues/535)).
 
+### Added
+
+- The TUI header and `/status` show the CLI version, so you can tell which build a session runs without leaving it. The header reads `Vela v0.8.1 · session <id>`, and `/status` starts with a `Version:` line. Both come from the installed `package.json`, the same value `vela --version` prints.
+
 ## [0.8.1] - 2026-11-23
 
 ### Changed

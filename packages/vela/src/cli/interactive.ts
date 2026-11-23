@@ -37,7 +37,7 @@ import {
   readClipboardText,
 } from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
-import { formatContextFileList } from './status-display.ts'
+import { formatContextFileList, headerSessionLabel } from './status-display.ts'
 import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
 import { backgroundRunning } from './tui/background.ts'
 import { commandCompletions, HOTKEYS } from './tui/commands.ts'
@@ -378,7 +378,7 @@ export class InteractiveMode {
     this.header.clear()
     const extensions = this.vela.extensions(this.session.id).map((e) => e.name)
     const lines = [
-      `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', `session ${this.session.id}`)}`,
+      `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', headerSessionLabel(this.session.id))}`,
       theme.fg(
         'dim',
         `${keyLabel('interrupt')} interrupt · ${keyLabel('clear')} clear · ${keyLabel('exit')} exit · / commands · ${keyLabel('followUp')} follow-up · /hotkeys for more`,
