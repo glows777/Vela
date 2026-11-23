@@ -1,9 +1,9 @@
-import type { LanguageModel, ToolSet } from 'ai'
 import {
   applyLimits,
   DEFAULT_LIMITS,
   type VelaLimits,
 } from '../../shared/limits.ts'
+import type { ModelHandle, ModelInput } from '../../shared/provider-types.ts'
 import { resolveCredential } from '../auth/resolve.ts'
 import { memoryCredentialStore } from '../auth/store.ts'
 import type {
@@ -61,12 +61,14 @@ export interface ProviderContext {
 }
 
 /** Optional provider-hosted equivalents for Vela tools, resolved for each request. */
-export type HostedToolModel = Exclude<LanguageModel, string> & {
-  hostedTools?: (options?: { reasoning?: string }) => Promise<ToolSet>
+export type HostedToolModel = ModelHandle & {
+  hostedTools?: (options?: {
+    reasoning?: string
+  }) => Promise<Record<string, unknown>>
 }
 
 /**
- * A model provider: lists known models and creates AI SDK LanguageModels by id. Unlisted ids work too, with
+ * A model provider: lists known models and creates model handles by id. Unlisted ids work too, with
  * metadata from the built-in catalog when it knows the id.
  */
 export interface ProviderDefinition {
@@ -83,7 +85,7 @@ export interface ProviderDefinition {
    * Without this function a provider counts as always configured.
    */
   authSource?(credential: Credential | undefined): string | undefined
-  createModel(id: string, ctx: ProviderContext): LanguageModel | HostedToolModel
+  createModel(id: string, ctx: ProviderContext): ModelInput | HostedToolModel
 }
 
 /** A provider `/login` can sign in to. */
@@ -101,7 +103,7 @@ export interface LoginProvider {
 const DEFAULT_PROVIDER_ORDER = ['anthropic', 'openai', 'openrouter', 'deepseek']
 
 export interface ResolvedModel {
-  model: LanguageModel
+  model: ModelInput
   info: ModelInfo
 }
 
@@ -265,8 +267,8 @@ export class ModelRegistry {
   }
 }
 
-/** Metadata for a LanguageModel passed in directly (e.g. the test faux); no ref. */
-export function describeModel(model: LanguageModel): ModelInfo {
+/** Metadata for a model passed in directly (e.g. the test faux); no ref. */
+export function describeModel(model: ModelInput): ModelInfo {
   if (typeof model === 'string') return { provider: '', id: model, ref: model }
   // AI SDK providers name themselves `anthropic.messages`, `openai.responses`, …: look the id up in the catalog
   const { api: _, ...known } = catalogLookup(
@@ -341,12 +343,12 @@ export function limitsForModel(
 
 /** @experimental Resolve a model for recording without assembling sessions, tools or resources. */
 export function resolveModel(
-  ref: string | LanguageModel | undefined,
+  ref: ModelInput | undefined,
   options: {
     providers?: Record<string, ProviderDefinition>
     credentials?: CredentialStore
   } = {},
-): LanguageModel {
+): ModelInput {
   const registry = new ModelRegistry(options.providers, options.credentials)
   const choice = ref ?? registry.defaultRef()
   if (choice === undefined)

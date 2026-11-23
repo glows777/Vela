@@ -1,9 +1,9 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { jsonSchema } from 'ai'
 import type { ExtensionAPI } from '../../packages/vela/src/driver/index.ts'
 import {
+  createJsonSchema,
   defineJsonSchemaTool,
   loadModels,
 } from '../../packages/vela/src/driver/index.ts'
@@ -56,7 +56,7 @@ function records(vela: ExtensionAPI) {
     defineJsonSchemaTool({
       name: 'records_read',
       description: 'Read records',
-      inputSchema: jsonSchema({
+      inputSchema: createJsonSchema({
         type: 'object',
         properties: {
           notes: {

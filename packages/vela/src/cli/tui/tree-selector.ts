@@ -16,7 +16,7 @@ function describe(entry: SessionEntry): string | undefined {
         typeof message.content === 'string'
           ? []
           : message.content
-              .filter((part) => part.type === 'tool-call')
+              .filter((part) => part.type === 'tool_call')
               .map((part) => part.toolName)
       const body = text || (calls.length ? `[${calls.join(', ')}]` : '')
       return `assistant: ${body}${entry.stopReason ? ` (${entry.stopReason})` : ''}`

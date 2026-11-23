@@ -1,11 +1,13 @@
-import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-import type { LanguageModel } from 'ai'
 import type {
   ResolvedModel,
   ThinkingLevel,
 } from '../../providers/models/index.ts'
 import type { VelaLimits } from '../../shared/limits.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
+import type {
+  ModelInput,
+  ProviderRequestParams,
+} from '../../shared/provider-types.ts'
 import type { VelaEvent } from '../agent/events.ts'
 import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
 import type {
@@ -67,8 +69,8 @@ interface SessionExtensionHooks<Session> {
   ): Promise<ModelMessage[]>
   beforeProviderRequest(
     session: Session,
-    params: LanguageModelV4CallOptions,
-  ): Promise<LanguageModelV4CallOptions>
+    params: ProviderRequestParams,
+  ): Promise<ProviderRequestParams>
   afterProviderResponse(
     session: Session,
     headers: Record<string, string>,
@@ -81,10 +83,10 @@ export interface SessionDeps<Session> {
   /** Only configuration-backed frontends need project defaults before command dispatch. */
   prepareCommands?: boolean
   /** Default model */
-  model: string | LanguageModel | undefined
+  model: ModelInput | undefined
   /** Resolves a model by name or object (including the provider registry) for a session */
   resolveModel: (
-    model: string | LanguageModel | undefined,
+    model: ModelInput | undefined,
     session: Session,
   ) => ResolvedModel
   thinkingLevel: ThinkingLevel

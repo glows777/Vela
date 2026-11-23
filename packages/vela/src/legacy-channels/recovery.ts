@@ -334,7 +334,7 @@ export class ChannelRecovery {
 
 function finalAnswer(message: ModelMessage): string {
   if (typeof message.content === 'string') return message.content
-  if (message.content.some((part) => part.type === 'tool-call')) return ''
+  if (message.content.some((part) => part.type === 'tool_call')) return ''
   return message.content
     .map((part) => (part.type === 'text' ? part.text : ''))
     .join('')

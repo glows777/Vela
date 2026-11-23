@@ -9,7 +9,6 @@ import {
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { LanguageModel } from 'ai'
 import type { VelaEvent } from '../../driver/agent/events.ts'
 import { memory } from '../../driver/extensions/memory/index.ts'
 import type { VelaExtension } from '../../driver/extensions/types.ts'
@@ -27,6 +26,7 @@ import type {
 } from '../../providers/models/index.ts'
 import type { VelaLimits } from '../../shared/limits.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
+import type { ModelInput } from '../../shared/provider-types.ts'
 import { resolveShellPath } from '../../shared/shell-path.ts'
 import {
   createFauxModel,
@@ -51,7 +51,7 @@ export interface TestVelaOptions {
   /** Other faux options (chunkSize, cache, ...) */
   faux?: Omit<FauxModelOptions, 'responses' | 'generate'>
   /** Use this model instead of faux, or a `provider/id` (with `providers`); `t.model` is then unavailable */
-  model?: LanguageModel | string
+  model?: ModelInput
   /** Model providers, same as createVela's `providers` */
   providers?: Record<string, ProviderDefinition>
   /** Default thinking level for new sessions (default medium) */

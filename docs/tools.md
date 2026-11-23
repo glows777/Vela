@@ -185,10 +185,9 @@ A tool definition's `exposure` decides where the tool shows up. The values and t
 | `direct` (default) | yes | yes | yes |
 | `model-only` | yes | yes | no |
 | `deferred` | after `tool_search` loads it | yes | yes |
-| `codemode` | no | no | yes |
 | `hidden` | no | no | no |
 
-Vela has no codemode tool yet, so a `codemode` tool can only be run by other tools through `ctx.executeTool()`. A `hidden` tool stays registered but unused, for example while it is turned off.
+A `hidden` tool stays registered but unused, for example while it is turned off.
 
 A deferred tool is not sent to the model as a tool. Instead, its `<deferred_tools>` section names it, with the tool's `searchHint` if it has one, and tells the model to call `tool_search` to load it. The section is left out when nothing is deferred or when `tool_search` itself is off, since the model could not load them anyway. Like pi, tools with a `namespace` (`{ name, description?, instructions? }`, for example the tools of one MCP server) are not listed one by one: the namespace gets one line with its tool count and description.
 
@@ -223,7 +222,7 @@ const session = vela.session('review', {
 ```
 
 - `tools` sets the session's tools. `session.setActiveTools(names)` replaces them with an allowlist later, and `session.setActiveTools(undefined)` removes the selection. `session.getActiveTools()` returns the names the model can currently see. If you select tools, include `tool_search` when the session needs deferred tools.
-For confirmation, load a user extension with a `tool_call` hook that checks `ctx.hasUI` and asks through `ctx.ui.confirm`. See [Confirm before a call](security.md#confirm-before-a-call).
+To block risky tool calls, load a user extension with a `tool_call` hook. See [Block dangerous calls](security.md#block-dangerous-calls).
 
 See [SDK](sdk.md) for the session API and [examples/extensions/read-only-session.ts](../examples/extensions/read-only-session.ts) for an extension that sets the selection per session.
 

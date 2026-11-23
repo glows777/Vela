@@ -70,15 +70,9 @@ export type ToolExecutionMode = 'sequential' | 'parallel'
  * - `direct`: declared to the model and callable.
  * - `model-only`: declared to the model, never callable (orchestrating or interactive tools).
  * - `deferred`: named in the system prompt; declared once `tool_search` loads it; always callable.
- * - `codemode`: never declared and not listed; callable (for tools that orchestrate other tools).
  * - `hidden`: registered but unreachable.
  */
-export type ToolExposure =
-  | 'direct'
-  | 'model-only'
-  | 'codemode'
-  | 'deferred'
-  | 'hidden'
+export type ToolExposure = 'direct' | 'model-only' | 'deferred' | 'hidden'
 
 /** MCP-style hints about a tool (same fields as pi's `ToolAnnotations`). */
 export interface ToolAnnotations {

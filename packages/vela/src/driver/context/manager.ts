@@ -247,7 +247,7 @@ export class ContextManager {
         let changed = false
         const content = message.content.map((part) => {
           if (
-            part.type !== 'tool-result' ||
+            part.type !== 'tool_result' ||
             part.output.type !== 'json' ||
             !part.output.value ||
             typeof part.output.value !== 'object' ||

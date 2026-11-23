@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { basename, join } from 'node:path'
-import { generateText } from 'ai'
 import z from 'zod'
+import { generateProviderText } from '../../../providers/index.ts'
 import type { ModelMessage, VelaSession } from '../../extension-api.ts'
 import { normalizeUsage } from '../../usage/tracker.ts'
 import { bm25Search } from './search.ts'
@@ -211,7 +211,7 @@ export class MemoryDream {
         assistants.flatMap((message) =>
           Array.isArray(message.content)
             ? message.content
-                .filter((part) => part.type === 'tool-call')
+                .filter((part) => part.type === 'tool_call')
                 .map((part) => part.toolName.slice(0, 100))
             : [],
         ),
@@ -456,12 +456,11 @@ export class MemoryDream {
     const pricing = session.modelInfo.cost
     const modelId = typeof model === 'string' ? model : model.modelId
     const started = performance.now()
-    const response = await generateText({
+    const response = await generateProviderText({
       model,
       instructions: INSTRUCTIONS,
       prompt,
       abortSignal: signal,
-      maxRetries: 0,
     })
     session.tracker.record(
       modelId,
@@ -476,7 +475,7 @@ export class MemoryDream {
     return {
       text: response.text,
       incomplete:
-        response.finishReason !== 'stop' || response.toolCalls.length > 0,
+        response.finishReason !== 'stop' || response.toolCallCount > 0,
     }
   }
 

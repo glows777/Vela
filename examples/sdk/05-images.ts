@@ -70,7 +70,8 @@ try {
     model.calls[2]?.prompt.flatMap((m) =>
       m.role === 'user'
         ? m.content.filter(
-            (p) => p.type === 'file' && p.mediaType.startsWith('image/'),
+            (p: { type: string; mediaType?: string }) =>
+              p.type === 'file' && p.mediaType?.startsWith('image/'),
           )
         : [],
     ) ?? []

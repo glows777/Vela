@@ -1,8 +1,7 @@
-import type { LanguageModel } from 'ai'
 import type { ThinkingLevel } from '../../providers/models/index.ts'
+import type { ModelInput } from '../../shared/provider-types.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
 import type { InputSource } from '../extensions/events.ts'
-import type { SessionUI } from '../extensions/ui.ts'
 import type { ImageContent } from '../messages.ts'
 import type { TokenStatus, UsageTotals } from '../usage/tracker.ts'
 import type { SessionScope } from './scope.ts'
@@ -63,7 +62,18 @@ export interface SendMessageOptions {
   deliverAs?: 'steer' | 'followUp' | 'nextTurn'
 }
 
-/** Options for `vela.session(id, options)`; `scope`, `channel` and `host` also bind an already-open session. */
+/** @internal Transitional host callback for `legacy-channels` until S4b deletes it. */
+export interface SessionHost {
+  deliver(text: string): void | Promise<void>
+  background?(
+    event:
+      | { type: 'started'; token: string; id: string; commandHead: string }
+      | { type: 'result'; token: string; text: string }
+      | { type: 'stopped'; token?: string },
+  ): void | Promise<void>
+}
+
+/** Options for `vela.session(id, options)`; `scope` and `channel` also bind an already-open session. */
 export interface SessionOptions {
   /** Transient storage sharing identity; first routing binding can attach to an already-open session. */
   scope?: SessionScope
@@ -78,34 +88,19 @@ export interface SessionOptions {
    * `+name` / `-name` entries adjusts the default set instead (like pi).
    */
   tools?: string[]
-  /** UI extensions use to interact with the user; without it there is no UI (confirm always returns false) */
-  ui?: SessionUI
-  /** Model for this session (`provider/id` or LanguageModel), default Vela's model. Also wins over the saved choice of a resumed session. */
-  model?: string | LanguageModel
+  /** Model for this session (`provider/id` or `ModelHandle`), default Vela's model. Also wins over the saved choice of a resumed session. */
+  model?: ModelInput
   /** Thinking level, default Vela's (Vela defaults to medium, like pi). Like `model`, wins over a resumed session's saved level. */
   thinkingLevel?: ThinkingLevel
   /** Automatic compaction, default Vela's (on unless createVela({ autoCompaction: false })) */
   autoCompaction?: boolean
   /** Opt into background command deadlines for an unattended run. Defaults to false. */
   unattended?: boolean
-  /**
-   * Where a result this session produces outside a turn goes, when a host owns a queue for it: a
-   * channel supplies its topic's input queue, so a background command's exit arrives like any other
-   * input. Without it the result is a message that starts a turn.
-   */
-  host?: {
-    deliver(text: string): void | Promise<void>
-    /**
-     * Persist started before execution; result admission must not wait for its response turn.
-     * A stopped event without a token clears all outstanding jobs for this session.
-     */
-    background?(
-      event:
-        | { type: 'started'; token: string; id: string; commandHead: string }
-        | { type: 'result'; token: string; text: string }
-        | { type: 'stopped'; token?: string },
-    ): void | Promise<void>
-  }
+}
+
+/** @internal Session options including the transitional `legacy-channels` host hook. */
+export interface InternalSessionOptions extends SessionOptions {
+  host?: SessionHost
 }
 
 export interface SessionUsage extends TokenStatus {

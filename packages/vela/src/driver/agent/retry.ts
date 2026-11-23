@@ -1,4 +1,4 @@
-import { APICallError } from '@ai-sdk/provider'
+import { inspectProviderApiError } from '../../providers/index.ts'
 import type { AgentErrorKind } from './events.ts'
 import { isContextOverflow } from './overflow.ts'
 
@@ -20,10 +20,11 @@ export function classifyAgentError(error: unknown): AgentErrorKind {
   let contextOverflow = false
   for (let depth = 0; depth < 5 && current != null; depth++) {
     contextOverflow ||= isContextOverflow(current)
-    if (APICallError.isInstance(current)) {
+    const apiError = inspectProviderApiError(current)
+    if (apiError) {
       provider = true
-      status ??= current.statusCode
-      text += `\n${current.responseBody ?? ''}`
+      status ??= apiError.statusCode
+      text += `\n${apiError.responseBody ?? ''}`
     }
     text += `\n${current instanceof Error ? current.message : String(current)}`
     if (current instanceof Error) {
@@ -66,7 +67,8 @@ export function agentErrorHint(
 export function isRetryable(error: unknown): boolean {
   // Provider HTTP errors: message is the response body text (e.g. "Rate limit reached ...") without
   // the status code, so use statusCode (AI SDK retries 408/409/429/5xx by default)
-  if (APICallError.isInstance(error)) return error.isRetryable
+  const apiError = inspectProviderApiError(error)
+  if (apiError) return apiError.isRetryable
   if (!(error instanceof Error)) return false
 
   const message = error.message || ''

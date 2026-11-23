@@ -170,9 +170,9 @@ test('the HTML export escapes every kind of entry: thinking, tool calls and resu
         message: {
           role: 'assistant',
           content: [
-            { type: 'reasoning', text: evil },
+            { type: 'thinking', text: evil },
             {
-              type: 'tool-call',
+              type: 'tool_call',
               toolCallId: 't1',
               toolName: evil,
               input: { command: evil },
@@ -188,7 +188,7 @@ test('the HTML export escapes every kind of entry: thinking, tool calls and resu
           role: 'tool',
           content: [
             {
-              type: 'tool-result',
+              type: 'tool_result',
               toolCallId: 't1',
               toolName: 'bash',
               output: { type: 'text', value: evil },

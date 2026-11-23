@@ -7,21 +7,21 @@ const parts = (message: ModelMessage) =>
     ? []
     : message.content.map((part) => part.type)
 
-test('withoutForeignReasoning keeps text and tool calls, dropping another model reasoning', () => {
+test('withoutForeignReasoning keeps text and tool calls, dropping another model thinking', () => {
   const own: ModelMessage = {
     role: 'assistant',
     content: [
-      { type: 'reasoning', text: 'own thinking' },
+      { type: 'thinking', text: 'own thinking' },
       { type: 'text', text: 'own answer' },
     ],
   }
   const foreign: ModelMessage = {
     role: 'assistant',
     content: [
-      { type: 'reasoning', text: 'other thinking' },
+      { type: 'thinking', text: 'other thinking' },
       { type: 'text', text: 'other answer' },
       {
-        type: 'tool-call',
+        type: 'tool_call',
         toolCallId: 'call-1',
         toolName: 'read_file',
         input: {},
@@ -30,11 +30,11 @@ test('withoutForeignReasoning keeps text and tool calls, dropping another model 
   }
   const unknown: ModelMessage = {
     role: 'assistant',
-    content: [{ type: 'reasoning', text: 'no recorded producer' }],
+    content: [{ type: 'thinking', text: 'no recorded producer' }],
   }
   const onlyReasoning: ModelMessage = {
     role: 'assistant',
-    content: [{ type: 'reasoning', text: 'nothing else' }],
+    content: [{ type: 'thinking', text: 'nothing else' }],
   }
   const messages = [own, foreign, unknown, onlyReasoning]
   const producedBy = new Map<ModelMessage, string>([
@@ -45,14 +45,14 @@ test('withoutForeignReasoning keeps text and tool calls, dropping another model 
 
   const result = withoutForeignReasoning(messages, 'fake/a', producedBy)
 
-  // The other model's reasoning goes, its answer and tool call stay; a message left with nothing goes too
+  // The other model's thinking goes, its answer and tool call stay; a message left with nothing goes too
   expect(result.map(parts)).toEqual([
-    ['reasoning', 'text'],
-    ['text', 'tool-call'],
-    ['reasoning'],
+    ['thinking', 'text'],
+    ['text', 'tool_call'],
+    ['thinking'],
   ])
-  // Without a recorded producer there is nothing that says the reasoning is foreign
+  // Without a recorded producer there is nothing that says the thinking is foreign
   expect(result[2]).toBe(unknown)
   // The history keeps what was passed in
-  expect(parts(foreign)).toEqual(['reasoning', 'text', 'tool-call'])
+  expect(parts(foreign)).toEqual(['thinking', 'text', 'tool_call'])
 })

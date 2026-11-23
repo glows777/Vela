@@ -3,7 +3,7 @@ import type { ExecutionLocation } from '../execution/types.ts'
 import type { SessionDeps } from './deps.ts'
 import type { SessionStore } from './index.ts'
 
-import type { SessionOptions } from './options.ts'
+import type { InternalSessionOptions, SessionOptions } from './options.ts'
 
 export function busyLocationError() {
   return Object.assign(new Error('Session is busy'), { code: 'SESSION_BUSY' })
@@ -26,7 +26,7 @@ export function restoredLocation(
 
 /** A changed gateway binding is prepared by admission. Interrupted turns prepare the saved location on start. */
 export function needsRestoredWorkspace(
-  options: SessionOptions,
+  options: InternalSessionOptions,
   target: ExecutionLocation,
 ) {
   return (

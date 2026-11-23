@@ -4,6 +4,7 @@ import {
   createRequestSnapshot,
   estimateRequestTokens,
 } from '../../packages/vela/src/driver/context/request.ts'
+import { resolveProviderTools } from '../../packages/vela/src/providers/index.ts'
 import {
   createFauxModel,
   fauxError,
@@ -22,11 +23,15 @@ afterEach(cleanupTestVelas)
 
 /** Estimate how many tokens the request t sends to the model in its current state (the same estimate ContextManager uses) */
 async function requestTokens(t: TestVela): Promise<number> {
+  const tools = await resolveProviderTools(
+    t.vela.model,
+    t.internals.registry.toProviderTools(),
+  )
   return estimateRequestTokens(
-    await createRequestSnapshot(
+    createRequestSnapshot(
       t.vela.model,
       t.session.buildSystem(),
-      t.internals.registry.toAISDKFormat(),
+      tools,
       t.messages,
     ),
   )
@@ -538,7 +543,7 @@ test('encrypted reasoning is sent without counting its payload toward an unancho
             role: 'assistant',
             content: [
               {
-                type: 'reasoning',
+                type: 'thinking',
                 text: 'thinking',
                 providerOptions: {
                   openai: { reasoningEncryptedContent: blob },

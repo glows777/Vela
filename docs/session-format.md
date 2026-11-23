@@ -89,7 +89,7 @@ The model and thinking level are the latest `model_change` and `thinking_level_c
 `SESSION_FORMAT_VERSION` is the version Vela writes. The current version is `2`. Branching did not change the version: pi's version 2 is already a tree, and a file with one branch is a valid tree. (Builds of Vela from before session trees would read a file with several branches as one long conversation; no released version writes branches.)
 
 - A header with a higher version than this Vela supports fails to resume with an error asking you to upgrade Vela.
-- Version 1 files (Vela 0.1: one `checkpoint` line holding the whole history after compaction, or the even older one message per line) are converted when the file storage loads them, and the file is rewritten as version 2 (written to a temp file and renamed over it). Messages become `message` entries, the checkpoint's model, thinking level and name become entries, and a compacted checkpoint (its first message is the summary) becomes its kept messages followed by a `compaction` entry, which rebuilds the same context. A custom storage holding version 1 data can convert it with `migrateSessionV1(id, lines)`.
+- Version 1 files (Vela 0.1: one `checkpoint` line holding the whole history after compaction, or the even older one message per line) are converted when the file storage loads them, and the file is rewritten as version 2 (written to a temp file and renamed over it). Messages become `message` entries, the checkpoint's model, thinking level and name become entries, and a compacted checkpoint (its first message is the summary) becomes its kept messages followed by a `compaction` entry, which rebuilds the same context.
 
 ## Messages
 

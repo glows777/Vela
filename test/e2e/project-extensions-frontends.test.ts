@@ -23,7 +23,7 @@ function setup() {
     writeFileSync(
       join(cwd, `.vela/${name}.ts`),
       `export default function ${name}(api) {
-        api.registerCommand('${name}-only', {description: '${name} project command', handler: (_args, ctx) => ctx.ui.notify('${name} command ran')})
+        api.registerCommand('${name}-only', {description: '${name} project command', handler: (_args, ctx) => ctx.notify('${name} command ran')})
       }`,
     )
   }

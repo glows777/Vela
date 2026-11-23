@@ -139,7 +139,7 @@ test.each(['text', 'summary'] as const)(
       .filter((entry) => entry.message?.role === 'assistant')
       .at(-1).message
     expect(assistant.content).toContainEqual(
-      expect.objectContaining({ type: 'reasoning', text: thinking }),
+      expect.objectContaining({ type: 'thinking', text: thinking }),
     )
   },
 )

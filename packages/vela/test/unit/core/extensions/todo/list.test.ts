@@ -16,7 +16,7 @@ function result(details: unknown, toolName = 'todo'): SessionEntry {
       role: 'tool',
       content: [
         {
-          type: 'tool-result',
+          type: 'tool_result',
           toolCallId,
           toolName,
           output: { type: 'text', value: 'ok' },

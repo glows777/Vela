@@ -12,7 +12,11 @@ export {
   tempDir,
 } from '@glows777/vela/testing'
 
-export type TestVelaOptions = CoreTestVelaOptions
+import type { InternalSessionOptions } from '../../packages/vela/src/driver/session/options.ts'
+
+export type TestVelaOptions = Omit<CoreTestVelaOptions, 'session'> & {
+  session?: InternalSessionOptions
+}
 
 /**
  * createTestVela() from vela/testing plus the CLI's slash command dispatcher:

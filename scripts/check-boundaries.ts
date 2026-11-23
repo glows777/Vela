@@ -51,56 +51,6 @@ const HEAVY_OWNER: Record<string, string> = {
 }
 const HEAVY = new Set(Object.keys(HEAVY_OWNER))
 
-/**
- * Shrink-only exact edge allowlist for files outside `src/providers/` (and `src/testing/`)
- * that still import `'ai'` / `'@ai-sdk/*'` until S1a replaces them with VelaMessage.
- * Each entry pins `type:<spec>` vs `runtime:<spec>` so adding a new package or turning a
- * type-only import into a runtime import fails immediately.
- */
-const AI_SDK_S1A_ALLOWLIST: Record<string, readonly string[]> = {
-  'packages/vela/src/cli/main.ts': ['type:ai'],
-  'packages/vela/src/cli/tui/logs.ts': ['type:ai'],
-  'packages/vela/src/driver/agent/cache.ts': [
-    'type:@ai-sdk/provider',
-    'type:ai',
-  ],
-  'packages/vela/src/driver/agent/checkpoint.ts': ['type:ai'],
-  'packages/vela/src/driver/agent/events.ts': ['type:ai'],
-  'packages/vela/src/driver/agent/index.ts': [
-    'runtime:@ai-sdk/provider',
-    'runtime:ai',
-  ],
-  'packages/vela/src/driver/agent/overflow.ts': ['runtime:@ai-sdk/provider'],
-  'packages/vela/src/driver/agent/retry.ts': ['runtime:@ai-sdk/provider'],
-  'packages/vela/src/driver/agent/step.ts': ['runtime:ai'],
-  'packages/vela/src/driver/context/compressor.ts': ['runtime:ai'],
-  'packages/vela/src/driver/context/request.ts': ['runtime:ai'],
-  'packages/vela/src/driver/extensions/events.ts': ['type:@ai-sdk/provider'],
-  'packages/vela/src/driver/extensions/memory/dream.ts': ['runtime:ai'],
-  'packages/vela/src/driver/extensions/provider-hooks.ts': [
-    'runtime:ai',
-    'type:@ai-sdk/provider',
-  ],
-  'packages/vela/src/driver/extensions/runner.ts': ['type:@ai-sdk/provider'],
-  'packages/vela/src/driver/messages.ts': ['type:ai'],
-  'packages/vela/src/driver/session/defaults.ts': ['type:ai'],
-  'packages/vela/src/driver/session/deps.ts': [
-    'type:@ai-sdk/provider',
-    'type:ai',
-  ],
-  'packages/vela/src/driver/session/export.ts': ['type:ai'],
-  'packages/vela/src/driver/session/options.ts': ['type:ai'],
-  'packages/vela/src/driver/session/resources.ts': ['type:ai'],
-  'packages/vela/src/driver/tools/json-schema.ts': ['runtime:ai'],
-  'packages/vela/src/driver/tools/registry.ts': ['runtime:ai', 'type:ai'],
-  'packages/vela/src/driver/tools/sdk-tools.ts': ['runtime:ai'],
-  'packages/vela/src/driver/tools/validation.ts': ['runtime:ai'],
-  'packages/vela/src/driver/usage/tracker.ts': ['type:ai'],
-  'packages/vela/src/driver/vela-session.ts': ['type:ai'],
-  'packages/vela/src/driver/vela.ts': ['type:ai'],
-  'packages/vela/src/mcp/tools.ts': ['runtime:ai'],
-}
-
 interface Package {
   name: string
   dir: string
@@ -364,7 +314,6 @@ export async function checkBoundaries(root: string): Promise<string[]> {
   }
 
   const eagerTargets = new Map<string, string[]>()
-  const seenAiAllowlist = new Set<string>()
 
   for (const [file, record] of sourceMap) {
     const { pkg, edges: imports } = record
@@ -406,14 +355,10 @@ export async function checkBoundaries(root: string): Promise<string[]> {
           if (!destination)
             report(file, edge.at, `private or missing export ${spec}`)
         }
-        // Gate 2: AI SDK confinement to src/providers/ (+ src/testing/ + shrink-only S1a exact edge allowlist)
+        // Gate 2: AI SDK confinement to src/providers/ (+ src/testing/)
         if (isAiSdk(spec)) {
           const edgeKey = `${edge.typeOnly ? 'type' : 'runtime'}:${spec}`
-          if (srcLayer === 'providers' || srcLayer === 'testing') {
-            // allowed
-          } else if (AI_SDK_S1A_ALLOWLIST[localRel]?.includes(edgeKey)) {
-            seenAiAllowlist.add(`${localRel}#${edgeKey}`)
-          } else {
+          if (srcLayer !== 'providers' && srcLayer !== 'testing') {
             report(
               file,
               edge.at,
@@ -487,7 +432,9 @@ export async function checkBoundaries(root: string): Promise<string[]> {
             destination === driverAPI ||
             (file ===
               resolve(pkg.dir, 'src/driver/extensions/memory/dream.ts') &&
-              destination === resolve(pkg.dir, 'src/driver/usage/tracker.ts')))
+              (destination ===
+                resolve(pkg.dir, 'src/driver/usage/tracker.ts') ||
+                destination === resolve(pkg.dir, 'src/providers/index.ts'))))
         if (destination && !local)
           report(
             file,

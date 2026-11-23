@@ -7,7 +7,7 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4Usage,
 } from '@ai-sdk/provider'
-import type { LanguageModel } from 'ai'
+import type { ModelInput } from '../../shared/provider-types.ts'
 import type {
   FauxFinishReason,
   FauxResponse,
@@ -22,7 +22,7 @@ export interface RecordOptions {
 
 export interface Recorder {
   /** The wrapped model: behaves like the original and records every response */
-  model: LanguageModel
+  model: ModelInput
   /** Records a user input (the CLI calls this on agent_start); replay feeds inputs back in order */
   addInput(input: string): void
   /** The scenario recorded so far */
@@ -38,7 +38,7 @@ export interface Recorder {
  * commit it as is.
  */
 export function recordModel(
-  model: LanguageModel,
+  model: ModelInput,
   options: RecordOptions,
 ): Recorder {
   if (typeof model === 'string')

@@ -65,11 +65,12 @@ async function callModelTool(
   input: unknown = {},
   toolCallId = 'call-1',
 ) {
-  return registry.toAISDKFormat()[name]!.execute!(input, {
-    toolCallId,
-    messages: [],
-    context: {},
-  })
+  return registry
+    .toProviderTools()
+    .find((t) => t.name === name)!
+    .execute(input, {
+      toolCallId,
+    })
 }
 
 /** The caller tool's outcomes (a non-string result reaches the model as JSON text) */
@@ -85,11 +86,9 @@ test('executeTool runs callable tools with nested ids and parentToolCallId on ev
   const { registry, events } = makeSession(
     caller([
       ['echo', { text: 'a' }],
-      ['hidden_helper', {}],
       ['deferred_one', {}],
     ]),
     echo,
-    tool('hidden_helper', { exposure: 'codemode', execute: async () => 'cm' }),
     tool('deferred_one', { exposure: 'deferred', execute: async () => 'df' }),
   )
   const outcomes = await callCaller(registry)
@@ -102,12 +101,6 @@ test('executeTool runs callable tools with nested ids and parentToolCallId on ev
     },
     {
       toolCallId: 'call-1/2',
-      toolName: 'hidden_helper',
-      result: 'cm',
-      isError: false,
-    },
-    {
-      toolCallId: 'call-1/3',
       toolName: 'deferred_one',
       result: 'df',
       isError: false,
@@ -123,8 +116,6 @@ test('executeTool runs callable tools with nested ids and parentToolCallId on ev
       ['tool_execution_end', 'call-1/1', 'call-1'],
       ['tool_execution_start', 'call-1/2', 'call-1'],
       ['tool_execution_end', 'call-1/2', 'call-1'],
-      ['tool_execution_start', 'call-1/3', 'call-1'],
-      ['tool_execution_end', 'call-1/3', 'call-1'],
     ],
   )
 })

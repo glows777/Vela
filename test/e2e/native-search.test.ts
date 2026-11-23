@@ -48,7 +48,7 @@ test('a provider-executed search completes in one turn and retains its answer', 
   expect(JSON.stringify(t.messages)).toContain('The answer is 42.')
   expect(t.eventsOf('turn_end')[0]?.toolResults).toContainEqual(
     expect.objectContaining({
-      type: 'tool-result',
+      type: 'tool_result',
       toolCallId: 'search-1',
       toolName: 'web_search',
     }),
@@ -856,7 +856,7 @@ test('an interrupted hosted search does not leave an orphan result after switchi
   await expect(t.run('Search example')).rejects.toThrow('ECONNRESET')
   expect(t.eventsOf('turn_end')[0]?.toolResults).toContainEqual(
     expect.objectContaining({
-      type: 'tool-result',
+      type: 'tool_result',
       toolCallId: 'search-1',
       toolName: 'web_search',
     }),

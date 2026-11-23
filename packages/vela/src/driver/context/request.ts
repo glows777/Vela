@@ -1,11 +1,16 @@
-import { asSchema, type LanguageModel, type ToolSet } from 'ai'
+import {
+  type ProviderToolSpec,
+  type ResolvedProviderTools,
+  resolveProviderTools,
+} from '../../providers/index.ts'
 import { DEFAULT_LIMITS } from '../../shared/limits.ts'
+import type { ModelInput } from '../../shared/provider-types.ts'
 import { type ModelMessage, messageEnvelopeChars } from '../messages.ts'
 
 export interface RequestSnapshot {
-  model: LanguageModel
+  model: ModelInput
   systemPrompt: string
-  tools: ToolSet
+  tools: ResolvedProviderTools
   messages: ModelMessage[]
   toolDefinitions: unknown[]
   abortSignal?: AbortSignal
@@ -13,36 +18,41 @@ export interface RequestSnapshot {
   maxOutputTokens?: number
 }
 
-export async function createRequestSnapshot(
-  model: LanguageModel,
+export function createRequestSnapshot(
+  model: ModelInput,
   systemPrompt: string,
-  tools: ToolSet,
+  tools: ResolvedProviderTools,
   messages: ModelMessage[],
   abortSignal?: AbortSignal,
-): Promise<RequestSnapshot> {
-  const toolDefinitions = await Promise.all(
-    Object.entries(tools).map(async ([name, tool]) => {
-      if (tool.type === 'provider')
-        return { type: tool.type, name, id: tool.id, args: tool.args }
-      return {
-        name,
-        description:
-          typeof tool.description === 'string' ? tool.description : undefined,
-        inputSchema: await asSchema(tool.inputSchema).jsonSchema,
-        strict: tool.strict,
-        providerOptions: tool.providerOptions,
-        inputExamples: tool.inputExamples,
-      }
-    }),
-  )
+): RequestSnapshot {
   return {
     model,
     systemPrompt,
     tools,
     messages: messages.slice(),
-    toolDefinitions,
+    toolDefinitions: tools.toolDefinitions,
     abortSignal,
   }
+}
+
+export async function resolveRequestSnapshot(
+  model: ModelInput,
+  systemPrompt: string,
+  tools: ProviderToolSpec[],
+  messages: ModelMessage[],
+  abortSignal?: AbortSignal,
+  maxOutputTokens?: number,
+): Promise<RequestSnapshot> {
+  const resolved = await resolveProviderTools(model, tools)
+  const request = createRequestSnapshot(
+    model,
+    systemPrompt,
+    resolved,
+    messages,
+    abortSignal,
+  )
+  request.maxOutputTokens = maxOutputTokens
+  return request
 }
 
 // A conservative, consistent local estimate, not a provider tokenizer.

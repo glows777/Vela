@@ -4,49 +4,41 @@ import type {
   SharedV4Headers,
 } from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
-import type { HostedToolModel } from '../../providers/models/index.ts'
-
-/** What the provider hook middleware calls (the extension runner, bound to one session). */
-export interface ProviderHooks {
-  /** Whether anyone handles the event, so idle hooks cost nothing */
-  has(
-    event:
-      | 'before_provider_request'
-      | 'after_provider_response'
-      | 'provider_stream_event'
-      | 'tool_call',
-    toolName?: string,
-  ): boolean
-  beforeRequest(
-    params: LanguageModelV4CallOptions,
-  ): Promise<LanguageModelV4CallOptions>
-  afterResponse(headers: Record<string, string>): Promise<void>
-  streamEvent(event: { provider: string; model: string; data: unknown }): void
-}
+import type {
+  ModelInput,
+  ProviderHooks,
+  ProviderRequestParams,
+} from '../shared/provider-types.ts'
+import type { HostedToolModel } from './models/index.ts'
 
 /**
- * Wraps a model so every request goes through the extension provider hooks (pi's `before_provider_request`,
- * `after_provider_response` and `provider_stream_event`). Raw stream chunks are requested from the provider
- * only while someone listens to them, and are not passed on unless the caller asked for them too.
+ * Wraps a model so every request goes through the extension provider hooks (pi's
+ * `before_provider_request`, `after_provider_response` and `provider_stream_event`).
+ * Raw stream chunks are requested from the provider only while someone listens to them,
+ * and are not passed on unless the caller asked for them too.
  * A model given by gateway id (a string) is returned unchanged.
  */
 export function withProviderHooks(
-  model: LanguageModel,
+  model: ModelInput,
   hooks: ProviderHooks,
-): LanguageModel {
+): ModelInput {
   if (typeof model === 'string') return model
-  const before = async (params: LanguageModelV4CallOptions) => {
+  const aiModel = model as LanguageModel
+  if (typeof aiModel === 'string') return model
+  const before = async (
+    params: LanguageModelV4CallOptions,
+  ): Promise<LanguageModelV4CallOptions> => {
     const request = hooks.has('before_provider_request')
-      ? await hooks.beforeRequest(params)
+      ? await hooks.beforeRequest(params as unknown as ProviderRequestParams)
       : params
-    return request
+    return request as LanguageModelV4CallOptions
   }
   const after = async (headers: SharedV4Headers | undefined) => {
     if (hooks.has('after_provider_response'))
       await hooks.afterResponse(stringHeaders(headers))
   }
   const wrapped = wrapLanguageModel({
-    model,
+    model: aiModel,
     middleware: {
       specificationVersion: 'v4',
       // The inner model is called directly (not through doGenerate / doStream) so the hooks' params are used

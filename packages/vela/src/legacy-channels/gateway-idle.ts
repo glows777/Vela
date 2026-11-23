@@ -45,7 +45,7 @@ export class GatewayIdle {
       // Running (an extension or SDK caller is using it), work outside a turn still going (a background
       // command), or opened with a UI (the terminal resumed it): check again later, so it is still closed
       // once that use ends without another channel message
-      if (session.isRunning || session.hasUI || session.hasWork) {
+      if (session.isRunning || session.hasWork) {
         this.schedule(id, idleMs || BUSY_RECHECK_MS)
         return
       }
@@ -78,7 +78,7 @@ export class GatewayIdle {
     }
     // New work may have arrived while saving; its queue will rearm idle cleanup.
     if (this.stopped() || this.find(id) !== session || this.queued(id)) return
-    if (session.isRunning || session.hasUI || session.hasWork) {
+    if (session.isRunning || session.hasWork) {
       this.schedule(id, idleMs || BUSY_RECHECK_MS)
       return
     }

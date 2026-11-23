@@ -1,7 +1,7 @@
-import { generateText, type LanguageModelUsage } from 'ai'
+import { generateProviderText } from '../../providers/index.ts'
+import type { ProviderUsage } from '../../shared/provider-types.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
-import type { ToolResultPart } from '../messages.ts'
-import { type ModelMessage, toModelMessages } from '../messages.ts'
+import type { ModelMessage, ToolResultPart } from '../messages.ts'
 import {
   branchSummaryMessageText,
   summaryMessageText,
@@ -56,10 +56,10 @@ export function planMicrocompact(
   messages.forEach((message, index) => {
     if (!Array.isArray(message.content)) return
     message.content.forEach((part, partIndex) => {
-      if (part.type === 'tool-call') {
+      if (part.type === 'tool_call') {
         if (calls.has(part.toolCallId)) invalid.add(part.toolCallId)
         calls.set(part.toolCallId, { name: part.toolName, index })
-      } else if (part.type === 'tool-result') {
+      } else if (part.type === 'tool_result') {
         if (results.has(part.toolCallId)) invalid.add(part.toolCallId)
         results.set(part.toolCallId, { part, message: index, index: partIndex })
       }
@@ -193,8 +193,8 @@ function findSummaryBoundary(messages: ModelMessage[]): number {
     for (const message of messages.slice(0, index)) {
       if (!Array.isArray(message.content)) continue
       for (const part of message.content) {
-        if (part.type === 'tool-call') pending.add(part.toolCallId)
-        else if (part.type === 'tool-result') pending.delete(part.toolCallId)
+        if (part.type === 'tool_call') pending.add(part.toolCallId)
+        else if (part.type === 'tool_result') pending.delete(part.toolCallId)
       }
     }
     if (pending.size === 0) return index
@@ -228,9 +228,9 @@ function sourceText(message: ModelMessage): string {
     .map((part) => {
       if (part.type === 'text') return part.text
       // Like pi's serialized conversation, keep the tool name so the summary can say what ran
-      if (part.type === 'tool-call')
+      if (part.type === 'tool_call')
         return `${part.toolName}(${JSON.stringify(part.input)})`
-      if (part.type === 'tool-result')
+      if (part.type === 'tool_result')
         return toolResultOutputToText(part.output)
       return ''
     })
@@ -310,7 +310,7 @@ export async function summarize(
   const summaryRequest: RequestSnapshot = {
     ...request,
     messages,
-    tools: {},
+    tools: { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
     toolDefinitions: [],
   }
   if (estimateRequestTokens(summaryRequest) > maxInputTokens)
@@ -320,25 +320,24 @@ export async function summarize(
   const started = performance.now()
   const modelId =
     typeof request.model === 'string' ? request.model : request.model.modelId
-  const recordUsage = (usage: LanguageModelUsage) =>
+  const recordUsage = (usage: ProviderUsage) =>
     tracker.record(modelId, normalizeUsage(usage), {
       kind: 'summary',
       usage,
       durationMs: performance.now() - started,
     })
-  const response = await generateText({
+  const response = await generateProviderText({
     model: summaryRequest.model,
     instructions: summaryRequest.systemPrompt,
-    messages: toModelMessages(summaryRequest.messages, false),
+    messages: summaryRequest.messages,
     abortSignal: summaryRequest.abortSignal,
     // Like pi #9512: thresholds decide when to compact, never how much the model may output.
     maxOutputTokens: summaryRequest.maxOutputTokens,
-    maxRetries: 0,
   })
   recordUsage(response.usage)
   request.abortSignal?.throwIfAborted()
   if (
-    response.toolCalls.length ||
+    response.toolCallCount ||
     !response.text.trim() ||
     response.finishReason !== 'stop'
   )
@@ -392,7 +391,7 @@ export async function summarize(
     if (message.role !== 'assistant' || !Array.isArray(message.content))
       continue
     for (const part of message.content)
-      if (part.type === 'tool-call') calls.push(part)
+      if (part.type === 'tool_call') calls.push(part)
   }
   for (const call of calls) {
     const input = call.input as { path?: unknown } | undefined

@@ -1292,7 +1292,7 @@ test.concurrent('-c -p with a command prints nothing on stdout, not the previous
   const ping = join(dir.path, 'ping.ts')
   await Bun.write(
     ping,
-    `export default (vela) => vela.registerCommand('ping', { handler: async (_args, ctx) => ctx.ui.notify('pong') })`,
+    `export default (vela) => vela.registerCommand('ping', { handler: async (_args, ctx) => ctx.notify('pong') })`,
   )
   const second = await cli(['-c', '-p', '/ping', '-e', ping], {
     model: `faux:${scenario('hello')}`,
@@ -2228,7 +2228,7 @@ test.concurrent('-p: SIGTERM stops a running bash command with its process group
     expect(saved).toHaveLength(1)
     const records = await Bun.file(saved[0]!).text()
     expect(records).toContain('run it')
-    expect(records).toContain('"tool-result"')
+    expect(records).toContain('"tool_result"')
   } finally {
     proc.kill('SIGKILL')
     // Don't leave the command running if the assertion failed

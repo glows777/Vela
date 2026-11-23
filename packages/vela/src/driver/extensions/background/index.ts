@@ -44,11 +44,9 @@ export function background(options: BackgroundOptions = {}): VelaExtension {
       handler: async (args: string, ctx: ExtensionContext) => {
         try {
           // `session_start` installs the job table before any command runs.
-          ctx.ui.notify(
-            await tasks(args, table(ctx.session.registry.background)),
-          )
+          ctx.notify(await tasks(args, table(ctx.session.registry.background)))
         } catch (error) {
-          ctx.ui.notify(errorMessage(error), 'error')
+          ctx.notify(errorMessage(error), 'error')
         }
       },
     }

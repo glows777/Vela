@@ -1,5 +1,10 @@
-import type { AssistantModelMessage, ToolCallPart } from 'ai'
-import type { ModelMessage, ToolResultPart, UserContent } from '../messages.ts'
+import type {
+  AssistantModelMessage,
+  ModelMessage,
+  ToolCallPart,
+  ToolResultPart,
+  UserContent,
+} from '../messages.ts'
 import type { StepRecord, StepUsage } from '../usage/tracker.ts'
 
 /**

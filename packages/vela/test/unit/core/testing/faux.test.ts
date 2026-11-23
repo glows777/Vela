@@ -1,12 +1,17 @@
 import { expect, test } from 'bun:test'
-import { generateText, streamText } from 'ai'
+import { generateText, type LanguageModel, streamText } from 'ai'
 import {
-  createFauxModel,
+  createFauxModel as createRawFauxModel,
+  type FauxModel,
+  type FauxModelOptions,
   fauxError,
   fauxText,
   fauxToolCall,
   loadFauxScenario,
 } from '../../../../src/testing/core/faux.ts'
+
+const createFauxModel = (options?: FauxModelOptions) =>
+  createRawFauxModel(options) as FauxModel & LanguageModel
 
 async function streamParts(
   model: ReturnType<typeof createFauxModel>,
@@ -174,7 +179,12 @@ test('loads a JSON scenario file', async () => {
   const model = await loadFauxScenario(
     `${import.meta.dir}/../../../../../../test/fixtures/scenarios/hello.json`,
   )
-  expect((await generateText({ model, prompt: 'hi' })).text).toContain(
-    'faux replay',
-  )
+  expect(
+    (
+      await generateText({
+        model: model as unknown as LanguageModel,
+        prompt: 'hi',
+      })
+    ).text,
+  ).toContain('faux replay')
 })

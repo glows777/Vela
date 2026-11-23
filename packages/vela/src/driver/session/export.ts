@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import type { LanguageModel } from 'ai'
+import type { ModelInput } from '../../shared/provider-types.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
 import {
   SESSION_FORMAT_VERSION,
@@ -57,7 +57,7 @@ export function exportBranch(options: {
   path?: string
   entries: SessionEntry[]
   name?: string
-  model?: string | LanguageModel
+  model?: ModelInput
   format: 'jsonl' | 'html'
 }): Promise<string> {
   const content =

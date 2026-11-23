@@ -31,10 +31,23 @@ export {
 } from '../providers/models/setup.ts'
 export type { VelaLimits } from '../shared/limits.ts'
 export { silentLogger, type VelaLogger } from '../shared/logger.ts'
+export type {
+  FinishReason,
+  ModelHandle,
+  ModelInput,
+  ProviderRequestParams,
+  ProviderUsage,
+  ReasoningOption,
+} from '../shared/provider-types.ts'
 export {
   resolveShellPath,
   type ShellPathOptions,
 } from '../shared/shell-path.ts'
+export {
+  createJsonSchema,
+  type ToolInputSchema,
+  type VelaJsonSchema,
+} from '../shared/tool-schema.ts'
 export type {
   AgentErrorKind,
   AssistantMessageEvent,
@@ -98,22 +111,33 @@ export type {
   ExtensionEventName,
   ExtensionEvents,
   ExtensionHandler,
-  ExtensionUI,
   InputSource,
   SendMessageOptions,
-  SessionUI,
   VelaExtension,
 } from './extensions/types.ts'
 export { type WebOptions, web, webConfig } from './extensions/web/index.ts'
 export { resolveBinary, setDefaultToolModifiers } from './frontend.ts'
 export type {
+  AssistantContent,
+  AssistantContentPart,
+  AssistantModelMessage,
   ImageContent,
   ModelMessage,
+  ProviderOptions,
   TextContent,
+  ThinkingPart,
+  ToolCallPart,
   ToolContent,
   ToolModelMessage,
+  ToolResultOutput,
   ToolResultPart,
   UserContent,
+  VelaAssistantMessage,
+  VelaMessage,
+  VelaPart,
+  VelaSystemMessage,
+  VelaToolMessage,
+  VelaUserMessage,
 } from './messages.ts'
 export {
   type ContextFile,

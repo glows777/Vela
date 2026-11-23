@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import z from 'zod'
-import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
 import todo from '../../examples/extensions/todo-command.ts'
 import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
 import type { ProviderDefinition } from '../../packages/vela/src/driver/index.ts'
@@ -115,7 +114,7 @@ for (const shape of ['native', 'mixed'] as const) {
       role: 'assistant',
       content: [
         {
-          type: 'tool-call',
+          type: 'tool_call',
           toolCallId: 'picture',
           toolName: 'read_file',
           input: { path: 'picture.png' },
@@ -126,7 +125,7 @@ for (const shape of ['native', 'mixed'] as const) {
       role: 'tool',
       content: [
         {
-          type: 'tool-result',
+          type: 'tool_result',
           toolCallId: 'picture',
           toolName: 'read_file',
           output: {
@@ -166,14 +165,14 @@ test('resumed hosted search renders its completed result', async () => {
     role: 'assistant',
     content: [
       {
-        type: 'tool-call',
+        type: 'tool_call',
         toolCallId: 'hosted',
         toolName: 'web_search',
         input: { query: 'example' },
         providerExecuted: true,
       },
       {
-        type: 'tool-result',
+        type: 'tool_result',
         toolCallId: 'hosted',
         toolName: 'web_search',
         output: { type: 'text', value: 'Hosted result evidence' },
@@ -196,7 +195,7 @@ test('ordinary JSON tool results keep file metadata in resumed history', async (
     role: 'assistant',
     content: [
       {
-        type: 'tool-call',
+        type: 'tool_call',
         toolCallId: 'metadata',
         toolName: 'inspect',
         input: {},
@@ -207,7 +206,7 @@ test('ordinary JSON tool results keep file metadata in resumed history', async (
     role: 'tool',
     content: [
       {
-        type: 'tool-result',
+        type: 'tool_result',
         toolCallId: 'metadata',
         toolName: 'inspect',
         output: {
@@ -282,7 +281,7 @@ for (const phase of ['live', 'resumed'] as const) {
         role: 'assistant',
         content: [
           {
-            type: 'tool-call',
+            type: 'tool_call',
             toolCallId: 'catalog',
             toolName: 'catalog_inspect',
             input: {},
@@ -293,7 +292,7 @@ for (const phase of ['live', 'resumed'] as const) {
         role: 'tool',
         content: [
           {
-            type: 'tool-result',
+            type: 'tool_result',
             toolCallId: 'catalog',
             toolName: 'catalog_inspect',
             output: { type: 'json', value: { records } },
@@ -599,28 +598,6 @@ test('a steer typed while the model streams is answered in the same run', async 
     'say something',
     'also this',
   ])
-})
-
-test('an extension confirm opens a dialog in place of the editor', async () => {
-  const t = createTestVela({
-    extensions: [confirmDangerous],
-    responses: [
-      fauxToolCall('bash', { command: 'rm -rf build' }),
-      fauxText('Okay, skipped'),
-    ],
-  })
-  const tui = await startTui(t.vela)
-  await tui.started
-  tui.submit('clean up')
-  await tui.until('Delete files?')
-  expect(tui.screen()).toContain('rm -rf build')
-  // Choose "No": Down, then Enter
-  tui.terminal.press(KEYS.down)
-  tui.terminal.press(KEYS.enter)
-  await tui.until('Okay, skipped')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
-    'User did not allow the deletion',
-  )
 })
 
 test('slash commands: CLI command output, extension commands and /hotkeys go to the chat', async () => {

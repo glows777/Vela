@@ -14,7 +14,6 @@ afterEach(async () => {
 
 test('core assembly supports memory and schema tools without installing a channel runtime', async () => {
   const core = await import('../../packages/vela/src/driver/index.ts')
-  const { jsonSchema } = await import('ai')
   const model = createFauxModel({
     responses: [
       fauxToolCall('schema_echo', { text: 'public' }),
@@ -31,7 +30,7 @@ test('core assembly supports memory and schema tools without installing a channe
           core.defineJsonSchemaTool({
             name: 'echo',
             description: 'echo',
-            inputSchema: jsonSchema({
+            inputSchema: core.createJsonSchema({
               type: 'object',
               properties: { text: { type: 'string' } },
               required: ['text'],
@@ -127,5 +126,5 @@ test('JSON Schema construction requires the SDK wrapper and leaves ordinary sche
         return ''
       },
     }),
-  ).toThrow('jsonSchema()')
+  ).toThrow('createJsonSchema()')
 })

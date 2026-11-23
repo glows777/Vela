@@ -124,11 +124,9 @@ An older failed follow-up may already have saved a user message between an unans
 | `cwd` | Vela's cwd | Base for file/search/bash tools (also `executeBash`), the cwd prompt and automatic AGENTS/CLAUDE discovery; relative values resolve against Vela's cwd. `session.cwd` exposes the resolved path. A different cwd reloads its own instruction chain instead of a supplied `contextFiles` array; `contextFiles: false` still disables loading. Workspace skills and templates follow the session cwd. Explicit SDK skill or template directories supply host resources and override automatic discovery at Vela’s default cwd. At a different session cwd, workspace resources take priority over those explicit directories. Extensions, configuration, storage and relative export destinations stay Vela-wide. Fork/clone preserves the location. New session records persist it, so resume restores it even if the new caller supplied a different cwd; legacy records with no location retain the previous caller/default cwd behavior. This is a default path, not a security sandbox. |
 | `location` | local session cwd | `{ environment, cwd }` selects the initial target and takes precedence over `cwd`. Local paths resolve against Vela’s cwd. A non-local target requires an absolute environment path and an explicit `env` resolver. |
 | `tools` | default set | Exact tool names enable only those tools; a list of only `+name` / `-name` entries adjusts the default set instead, like pi. `*` patterns are a CLI option (`--tools`, `--exclude-tools`), not part of this option |
-| `ui` | none | A `SessionUI` extensions use to talk to the user (`notify`, `confirm`, `select`, `input`, optional `setStatus`, `setWidget`). Without it `confirm` answers no, `select`/`input` answer nothing, and `notify` becomes a `notify` event. |
-| `model` | Vela's model | `provider/id` or `LanguageModel` for this session |
+| `model` | Vela's model | `provider/id` or `ModelHandle` for this session |
 | `thinkingLevel` | Vela's level | Thinking level for this session |
 | `autoCompaction` | Vela's setting | Automatic compaction for this session |
-| `host` | none | Owns delivery outside a turn through `deliver(text)`. Optional `background(event)` receives `started` (token, id, commandHead), `result` (token, text), or `stopped` (optional token; omitted means all jobs). Awaited `started` must persist before execution; result admission must not wait for the resulting model turn. Channels implement this with their directory and input queue. Without this optional member, existing delivery behavior remains unchanged. |
 
 ### Image input
 
@@ -298,7 +296,7 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `compaction_end` | `reason`, `result?` (`summary`, `firstKeptEntryId`, `tokensBefore`, `tokensAfter`, `messages`), `aborted`, `willRetry`, `errorMessage?` | Summarizing ended (like pi). `result` is set when it succeeded, `aborted` when it was interrupted, otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again |
 | `session_save_failed` | `error` | Writing the session's entries failed (the run itself continued). The entries are kept and written again with the next entry or at the end of the run |
 | `audit` | `toolName`, `path` | Before `write_file` or `edit_file` writes `path` |
-| `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ui.notify()` in a session without a UI. In RPC mode this is an [extension UI request](rpc.md#extension-ui) instead. |
+| `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ctx.notify()`. See [Extension Notifications](rpc.md#extension-notifications). |
 | `channel_message` | `channel`, `senderId`, `senderName`, `text` | A channel received a message for this session |
 | `channel_reply` | `channel`, `recipientId`, `text` | A channel sent a reply |
 | `channel_error` | `channel`, `senderId`, `error`, `aborted`, `source?` | A channel turn failed or was aborted. `source: 'feedback'` means only the progress presentation failed (the run still finishes); admission, preparation and command failures are not tagged |
@@ -362,7 +360,7 @@ interface SessionStorage {
 
 `persistence` is `{ type: 'file', path }`, `{ type: 'memory' }`, or omitted. The built-in file and memory storages set it. A custom storage that omits it is not treated as memory: `session.persistence` is `{ type: 'unknown' }`, because a `load` / `append` / `list` adapter can still be durable and there is no path to show. Return `{ type: 'memory' }` only when nothing is written. A file path may not exist until the first user or assistant message is persisted.
 
-A session is an append-only list of entries in pi's format: a header, then one entry per message, compaction, context edit or setting change (see [Session format](session-format.md)). Vela calls `append` as entries happen (the first call of a new session starts with the header) and never rewrites them; `load` returns everything appended, in order. Store entries as given. `summarizeSession(id, entries)` builds a `list()` row, and `migrateSessionV1(id, lines)` converts data saved by Vela 0.1's checkpoint storage. See [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts).
+A session is an append-only list of entries in pi's format: a header, then one entry per message, compaction, context edit or setting change (see [Session format](session-format.md)). Vela calls `append` as entries happen (the first call of a new session starts with the header) and never rewrites them; `load` returns everything appended, in order. Store entries as given. `summarizeSession(id, entries)` builds a `list()` row. See [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts).
 
 `session.getEntries()` returns a session's entries, including messages that were summarized or are no longer sent to the model.
 
@@ -512,7 +510,7 @@ See [the offline tool-image example](../examples/sdk/06-tool-images.ts) and [too
 
 An existing unbound session accepts its first scope/channel binding while preserving object identity and its original cwd, tools and model. The binding is synchronous, and its `session_channel` entry is written like other session metadata: `listSessions()` shows the channel once that queued write completes (on `session.save()`, the next prompt, or `close()`). Repeating the same route is allowed. A channel already saved for the session is that binding after `resume()`, including when the new session was opened with a channel before `resume()`. A different channel throws an error named `SessionRoutingConflictError`, containing the session ID and both routes, without retry or rebinding. Other session options remain first-open-only.
 
-`session.getActiveTools()` returns the tools currently exposed to the model; use `tools` or `setActiveTools()` to control the selection. `session.hasUI` distinguishes an attached frontend. `session.save()` retains its flush-and-reject behavior; `session.save({ reportFailure: true })` additionally emits one existing `session_save_failed` event if that explicit flush fails. It does not close the session.
+`session.getActiveTools()` returns the tools currently exposed to the model; use `tools` or `setActiveTools()` to control the selection. `session.save()` retains its flush-and-reject behavior; `session.save({ reportFailure: true })` additionally emits one existing `session_save_failed` event if that explicit flush fails. It does not close the session.
 
 `createVela({ onSessionSaved(id), beforeDispose() })` supports host composition. A successful nonempty storage append calls `onSessionSaved`; no-op or failed saves do not. Observer errors are logged and cannot retry committed history. Disposal waits for extension factories, runs `beforeDispose` to stop ingress, attempts every session close, then shared extension shutdown and cleanup, aggregating errors.
 

@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { LanguageModelUsage } from 'ai'
 import type { ModelPricing } from '../../shared/pricing.ts'
+import type { ProviderUsage } from '../../shared/provider-types.ts'
 import { toolResultOutputToText } from '../context/tool-result-output.ts'
 import {
   IMAGE_CHARS,
@@ -32,7 +32,7 @@ export interface StepUsage {
 
 export interface StepRecord extends StepUsage {
   kind?: 'main' | 'summary' | 'dream'
-  usage?: LanguageModelUsage
+  usage?: ProviderUsage
   durationMs?: number
   /** Unix timestamp when this model request finished. */
   ts: number
@@ -343,9 +343,7 @@ function computeCost(usage: StepUsage, p: ModelPricing): number {
  * Its `inputTokens` is the total of all three; this keeps the tracker's four-kind billing scheme,
  * so `StepUsage.inputTokens` means uncached input tokens.
  */
-export function normalizeUsage(
-  usage: LanguageModelUsage | undefined,
-): StepUsage {
+export function normalizeUsage(usage: ProviderUsage | undefined): StepUsage {
   if (!usage)
     return {
       inputTokens: 0,
@@ -354,10 +352,10 @@ export function normalizeUsage(
       cacheWriteTokens: 0,
     }
 
-  const cacheReadTokens = usage.inputTokenDetails.cacheReadTokens ?? 0
-  const cacheWriteTokens = usage.inputTokenDetails.cacheWriteTokens ?? 0
+  const cacheReadTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0
+  const cacheWriteTokens = usage.inputTokenDetails?.cacheWriteTokens ?? 0
   const inputTokens =
-    usage.inputTokenDetails.noCacheTokens ??
+    usage.inputTokenDetails?.noCacheTokens ??
     Math.max(0, (usage.inputTokens ?? 0) - cacheReadTokens - cacheWriteTokens)
 
   return {

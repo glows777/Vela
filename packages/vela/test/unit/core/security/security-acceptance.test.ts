@@ -2,7 +2,6 @@ import { afterAll, afterEach, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { jsonSchema } from 'ai'
 import { z } from 'zod'
 import {
   cleanupTestVelas,
@@ -14,6 +13,7 @@ import {
   ToolRegistry,
 } from '../../../../src/driver/tools/registry.ts'
 import { ToolExecutionResult } from '../../../../src/driver/tools/types.ts'
+import { createJsonSchema } from '../../../../src/shared/tool-schema.ts'
 import { fauxText, fauxToolCall } from '../../../../src/testing/core/index.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-security-acceptance-'))
@@ -52,13 +52,13 @@ function invoke(
   input: unknown = { command: 'echo hello' },
   signal?: AbortSignal,
 ) {
-  const execute = registry.toAISDKFormat()[name]?.execute
+  const execute = registry
+    .toProviderTools()
+    .find((t) => t.name === name)?.execute
   if (!execute) throw new Error(`Missing executable ${name}`)
   return Promise.resolve(
     execute(input, {
       toolCallId: crypto.randomUUID(),
-      messages: [],
-      context: undefined,
       abortSignal: signal,
     }),
   )
@@ -179,7 +179,7 @@ for (const kind of ['zod', 'json'] as const) {
       fake('read_file', {
         ...(kind === 'json'
           ? {
-              inputSchema: jsonSchema({
+              inputSchema: createJsonSchema({
                 type: 'object',
                 properties: { command: { type: 'string' } },
                 required: ['command'],

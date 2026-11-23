@@ -258,34 +258,20 @@ test.concurrent('rpc: compacting an empty session says there is nothing to compa
   expect(await rpc.close()).toBe(0)
 })
 
-test.concurrent('rpc: extension ui dialogs round-trip through extension_ui_request / response', async () => {
+test.concurrent('rpc: extension commands emit notify events over the stream', async () => {
   const rpc = startRpc(`faux:${scenario('hello')}`, [], {
     'extensions/ask.ts': `export default (vela) => vela.registerCommand('ask', {
   handler: async (_args, ctx) => {
-    ctx.ui.setStatus('ask', 'Asking')
-    const ok = await ctx.ui.confirm('Continue?', 'Keep going')
-    const pick = await ctx.ui.select('Pick one', ['A', 'B'])
-    ctx.ui.notify(\`ok=\${ok} pick=\${pick}\`)
+    ctx.notify('hello from extension', 'info')
   },
 })`,
   })
 
   rpc.send({ id: 'cmd', type: 'prompt', message: '/ask' })
-  const status = await rpc.waitFor((r) => r.method === 'setStatus')
-  expect(status).toMatchObject({ statusKey: 'ask', statusText: 'Asking' })
-  const confirm = await rpc.waitFor((r) => r.method === 'confirm')
-  expect(confirm).toMatchObject({
-    type: 'extension_ui_request',
-    title: 'Continue?',
-    message: 'Keep going',
-  })
-  rpc.send({ type: 'extension_ui_response', id: confirm.id, confirmed: true })
-  const select = await rpc.waitFor((r) => r.method === 'select')
-  expect(select.options).toEqual(['A', 'B'])
-  rpc.send({ type: 'extension_ui_response', id: select.id, cancelled: true })
-  expect(await rpc.waitFor((r) => r.method === 'notify')).toMatchObject({
-    message: 'ok=true pick=undefined',
-    notifyType: 'info',
+  expect(await rpc.waitFor((r) => r.type === 'notify')).toMatchObject({
+    type: 'notify',
+    message: 'hello from extension',
+    level: 'info',
   })
   expect(await rpc.waitFor((r) => r.id === 'cmd')).toMatchObject({
     data: { disposition: 'handled' },

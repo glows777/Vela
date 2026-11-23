@@ -10,17 +10,10 @@ import { sanitize } from './components.ts'
 import { theme } from './theme.ts'
 
 export class Footer implements Component {
-  private readonly statuses = new Map<string, string>()
-
   constructor(
     private readonly cwd: string,
     private readonly session: () => VelaSession | undefined,
   ) {}
-
-  setStatus(key: string, text?: string): void {
-    if (text) this.statuses.set(key, text)
-    else this.statuses.delete(key)
-  }
 
   invalidate(): void {}
 
@@ -57,10 +50,14 @@ export class Footer implements Component {
       ),
       truncateToWidth(` ${left}${' '.repeat(gap)}${right}`, width),
     ]
-    if (this.statuses.size)
-      lines.push(
-        truncateToWidth(` ${[...this.statuses.values()].join(' · ')}`, width),
-      )
+    const running =
+      session.registry.background
+        ?.tasks()
+        .filter((task) => task.snapshot.state === 'running') ?? []
+    if (running.length) {
+      const label = `${running.length} background ${running.length === 1 ? 'task' : 'tasks'} · ${running.map((task) => task.snapshot.id).join(', ')}`
+      lines.push(truncateToWidth(` ${label}`, width))
+    }
     return lines.map((line) => theme.fg('dim', line))
   }
 }

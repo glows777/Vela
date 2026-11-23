@@ -19,7 +19,7 @@ const hello: VelaExtension = (vela) => {
   vela.registerCommand('hello', {
     description: 'Show a greeting',
     handler: (name, ctx) => {
-      ctx.ui.notify(`Hello, ${name || 'world'}!`)
+      ctx.notify(`Hello, ${name || 'world'}!`)
     },
   })
 }
@@ -150,7 +150,7 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `annotations` | Hints about the tool, same as pi and MCP: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Vela does not enforce these hints; a user extension can inspect them |
 | `maxResultChars` | Results longer than this (default 51,200) are saved to a file and the model gets a preview and the path to read the rest |
 | `hostedOnly` | When `true`, the tool is offered only if the current model declares a same-name hosted equivalent and the tool is allowed. It is never executed locally |
-| `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, `codemode` tools only for other tools, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
+| `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
 | `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's). The deferred tool list shows the namespace once instead of each tool, and `tool_search` returns its `instructions` with the tools it loads |
 | `searchHint` | Short hint shown next to a deferred tool's name |
 | `promptSnippet` | One line for the system prompt's `<tools>` section while the tool is active (pi's `promptSnippet`). A tool without one is not listed there; its definition still reaches the model |
@@ -184,7 +184,7 @@ Example: [todo-command.ts](../examples/extensions/todo-command.ts)
 vela.registerCommand('todo', {
   description: 'Add a todo; with no arguments, list todos',
   handler: (args, ctx) => {
-    ctx.ui.notify(args ? `Added: ${args}` : 'No todos')
+    ctx.notify(args ? `Added: ${args}` : 'No todos')
   },
 })
 ```
@@ -344,25 +344,11 @@ Handlers and command handlers receive a context as their second argument:
 | Field | Description |
 |---|---|
 | `ctx.session` | The session that fired the event: `id`, `name`, `model`, `messages`, `getActiveTools()`, `setActiveTools(names)`, `setModel()`, `prompt()`, ... (see [SDK](sdk.md)) |
-| `ctx.ui` | How to talk to the user (below) |
-| `ctx.hasUI` | Whether `confirm`, `select` and `input` can actually ask someone |
+| `ctx.notify(message, level?)` | Emits a `notify` event (`info`, `warning`, or `error`); shown in the TUI chat log, emitted as an event in JSON/RPC mode, and printed to stderr in `-p` mode |
 | `ctx.cwd` | The current session's working directory, for both host and project handlers |
 | `ctx.signal` | Abort signal of the running turn; `undefined` when the session is idle. In a command handler it is the command's own signal |
 
 `ctx.session.setActiveTools(names)` limits the tools of that one session; `undefined` restores all. Unknown names are ignored.
-
-### ctx.ui
-
-| Method | Interactive | RPC | No UI (SDK without `ui`, `-p`, `--mode json`, channel sessions) |
-|---|---|---|---|
-| `notify(message, level?)` | Shown in the chat log | `extension_ui_request` | Emitted as a `notify` event; `-p` prints it to stderr |
-| `confirm(title, message)` | Yes/no dialog | Request, the client answers | Returns `false` |
-| `select(title, options)` | Selection list | Request, the client answers | Returns `undefined` |
-| `input(title, placeholder?)` | Text input | Request, the client answers | Returns `undefined` |
-| `setStatus(key, text?)` | Footer entry; empty text clears it | Sent to the client | Does nothing |
-| `setWidget(key, lines?)` | Lines above the editor; empty clears them | Sent to the client | Does nothing |
-
-`level` is `info` (default), `warning` or `error`. Because `confirm` returns `false` without a UI, a guard written as "block unless confirmed" blocks in print mode and in channel sessions. See [RPC](rpc.md) for the `extension_ui_request` / `extension_ui_response` protocol. SDK users pass a UI with `vela.session(id, { ui })`.
 
 ## Configuration
 

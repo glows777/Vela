@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import type { SessionUI, VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela'
 import { jsonSchema } from 'ai'
 import { z } from 'zod'
 import { z as z3 } from 'zod/v3'
@@ -20,22 +20,6 @@ import {
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
-
-/** Test UI: confirm returns the given answer and records what was asked */
-function scriptedUI(answer: boolean) {
-  const asked: string[] = []
-  const notes: string[] = []
-  const ui: SessionUI = {
-    notify: (message) => notes.push(message),
-    confirm: async (title, message) => {
-      asked.push(`${title}: ${message}`)
-      return answer
-    },
-    select: async () => undefined,
-    input: async () => undefined,
-  }
-  return { ui, asked, notes }
-}
 
 test.each([
   { type: 'object', properties: {} },
@@ -158,16 +142,6 @@ test('todo-command: /todo runs the command instead of calling the model', async 
   ])
 })
 
-test('todo-command: notify goes to the session ui when there is one', async () => {
-  const { ui, notes } = scriptedUI(true)
-  const t = createTestVela({
-    extensions: [todo],
-    session: { ui },
-  })
-  await t.run('/todo write the weekly report')
-  expect(notes).toEqual(['Added: write the weekly report'])
-})
-
 test('prompt-section: before_agent_start adds a section that stays fixed for the run', async () => {
   const t = createTestVela({
     extensions: [today],
@@ -182,7 +156,7 @@ test('prompt-section: before_agent_start adds a section that stays fixed for the
   expect(second!.system).toBe(first!.system)
 })
 
-test('confirm-dangerous: blocks rm without a ui, runs it when the user agrees', async () => {
+test('confirm-dangerous: blocks rm and notifies the session', async () => {
   const headless = createTestVela({
     extensions: [confirmDangerous],
     files: { 'junk.txt': 'x' },
@@ -192,22 +166,13 @@ test('confirm-dangerous: blocks rm without a ui, runs it when the user agrees', 
     ],
   })
   await headless.run('Delete junk.txt')
-  expect(headless.lastAssistantText()).toContain('no UI for confirmation')
+  expect(headless.lastAssistantText()).toContain(
+    'Deletion blocked by confirm-dangerous extension',
+  )
   expect(await Bun.file(headless.path('junk.txt')).exists()).toBe(true)
-
-  const { ui, asked } = scriptedUI(true)
-  const t = createTestVela({
-    extensions: [confirmDangerous],
-    session: { ui },
-    files: { 'junk.txt': 'x' },
-    responses: [
-      fauxToolCall('bash', { command: 'rm junk.txt' }),
-      fauxText('Deleted'),
-    ],
-  })
-  await t.run('Delete junk.txt')
-  expect(asked).toEqual(['Delete files?: rm junk.txt'])
-  expect(await Bun.file(t.path('junk.txt')).exists()).toBe(false)
+  expect(headless.eventsOf('notify').map((e) => e.message)).toContain(
+    'Blocked dangerous command: rm junk.txt',
+  )
 })
 
 test('redact-secrets: the model sees the redacted text, the history keeps the original', async () => {

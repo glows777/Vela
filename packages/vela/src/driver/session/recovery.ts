@@ -35,7 +35,7 @@ export async function reconcileInterruptedTools({
       role: 'tool',
       content: [
         {
-          type: 'tool-result',
+          type: 'tool_result',
           toolName: call.toolName,
           toolCallId: call.toolCallId,
           output,
@@ -58,7 +58,7 @@ export async function assertLegacyAnchors(
       entry.message.role === 'assistant' &&
       Array.isArray(entry.message.content)
         ? entry.message.content.flatMap((part) =>
-            part.type === 'tool-call' ? [part.toolCallId] : [],
+            part.type === 'tool_call' ? [part.toolCallId] : [],
           )
         : [],
     ),
@@ -79,7 +79,7 @@ export function assertInterruptedTurn(messages: readonly ModelMessage[]): void {
   if (
     last?.role === 'assistant' &&
     (typeof last.content === 'string' ||
-      !last.content.some((part) => part.type === 'tool-call'))
+      !last.content.some((part) => part.type === 'tool_call'))
   )
     throw new Error('No interrupted turn to continue')
 }
@@ -90,11 +90,11 @@ export function pendingToolCalls(messages: readonly ModelMessage[]) {
   for (const message of messages) {
     if (message.role === 'assistant' && Array.isArray(message.content))
       for (const part of message.content)
-        if (part.type === 'tool-call' && !part.providerExecuted)
+        if (part.type === 'tool_call' && !part.providerExecuted)
           unresolved.add(part.toolCallId)
     if (message.role === 'tool')
       for (const part of message.content)
-        if (part.type === 'tool-result') unresolved.delete(part.toolCallId)
+        if (part.type === 'tool_result') unresolved.delete(part.toolCallId)
     if (
       (message.role === 'user' || message.role === 'system') &&
       unresolved.size
@@ -107,13 +107,13 @@ export function pendingToolCalls(messages: readonly ModelMessage[]) {
   for (const message of messages) {
     if (message.role !== 'tool') continue
     for (const part of message.content)
-      if (part.type === 'tool-result') completed.add(part.toolCallId)
+      if (part.type === 'tool_result') completed.add(part.toolCallId)
   }
   // Snapshot before appending repairs; sibling calls retain the model's order.
   return messages.flatMap((message) =>
     message.role === 'assistant' && Array.isArray(message.content)
       ? message.content.flatMap((part) =>
-          part.type === 'tool-call' &&
+          part.type === 'tool_call' &&
           !part.providerExecuted &&
           !completed.has(part.toolCallId)
             ? [part]

@@ -6,7 +6,10 @@ import { createLocalExecutionEnv } from '../../../../src/driver/execution/local.
 import type { ExecutionEnv } from '../../../../src/driver/execution/types.ts'
 import { background } from '../../../../src/driver/extensions/background/index.ts'
 import { BackgroundJobs } from '../../../../src/driver/extensions/background/jobs.ts'
-import type { SessionOptions } from '../../../../src/driver/session/options.ts'
+import type {
+  InternalSessionOptions,
+  SessionHost,
+} from '../../../../src/driver/session/options.ts'
 import { ToolResultStore } from '../../../../src/driver/session/tool-results.ts'
 import { SessionWork } from '../../../../src/driver/session/work.ts'
 import { backgroundBash } from '../../../../src/driver/tools/environment-bash.ts'
@@ -44,12 +47,11 @@ function sessionStub(
   cwd: string,
   delivered: string[],
   deliver?: (text: string) => void,
-  background?: NonNullable<SessionOptions['host']>['background'],
+  background?: SessionHost['background'],
 ) {
   return {
     id: 'stub',
     cwd,
-    ui: { setStatus: () => {} },
     ...(deliver || background
       ? { host: { deliver: deliver ?? (() => {}), background } }
       : {}),
@@ -408,9 +410,7 @@ test('outside channels the exit is a custom message that starts a turn', async (
 })
 
 test('a host records a unique job token before execution and receives the same token with its result', async () => {
-  type Event = Parameters<
-    NonNullable<NonNullable<SessionOptions['host']>['background']>
-  >[0]
+  type Event = Parameters<NonNullable<SessionHost['background']>>[0]
   const events: Event[] = []
   const gate = Promise.withResolvers<void>()
   const root = directory()
@@ -564,7 +564,7 @@ test('bash does not promise a background result when the host refuses the durabl
             throw new Error('host could not save start')
         },
       },
-    },
+    } as InternalSessionOptions,
   })
   await t.run('start the command')
   expect(t.exists('must-not-run')).toBe(false)

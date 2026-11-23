@@ -4,7 +4,6 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import type { LanguageModel } from 'ai'
 import {
   defaultAgentDir,
   loadConfig,
@@ -28,6 +27,7 @@ import {
 } from '../driver/index.ts'
 import { type LocalOptions, local } from '../legacy-channels/index.ts'
 import { usableModel } from '../settings.ts'
+import type { ModelInput } from '../shared/provider-types.ts'
 import {
   createMockModel,
   loadFauxScenario,
@@ -233,7 +233,7 @@ function cliErrorMessage(error: unknown): string {
 }
 
 /** The default model; undefined when nothing is configured (a session resumed with --continue may have a saved model; otherwise startup reports model-selection guidance) */
-async function chooseModel(): Promise<LanguageModel | string | undefined> {
+async function chooseModel(): Promise<ModelInput | undefined> {
   // --model wins over VELA_MODEL (so VELA_RECORD wraps the model --model names)
   if (args.model) return args.model
   // VELA_MODEL=mock: offline demo with the built-in keyword demo model (simulates prompt cache behavior)

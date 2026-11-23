@@ -488,18 +488,8 @@ export class BackgroundJobs implements BackgroundCommands {
     return job.stoppedNotice
   }
 
-  /** The footer's extension status slot: the running jobs and their ids, cleared when none runs. */
-  private syncStatus(): void {
-    const running = [...this.jobs.values()].filter(
-      (job) => job.state === 'running',
-    )
-    this.session.ui.setStatus(
-      'background',
-      running.length === 0
-        ? undefined
-        : `${running.length} background ${running.length === 1 ? 'task' : 'tasks'} · ${running.map((job) => job.id).join(', ')}`,
-    )
-  }
+  /** Kept as a no-op hook until S3b moves background job tracking into Runtime DB. */
+  private syncStatus(): void {}
 
   private job(id: string): Job {
     const job = this.jobs.get(id)

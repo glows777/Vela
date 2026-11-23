@@ -23,7 +23,6 @@ import {
 import type {
   ImageContent,
   ModelMessage,
-  SessionUI,
   ThinkingLevel,
   VelaEvent,
   VelaSession,
@@ -80,7 +79,7 @@ const BUSY =
 
 /**
  * Interactive mode (TUI, like pi's interactive mode): pi-tui provides components and rendering.
- * Layout: header → chat log → queued messages → status line → extension widgets → editor → footer.
+ * Layout: header → chat log → queued messages → status line → editor → footer.
  * The returned Promise resolves on exit.
  */
 export async function runInteractive(
@@ -118,7 +117,6 @@ export class InteractiveMode {
   private readonly pendingBash = new Container()
   private readonly pending = new Container()
   private readonly status = new Container()
-  private readonly widgets = new Container()
   private readonly editorArea = new Container()
   private readonly footer: Footer
   private readonly editor: VelaEditor
@@ -134,7 +132,6 @@ export class InteractiveMode {
   private hideThinking = false
   private lastCtrlC = 0
   private shownError?: unknown
-  private readonly widgetLines = new Map<string, string[]>()
   private dialogs = Promise.resolve()
   private restoreLogs?: () => void
   private readonly cleanups: (() => void)[] = []
@@ -144,30 +141,6 @@ export class InteractiveMode {
   readonly exited = new Promise<void>((resolve) => {
     this.resolveExit = resolve
   })
-
-  private readonly ui: SessionUI = {
-    notify: (message, level = 'info') => this.addNotice(message, level),
-    confirm: async (title, message) =>
-      (await this.select(`${title}\n${message}`, [
-        { value: 'yes', label: 'Yes' },
-        { value: 'no', label: 'No' },
-      ])) === 'yes',
-    select: (title, choices) =>
-      this.select(
-        title,
-        choices.map((choice) => ({ value: choice, label: choice })),
-      ),
-    input: (title, placeholder) => this.input(title, placeholder),
-    setStatus: (key, text) => {
-      this.footer.setStatus(key, text)
-      this.tui.requestRender()
-    },
-    setWidget: (key, lines) => {
-      if (lines?.length) this.widgetLines.set(key, lines)
-      else this.widgetLines.delete(key)
-      this.renderWidgets()
-    },
-  }
 
   constructor(options: InteractiveOptions) {
     this.options = options
@@ -188,7 +161,6 @@ export class InteractiveMode {
       this.pendingBash,
       this.pending,
       this.status,
-      this.widgets,
     ])
       this.transcript.addChild(child)
     this.editorArea.addChild(this.editor)
@@ -287,7 +259,7 @@ export class InteractiveMode {
   // ---------------------------------------------------------------- Sessions
 
   private async openSession(id: string, resume: boolean, startup = false) {
-    const session = this.vela.session(id, { ui: this.ui })
+    const session = this.vela.session(id)
     const { resources, resumed, resumeFailure, setupNext } =
       await prepareInteractiveSession(session, this.options, resume, startup)
     this.session = session
@@ -436,7 +408,7 @@ export class InteractiveMode {
       if (message.role === 'user' || typeof message.content === 'string')
         continue
       for (const part of message.content) {
-        if (part.type !== 'tool-result') continue
+        if (part.type !== 'tool_result') continue
         const block = this.tools.get(part.toolCallId)
         if (!block) continue
         for (const call of entry.nestedCalls?.[part.toolCallId]?.calls ?? []) {
@@ -628,9 +600,9 @@ export class InteractiveMode {
       }
       for (const part of message.content) {
         if (part.type === 'text') this.assistant().appendText(part.text)
-        else if (part.type === 'reasoning')
+        else if (part.type === 'thinking')
           this.assistant().appendThinking(part.text)
-        else if (part.type === 'tool-call') {
+        else if (part.type === 'tool_call') {
           this.current = undefined
           this.addTool(part.toolCallId, part.toolName, part.input)
         }
@@ -771,13 +743,6 @@ export class InteractiveMode {
         0,
       ),
     )
-  }
-
-  private renderWidgets(): void {
-    this.widgets.clear()
-    for (const lines of this.widgetLines.values())
-      this.widgets.addChild(new Text(lines.join('\n'), 1, 0))
-    this.tui.requestRender()
   }
 
   private updateBorder(): void {

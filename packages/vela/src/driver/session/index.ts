@@ -283,7 +283,7 @@ export class SessionStore {
     )) {
       if (entry.type !== 'message' || entry.message.role !== 'tool') continue
       for (const part of entry.message.content) {
-        if (part.type !== 'tool-result' || part.toolName !== 'tool_search')
+        if (part.type !== 'tool_result' || part.toolName !== 'tool_search')
           continue
         if (part.output.type === 'text') {
           const path = part.output.value.match(

@@ -1,21 +1,24 @@
-import { APICallError } from '@ai-sdk/provider'
-import { type AssistantModelMessage, type LanguageModel, streamText } from 'ai'
 import {
-  describeModel,
-  type HostedToolModel,
-} from '../../providers/models/index.ts'
+  inspectProviderApiError,
+  type ProviderStepFinal,
+  resolveProviderTools,
+  streamProviderStep,
+} from '../../providers/index.ts'
+import { describeModel } from '../../providers/models/index.ts'
 import { resolveLimits, type VelaLimits } from '../../shared/limits.ts'
+import type {
+  ModelInput,
+  ReasoningOption,
+} from '../../shared/provider-types.ts'
 import {
   contextRequestTokens,
   createRequestSnapshot,
   type RequestSnapshot,
 } from '../context/request.ts'
-import { type ModelMessage, toModelMessages } from '../messages.ts'
+import type { AssistantModelMessage, ModelMessage } from '../messages.ts'
 import { getStoredResult } from '../session/tool-results.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
-import { withPromptCache } from './cache.ts'
-import { checkpointMessage } from './checkpoint.ts'
 import type { VelaEvent, VelaEventListener } from './events.ts'
 import { LoopDetector } from './loop-detection.ts'
 import { isContextOverflow } from './overflow.ts'
@@ -35,17 +38,8 @@ import {
   truncatedToolCallResult,
 } from './step.ts'
 
-type ReasoningOption =
-  | 'none'
-  | 'minimal'
-  | 'low'
-  | 'medium'
-  | 'high'
-  | 'xhigh'
-  | 'max'
-
 interface AgentLoopParameter {
-  model: LanguageModel
+  model: ModelInput
   systemPrompt: string | (() => string)
   toolRegistry: ToolRegistry
   messages: ModelMessage[]
@@ -184,39 +178,37 @@ export const agentLoop = async ({
 
       // Prepare context before every actual model request, including tool continuations.
       const requestReasoning = currentReasoning()
-      const hostedTools =
-        typeof model === 'string'
-          ? {}
-          : ((await (model as HostedToolModel).hostedTools?.({
-              reasoning: requestReasoning,
-            })) ?? {})
-      const request = await createRequestSnapshot(
+      let checkpointFailure: { error: unknown } | undefined
+      const resolvedTools = await resolveProviderTools(
+        model,
+        toolRegistry.toProviderTools(),
+        {
+          reasoning: requestReasoning,
+          wrapExecute:
+            onCheckpoint || isDraining
+              ? (execute) => async (input, options) => {
+                  if (isDraining?.())
+                    throw new Error(
+                      'Tool was not executed because the session is shutting down.',
+                    )
+                  // SDK lifecycle callbacks swallow errors. Check again at the actual
+                  // execution boundary so a failed flush cannot authorize side effects.
+                  if (checkpointFailure)
+                    throw new Error(
+                      `Tool was not executed because its checkpoint could not be saved: ${errorMessageOf(checkpointFailure.error)}`,
+                    )
+                  return execute(input, options)
+                }
+              : undefined,
+        },
+      )
+      const request = createRequestSnapshot(
         model,
         currentSystem(),
-        toolRegistry.toAISDKFormat(hostedTools),
+        resolvedTools,
         messages,
         abortSignal,
       )
-      let checkpointFailure: { error: unknown } | undefined
-      if (onCheckpoint || isDraining) {
-        for (const tool of Object.values(request.tools)) {
-          const execute = tool.execute
-          if (!execute) continue
-          tool.execute = async (input, options) => {
-            if (isDraining?.())
-              throw new Error(
-                'Tool was not executed because the session is shutting down.',
-              )
-            // SDK lifecycle callbacks swallow errors. Check again at the actual
-            // execution boundary so a failed flush cannot authorize side effects.
-            if (checkpointFailure)
-              throw new Error(
-                `Tool was not executed because its checkpoint could not be saved: ${errorMessageOf(checkpointFailure.error)}`,
-              )
-            return execute(input, options)
-          }
-        }
-      }
       await prepareContext?.(request)
       abortSignal?.throwIfAborted()
       const inferenceSystem = currentSystem()
@@ -227,9 +219,7 @@ export const agentLoop = async ({
       let shouldBreak = false
       const sources = new Map<string, string>()
       let loopWarning: string | undefined
-      let finalStep:
-        | Awaited<ReturnType<typeof streamText>['finalStep']>
-        | undefined
+      let finalStep: ProviderStepFinal | undefined
       let step!: StepMessage
       let sourcesShown = false
       const showSources = () => {
@@ -286,65 +276,49 @@ export const agentLoop = async ({
         shouldBreak = false
         loopWarning = undefined
         try {
-          const modelMessages = toModelMessages(
-            requestMessages,
-            supportsImages,
-            typeof model !== 'string' && model.provider.endsWith('.chat'),
+          const preparedMessages: ModelMessage[] = requestMessages.map(
+            (message) => {
+              if (message.role !== 'tool') return message
+              return {
+                ...message,
+                content: message.content.map((part) => {
+                  const stored = getStoredResult(part.output)
+                  if (!stored) return part
+                  return {
+                    ...part,
+                    output: {
+                      type: 'text' as const,
+                      value:
+                        stored.preview.includes(
+                          '[tool result preview omitted; original available at path]',
+                        ) || stored.preview.includes('[preview: first ')
+                          ? `${stored.preview}\n\n[Full output: ${stored.path}; use read_file with offset to read the rest.]`
+                          : stored.preview,
+                    },
+                  }
+                }),
+              }
+            },
           )
-          for (const message of modelMessages) {
-            if (message.role !== 'tool') continue
-            for (const part of message.content) {
-              if (part.type !== 'tool-result') continue
-              const stored = getStoredResult(part.output)
-              if (stored)
-                part.output = {
-                  type: 'text',
-                  value:
-                    stored.preview.includes(
-                      '[tool result preview omitted; original available at path]',
-                    ) || stored.preview.includes('[preview: first ')
-                      ? `${stored.preview}\n\n[Full output: ${stored.path}; use read_file with offset to read the rest.]`
-                      : stored.preview,
-                }
-            }
-          }
           checkDrain()
-          const result = streamText({
+          const result = streamProviderStep({
             model,
-            // Messages are copied here, so compaction or an abort never sees cache markers in history
-            ...withPromptCache({
-              system: inferenceSystem,
-              tools: request.tools,
-              messages: modelMessages,
-            }),
-            maxRetries: 0, // No retries inside streamText; the loop below handles retries
-            ...(requestReasoning ? { reasoning: requestReasoning } : {}),
+            system: inferenceSystem,
+            messages: preparedMessages,
+            tools: request.tools,
+            supportsImages,
+            reasoning: requestReasoning,
             abortSignal,
-            // Errors are thrown in the 'error' branch below and reported via events, not printed by the SDK
-            onError: () => {},
-            // The model finished (tools run only after this): its tool calls tell when the message is complete
-            onLanguageModelCallEnd: async (event) => {
-              current.modelFinished(
-                event.finishReason,
-                event.content.flatMap((part) =>
-                  part.type === 'tool-call' ? [part.toolCallId] : [],
-                ),
-              )
+            onModelCallEnd: async (event) => {
+              current.modelFinished(event.finishReason, event.toolCallIds)
               if (
                 onCheckpoint &&
                 (event.finishReason === 'stop' ||
                   event.finishReason === 'tool-calls') &&
-                event.content.some(
-                  (part) => part.type === 'tool-call' && !part.providerExecuted,
-                )
+                event.hasClientToolCalls
               ) {
-                // The SDK awaits this hook before executing client tools. StreamMessage can
-                // still lag behind it, so use the complete normalized model response here.
                 try {
-                  const assistant = await checkpointMessage(
-                    event,
-                    request.tools,
-                  )
+                  const assistant = await event.buildCheckpoint()
                   checkpoints.set(current, assistant)
                   add(assistant, false)
                   await onCheckpoint()
@@ -466,7 +440,7 @@ export const agentLoop = async ({
             }
           }
 
-          finalStep = await result.finalStep
+          finalStep = await result.getFinalStep()
           if (checkpointFailure) throw checkpointFailure.error
           abortSignal?.throwIfAborted()
           if (retried)
@@ -504,14 +478,14 @@ export const agentLoop = async ({
           const canResend =
             !step.toolsStarted &&
             !checkpoints.has(step) &&
-            !Object.values(request.tools).some(
-              (tool) => tool.type === 'provider',
-            )
+            !request.tools.hasHostedTools
+          const apiError = inspectProviderApiError(error)
           if (
             (canResend ||
               (!step.toolsStarted &&
-                APICallError.isInstance(error) &&
-                (error.statusCode === 400 || error.statusCode === 413))) &&
+                apiError &&
+                (apiError.statusCode === 400 ||
+                  apiError.statusCode === 413))) &&
             !compactedForOverflow &&
             compactOnOverflow &&
             isContextOverflow(error)
@@ -598,14 +572,14 @@ export const agentLoop = async ({
       // so the history must keep each call paired with its result
       // The SDK's response converts tool images to provider edge shapes. Keep canonical
       // tool content from the execution stream in history (also used on interrupted steps).
-      const responseMessages: ModelMessage[] = finalStep.response.messages.map(
+      const responseMessages: ModelMessage[] = finalStep.messages.map(
         (message) =>
           message.role !== 'tool'
             ? message
             : {
                 ...message,
                 content: message.content.map((part) =>
-                  part.type === 'tool-result'
+                  part.type === 'tool_result'
                     ? (step.results.get(part.toolCallId) ?? part)
                     : part,
                 ),
@@ -751,7 +725,7 @@ export const agentLoop = async ({
     let assistant = checkpoint ?? step.snapshot({ complete: step.complete })
     if (checkpoint && Array.isArray(checkpoint.content)) {
       for (const call of checkpoint.content) {
-        if (call.type !== 'tool-call' || call.providerExecuted) continue
+        if (call.type !== 'tool_call' || call.providerExecuted) continue
         if (
           !step.toolCalls.some((known) => known.toolCallId === call.toolCallId)
         )
@@ -767,7 +741,7 @@ export const agentLoop = async ({
       assistant = {
         ...assistant,
         content: assistant.content.flatMap((part) => {
-          if (part.type !== 'tool-call' || !ids.has(part.toolCallId))
+          if (part.type !== 'tool_call' || !ids.has(part.toolCallId))
             return [part]
           const detail = JSON.stringify(
             step.results.get(part.toolCallId)?.output,

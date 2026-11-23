@@ -55,7 +55,7 @@ try {
   await session.prompt('Read picture.txt as an image.')
   const output = session.messages
     .flatMap((message) => (message.role === 'tool' ? message.content : []))
-    .find((part) => part.type === 'tool-result')?.output
+    .find((part) => part.type === 'tool_result')?.output
   const image =
     output?.type === 'content'
       ? output.value.find((part) => part.type === 'image')

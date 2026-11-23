@@ -8,14 +8,12 @@ import {
 } from 'node:fs'
 import { basename, join } from 'node:path'
 import { Readable } from 'node:stream'
-import type {
-  LanguageModelV4FilePart,
-  LanguageModelV4Prompt,
-} from '@ai-sdk/provider'
+import type { LanguageModelV4FilePart } from '@ai-sdk/provider'
 import type { VelaExtension, VelaLogger } from '@glows777/vela'
 import { z } from 'zod'
 import { lark } from '../../packages/vela/src/lark/index.ts'
 import {
+  type FauxPromptMessage,
   fauxError,
   fauxText,
   fauxToolCall,
@@ -31,12 +29,14 @@ afterEach(async () => {
 const png = readFileSync(
   new URL('../fixtures/images/blue.png', import.meta.url),
 )
-const imageParts = (prompt: LanguageModelV4Prompt) =>
+const imageParts = (prompt: FauxPromptMessage[]) =>
   prompt.flatMap((m) =>
     m.role === 'user'
       ? m.content.filter(
           (p): p is LanguageModelV4FilePart =>
-            p.type === 'file' && p.mediaType.startsWith('image/'),
+            p.type === 'file' &&
+            typeof p.mediaType === 'string' &&
+            p.mediaType.startsWith('image/'),
         )
       : [],
   )

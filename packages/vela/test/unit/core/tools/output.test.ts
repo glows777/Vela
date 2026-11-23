@@ -2,11 +2,11 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ModelMessage } from 'ai'
-import { generateText, stepCountIs } from 'ai'
+import { generateText, type LanguageModel, stepCountIs } from 'ai'
 import z from 'zod'
 import { summarize } from '../../../../src/driver/context/compressor.ts'
 import { createRequestSnapshot } from '../../../../src/driver/context/request.ts'
+import type { ModelMessage } from '../../../../src/driver/messages.ts'
 import { SessionStore } from '../../../../src/driver/session/index.ts'
 import {
   getStoredResult,
@@ -17,6 +17,7 @@ import { ToolRegistry } from '../../../../src/driver/tools/registry.ts'
 import { createBashTool } from '../../../../src/driver/tools/shell.ts'
 import { ToolExecutionResult } from '../../../../src/driver/tools/types.ts'
 import { TokenTracker } from '../../../../src/driver/usage/tracker.ts'
+import { resolveProviderTools } from '../../../../src/providers/index.ts'
 import {
   createFauxModel,
   fauxSummary,
@@ -25,6 +26,9 @@ import {
 } from '../../../../src/testing/core/faux.ts'
 import { createTestBashTool, testBashTool } from '../../../support/bash.ts'
 
+const EMPTY_TOOLS = { sdkTools: {}, toolDefinitions: [], hasHostedTools: false }
+const sdkTools = (r: ToolRegistry) =>
+  Object.fromEntries(r.toProviderTools().map((t) => [t.name, t]))
 const dir = mkdtempSync(join(tmpdir(), 'vela-output-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 const posixTest = process.platform === 'win32' ? test.skip : test
@@ -42,16 +46,13 @@ test('oversized result is saved before returning a preview and can be read throu
     },
     readFileTool,
   )
-  const tools = registry.toAISDKFormat()
-  const result = await tools.large!.execute!(
-    {},
-    { toolCallId: 'large', messages: [], context: {} },
-  )
+  const tools = sdkTools(registry)
+  const result = await tools.large!.execute!({}, { toolCallId: 'large' })
   const path = String(result).match(/Full output: (.+?);/)![1]!
   expect(await Bun.file(path).text()).toBe(raw)
   const page = await tools.read_file!.execute!(
     { path, offset: 1001, limit: 1 },
-    { toolCallId: 'read', messages: [], context: {} },
+    { toolCallId: 'read' },
   )
   expect(String(page)).toContain('MIDDLE_EVIDENCE')
   expect(String(page)).toContain('offset=1002')
@@ -87,9 +88,9 @@ test('storage failure returns a bounded warning without an unreadable reference'
     inputSchema: z.object({}),
     execute: async () => 'x'.repeat(60_000),
   })
-  const output = await registry.toAISDKFormat().large!.execute!(
+  const output = await sdkTools(registry).large!.execute!(
     {},
-    { toolCallId: 'fail', messages: [], context: {} },
+    { toolCallId: 'fail' },
   )
   expect(output).toContain('could not be saved')
   expect(output).not.toContain('Full output:')
@@ -102,12 +103,12 @@ test('real Bash captures large stdout and stderr with exit status and a bounded 
   )
   registry.register(testBashTool)
   // Like pi, a non-zero exit is an error result: the error text is the bounded tail plus the status
-  const error = await registry.toAISDKFormat().bash!.execute!(
+  const error = await sdkTools(registry).bash!.execute!(
     {
       command:
         "printf 'STDERR_EVIDENCE\\n' >&2; for ((i=0;i<15000;i++)); do printf '日志😀-%s\\n' \"$i\"; done; exit 7",
     },
-    { toolCallId: 'bash', messages: [], context: {} },
+    { toolCallId: 'bash' },
   ).then(
     () => {
       throw new Error('expected an error result')
@@ -141,10 +142,7 @@ test('small results stay inline and invalid read cursors fail clearly', async ()
     execute: async () => 'small',
   })
   expect(
-    await registry.toAISDKFormat().small!.execute!(
-      {},
-      { toolCallId: 'small', messages: [], context: {} },
-    ),
+    await sdkTools(registry).small!.execute!({}, { toolCallId: 'small' }),
   ).toBe('small')
   const records = (await Bun.file(results.indexPath).text())
     .trim()
@@ -177,7 +175,7 @@ test('summary keeps a readable index even if the summarizer omits every file ref
       role: 'tool',
       content: [
         {
-          type: 'tool-result',
+          type: 'tool_result',
           toolName: 'bash',
           toolCallId: 'summary',
           output: { type: 'text', value: 'SUMMARY_EVIDENCE' },
@@ -190,7 +188,7 @@ test('summary keeps a readable index even if the summarizer omits every file ref
     ),
   ]
   const compacted = await summarize(
-    await createRequestSnapshot(model, 'stable', {}, history),
+    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, history),
     summaryStore,
     new TokenTracker(),
   )
@@ -215,7 +213,7 @@ test('summary keeps a readable index even if the summarizer omits every file ref
   await store.flush()
   expect((await store.loadSaved())?.summary).toContain('/snapshots/through-')
   const repeated = await summarize(
-    await createRequestSnapshot(model, 'stable', {}, [
+    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, [
       ...compacted.messages,
       ...Array.from(
         { length: 6 },
@@ -259,10 +257,11 @@ test('AI SDK passes the saved reference to the next step and accepts a paged fol
       },
     ],
   })
+  const resolved = await resolveProviderTools(model, registry.toProviderTools())
   const result = await generateText({
-    model,
+    model: model as unknown as LanguageModel,
     prompt: 'Find the middle evidence',
-    tools: registry.toAISDKFormat(),
+    tools: resolved.sdkTools,
     stopWhen: stepCountIs(3),
   })
   expect(model.calls).toHaveLength(3)

@@ -3,8 +3,9 @@ import { mkdir, readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LanguageModelV4, LanguageModelV4Usage } from '@ai-sdk/provider'
-import { type LanguageModel, wrapLanguageModel } from 'ai'
+import { wrapLanguageModel } from 'ai'
 import type { VelaEvent } from '../../packages/vela/src/driver/index.ts'
+import type { ModelInput } from '../../packages/vela/src/shared/provider-types.ts'
 import {
   type Call,
   chars,
@@ -90,7 +91,7 @@ export async function command(
 export async function runAttempt(
   config: WorkerConfig,
   apiKey?: string,
-  injectedModel?: LanguageModel,
+  injectedModel?: ModelInput,
 ): Promise<Attempt> {
   const started = performance.now()
   const evidence: Evidence = {
@@ -149,7 +150,7 @@ export async function runAttempt(
     usage.unknown++
     void checkpoint()
   }
-  const wrap = (model: LanguageModel) =>
+  const wrap = (model: ModelInput) =>
     wrapLanguageModel({
       model: model as LanguageModelV4,
       middleware: {

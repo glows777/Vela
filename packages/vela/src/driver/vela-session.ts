@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import type { LanguageModel } from 'ai'
+import { withProviderHooks } from '../providers/index.ts'
 import { supportedThinkingLevels } from '../providers/models/catalog.ts'
 import {
   limitsForModel,
@@ -10,6 +10,7 @@ import {
   type ThinkingLevel,
 } from '../providers/models/index.ts'
 import type { VelaLimits } from '../shared/limits.ts'
+import type { ModelInput } from '../shared/provider-types.ts'
 import type {
   CustomMessage,
   CustomMessageInfo,
@@ -21,8 +22,8 @@ import { canSummarize } from './context/compressor.ts'
 import { estimateMessageTokens } from './context/defense.ts'
 import { ContextManager } from './context/manager.ts'
 import {
-  createRequestSnapshot,
   type RequestSnapshot,
+  resolveRequestSnapshot,
 } from './context/request.ts'
 import { abortable, resolveLocation } from './execution/location.ts'
 import type { ExecutionLocation } from './execution/types.ts'
@@ -30,8 +31,6 @@ import type {
   BeforeAgentStartResult,
   InputSource,
 } from './extensions/events.ts'
-import { withProviderHooks } from './extensions/provider-hooks.ts'
-import { type ExtensionUI, headlessUI, withDefaults } from './extensions/ui.ts'
 import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
 import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
 import {
@@ -58,9 +57,10 @@ import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
 import { NestedCallLog, takeToolDetails } from './session/nested-calls.ts'
 import type {
+  InternalSessionOptions,
   PromptOptions,
   SendMessageOptions,
-  SessionOptions,
+  SessionHost,
   SessionUsage,
 } from './session/options.ts'
 import {
@@ -186,10 +186,6 @@ export class VelaSession {
   readonly busy: { locked: boolean; controller?: AbortController } = {
     locked: false,
   }
-  /** @internal UI for extensions */
-  readonly ui: ExtensionUI
-  /** Whether this session has a real UI (idle channel cleanup must preserve it). */
-  readonly hasUI: boolean
 
   private readonly listeners = new Set<VelaEventListener>()
   /** Calls tools made through ctx.executeTool(), recorded on their caller's tool result (like pi's nestedCalls) */
@@ -200,7 +196,7 @@ export class VelaSession {
   private readonly builder: SystemPromptBuilder
   private readonly deps: SessionDeps
   /** Options the session was opened with (a fork opens with the same) */
-  private readonly options: SessionOptions
+  private readonly options: InternalSessionOptions
   private closed = false
   private draining = false
   private drained?: Promise<void>
@@ -216,7 +212,11 @@ export class VelaSession {
   followUpMode: QueueMode = 'one-at-a-time'
 
   /** @internal Created by vela.session() */
-  constructor(id: string, deps: SessionDeps, options: SessionOptions = {}) {
+  constructor(
+    id: string,
+    deps: SessionDeps,
+    options: InternalSessionOptions = {},
+  ) {
     assertSessionId(id)
     this.id = id
     this.position = resolveLocation(options.location, deps.cwd, options.cwd)
@@ -241,8 +241,6 @@ export class VelaSession {
       this.location,
       () => deps.onSaved(id),
     )
-    this.hasUI = options.ui !== undefined
-    this.ui = options.ui ? withDefaults(options.ui) : headlessUI(this.emit)
     this.registry = deps.registry.fork(this.store.results, {
       onEvent: this.emit,
       sessionId: id,
@@ -331,7 +329,12 @@ export class VelaSession {
     this.tracker.setModel(window, resolved.info.cost)
   }
 
-  private requestModel(): LanguageModel {
+  /** Emit a notification event on this session's event stream. */
+  notify(message: string, level: 'info' | 'warning' | 'error' = 'info'): void {
+    this.emit({ type: 'notify', message, level })
+  }
+
+  private requestModel(): ModelInput {
     this.defaults.hooked ??= withProviderHooks(this.model, {
       has: (event, toolName) =>
         this.deps.extensions.hasHandlers(event, toolName),
@@ -348,8 +351,8 @@ export class VelaSession {
     return this.defaults.hooked
   }
 
-  /** Current model (AI SDK LanguageModel). Throws if the name cannot be resolved. */
-  get model(): LanguageModel {
+  /** Current model handle. Throws if the name cannot be resolved. */
+  get model(): ModelInput {
     return this.resolveModel().model
   }
 
@@ -359,16 +362,16 @@ export class VelaSession {
   }
 
   /**
-   * Switches the model (like pi's setModel): `provider/id` or LanguageModel, effective from the next prompt().
+   * Switches the model (like pi's setModel): `provider/id` or `ModelHandle`, effective from the next prompt().
    * Compaction thresholds are recomputed from the new model's context window. Throws and keeps the
    * current model if the name cannot be resolved. A model chosen by name is appended to the session (`model_change`).
    */
-  setModel(model: string | LanguageModel): void {
+  setModel(model: ModelInput): void {
     this.selectModel(model, true)
     this.defaults.modelPinned = true
   }
 
-  private selectModel(model: string | LanguageModel, record: boolean): void {
+  private selectModel(model: ModelInput, record: boolean): void {
     const resolved = this.deps.resolveModel(model, this)
     const thinking = this.thinkingLevel
     this.defaults.modelChoice = model
@@ -428,7 +431,7 @@ export class VelaSession {
   }
 
   /** @internal The host's queue for results produced outside a turn (channels bind it at open). */
-  get host(): SessionOptions['host'] {
+  get host(): SessionHost | undefined {
     return routing.sessionHost(this)
   }
   /** @internal Work outside a turn; idle cleanup keeps the session open while it runs. */
@@ -729,14 +732,7 @@ export class VelaSession {
       if (id && ancestorIds.has(id)) start = index + 1
     })
     if (start >= this.messages.length) return
-    const request = await createRequestSnapshot(
-      this.model,
-      this.buildSystem(),
-      this.registry.toAISDKFormat(),
-      this.messages,
-      signal,
-    )
-    request.maxOutputTokens = this.modelInfo.maxTokens
+    const request = await this.buildSnapshot(this.model, signal)
     return this.contextManager.summarizeBranch(request, start, focus)
   }
 
@@ -1384,19 +1380,21 @@ export class VelaSession {
     })
   }
 
-  private async compactionRequest(
-    signal?: AbortSignal,
-  ): Promise<RequestSnapshot> {
-    const request = await createRequestSnapshot(
-      this.requestModel(),
+  private buildSnapshot(model: ModelInput, signal?: AbortSignal) {
+    return resolveRequestSnapshot(
+      model,
       this.buildSystem(),
-      this.registry.toAISDKFormat(),
+      this.registry.toProviderTools(),
       this.messages,
       signal,
+      this.modelInfo.maxTokens,
     )
+  }
+
+  private async compactionRequest(signal?: AbortSignal) {
+    const request = await this.buildSnapshot(this.requestModel(), signal)
     if (!canSummarize(request.messages))
       throw new Error('Nothing to compact (session too small)')
-    request.maxOutputTokens = this.modelInfo.maxTokens
     return request
   }
 
