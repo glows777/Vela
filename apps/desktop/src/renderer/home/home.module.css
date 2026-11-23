@@ -251,47 +251,6 @@
   white-space: nowrap;
 }
 
-.pickerWrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.pickerDot {
-  position: absolute;
-  left: 10px;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--vela-radius-round);
-  background: var(--vela-live);
-  pointer-events: none;
-}
-
-.picker {
-  min-height: var(--vela-control-sm);
-  padding: 0 26px 0 22px;
-  border: 1px solid var(--vela-paper-edge);
-  border-radius: var(--vela-radius-md);
-  background: var(--vela-white);
-  color: var(--vela-ink);
-  font-size: var(--vela-text-sm);
-  font-weight: 500;
-  appearance: none;
-  cursor: pointer;
-}
-
-.picker:hover {
-  border-color: var(--vela-border-strong);
-  background: var(--vela-menu-hover);
-}
-
-.pickerChevron {
-  position: absolute;
-  right: 8px;
-  color: var(--vela-muted);
-  pointer-events: none;
-}
-
 .error {
   margin: 0;
   color: var(--vela-accent-ink);

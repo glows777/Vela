@@ -1,13 +1,16 @@
 import { useState } from 'react'
-import type {
-  ModelSetup,
-  ProviderApi,
-  SettingsState,
+import {
+  type ModelSetup,
+  type ProviderApi,
+  type SettingsState,
+  THINKING_LEVELS,
+  type ThinkingLevel,
 } from '../../shared/bridge.ts'
-import { Field, Input, Select } from '../components/field.tsx'
+import { Field, Input } from '../components/field.tsx'
 import { fileName, providerOf } from '../format.ts'
 import { errorMessage, saveModel } from '../store.ts'
 import { Button } from '../ui/button.tsx'
+import { Select } from '../ui/select.tsx'
 import styles from './model-form.module.css'
 
 /** The select value for a provider models.json doesn't define yet. */
@@ -60,12 +63,15 @@ export function ModelForm({
   const [api, setApi] = useState<ProviderApi>('openai-completions')
   const [baseUrl, setBaseUrl] = useState('')
   const [model, setModel] = useState(initial.model)
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel | ''>('')
   const [key, setKey] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
 
   const custom = provider === CUSTOM
   const chosen = settings.providers.find((item) => item.name === provider)
+  const canThink =
+    chosen?.models.find((item) => item.id === model)?.reasoning !== false
   const providerName = custom ? name.trim() : provider
   const needsKey = custom || !chosen?.credential
   const canSubmit =
@@ -93,6 +99,7 @@ export function ModelForm({
     const input: ModelSetup = {
       provider: providerName,
       model: model.trim(),
+      ...(canThink && thinkingLevel ? { thinkingLevel } : {}),
       ...(key.trim() ? { key: key.trim() } : {}),
       ...(custom ? { custom: { api, baseUrl: baseUrl.trim() } } : {}),
     }
@@ -112,17 +119,17 @@ export function ModelForm({
       <Field label="Provider" htmlFor="model-provider">
         <Select
           id="model-provider"
+          label="Provider"
           value={provider}
-          onChange={(event) => pickProvider(event.target.value)}
-        >
-          {settings.providers.map((item) => (
-            <option key={item.name} value={item.name}>
-              {item.name}
-              {item.credential ? '' : ' (no key)'}
-            </option>
-          ))}
-          <option value={CUSTOM}>Custom provider</option>
-        </Select>
+          onChange={pickProvider}
+          options={[
+            ...settings.providers.map((item) => ({
+              value: item.name,
+              label: item.credential ? item.name : `${item.name} (no key)`,
+            })),
+            { value: CUSTOM, label: 'Custom provider' },
+          ]}
+        />
       </Field>
       {custom ? (
         <>
@@ -142,15 +149,11 @@ export function ModelForm({
           <Field label="Protocol" htmlFor="model-api">
             <Select
               id="model-api"
+              label="Protocol"
               value={api}
-              onChange={(event) => setApi(event.target.value as ProviderApi)}
-            >
-              {APIS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </Select>
+              onChange={setApi}
+              options={APIS}
+            />
           </Field>
           <Field
             label="Base URL"
@@ -204,17 +207,38 @@ export function ModelForm({
         <Field label="Model" htmlFor="model-id">
           <Select
             id="model-id"
+            label="Model"
             value={model}
-            onChange={(event) => setModel(event.target.value)}
-          >
-            {chosen.models.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.id}
-              </option>
-            ))}
-          </Select>
+            onChange={setModel}
+            options={chosen.models.map(({ id }) => ({ value: id, label: id }))}
+          />
         </Field>
       )}
+      {!settings.setup.required ? (
+        <Field
+          label="Thinking level"
+          htmlFor="model-thinking"
+          note={canThink ? undefined : 'This model does not support reasoning.'}
+        >
+          <Select
+            id="model-thinking"
+            label="Thinking level"
+            value={canThink ? thinkingLevel : ''}
+            onChange={setThinkingLevel}
+            disabled={!canThink}
+            options={[
+              { value: '', label: 'Keep current' },
+              ...THINKING_LEVELS.map((level) => ({
+                value: level,
+                label:
+                  level === 'xhigh'
+                    ? 'Extra high'
+                    : level[0]!.toUpperCase() + level.slice(1),
+              })),
+            ]}
+          />
+        </Field>
+      ) : null}
       {error ? (
         <p className={styles.error} role="alert">
           {error}

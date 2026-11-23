@@ -85,7 +85,7 @@ export type SettingsState = {
   }
   /** The saved default model, `provider/id`. */
   model?: string
-  thinkingLevel?: string
+  thinkingLevel?: ThinkingLevel | 'max'
   lark: {
     appId: string
     appSecretSaved: boolean
@@ -105,12 +105,23 @@ export type ProviderApi =
   | 'openai-completions'
   | 'openai-responses'
   | 'anthropic-messages'
+export const THINKING_LEVELS = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
 /** A provider and model to check and then save. */
 export type ModelSetup = {
   provider: string
   model: string
   /** A new API key; absent keeps the saved one. */
   key?: string
+  /** Absent keeps the saved default. */
+  thinkingLevel?: ThinkingLevel
   /** A provider that models.json doesn't define yet; saved with this model. */
   custom?: { api: ProviderApi; baseUrl: string }
 }

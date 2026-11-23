@@ -59,7 +59,21 @@ const larkScenario = resolve(scratch, 'lark-faux.json')
 const larkOffScenario = resolve(scratch, 'lark-off-faux.json')
 /** The fake Lark's seed history and the person's scripted messages. */
 const larkDir = resolve(scratch, 'lark')
+async function pick(
+  page: Page,
+  trigger: ReturnType<Page['getByRole']>,
+  label: string,
+) {
+  await trigger.click()
+  await page
+    .getByRole('listbox')
+    .getByRole('option', { name: label, exact: true })
+    .click()
+  assert.equal(await page.locator('select').count(), 0)
+}
+
 const larkProject = 'oc_alpha'
+const reasoningModel = 'gpt-5.4'
 /** A second enabled group, for the history gap a long disconnect leaves. */
 const gapProject = 'oc_gap'
 /** A third, busy group: routine live messages must not reset paging. */
@@ -625,8 +639,10 @@ const journeyOne = async (page: Page, app?: ElectronApplication) => {
   await waitForIdle(page, alphaProject.sessionId)
   await page.getByRole('button', { name: 'Home', exact: true }).click()
   assert.equal(
-    await page.getByLabel('Project', { exact: true }).inputValue(),
-    alphaProject.id,
+    await page
+      .getByRole('combobox', { name: 'Project', exact: true })
+      .textContent(),
+    'Alpha · Local',
     'Home starts on the project used last',
   )
   const homeComposer = page.getByLabel('Message Vela', { exact: true })
@@ -1325,8 +1341,11 @@ const journeyFive = async (page: Page) => {
   await dialog.getByLabel('What Vela should do').fill('Review the report')
   await dialog.getByLabel('Date').fill(twoDays.date)
   await dialog.getByLabel('Time').fill('09:00')
-  const where = dialog.getByLabel('Where')
-  const places = await where.locator('option').allTextContents()
+  const where = dialog.getByRole('combobox', { name: 'Where', exact: true })
+  await where.press('ArrowDown')
+  const listbox = page.getByRole('listbox')
+  await listbox.waitFor()
+  const places = await listbox.getByRole('option').allTextContents()
   for (const label of [
     'Alpha · the project chat',
     'Alpha · topic “Fix the retry backoff”',
@@ -1341,7 +1360,11 @@ const journeyFive = async (page: Page) => {
     !places.some((label) => label.startsWith('Gamma')),
     'A project with no message is not a place to answer',
   )
-  await where.selectOption({ label: 'Alpha · the project chat' })
+  await where.press('Escape')
+  await listbox.waitFor({ state: 'hidden' })
+  assert(await dialog.isVisible(), 'Escape closes only the listbox')
+  assert(await where.evaluate((node) => node === document.activeElement))
+  await pick(page, where, 'Alpha · the project chat')
   await dialog.getByRole('button', { name: 'Create routine' }).click()
   await dialog.waitFor({ state: 'hidden' })
 
@@ -1393,9 +1416,23 @@ const journeyFive = async (page: Page) => {
   await dialog.getByRole('button', { name: 'Repeat' }).click()
   await dialog.getByLabel('Time').fill(localTime(3 * 3_600_000).time)
   await snapshot(page, 'journey-5-repeat')
-  await dialog
-    .getByLabel('Where')
-    .selectOption({ label: 'Alpha · topic “Fix the retry backoff”' })
+  await where.press('Home')
+  const target = 'Alpha · topic “Fix the retry backoff”'
+  const options = listbox.getByRole('option')
+  await listbox.waitFor()
+  const index = (await options.allTextContents()).indexOf(target)
+  assert(index >= 0)
+  for (let step = 0; step < index; step += 1) await where.press('ArrowDown')
+  assert.equal(
+    await where.getAttribute('aria-activedescendant'),
+    await options.nth(index).getAttribute('id'),
+  )
+  await where.press('Enter')
+  await listbox.waitFor({ state: 'hidden' })
+  assert(
+    await dialog.isVisible(),
+    'Choosing with Enter does not create the routine',
+  )
   await dialog.getByRole('button', { name: 'Create routine' }).click()
   await dialog.waitFor({ state: 'hidden' })
 
@@ -1414,15 +1451,31 @@ const journeyFive = async (page: Page) => {
     'A routine can answer in a topic, named the way the host names it.',
   )
 
-  await alphaGroup
-    .getByRole('button', { name: 'Delete routine: Review the report' })
+  const deleteRoutine = alphaGroup.getByRole('button', {
+    name: 'Delete routine: Review the report',
+  })
+  await deleteRoutine.click()
+  const cancelDelete = dialog.getByRole('button', {
+    name: 'Cancel',
+    exact: true,
+  })
+  await cancelDelete.waitFor()
+  assert(await cancelDelete.evaluate((node) => node === document.activeElement))
+  await cancelDelete.click()
+  await dialog.waitFor({ state: 'hidden' })
+  assert.equal((await routinesIn(page, alpha.id)).routines.length, 2)
+  await deleteRoutine.click()
+  await dialog
+    .getByRole('button', { name: 'Delete routine', exact: true })
     .click()
   await alphaGroup
     .getByText('Review the report', { exact: true })
     .waitFor({ state: 'detached' })
   await alphaGroup.getByText('Check the CI log', { exact: true }).waitFor()
   assert.equal((await routinesIn(page, alpha.id)).routines.length, 1)
-  checks.push('Cancel removes the routine and leaves the other one.')
+  checks.push(
+    'Cancel preserves the routine; confirming deletion removes it and leaves the other one.',
+  )
 
   // A real rejection: yesterday's 09:00 is in the past, so the host refuses it.
   const yesterday = localTime(-86_400_000)
@@ -1727,38 +1780,35 @@ async function firstRunJourney() {
       'An empty data directory opens on setup, with no sidebar to leave it.',
     )
 
-    const providers = page.getByLabel('Provider', { exact: true })
-    const options = (
-      await providers
-        .locator('option')
-        .evaluateAll((nodes) =>
-          nodes.map((node) => (node as HTMLOptionElement).value),
-        )
-    ).sort()
-    assert.deepEqual(options, [
-      '',
-      'anthropic',
-      'deepseek',
-      'openai',
-      'openrouter',
-    ])
-    checks.push(
-      'The provider list offers the four built-in providers and a custom one.',
+    const providers = page.getByRole('combobox', {
+      name: 'Provider',
+      exact: true,
+    })
+    assert.match(await providers.innerText(), /^anthropic/)
+    await providers.press('ArrowDown')
+    const providerList = page.getByRole('listbox')
+    await providerList.waitFor()
+    assert.deepEqual(
+      (await providerList.getByRole('option').allTextContents())
+        .map((name) => name.replace(' (no key)', ''))
+        .sort(),
+      ['Custom provider', 'anthropic', 'deepseek', 'openai', 'openrouter'],
     )
-
-    // A fresh install starts on a built-in provider with its first model already chosen, so a key
-    // alone is enough to submit; a model field left empty while the select shows an option would
-    // keep the button disabled with no way forward.
-    assert.equal(await providers.inputValue(), 'anthropic')
+    await providers.press('Escape')
+    await providerList.waitFor({ state: 'hidden' })
     const submit = page.getByRole('button', { name: 'Verify and save' })
+    const initialModel = page.getByRole('combobox', {
+      name: 'Model',
+      exact: true,
+    })
+    const initialModelName = await initialModel.innerText()
+    await initialModel.press('ArrowDown')
     assert.equal(
-      await page.getByLabel('Model', { exact: true }).inputValue(),
-      await page
-        .getByLabel('Model', { exact: true })
-        .locator('option')
-        .first()
-        .getAttribute('value'),
+      initialModelName,
+      await providerList.getByRole('option').first().innerText(),
     )
+    await initialModel.press('Escape')
+    await providerList.waitFor({ state: 'hidden' })
     assert.equal(await submit.isDisabled(), true, 'No key yet')
     await snapshot(page, 'journey-6-first-run')
     await page.getByLabel(/^API key/).fill(GOOD_KEY)
@@ -1771,11 +1821,15 @@ async function firstRunJourney() {
       'A fresh install opens on a built-in provider with its model chosen, and a key is the only thing missing.',
     )
 
-    await providers.selectOption({ label: 'Custom provider' })
+    await pick(page, providers, 'Custom provider')
     await page.getByLabel('Provider name').fill('faux')
-    await page.getByLabel('Protocol').selectOption('openai-completions')
+    await pick(
+      page,
+      page.getByRole('combobox', { name: 'Protocol', exact: true }),
+      'OpenAI Chat Completions',
+    )
     await page.getByLabel('Base URL').fill(provider.baseUrl)
-    await page.getByLabel('Model ID').fill('faux-model')
+    await page.getByLabel('Model ID').fill(reasoningModel)
     await page.getByLabel('API key').fill('wrong-key')
     assert.equal(
       await page.evaluate(() => scrollY),
@@ -1829,7 +1883,7 @@ async function firstRunJourney() {
     await title.waitFor({ state: 'hidden' })
     const state = await page.evaluate(() => window.vela.settings())
     assert.equal(state.setup.required, false)
-    assert.equal(state.model, 'faux/faux-model')
+    assert.equal(state.model, `faux/${reasoningModel}`)
     assert.equal(state.files.settings, resolve(dir, 'settings.json'))
     assert(
       !JSON.stringify(state).includes(GOOD_KEY),
@@ -1842,7 +1896,7 @@ async function firstRunJourney() {
     const settings = JSON.parse(
       await readFile(resolve(dir, 'settings.json'), 'utf8'),
     )
-    assert.equal(settings.defaultModel, 'faux/faux-model')
+    assert.equal(settings.defaultModel, `faux/${reasoningModel}`)
     const auth = JSON.parse(await readFile(resolve(dir, 'auth.json'), 'utf8'))
     assert.deepEqual(auth.faux, { type: 'api_key', key: GOOD_KEY })
     const models = JSON.parse(
@@ -1850,7 +1904,7 @@ async function firstRunJourney() {
     )
     assert.equal(models.providers.faux.api, 'openai-completions')
     assert.equal(models.providers.faux.baseUrl, provider.baseUrl)
-    assert.deepEqual(models.providers.faux.models, [{ id: 'faux-model' }])
+    assert.deepEqual(models.providers.faux.models, [{ id: reasoningModel }])
     for (const name of ['settings.json', 'auth.json'])
       assert.equal(
         (await stat(resolve(dir, name))).mode & 0o777,
@@ -1888,7 +1942,7 @@ async function firstRunJourney() {
 
     await sections.getByRole('button', { name: 'Models' }).click()
     await page.getByRole('heading', { name: 'Models', exact: true }).waitFor()
-    await page.getByText('faux/faux-model', { exact: true }).waitFor()
+    await page.getByText(`faux/${reasoningModel}`, { exact: true }).waitFor()
     assert.equal(
       await page.getByText('settings.json', { exact: true }).count(),
       1,
@@ -1910,12 +1964,21 @@ async function firstRunJourney() {
 
     await page.getByRole('button', { name: 'Change model' }).click()
     const dialog = page.getByRole('dialog')
-    await dialog.getByLabel('Provider', { exact: true }).waitFor()
+    await dialog
+      .getByRole('combobox', { name: 'Provider', exact: true })
+      .waitFor()
     assert.equal(
-      await dialog.getByLabel('Provider', { exact: true }).inputValue(),
+      await dialog
+        .getByRole('combobox', { name: 'Provider', exact: true })
+        .innerText(),
       'faux',
     )
-    assert.equal(await dialog.getByLabel('Model').inputValue(), 'faux-model')
+    assert.equal(
+      await dialog
+        .getByRole('combobox', { name: 'Model', exact: true })
+        .innerText(),
+      reasoningModel,
+    )
     assert.equal(
       await dialog.getByLabel('API key').inputValue(),
       '',
@@ -1925,8 +1988,29 @@ async function firstRunJourney() {
     checks.push(
       'Change model opens the same form on the saved provider and model, with an empty key field.',
     )
-    await page.keyboard.press('Escape')
+    await Bun.write(
+      resolve(dir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          faux: {
+            ...models.providers.faux,
+            models: [{ id: reasoningModel, reasoning: true }],
+          },
+        },
+      }),
+    )
+    await pick(
+      page,
+      dialog.getByRole('combobox', { name: 'Thinking level', exact: true }),
+      'High',
+    )
+    await dialog.getByRole('button', { name: 'Verify and save' }).click()
     await dialog.waitFor({ state: 'hidden' })
+    const savedLevel = async () =>
+      (await Bun.file(resolve(dir, 'settings.json')).json())
+        .defaultThinkingLevel
+    assert.equal(await savedLevel(), 'high')
+    await page.getByText('high', { exact: true }).waitFor()
 
     // The host must be using the model it saved: an endpoint that only answers `good-key` and
     // streams a reply, driven through the app's own composer.
@@ -1948,8 +2032,69 @@ async function firstRunJourney() {
     await page
       .getByText('Local answer', { exact: true })
       .waitFor({ timeout: 60_000 })
+    assert.equal(
+      provider.lastStreamEffort(),
+      'high',
+      'A new session uses the saved effort without restart',
+    )
+    const firstStreamCount = provider.streamCount()
+    await page
+      .getByLabel('Sidebar')
+      .getByRole('button', { name: 'Settings' })
+      .click()
+    await sections.getByRole('button', { name: 'Models' }).click()
+    await page.getByRole('button', { name: 'Change model' }).click()
+    assert.equal(
+      await dialog
+        .getByRole('combobox', { name: 'Thinking level', exact: true })
+        .innerText(),
+      'Keep current',
+    )
+    await dialog.getByRole('button', { name: 'Verify and save' }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    assert.equal(await savedLevel(), 'high')
+    // Home sends Local messages to the project's same session, so use a new project
+    // here to observe setDefaults on a genuinely different, newly created SDK session.
+    const secondProject = resolve(dir, 'second-project')
+    await mkdir(secondProject)
+    await page
+      .getByLabel('Sidebar')
+      .getByRole('button', { name: 'New project' })
+      .click()
+    await projectDialog.getByLabel('Folder path').fill(secondProject)
+    await projectDialog.getByLabel('Name').fill('Second setup project')
+    await projectDialog.getByRole('button', { name: 'Create project' }).click()
+    await projectDialog.waitFor({ state: 'hidden' })
+    await page
+      .getByRole('heading', { name: 'Second setup project', exact: true })
+      .waitFor()
+    await sendIn(
+      page,
+      'Message Vela in this project',
+      'Does the next session still think high?',
+    )
+    await page
+      .getByText('Local answer', { exact: true })
+      .waitFor({ timeout: 60_000 })
+    assert.equal(
+      provider.lastStreamEffort(),
+      'high',
+      'Keep current preserves the effort on another fresh session',
+    )
+    assert.equal(
+      provider.streamCount(),
+      firstStreamCount + 1,
+      'The second probe reaches the provider',
+    )
+    await page.reload()
+    await page
+      .getByLabel('Sidebar')
+      .getByRole('button', { name: 'Settings' })
+      .click()
+    await sections.getByRole('button', { name: 'Models' }).click()
+    await page.getByText('high', { exact: true }).waitFor()
     checks.push(
-      'The saved model answers in the app: the host uses the choice without a restart.',
+      'Thinking High reaches the local provider on a fresh session in the running host, survives Keep current on a second session, and remains visible after reload.',
     )
 
     const cli = Bun.spawnSync(
@@ -1977,9 +2122,9 @@ async function firstRunJourney() {
       0,
       `vela --list-models failed: ${cli.stderr.toString()}`,
     )
-    assert(/^faux\s+faux-model/m.test(list), `--list-models printed: ${list}`)
+    assert(list.includes(reasoningModel), `--list-models printed: ${list}`)
     checks.push(
-      'The CLI reads the same directory: vela --list-models prints faux faux-model.',
+      'The CLI reads the same directory: vela --list-models prints the saved model.',
     )
     console.log('Desktop verification: journey 6 passed')
   } catch (cause) {
@@ -2486,11 +2631,36 @@ async function larkJourneys() {
     await page.getByRole('button', { name: 'Home', exact: true }).click()
     await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
     assert.equal(
-      await page.getByLabel('Project', { exact: true }).inputValue(),
-      liveProject,
+      await page
+        .getByRole('combobox', { name: 'Project', exact: true })
+        .textContent(),
+      'Vela live · Lark',
       'Home defaults to the last project used',
     )
-    await page.getByLabel('Project', { exact: true }).selectOption(larkProject)
+    const projectPicker = page.getByRole('combobox', {
+      name: 'Project',
+      exact: true,
+    })
+    await projectPicker.press('ArrowDown')
+    const projects = page.getByRole('listbox')
+    await projects.waitFor()
+    const projectMenu = (await projects.boundingBox())!
+    const projectTrigger = (await projectPicker.boundingBox())!
+    assert(
+      projectMenu.y >= 0 &&
+        projectMenu.y + projectMenu.height <= projectTrigger.y + 1,
+      'The Home dock list opens upward and stays on screen',
+    )
+    await projects
+      .getByRole('option', { name: 'Vela dev · Lark', exact: true })
+      .click()
+    assert.equal(await page.locator('select').count(), 0)
+    assert(
+      await projectPicker.evaluate(
+        (element) => document.activeElement === element,
+      ),
+      'Changing the Home project leaves focus on the picker',
+    )
     await page
       .getByText('Vela opens a topic in Vela dev for it, started by you.')
       .waitFor()
@@ -3148,7 +3318,11 @@ async function larkOffJourney() {
     // A send to the group is refused before anything is posted: the reason shows and
     // the draft comes back (the `not-sent` outcome, never a resend).
     await page.getByRole('button', { name: 'Home', exact: true }).click()
-    await page.getByLabel('Project', { exact: true }).selectOption(larkProject)
+    await pick(
+      page,
+      page.getByRole('combobox', { name: 'Project', exact: true }),
+      `${larkProject} · Lark`,
+    )
     const homeComposer = page.getByLabel('Message Vela', { exact: true })
     await homeComposer.fill('A question while Lark is off')
     await page.getByRole('button', { name: 'Send' }).click()

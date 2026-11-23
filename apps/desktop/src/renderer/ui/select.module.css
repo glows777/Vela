@@ -1,0 +1,96 @@
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vela-space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--vela-control-md);
+  padding: 0 var(--vela-space-3);
+  border: 1px solid var(--vela-border-strong);
+  border-radius: var(--vela-radius-md);
+  background: var(--vela-white);
+  color: var(--vela-ink);
+  font-size: var(--vela-text-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.compact {
+  width: auto;
+  min-height: var(--vela-control-sm);
+  font-size: var(--vela-text-sm);
+  font-weight: 500;
+}
+
+.compact::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--vela-radius-round);
+  background: var(--vela-live);
+  content: "";
+}
+
+.trigger > svg {
+  flex: none;
+  color: var(--vela-muted);
+}
+
+.trigger:hover:not(:disabled) {
+  background: var(--vela-menu-hover);
+}
+
+.trigger:disabled {
+  cursor: default;
+  color: var(--vela-muted);
+}
+
+.value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu {
+  position: fixed;
+  position-area: block-end span-inline-end;
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline;
+  justify-self: start;
+  min-width: anchor-size(width);
+  max-width: calc(100dvw - 24px);
+  max-height: min(16rem, 45dvh);
+  margin: var(--vela-space-1) 0;
+  padding: var(--vela-space-1);
+  overflow: auto;
+  border: 1px solid var(--vela-paper-edge);
+  border-radius: var(--vela-radius-md);
+  background: var(--vela-paper);
+  color: var(--vela-ink);
+  box-shadow: var(--vela-dialog-shadow);
+  overscroll-behavior: contain;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vela-space-2);
+  width: 100%;
+  min-height: var(--vela-control-sm);
+  padding: 0 var(--vela-space-2);
+  border: 0;
+  border-radius: var(--vela-radius-md);
+  background: transparent;
+  color: inherit;
+  font-size: var(--vela-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.option[data-active] {
+  background: var(--vela-menu-hover);
+}

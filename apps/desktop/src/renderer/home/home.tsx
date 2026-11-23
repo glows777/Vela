@@ -1,5 +1,5 @@
-import { ArrowRight, ChevronDown } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ArrowRight } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { Composer } from '../components/composer.tsx'
 import { PageError } from '../components/page-error.tsx'
 import {
@@ -14,6 +14,7 @@ import {
 } from '../format.ts'
 import type { Snapshot } from '../store.ts'
 import { startSession } from '../store.ts'
+import { Select } from '../ui/select.tsx'
 import styles from './home.module.css'
 
 /** Desktop workbench: compact attention & recent sessions above, anchored composer dock below. */
@@ -31,6 +32,15 @@ export function Home({
   const needs = needsYou(snapshot)
   const recent = recentSessions(snapshot)
   const [picked, setPicked] = useState('')
+  const picker = useRef<HTMLButtonElement>(null)
+  const focusPicker = useRef('')
+
+  // Changing destination mounts a new composer with that project's draft.
+  useEffect(() => {
+    if (!focusPicker.current || focusPicker.current !== picked) return
+    focusPicker.current = ''
+    picker.current?.focus()
+  }, [picked])
 
   // Latch the suggested project once: later activity must not move the destination
   // while the person is typing.
@@ -175,26 +185,21 @@ export function Home({
                 startSession(project, text, () => onOpenProject(project.id))
               }
             >
-              <div className={styles.pickerWrap}>
-                <span className={styles.pickerDot} aria-hidden="true" />
-                <select
-                  className={styles.picker}
-                  aria-label="Project"
-                  value={project.id}
-                  onChange={(event) => setPicked(event.target.value)}
-                >
-                  {snapshot.projects.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {projectName(item)} · {projectTag(item)}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown
-                  className={styles.pickerChevron}
-                  size={13}
-                  aria-hidden="true"
-                />
-              </div>
+              <Select
+                compact
+                label="Project"
+                value={project.id}
+                options={snapshot.projects.map((item) => ({
+                  value: item.id,
+                  label: `${projectName(item)} · ${projectTag(item)}`,
+                }))}
+                triggerRef={picker}
+                onChange={(next) => {
+                  if (next === picked) return
+                  focusPicker.current = next
+                  setPicked(next)
+                }}
+              />
             </Composer>
           ) : (
             <p className={styles.emptyLine}>

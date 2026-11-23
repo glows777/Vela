@@ -71,6 +71,10 @@ export async function verifyLarkSettings(
   )
   await page.getByRole('button', { name: 'Remove oc_duplicate' }).click()
   await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Remove chat', exact: true })
+    .click()
+  await page
     .getByText('oc_duplicate', { exact: true })
     .waitFor({ state: 'detached' })
   await toggle.click()
@@ -143,7 +147,19 @@ export async function verifyLarkSettings(
     release()
   }
   await waitForLocalWork(page, false)
-  await page.getByRole('button', { name: 'Remove oc_settings' }).click()
+  const removeChat = page.getByRole('button', { name: 'Remove oc_settings' })
+  await removeChat.click()
+  const confirm = page.getByRole('dialog')
+  const cancel = confirm.getByRole('button', { name: 'Cancel', exact: true })
+  await cancel.waitFor()
+  assert(await cancel.evaluate((node) => node === document.activeElement))
+  await cancel.click()
+  await confirm.waitFor({ state: 'hidden' })
+  assert.deepEqual((await disk()).extensionConfig.lark.chats, ['oc_settings'])
+  await removeChat.click()
+  await confirm
+    .getByRole('button', { name: 'Remove chat', exact: true })
+    .click()
   await page.getByText('No enabled chats.', { exact: true }).waitFor()
   const saved = (await disk()).extensionConfig.lark
   assert.deepEqual(saved.chats, [])

@@ -9,7 +9,12 @@ import {
   verifyProviderModel,
 } from '@glows777/vela-core'
 import { resolveModel } from '@glows777/vela-core/diagnostics'
-import type { ModelSetup, ProviderApi } from '../shared/bridge.ts'
+import {
+  type ModelSetup,
+  type ProviderApi,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from '../shared/bridge.ts'
 
 /** Long enough for a slow provider, short enough that a stuck one ends with a reason. */
 const VERIFY_TIMEOUT_MS = 60_000
@@ -34,6 +39,9 @@ function readModelSetup(input: unknown): ModelSetup {
   const model = text(value.model, 'model')
   if (value.key !== undefined && typeof value.key !== 'string')
     throw new Error('The API key must be text')
+  const thinkingLevel = value.thinkingLevel as ThinkingLevel | undefined
+  if (thinkingLevel !== undefined && !THINKING_LEVELS.includes(thinkingLevel))
+    throw new Error('Choose a supported thinking level')
   let custom: ModelSetup['custom']
   if (value.custom !== undefined) {
     const entry = (value.custom ?? {}) as Record<string, unknown>
@@ -55,6 +63,7 @@ function readModelSetup(input: unknown): ModelSetup {
     model,
     ...(typeof key === 'string' && key.trim() ? { key: key.trim() } : {}),
     ...(custom ? { custom } : {}),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   }
 }
 
@@ -171,6 +180,9 @@ export async function saveModel(options: {
     providers,
     ...(toSave ? { credential: toSave } : {}),
     ...(preset ? { preset } : {}),
+    ...(input.thinkingLevel === undefined
+      ? {}
+      : { thinkingLevel: input.thinkingLevel }),
   })
   return {
     provider,
