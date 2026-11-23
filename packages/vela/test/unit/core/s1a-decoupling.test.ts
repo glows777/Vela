@@ -487,3 +487,208 @@ test('invalid ModelHandle is rejected cleanly at SDK boundary', async () => {
     await vela.dispose()
   }
 })
+
+test('hosted tools with client-side execute respect checkpoint guard on failure', async () => {
+  const { agentLoop } = await import('../../../src/driver/agent/index.ts')
+  const { ToolResultStore } = await import(
+    '../../../src/driver/session/tool-results.ts'
+  )
+  const { ToolRegistry } = await import('../../../src/driver/tools/registry.ts')
+  const { TokenTracker } = await import('../../../src/driver/usage/tracker.ts')
+  const { tool } = await import('ai')
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-hosted-guard-'))
+  try {
+    let executions = 0
+    const model = Object.assign(
+      createFauxModel({
+        responses: [fauxToolCall('local_shell', { cmd: 'echo hi' })],
+      }),
+      {
+        hostedTools: async () => ({
+          local_shell: tool({
+            description: 'Hosted local shell',
+            inputSchema: z.object({ cmd: z.string() }),
+            execute: async () => {
+              executions++
+              return { output: 'ran' }
+            },
+          }),
+        }),
+      },
+    )
+    const registry = new ToolRegistry(new ToolResultStore(join(dir, 'results')))
+    registry.register({
+      name: 'local_shell',
+      description: 'probe',
+      inputSchema: z.object({ cmd: z.string() }),
+      execute: async () => 'unused',
+    })
+    await expect(
+      agentLoop({
+        model,
+        systemPrompt: 'test',
+        toolRegistry: registry,
+        messages: [{ role: 'user', content: 'probe' }],
+        tokenTracker: new TokenTracker(),
+        onCheckpoint: async () => {
+          throw new Error('checkpoint unavailable')
+        },
+      }),
+    ).rejects.toThrow('checkpoint unavailable')
+    expect(executions).toBe(0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resuming a transcript with tool-approval-request preserves approval parts in both directions', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-approval-'))
+  try {
+    const dataDir = join(dir, 'data')
+    const sessionDir = join(dataDir, 'sessions', 'approval-session')
+    mkdirSync(sessionDir, { recursive: true })
+    const now = '2026-11-23T00:00:00.000Z'
+    writeFileSync(
+      join(sessionDir, 'transcript.jsonl'),
+      `${[
+        JSON.stringify({
+          type: 'session',
+          version: 2,
+          id: 'approval-session',
+          timestamp: now,
+          cwd: dir,
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e1',
+          parentId: null,
+          timestamp: now,
+          message: { role: 'user', content: 'search' },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e2',
+          parentId: 'e1',
+          timestamp: now,
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolCallId: 'c1',
+                toolName: 'mcp.read',
+                input: {},
+                providerExecuted: true,
+              },
+              {
+                type: 'tool-approval-request',
+                approvalId: 'apr-1',
+                toolCallId: 'c1',
+              },
+            ],
+          },
+        }),
+      ].join('\n')}\n`,
+    )
+    const model = createFauxModel({ responses: [fauxText('ok')] })
+    const vela = createVela({ cwd: dir, dataDir, model, contextFiles: false })
+    try {
+      const session = vela.session('approval-session')
+      expect(await session.resume()).toBe(true)
+      await session.prompt('follow up')
+      expect(model.calls).toHaveLength(1)
+    } finally {
+      await vela.dispose()
+    }
+    const roundTripped = fromAiResponseMessage({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-approval-request',
+          approvalId: 'apr-2',
+          toolCallId: 'c2',
+        },
+      ],
+    })
+    expect(roundTripped).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-approval-request',
+          approvalId: 'apr-2',
+          toolCallId: 'c2',
+        },
+      ],
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resuming a legacy image with provider file reference object preserves structured data', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-file-ref-'))
+  try {
+    const dataDir = join(dir, 'data')
+    const sessionDir = join(dataDir, 'sessions', 'file-ref')
+    mkdirSync(sessionDir, { recursive: true })
+    const now = '2026-11-23T00:00:00.000Z'
+    writeFileSync(
+      join(sessionDir, 'transcript.jsonl'),
+      `${[
+        JSON.stringify({
+          type: 'session',
+          version: 2,
+          id: 'file-ref',
+          timestamp: now,
+          cwd: dir,
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e1',
+          parentId: null,
+          timestamp: now,
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'check ref' },
+              {
+                type: 'image',
+                image: { openai: 'file-abc' },
+                mediaType: 'image/png',
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e2',
+          parentId: 'e1',
+          timestamp: now,
+          message: { role: 'assistant', content: 'seen' },
+        }),
+      ].join('\n')}\n`,
+    )
+    const model = createFauxModel({ responses: [fauxText('still valid')] })
+    const vela = createVela({ cwd: dir, dataDir, model, contextFiles: false })
+    try {
+      const session = vela.session('file-ref')
+      await session.resume()
+      await session.prompt('describe')
+      expect(model.calls).toHaveLength(1)
+      const filePart = model.calls[0]!.prompt.flatMap((m) =>
+        m.role === 'user' ? m.content : [],
+      ).find((p) => p.type === 'file')
+      expect(filePart).toBeDefined()
+      expect(
+        filePart && filePart.type === 'file' ? filePart.data : null,
+      ).toEqual({
+        type: 'reference',
+        reference: { openai: 'file-abc' },
+      })
+    } finally {
+      await vela.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

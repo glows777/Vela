@@ -124,9 +124,9 @@ export function toAiModelMessages(
           }
           if (part.type === 'image') {
             const legacy = part as unknown as {
-              data?: string
+              data?: string | Uint8Array | URL | Record<string, string>
               mimeType?: string
-              image?: string | Uint8Array
+              image?: string | Uint8Array | URL | Record<string, string>
               mediaType?: string
             }
             const rawData = legacy.data ?? legacy.image
@@ -210,6 +210,13 @@ export function toAiModelMessages(
                 type: 'reasoning-file' as const,
                 data: part.data,
                 mediaType: part.mediaType,
+                ...opts,
+              }
+            case 'tool-approval-request':
+              return {
+                type: 'tool-approval-request' as const,
+                approvalId: part.approvalId,
+                toolCallId: part.toolCallId,
                 ...opts,
               }
             case 'custom':
@@ -403,6 +410,14 @@ export function fromAiResponseMessage(
             type: 'reasoning-file',
             data: part.data as string | Uint8Array | URL,
             mediaType: part.mediaType,
+            ...partOpts,
+          })
+          break
+        case 'tool-approval-request':
+          content.push({
+            type: 'tool-approval-request',
+            approvalId: part.approvalId,
+            toolCallId: part.toolCallId,
             ...partOpts,
           })
           break

@@ -109,7 +109,27 @@ export async function resolveProviderTools(
   for (const spec of tools) {
     const hosted = hostedTools[spec.name]
     if (hosted) {
-      sdkTools[spec.name] = hosted
+      sdkTools[spec.name] =
+        options.wrapExecute && hosted.execute
+          ? {
+              ...hosted,
+              execute: (input, execOptions) =>
+                options.wrapExecute!((wrappedInput, wrappedOptions) =>
+                  Promise.resolve(
+                    hosted.execute!(wrappedInput, {
+                      ...execOptions,
+                      toolCallId:
+                        wrappedOptions.toolCallId ?? execOptions.toolCallId,
+                      abortSignal:
+                        wrappedOptions.abortSignal ?? execOptions.abortSignal,
+                    }),
+                  ),
+                )(input, {
+                  toolCallId: execOptions?.toolCallId,
+                  abortSignal: execOptions?.abortSignal,
+                }),
+            }
+          : hosted
       if (hosted.type === 'provider') {
         hasHostedTools = true
         toolDefinitions.push({

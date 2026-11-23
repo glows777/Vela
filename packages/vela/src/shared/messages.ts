@@ -32,10 +32,10 @@ export interface ThinkingPart {
   providerOptions?: ProviderOptions
 }
 
-/** Non-image or binary file attachment carried in user or assistant messages. */
+/** Non-image or binary file attachment (or provider file reference) carried in user or assistant messages. */
 interface FilePart {
   type: 'file'
-  data: string | Uint8Array | URL
+  data: string | Uint8Array | URL | Record<string, string>
   mediaType: string
   filename?: string
   providerOptions?: ProviderOptions
@@ -119,6 +119,14 @@ export interface ToolResultPart {
   providerOptions?: ProviderOptions
 }
 
+/** Provider-emitted tool approval request carried on an assistant message. */
+interface ToolApprovalRequestPart {
+  type: 'tool-approval-request'
+  approvalId: string
+  toolCallId: string
+  providerOptions?: ProviderOptions
+}
+
 type UserContentPart = TextPart | ImageContent | FilePart
 export type UserContent = string | UserContentPart[]
 
@@ -130,6 +138,7 @@ export type AssistantContentPart =
   | CustomProviderPart
   | ToolCallPart
   | ToolResultPart
+  | ToolApprovalRequestPart
 
 export type AssistantContent = string | AssistantContentPart[]
 
@@ -143,6 +152,7 @@ export type VelaPart =
   | CustomProviderPart
   | ToolCallPart
   | ToolResultPart
+  | ToolApprovalRequestPart
 
 export interface VelaSystemMessage {
   role: 'system'
@@ -212,20 +222,28 @@ export function normalizeVelaContent(content: unknown[]): {
     ) {
       changed = true
       const rawImage = part.image
+      const mediaType =
+        typeof part.mimeType === 'string'
+          ? part.mimeType
+          : typeof part.mediaType === 'string'
+            ? part.mediaType
+            : 'image/png'
+      const { image: _img, mediaType: _mt, mimeType: _mime, ...rest } = part
+      if (
+        rawImage &&
+        typeof rawImage === 'object' &&
+        !(rawImage instanceof Uint8Array) &&
+        !(rawImage instanceof URL)
+      ) {
+        return { ...rest, type: 'file', data: rawImage, mediaType }
+      }
       const data =
         typeof rawImage === 'string'
           ? rawImage
           : rawImage instanceof Uint8Array
             ? Buffer.from(rawImage).toString('base64')
             : String(rawImage)
-      const mimeType =
-        typeof part.mimeType === 'string'
-          ? part.mimeType
-          : typeof part.mediaType === 'string'
-            ? part.mediaType
-            : 'image/png'
-      const { image: _img, mediaType: _mt, ...rest } = part
-      return { ...rest, type: 'image', data, mimeType }
+      return { ...rest, type: 'image', data, mimeType: mediaType }
     }
     return item
   })

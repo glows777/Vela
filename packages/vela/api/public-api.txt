@@ -1396,6 +1396,7 @@
       | CustomProviderPart
       | ToolCallPart
       | ToolResultPart
+      | ToolApprovalRequestPart
   class VelaSession
     abort: (reason?: unknown) => Promise<void>
     abortBash: () => void
@@ -1908,6 +1909,7 @@
       | CustomProviderPart
       | ToolCallPart
       | ToolResultPart
+      | ToolApprovalRequestPart
   class VelaSession
     abort: (reason?: unknown) => Promise<void>
     abortBash: () => void
