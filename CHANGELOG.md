@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-23
+
 ### Breaking Changes
 
 - **`background_start` is gone; `bash` starts a background command.** `bash` takes `run_in_background: true`, runs the command through the session's execution environment and returns at once with the job id, so one shell tool covers foreground and background work. Replace `background_start({ command })` with `bash({ command, run_in_background: true })`, and remove `+background_start` from a `tools` list: an unknown name now fails at startup. `background_output`, `background_stop` and `background({ shellPath })` stay ([#429](https://github.com/glows777/Vela/issues/429)).
