@@ -28,7 +28,9 @@ export async function verifyLarkSettings(
   const input = page.getByLabel('App secret', { exact: true })
   const save = page.getByRole('button', { name: 'Save credentials' })
   const submit = async (message: string) => {
-    await sidebar.getByRole('button', { name: 'Setup project' }).click()
+    await sidebar
+      .getByRole('button', { name: 'Setup project Local', exact: true })
+      .click()
     const panel = page.getByRole('complementary', { name: 'Sessions' })
     const close = panel.getByRole('button', { name: 'Close sessions' })
     if (await close.isVisible()) {
