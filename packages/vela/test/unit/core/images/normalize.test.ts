@@ -8,7 +8,7 @@ const MAX_BASE64_LENGTH = 4.5 * 1024 * 1024
 const fixture = (name: string, mimeType: string): ImageContent => ({
   type: 'image',
   data: readFileSync(
-    new URL(`../../../../../test/fixtures/images/${name}`, import.meta.url),
+    new URL(`../../../../../../test/fixtures/images/${name}`, import.meta.url),
   ).toString('base64'),
   mimeType,
 })

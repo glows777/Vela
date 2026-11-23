@@ -4,7 +4,7 @@ import { app, BrowserWindow, nativeTheme, session } from 'electron'
 import tokens from '../../design/tokens.json'
 import { startHost } from './restart-host.ts'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const mainDir = path.dirname(fileURLToPath(import.meta.url))
 const canvas = tokens.tokens['vela-white']
 
 const createWindow = (hostError = false) => {
@@ -30,7 +30,7 @@ const createWindow = (hostError = false) => {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
-      preload: path.join(__dirname, 'preload.cjs'),
+      preload: path.join(mainDir, 'preload.cjs'),
     },
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -44,7 +44,7 @@ const createWindow = (hostError = false) => {
     void window.loadURL(url.href)
   } else {
     void window.loadFile(
-      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
+      path.join(mainDir, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
       hostError ? { query: { hostError: '1' } } : undefined,
     )
   }

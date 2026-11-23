@@ -171,8 +171,8 @@ test.concurrent.if(hasScript)(
   async () => {
     const preload = `
       import { mock } from 'bun:test'
-      import * as real from ${JSON.stringify(join(ROOT, 'packages/lark/src/index.ts'))}
-      mock.module(${JSON.stringify(join(ROOT, 'packages/lark/src/index.ts'))}, () => ({ ...real,
+      import * as real from ${JSON.stringify(join(ROOT, 'packages/vela/src/lark/index.ts'))}
+      mock.module(${JSON.stringify(join(ROOT, 'packages/vela/src/lark/index.ts'))}, () => ({ ...real,
         connectLarkSetup: async () => ({
           waitForMention: async () => ({ chatId: 'oc_fake' }),
           send: async (chatId, text) => { await Bun.write(process.env.VELA_DIR + '/sent.json', JSON.stringify({ chatId, text })) },
