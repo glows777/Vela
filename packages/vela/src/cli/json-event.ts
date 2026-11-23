@@ -1,4 +1,4 @@
-import type { VelaEvent } from '@glows777/vela-core'
+import type { VelaEvent } from '../driver/index.ts'
 
 /** JSON.stringify that writes Errors (including DOMException) as `{ name, message }` and bigints as strings. */
 export function toJsonLine(value: unknown): string {

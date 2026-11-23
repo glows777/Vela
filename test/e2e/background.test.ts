@@ -2,13 +2,16 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, tempDir } from '@glows777/vela/testing'
-import { local } from '@glows777/vela-channels'
-import type { ExecutionEnv } from '@glows777/vela-core'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
 import z from 'zod'
-import { createLocalExecutionEnv } from '../../packages/core/src/execution/local.ts'
-import { background } from '../../packages/core/src/extensions/background/index.ts'
+import { createLocalExecutionEnv } from '../../packages/vela/src/driver/execution/local.ts'
+import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
+import type { ExecutionEnv } from '../../packages/vela/src/driver/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import { local } from '../../packages/vela/src/legacy-channels/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

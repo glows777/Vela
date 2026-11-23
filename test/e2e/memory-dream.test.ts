@@ -7,8 +7,11 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { MemoryStore } from '../../packages/core/src/extensions/memory/store.ts'
+import { MemoryStore } from '../../packages/vela/src/driver/extensions/memory/store.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import {
   captureConsole,
   cleanupTestVelas,

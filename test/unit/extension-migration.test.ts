@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
 import type { createVela } from '@glows777/vela'
-import type { LoadedChannelExtension } from '@glows777/vela-channels'
+import type { LoadedChannelExtension } from '../../packages/vela/src/legacy-channels/index.ts'
 import { stampRelease, unreleasedEntries } from '../../scripts/changelog.ts'
 
 type Extensions = ReturnType<ReturnType<typeof createVela>['extensions']>

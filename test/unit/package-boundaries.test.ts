@@ -8,6 +8,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0))
     await rm(dir, { recursive: true, force: true })
 })
+
 async function fixture(files: Record<string, string>) {
   const root = await mkdtemp(join(tmpdir(), 'vela-boundaries-'))
   dirs.push(root)
@@ -15,48 +16,40 @@ async function fixture(files: Record<string, string>) {
     'tsconfig.json': JSON.stringify({
       compilerOptions: {
         paths: {
-          '@glows777/vela-core': ['./packages/core/src/index.ts'],
-          '@glows777/vela-core/extension-api': [
-            './packages/core/src/extension-api.ts',
-          ],
-          '@glows777/vela-channels': ['./packages/channels/src/index.ts'],
           '@glows777/vela': ['./packages/vela/src/index.ts'],
+          '@glows777/vela/extension-api': [
+            './packages/vela/src/extension-api.ts',
+          ],
         },
       },
+    }),
+    'tsconfig.build.json': JSON.stringify({
+      extends: './tsconfig.json',
+      compilerOptions: { paths: {} },
     }),
     'package.json': JSON.stringify({
       private: true,
       workspaces: ['packages/*'],
     }),
-    'packages/core/package.json': JSON.stringify({
-      name: '@glows777/vela-core',
-      version: '0.4.0',
+    'packages/vela/package.json': JSON.stringify({
+      name: '@glows777/vela',
+      version: '0.9.0',
       exports: {
         '.': { import: './dist/index.js' },
         './extension-api': { import: './dist/extension-api.js' },
       },
       dependencies: {},
     }),
-    'packages/core/src/index.ts': 'export const core = true',
-    'packages/core/src/extension-api.ts':
-      'export interface Session {\n/** @internal */\nregistry: object\n}',
-    'packages/core/dist/extension-api.d.ts':
-      'export interface Session {\n/** @internal */\nregistry: object\n}',
-    'packages/channels/package.json': JSON.stringify({
-      name: '@glows777/vela-channels',
-      version: '0.4.0',
-      exports: { '.': { import: './dist/index.js' } },
-      dependencies: { '@glows777/vela-core': 'workspace:*' },
-    }),
-    'packages/channels/src/index.ts':
-      "export {core} from '@glows777/vela-core'",
-    'packages/vela/package.json': JSON.stringify({
-      name: '@glows777/vela',
-      version: '0.4.0',
-      exports: { '.': { import: './dist/index.js' } },
-      dependencies: { '@glows777/vela-core': 'workspace:*' },
-    }),
     'packages/vela/src/index.ts': 'export const product = true',
+    'packages/vela/src/extension-api.ts':
+      'export interface Session {\n/** @internal */\nregistry: object\n}',
+    'packages/vela/src/shared/ok.ts': 'export const shared = true',
+    'packages/vela/src/db/ok.ts': "export { shared } from '../shared/ok.ts'",
+    'packages/vela/src/runtime/ok.ts': "export { shared } from '../db/ok.ts'",
+    'packages/vela/src/providers/ok.ts':
+      "export { shared } from '../shared/ok.ts'",
+    'packages/vela/src/driver/ok.ts':
+      "export { shared } from '../providers/ok.ts'",
   }
   for (const [path, content] of Object.entries({ ...base, ...files })) {
     const file = join(root, path)
@@ -65,84 +58,201 @@ async function fixture(files: Record<string, string>) {
   }
   return root
 }
+
 async function errors(files: Record<string, string>) {
   const { checkBoundaries } = await import('../../scripts/check-boundaries.ts')
   return checkBoundaries(await fixture(files))
 }
 
-test('boundary checker accepts downward public package edges', async () => {
+test('boundary checker accepts valid single-package layer DAG', async () => {
   expect(await errors({})).toEqual([])
 })
+
+test('boundary checker ignores retired build artifact dirs without package.json but rejects extra packages', async () => {
+  expect(
+    await errors({
+      'packages/core/dist/index.js': 'export {}',
+    }),
+  ).toEqual([])
+  expect(
+    (
+      await errors({
+        'packages/extra/package.json': JSON.stringify({
+          name: '@glows777/vela-extra',
+          version: '0.9.0',
+          exports: { '.': { import: './dist/index.js' } },
+        }),
+      })
+    ).join('\n'),
+  ).toMatch(/expected single published package/)
+})
+
 for (const [label, files, pattern] of [
   [
-    'type-only upward edge',
+    'runtime importing driver',
     {
-      'packages/core/src/index.ts':
-        "import type {X} from '@glows777/vela'; export type Y=X",
+      'packages/vela/src/runtime/bad.ts':
+        "export { shared } from '../driver/ok.ts'",
     },
-    /direction/,
+    /layer direction runtime -> driver/,
   ],
   [
-    'mixed export upward edge',
+    'runtime importing providers',
     {
-      'packages/core/src/index.ts':
-        "export { type X, product } from '@glows777/vela'",
+      'packages/vela/src/runtime/bad.ts':
+        "export { shared } from '../providers/ok.ts'",
     },
-    /direction/,
+    /layer direction runtime -> providers/,
   ],
   [
-    'private subpath',
+    'db importing runtime',
     {
-      'packages/channels/src/index.ts':
-        "export {} from '@glows777/vela-core/private'",
+      'packages/vela/src/db/bad.ts':
+        "export { shared } from '../runtime/ok.ts'",
     },
-    /export/,
+    /layer direction db -> runtime/,
   ],
   [
-    'relative source escape',
+    'shared importing db',
     {
-      'packages/channels/src/index.ts':
-        "export {} from '../../core/src/index.ts'",
+      'packages/vela/src/shared/bad.ts': "export { shared } from '../db/ok.ts'",
     },
-    /source escape/,
+    /layer direction shared -> db/,
   ],
   [
-    'dynamic heavy import',
+    'driver importing lark',
     {
-      'packages/core/src/index.ts':
-        "export const load=()=>import('@modelcontextprotocol/sdk/client/index.js')",
+      'packages/vela/src/lark/ok.ts': 'export const l = 1',
+      'packages/vela/src/driver/bad.ts': "export { l } from '../lark/ok.ts'",
     },
-    /heavy/,
+    /layer direction driver -> lark/,
   ],
   [
-    'require heavy import',
+    'AI SDK outside src/providers/',
     {
-      'packages/core/src/index.ts':
-        "const sdk=require('@larksuiteoapi/node-sdk');export {sdk}",
+      'packages/vela/src/runtime/bad.ts':
+        "import type { ModelMessage } from 'ai'; export type M = ModelMessage",
     },
-    /heavy/,
+    /AI SDK import "type:ai" is confined to src\/providers\//,
+  ],
+  [
+    'AI SDK provider package outside src/providers/',
+    {
+      'packages/vela/src/driver/new-file.ts':
+        "import { createOpenAI } from '@ai-sdk/openai'; export { createOpenAI }",
+    },
+    /AI SDK import "runtime:@ai-sdk\/openai" is confined to src\/providers\//,
+  ],
+  [
+    'allowlisted file adding a new AI SDK package',
+    {
+      'packages/vela/src/cli/main.ts':
+        "import { createOpenAI } from '@ai-sdk/openai'; export { createOpenAI }",
+    },
+    /AI SDK import "runtime:@ai-sdk\/openai" is confined to src\/providers\//,
+  ],
+  [
+    'allowlisted type-only file adding a runtime AI SDK import',
+    {
+      'packages/vela/src/cli/main.ts':
+        "import { streamText } from 'ai'; export { streamText }",
+    },
+    /AI SDK import "runtime:ai" is confined to src\/providers\//,
+  ],
+  [
+    'AI SDK subpath outside src/providers/',
+    {
+      'packages/vela/src/runtime/bad.ts':
+        "import { MockLanguageModelV4 } from 'ai/test'; export { MockLanguageModelV4 }",
+    },
+    /AI SDK import "runtime:ai\/test" is confined to src\/providers\//,
+  ],
+  [
+    'runtime bypassing layer checks via root barrel',
+    {
+      'packages/vela/src/runtime/bad.ts':
+        "export { product } from '@glows777/vela'",
+    },
+    /layer runtime may not import root barrel/,
+  ],
+  [
+    'runtime bypassing layer checks via extension-api barrel',
+    {
+      'packages/vela/src/runtime/bad.ts':
+        "export type { Session } from '@glows777/vela/extension-api'",
+    },
+    /layer runtime may not import root barrel/,
+  ],
+  [
+    'config importing cli (bidirectional cycle)',
+    {
+      'packages/vela/src/cli/ok.ts': 'export const c = 1',
+      'packages/vela/src/config/bad.ts': "export { c } from '../cli/ok.ts'",
+    },
+    /layer direction config -> cli/,
+  ],
+  [
+    'eager heavy dependency reachable from root entry',
+    {
+      'packages/vela/src/lark/transport.ts':
+        "import * as lark from '@larksuiteoapi/node-sdk'; export { lark }",
+      'packages/vela/src/index.ts': "export * from './lark/transport.ts'",
+    },
+    /heavy dependency @larksuiteoapi\/node-sdk eagerly reachable from @glows777\/vela/,
+  ],
+  [
+    'top-level dynamic heavy import reachable from root entry',
+    {
+      'packages/vela/src/lark/load.ts':
+        "export const sdk = await import('@larksuiteoapi/node-sdk')",
+      'packages/vela/src/index.ts': "export * from './lark/load.ts'",
+    },
+    /heavy dependency @larksuiteoapi\/node-sdk eagerly reachable from @glows777\/vela/,
+  ],
+  [
+    'eager pi-tui reachable from cli/main.ts',
+    {
+      'packages/vela/src/cli/main.ts':
+        "import { Editor } from '@earendil-works/pi-tui'; export { Editor }",
+    },
+    /heavy dependency @earendil-works\/pi-tui eagerly reachable from cli\/main\.ts/,
+  ],
+  [
+    'heavy dependency outside owning layer',
+    {
+      'packages/vela/src/runtime/bad.ts':
+        "export const load = () => import('@modelcontextprotocol/sdk/client/index.js')",
+    },
+    /heavy dependency @modelcontextprotocol\/sdk is confined to src\/mcp\//,
   ],
   [
     'eager Photon',
     {
-      'packages/core/src/index.ts':
+      'packages/vela/src/shared/img.ts':
         "export * from '@silvia-odwyer/photon-node'",
     },
-    /Photon/,
+    /Photon must remain lazy/,
+  ],
+  [
+    'relative source escape',
+    {
+      'packages/vela/src/index.ts': "export {} from '../../../outside.ts'",
+    },
+    /source escape/,
   ],
   [
     'light builtin private source',
     {
-      'packages/core/src/extensions/memory/index.ts':
-        "export {} from '../../index.ts'",
+      'packages/vela/src/driver/extensions/memory/index.ts':
+        "export {} from '../../ok.ts'",
     },
     /light builtin/,
   ],
   [
     'light builtin root escape',
     {
-      'packages/core/src/extensions/web/index.ts':
-        "export {} from '@glows777/vela-core'",
+      'packages/vela/src/driver/extensions/web/index.ts':
+        "export {} from '@glows777/vela'",
     },
     /light builtin/,
   ],
@@ -150,134 +260,72 @@ for (const [label, files, pattern] of [
   test(`boundary checker rejects ${label}`, async () => {
     expect((await errors(files)).join('\n')).toMatch(pattern)
   })
-test('light builtin cannot access an internal member through a public session type', async () => {
-  expect(
-    (
-      await errors({
-        'packages/core/src/extensions/memory/index.ts':
-          "import type {Session} from '@glows777/vela-core/extension-api'; export const leak=(session:Session)=>session.registry",
-      })
-    ).join('\n'),
-  ).toMatch(/internal member/)
-})
 
-test('Photon remains allowed only behind a lazy import', async () => {
+test('AI SDK is allowed inside src/providers/', async () => {
   expect(
     await errors({
-      'packages/core/src/index.ts':
-        "export const image=()=>import('@silvia-odwyer/photon-node')",
+      'packages/vela/src/providers/client.ts':
+        "import type { LanguageModel } from 'ai'; export type M = LanguageModel",
     }),
   ).toEqual([])
 })
 
-test('light builtin cannot bypass an internal member check with string indexing', async () => {
+test('lazy heavy imports inside owning layers pass cold-start checks', async () => {
+  expect(
+    await errors({
+      'packages/vela/src/lark/transport.ts':
+        "export const load = () => import('@larksuiteoapi/node-sdk')",
+      'packages/vela/src/shared/image.ts':
+        "export const load = () => import('@silvia-odwyer/photon-node')",
+      'packages/vela/src/index.ts':
+        "export { load as loadLark } from './lark/transport.ts'\nexport { load as loadImage } from './shared/image.ts'",
+    }),
+  ).toEqual([])
+})
+
+test('light builtin cannot access an internal member through extension-api', async () => {
   expect(
     (
       await errors({
-        'packages/core/src/extensions/memory/index.ts':
-          "import type {Session} from '@glows777/vela-core/extension-api'; export const leak=(session:Session)=>session['registry']",
+        'packages/vela/src/driver/extensions/memory/index.ts':
+          "import type {Session} from '@glows777/vela/extension-api'; export const leak=(session:Session)=>session.registry",
       })
     ).join('\n'),
   ).toMatch(/internal member/)
 })
+
 test('source aliases cannot hide a private workspace import', async () => {
   expect(
     (
       await errors({
         'tsconfig.json': JSON.stringify({
-          compilerOptions: { paths: { '@hidden/*': ['packages/core/src/*'] } },
+          compilerOptions: {
+            paths: { '@hidden/*': ['packages/vela/src/*'] },
+          },
         }),
       })
     ).join('\n'),
   ).toMatch(/source alias/)
 })
-test('absolute private source imports are not package contracts', async () => {
+
+test('build inheriting development mappings is rejected', async () => {
   expect(
     (
       await errors({
-        'packages/channels/src/index.ts':
-          "export {} from '/tmp/private-core.ts'",
-      })
-    ).join('\n'),
-  ).toMatch(/source escape/)
-})
-
-test('declared public development mappings resolve only each package export entry', async () => {
-  expect(
-    await errors({
-      'tsconfig.json': JSON.stringify({
-        compilerOptions: {
-          paths: {
-            '@glows777/vela-core': ['./packages/core/src/index.ts'],
-            '@glows777/vela-core/extension-api': [
-              './packages/core/src/extension-api.ts',
-            ],
-            '@glows777/vela-channels': ['./packages/channels/src/index.ts'],
-            '@glows777/vela': ['./packages/vela/src/index.ts'],
-          },
-        },
-      }),
-    }),
-  ).toEqual([])
-})
-
-test('a downward workspace import still requires a declared runtime dependency', async () => {
-  expect(
-    (
-      await errors({
-        'packages/vela/package.json': JSON.stringify({
-          name: '@glows777/vela',
-          version: '0.4.0',
-          exports: { '.': { import: './dist/index.js' } },
-          dependencies: {},
+        'tsconfig.build.json': JSON.stringify({
+          extends: './tsconfig.json',
+          compilerOptions: { module: 'NodeNext' },
         }),
-        'packages/vela/src/index.ts':
-          "export {core} from '@glows777/vela-core'",
       })
     ).join('\n'),
-  ).toMatch(/undeclared.*dependency|dependency.*undeclared/)
+  ).toMatch(/explicitly clear/)
 })
-
-for (const [label, files] of [
-  [
-    'wrong public source target',
-    {
-      'tsconfig.json': JSON.stringify({
-        compilerOptions: {
-          paths: { '@glows777/vela-core': ['./packages/core/src/vela.ts'] },
-        },
-      }),
-    },
-  ],
-  [
-    'build inheriting development mappings',
-    {
-      'tsconfig.build.json': JSON.stringify({
-        extends: './tsconfig.json',
-        compilerOptions: { module: 'NodeNext' },
-      }),
-    },
-  ],
-  [
-    'build private source mapping',
-    {
-      'packages/core/tsconfig.build.json': JSON.stringify({
-        compilerOptions: { paths: { '@private/*': ['src/*'] } },
-      }),
-    },
-  ],
-] as const)
-  test(`development mapping guard rejects ${label}`, async () => {
-    expect((await errors(files)).join('\n')).toMatch(
-      /source aliases|explicitly clear/,
-    )
-  })
 
 test('memory dream alone may import the internal usage tracker', async () => {
   expect(
     await errors({
-      'packages/core/src/usage/tracker.ts': 'export const usage = true',
-      'packages/core/src/extensions/memory/dream.ts':
+      'packages/vela/src/driver/usage/tracker.ts': 'export const usage = true',
+      'packages/vela/src/driver/extensions/memory/dream.ts':
         "export {usage} from '../../usage/tracker.ts'",
     }),
   ).toEqual([])
@@ -285,8 +333,9 @@ test('memory dream alone may import the internal usage tracker', async () => {
     expect(
       (
         await errors({
-          'packages/core/src/usage/tracker.ts': 'export const usage = true',
-          [`packages/core/src/extensions/${file}`]:
+          'packages/vela/src/driver/usage/tracker.ts':
+            'export const usage = true',
+          [`packages/vela/src/driver/extensions/${file}`]:
             "export {usage} from '../../usage/tracker.ts'",
         })
       ).join('\n'),
@@ -294,23 +343,64 @@ test('memory dream alone may import the internal usage tracker', async () => {
   }
 })
 
-test('only memory dream may use the internal session tracker, not other members', async () => {
-  const api =
-    'export interface Session {\n/** @internal */\ntracker: object\n/** @internal */\nregistry: object\n}'
-  const check = (file: string, member: string) =>
-    errors({
-      'packages/core/src/extension-api.ts': api,
-      'packages/core/dist/extension-api.d.ts': api,
-      [`packages/core/src/extensions/${file}`]: `import type {Session} from '@glows777/vela-core/extension-api'; export const access=(session:Session)=>session.${member}`,
-    })
-  expect(await check('memory/dream.ts', 'tracker')).toEqual([])
-  expect((await check('memory/dream.ts', 'registry')).join('\n')).toMatch(
-    /internal member/,
+test('print mode with AGENTS.md does not load @earendil-works/pi-tui', async () => {
+  const work = await mkdtemp(join(tmpdir(), 'vela-cold-print-'))
+  dirs.push(work)
+  const home = join(work, 'home')
+  await mkdir(home, { recursive: true })
+  await writeFile(join(work, 'AGENTS.md'), 'Keep answers short.\n')
+  const preload = join(work, 'block-tui.ts')
+  await writeFile(
+    preload,
+    `Bun.plugin({ name: 'block-tui', setup(build) { build.onLoad({ filter: /pi-tui/ }, () => { throw new Error('pi-tui must not load in print mode') }) } })\n`,
   )
-  expect((await check('memory/index.ts', 'tracker')).join('\n')).toMatch(
-    /internal member/,
+  // Positive control: prove the resolution hook catches an actual import that pulls in pi-tui.
+  const statusDisplay = join(
+    import.meta.dir,
+    '../../packages/vela/src/cli/status-display.ts',
   )
-  expect((await check('web/index.ts', 'tracker')).join('\n')).toMatch(
-    /internal member/,
+  const probe = join(work, 'probe-tui.ts')
+  await writeFile(probe, `await import(${JSON.stringify(statusDisplay)})\n`)
+  const probeChild = Bun.spawn(
+    [process.execPath, '--preload', preload, probe],
+    {
+      cwd: work,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { PATH: process.env.PATH ?? '', HOME: home },
+    },
   )
-})
+  const [probeErr, probeCode] = await Promise.all([
+    new Response(probeChild.stderr).text(),
+    probeChild.exited,
+  ])
+  expect(probeCode).not.toBe(0)
+  expect(probeErr).toContain('pi-tui must not load in print mode')
+
+  const main = join(import.meta.dir, '../../packages/vela/src/cli/main.ts')
+  const child = Bun.spawn(
+    [process.execPath, '--preload', preload, main, '-p', 'hello'],
+    {
+      cwd: work,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: home,
+        VELA_DIR: join(home, '.vela'),
+        VELA_MODEL: 'mock',
+        VELA_OFFLINE: '1',
+      },
+    },
+  )
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  expect(code, stderr).toBe(0)
+  expect(stdout.trim().length).toBeGreaterThan(0)
+  expect(stderr).not.toContain('pi-tui must not load')
+}, 20_000)

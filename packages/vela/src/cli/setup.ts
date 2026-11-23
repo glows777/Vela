@@ -1,19 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import { fuzzyFilter } from '@earendil-works/pi-tui'
-import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
-import type { ModelInfo, ThinkingLevel } from '@glows777/vela-core'
-import { background, memory, todo, web, webConfig } from '@glows777/vela-core'
-import {
-  assertSessionId,
-  getToolListError,
-  isToolModifier,
-  THINKING_LEVELS,
-} from '@glows777/vela-core/diagnostics'
-import { lark, larkConfig } from '@glows777/vela-lark'
-import { mcp } from '@glows777/vela-mcp'
-import { rag, ragConfig } from '@glows777/vela-rag'
 import {
   type ExtensionEntry,
   extensionName,
@@ -24,6 +11,17 @@ import {
   type VelaConfig,
   type VelaSettings,
 } from '../config/index.ts'
+import {
+  assertSessionId,
+  getToolListError,
+  isToolModifier,
+  THINKING_LEVELS,
+} from '../driver/diagnostics.ts'
+import type { ModelInfo, ThinkingLevel } from '../driver/index.ts'
+import { background, memory, todo, web, webConfig } from '../driver/index.ts'
+import { lark, larkConfig } from '../lark/index.ts'
+import type { ChannelExtension as VelaExtension } from '../legacy-channels/index.ts'
+import { mcp } from '../mcp/index.ts'
 import { resolveShellPath } from './shell.ts'
 import { applyToolModifiers, type ToolLoadout } from './tool-selection.ts'
 
@@ -37,7 +35,6 @@ export const BUILTIN_EXTENSIONS: Record<
   background: (settings) =>
     background({ shellPath: resolveShellPath(settings.shellPath) }),
   memory: () => memory(),
-  rag: () => rag(),
   web: () => web(),
   lark: () => lark(),
   mcp: () => mcp(),
@@ -47,7 +44,7 @@ export const BUILTIN_EXTENSIONS: Record<
 /** Config-driven session capabilities; explicit -e factories remain host-owned. */
 export const SESSION_BUILTINS = new Set(['background', 'web', 'mcp', 'todo'])
 /** One owner for each host-wide storage/lifecycle, regardless of project switches. */
-export const HOST_STORAGE_BUILTINS = new Set(['memory', 'rag'])
+export const HOST_STORAGE_BUILTINS = new Set(['memory'])
 
 export interface CliArgs {
   setup?: boolean
@@ -458,6 +455,33 @@ function toolMatcher(entry: string): (name: string) => boolean {
   return (name) => pattern.test(name)
 }
 
+function isSubsequence(haystack: string, needle: string): boolean {
+  let pos = 0
+  for (const ch of needle) {
+    const idx = haystack.indexOf(ch, pos)
+    if (idx === -1) return false
+    pos = idx + 1
+  }
+  return true
+}
+
+/** Space- and slash-separated case-insensitive subsequence match with alpha/digit swap fallback (keeps `--list-models` off pi-tui). */
+function matchesTokens(text: string, query: string): boolean {
+  const haystack = text.toLowerCase()
+  for (const token of query
+    .trim()
+    .toLowerCase()
+    .split(/[\s/]+/)) {
+    if (!token) continue
+    if (isSubsequence(haystack, token)) continue
+    const swapped =
+      token.match(/^([a-z]+)([0-9]+.*)$/) ?? token.match(/^([0-9]+)([a-z]+.*)$/)
+    if (!swapped || !isSubsequence(haystack, `${swapped[2]}${swapped[1]}`))
+      return false
+  }
+  return true
+}
+
 /**
  * `--list-models` output (like pi's): provider, model, context window and thinking support, sorted by
  * provider and id. Only providers with a credential (auth.json, models.json or an environment variable) appear.
@@ -470,7 +494,9 @@ export function formatModelList(
     return 'No models available: sign in with /login, or set a provider API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY) or a provider in ~/.vela/models.json.\n'
   const found = (
     search
-      ? fuzzyFilter([...models], search, (m) => `${m.provider} ${m.id}`)
+      ? [...models].filter((m) =>
+          matchesTokens(`${m.provider} ${m.id}`, search),
+        )
       : [...models]
   ).sort(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
@@ -580,7 +606,7 @@ export function extensionConfigFromEnv(
 ): Record<string, Record<string, unknown>> {
   const result = { ...fromSettings }
   const context = { cwd: '', agentDir: '', projectDir: '', trusted: false, env }
-  for (const definition of [webConfig, larkConfig, ragConfig])
+  for (const definition of [webConfig, larkConfig])
     result[definition.name] = definition.resolve(
       result[definition.name] ?? {},
       context,
@@ -710,16 +736,12 @@ export function legacyDataHint(
       ['.sessions', 'sessions'],
       ['.memory', 'memory'],
       ['.usage', 'usage'],
-      ['knowledge.db', 'rag'],
     ] as const
   ).filter(([old]) => existsSync(join(cwd, old)))
   if (!moves.length) return
   const lines = moves.map(([old, next]) => {
     const from = shellQuote(join(resolve(cwd), old))
     const target = shellQuote(join(resolve(dataDir), next))
-    // knowledge.db* moves together with any -journal / -wal / -shm files
-    if (old === 'knowledge.db')
-      return `  mkdir -p ${target} && mv ${from}* ${target}/`
     // The new dir may already hold files created by this launch (e.g. an empty MEMORY.md): merge, old data wins on name clashes
     return `  mkdir -p ${target} && cp -R ${from}/. ${target}/ && rm -r ${from}`
   })

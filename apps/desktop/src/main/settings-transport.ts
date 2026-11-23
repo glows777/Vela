@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { LarkTransport } from '@glows777/vela-lark'
+import type { LarkTransport } from '@glows777/vela'
 
 /** The settings journey only opens and closes a connection. Never contact a tenant. */
 export function settingsTransport(

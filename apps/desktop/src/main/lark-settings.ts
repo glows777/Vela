@@ -1,5 +1,5 @@
 import { saveLarkSection } from '@glows777/vela'
-import { connectLarkSetup } from '@glows777/vela-lark'
+import { connectLarkSetup } from '@glows777/vela/legacy-desktop'
 import type { LarkSetup, SettingsState } from '../shared/bridge.ts'
 
 /** SDK errors may contain configuration values. Only fixed diagnostic text crosses IPC. */

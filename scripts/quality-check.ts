@@ -24,9 +24,7 @@ import { readWorkspaces } from './workspaces.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
 const SOURCES = [
-  ...['core', 'channels', 'mcp', 'rag', 'lark', 'vela'].map((name) =>
-    join(ROOT, 'packages', name, 'src'),
-  ),
+  join(ROOT, 'packages/vela/src'),
   join(ROOT, 'apps/desktop/src'),
   join(ROOT, 'extensions/docker'),
 ]
@@ -37,9 +35,9 @@ const MAX_CYCLES = 0
 
 /** Files that were already over the limit when the ratchet landed, pinned at their size that day. */
 const LINE_CEILINGS = new Map<string, number>([
-  ['packages/core/src/vela-session.ts', 1482],
+  ['packages/vela/src/driver/vela-session.ts', 1482],
   ['packages/vela/src/cli/interactive.ts', 1362],
-  ['packages/core/src/tools/registry.ts', 714],
+  ['packages/vela/src/driver/tools/registry.ts', 714],
 ])
 
 const failures: string[] = []

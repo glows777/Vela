@@ -66,7 +66,7 @@ async function main() {
           await $`npm publish ${pkg.tarball} --provenance --access public --tag ${tag}`
         },
       })
-      console.log('All six release packages are published and verified')
+      console.log('Release package @glows777/vela is published and verified')
     } finally {
       await rm(work, { recursive: true, force: true })
     }
@@ -128,8 +128,6 @@ async function main() {
   await $`git commit -m ${`Release ${tag}`}`
   await $`git tag -a ${tag} -m ${tag}`
   await $`git push --atomic origin main ${tag}`
-  console.log(
-    `Pushed ${tag}; Release publishes all six packages in dependency order`,
-  )
+  console.log(`Pushed ${tag}; Release publishes @glows777/vela`)
 }
 if (import.meta.main) await main()

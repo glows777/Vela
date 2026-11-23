@@ -1,17 +1,20 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
-import { channelSessionId, chatDirectory } from '@glows777/vela-channels'
+import { z } from 'zod'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import type { ChannelExtension as VelaExtension } from '../../packages/vela/src/legacy-channels/index.ts'
+import {
+  channelSessionId,
+  chatDirectory,
+} from '../../packages/vela/src/legacy-channels/index.ts'
 import {
   createFauxModel,
   type FauxRequest,
   type FauxStep,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { z } from 'zod'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

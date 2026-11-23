@@ -1,5 +1,5 @@
-import type { SessionEntry, VelaSession } from '@glows777/vela-core'
-import { sessionContentText as messageText } from '@glows777/vela-core/diagnostics'
+import { sessionContentText as messageText } from '../../driver/diagnostics.ts'
+import type { SessionEntry, VelaSession } from '../../driver/index.ts'
 import {
   type DialogHost,
   errorMessage,

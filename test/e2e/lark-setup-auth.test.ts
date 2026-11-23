@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { defaultHttpInstance } from '@larksuiteoapi/node-sdk'
-import { larkTransport } from '../../packages/lark/src/transport.ts'
+import { larkTransport } from '../../packages/vela/src/lark/transport.ts'
 
 test('setup transport authenticates bot lookup and confirmation message', async () => {
   const original = defaultHttpInstance.defaults.adapter

@@ -1,20 +1,23 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
+import type { ProviderContext } from '../../packages/vela/src/driver/index.ts'
+import {
+  memorySessionStorage,
+  silentLogger,
+} from '../../packages/vela/src/driver/index.ts'
+import { messageTime } from '../../packages/vela/src/lark/history.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
 import type {
   ChannelDefinition,
   IncomingMessage,
   OutgoingMessage,
-} from '@glows777/vela-channels'
-import { channelSessionId } from '@glows777/vela-channels'
-import type { ProviderContext } from '@glows777/vela-core'
-import { memorySessionStorage, silentLogger } from '@glows777/vela-core'
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import { channelSessionId } from '../../packages/vela/src/legacy-channels/index.ts'
 import {
   createFauxModel,
   fauxHang,
   fauxText,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { messageTime } from '../../packages/lark/src/history.ts'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import {
   cleanupTestVelas,

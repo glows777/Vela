@@ -4,19 +4,18 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from 'zod'
 import {
   channelSessionId,
   createChannelVela,
   type IncomingMessage,
-} from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-
-import { z } from 'zod'
+} from '../../packages/vela/src/testing/core/index.ts'
 
 const secret = 'fixture-only-webhook-secret'
 const repo = 'glows777/Vela'

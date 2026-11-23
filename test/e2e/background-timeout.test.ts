@@ -3,9 +3,9 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { fauxText, fauxToolCall, tempDir } from '@glows777/vela/testing'
-import { loadConfig } from '@glows777/vela-core'
-import { lark } from '@glows777/vela-lark'
-import { background } from '../../packages/core/src/extensions/background/index.ts'
+import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
+import { loadConfig } from '../../packages/vela/src/driver/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import {
   cleanupTestVelas,

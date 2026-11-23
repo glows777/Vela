@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { inspectSession } from '@glows777/vela-core/diagnostics'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { createVela } from '../support/compat-vela.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

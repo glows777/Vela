@@ -1,6 +1,10 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
-import { fauxText } from '@glows777/vela-core/testing'
-import { type LarkHostEvent, LarkSubmitError, lark } from '@glows777/vela-lark'
+import {
+  type LarkHostEvent,
+  LarkSubmitError,
+  lark,
+} from '../../packages/vela/src/lark/index.ts'
+import { fauxText } from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

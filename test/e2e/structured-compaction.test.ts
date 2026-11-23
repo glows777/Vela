@@ -4,7 +4,7 @@ import {
   fauxError,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

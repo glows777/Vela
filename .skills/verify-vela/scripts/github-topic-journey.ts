@@ -3,18 +3,18 @@ import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { z } from 'zod'
 import {
   channelSessionId,
   createChannelVela,
   type IncomingMessage,
-} from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
+} from '../../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../../packages/vela/src/legacy-channels/testing.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { z } from 'zod'
+} from '../../../packages/vela/src/testing/core/index.ts'
 import { prepareWorkspace } from './workspace.ts'
 
 prepareWorkspace()

@@ -1,4 +1,4 @@
-import { isToolModifier } from '@glows777/vela-core/diagnostics'
+import { isToolModifier } from '../driver/diagnostics.ts'
 export interface ToolLoadout {
   selection?: string[]
   modifiers?: string[]

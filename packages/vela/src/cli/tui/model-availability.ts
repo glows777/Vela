@@ -1,4 +1,4 @@
-import type { VelaSession } from '@glows777/vela-core'
+import type { VelaSession } from '../../driver/index.ts'
 
 /**
  * Whether a session has a usable model: its name resolves and, when the provider defines one, its

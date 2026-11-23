@@ -8,13 +8,17 @@ import {
 } from 'node:https'
 import { join } from 'node:path'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
-import { createVela, type ExecutionEnv, type Result } from '@glows777/vela-core'
 import { buildDockerAdapter } from '../../extensions/docker/build.ts'
 import { createCredentialIdentity } from '../../extensions/docker/credential-identity.ts'
 import { openCredentialProxy } from '../../extensions/docker/credential-proxy.ts'
 import { openGuestHttpsRouter } from '../../extensions/docker/guest-https-router.ts'
 import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
 import { dockerOperations } from '../../extensions/docker/operations.ts'
+import {
+  createVela,
+  type ExecutionEnv,
+  type Result,
+} from '../../packages/vela/src/driver/index.ts'
 
 describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
   const ownerTest = test.skipIf(

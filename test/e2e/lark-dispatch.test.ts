@@ -1,17 +1,17 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
-import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { memorySessionStorage } from '@glows777/vela-core'
+import { z } from 'zod'
+import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
+import { messageTime } from '../../packages/vela/src/lark/history.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import type { ChannelExtension as VelaExtension } from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
   type FauxRequest,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { z } from 'zod'
-import { messageTime } from '../../packages/lark/src/history.ts'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

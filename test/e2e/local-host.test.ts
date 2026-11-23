@@ -2,22 +2,22 @@ import { afterEach, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, symlinkSync } from 'node:fs'
 import { Server } from 'node:net'
 import { join } from 'node:path'
+import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
+import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
 import {
   type ChannelRuntime,
   type LocalEvent,
   type LocalHost,
   local,
-} from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { inspectSession } from '@glows777/vela-core/diagnostics'
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
   type FauxRequest,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { background } from '../../packages/core/src/extensions/background/index.ts'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import {
   freeLocalPort,

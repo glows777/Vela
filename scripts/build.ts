@@ -21,7 +21,7 @@ export async function copyPackageAssets(
 }
 
 if (import.meta.main) {
-  for (const name of ['core', 'channels', 'mcp', 'rag', 'lark', 'vela']) {
+  for (const name of ['vela']) {
     const dir = join(root, 'packages', name)
     await rm(join(dir, 'dist'), { recursive: true, force: true })
     await $`bunx --no-install tsc -p ${join(dir, 'tsconfig.build.json')}`.cwd(

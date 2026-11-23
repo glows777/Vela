@@ -2,8 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fauxText } from '@glows777/vela-core/testing'
 import { z } from 'zod'
+import { fauxText } from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 const roots: string[] = []

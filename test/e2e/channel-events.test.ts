@@ -3,16 +3,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createVela, type IncomingMessage } from '@glows777/vela'
-import { channelSessionId } from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
+import { z } from 'zod'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import { channelSessionId } from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
   createFauxModel,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { z } from 'zod'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 
 const cleanups: (() => Promise<void>)[] = []

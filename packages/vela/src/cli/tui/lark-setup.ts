@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { connectLarkSetup } from '@glows777/vela-lark'
+import { connectLarkSetup } from '../../lark/index.ts'
 import { saveLarkSection } from '../../settings.ts'
 
 interface Connection {

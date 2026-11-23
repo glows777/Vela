@@ -1,16 +1,19 @@
 import { expect, test } from 'bun:test'
-import * as diagnostics from '@glows777/vela-core/diagnostics'
-import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
-import { BUILTIN_PROVIDERS } from '../../packages/core/src/config/models.ts'
-import * as paths from '../../packages/core/src/config/paths.ts'
-import * as settings from '../../packages/core/src/config/settings.ts'
-import * as messages from '../../packages/core/src/messages.ts'
-import * as catalog from '../../packages/core/src/models/catalog.ts'
-import * as entries from '../../packages/core/src/session/entries.ts'
-import * as html from '../../packages/core/src/session/export-html.ts'
-import * as options from '../../packages/core/src/session/options.ts'
-import * as ids from '../../packages/core/src/session/session-id.ts'
-import * as selection from '../../packages/core/src/tools/tool-selection.ts'
+import * as paths from '../../packages/vela/src/driver/config/paths.ts'
+import * as settings from '../../packages/vela/src/driver/config/settings.ts'
+import * as diagnostics from '../../packages/vela/src/driver/diagnostics.ts'
+import * as messages from '../../packages/vela/src/driver/messages.ts'
+import * as entries from '../../packages/vela/src/driver/session/entries.ts'
+import * as html from '../../packages/vela/src/driver/session/export-html.ts'
+import * as options from '../../packages/vela/src/driver/session/options.ts'
+import * as ids from '../../packages/vela/src/driver/session/session-id.ts'
+import * as selection from '../../packages/vela/src/driver/tools/tool-selection.ts'
+import * as catalog from '../../packages/vela/src/providers/models/catalog.ts'
+import { BUILTIN_PROVIDERS } from '../../packages/vela/src/providers/models-config.ts'
+import {
+  createFauxModel,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 
 const api = diagnostics as unknown as Record<string, unknown>
 test('experimental frontend helpers are the canonical core implementations', () => {

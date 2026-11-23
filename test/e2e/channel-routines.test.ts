@@ -1,12 +1,15 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { channelSessionId } from '@glows777/vela-channels'
-import { VelaSession } from '@glows777/vela-core'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { ChannelDirectory } from '../../packages/channels/src/directory.ts'
+import { VelaSession } from '../../packages/vela/src/driver/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import { ChannelDirectory } from '../../packages/vela/src/legacy-channels/directory.ts'
+import { channelSessionId } from '../../packages/vela/src/legacy-channels/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { RoutineClock } from '../support/routine-clock.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'

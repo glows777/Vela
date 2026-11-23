@@ -1,3 +1,4 @@
+export { agentErrorHint, createLocalExecutionEnv } from './driver/index.ts'
 export type {
   LocalEvent,
   LocalEventData,
@@ -7,23 +8,32 @@ export type {
   LocalProgress,
   LocalProject,
   LocalSession,
-} from '@glows777/vela-channels'
-export { LocalError, local } from '@glows777/vela-channels'
-export { agentErrorHint, createLocalExecutionEnv } from '@glows777/vela-core'
+} from './legacy-channels/index.ts'
+export { LocalError, local } from './legacy-channels/index.ts'
+
 /**
  * Public entry point of the Vela SDK (`import { createVela } from '@glows777/vela'`).
  * Export only from here; the CLI lives in cli/main.ts and test helpers in '@glows777/vela/testing'.
  * test/public-api.test.ts checks the export map against api/public-api.txt: run `bun run api:update` after changing it.
  */
 
-export type {
-  ChannelDefinition,
-  ChannelEvent,
-  ChannelExtension as VelaExtension,
-  ChannelExtensionAPI as ExtensionAPI,
-  IncomingMessage,
-  OutgoingMessage,
-} from '@glows777/vela-channels'
+export {
+  type ExtensionEntry,
+  importExtension,
+  type LoadConfigOptions,
+  loadConfig,
+  loadModels,
+  type ProviderApi,
+  type ProviderConfig,
+  type VelaConfig,
+  type VelaSettings,
+} from './config/index.ts'
+export {
+  inspectSession,
+  inspectVela,
+  type SessionInspection,
+  type VelaInspection,
+} from './driver/diagnostics.ts'
 export type {
   AgentErrorKind,
   ApiKeyCredential,
@@ -104,7 +114,7 @@ export type {
   VelaEventListener,
   VelaLimits,
   VelaSessionEventListener,
-} from '@glows777/vela-core'
+} from './driver/index.ts'
 export {
   type BashExecutionEntry,
   type BranchSummaryEntry,
@@ -161,13 +171,7 @@ export {
   webConfig,
   withFileMutationQueue,
   writeProviderPreset,
-} from '@glows777/vela-core'
-export {
-  inspectSession,
-  inspectVela,
-  type SessionInspection,
-  type VelaInspection,
-} from '@glows777/vela-core/diagnostics'
+} from './driver/index.ts'
 export {
   type AfterProviderResponseEvent,
   type BeforeAgentStartEvent,
@@ -195,7 +199,7 @@ export {
   type ToolResultEvent,
   type ToolResultEventResult,
   type TreePreparation,
-} from '@glows777/vela-core/extension-api'
+} from './extension-api.ts'
 export type {
   LarkCard,
   LarkCardAction,
@@ -204,7 +208,7 @@ export type {
   LarkMessageEvent,
   LarkSentMessage,
   LarkTransport,
-} from '@glows777/vela-lark'
+} from './lark/index.ts'
 export {
   type LarkHost,
   type LarkHostEvent,
@@ -212,7 +216,15 @@ export {
   type LarkVisibleMessage,
   lark,
   larkConfig,
-} from '@glows777/vela-lark'
+} from './lark/index.ts'
+export type {
+  ChannelDefinition,
+  ChannelEvent,
+  ChannelExtension as VelaExtension,
+  ChannelExtensionAPI as ExtensionAPI,
+  IncomingMessage,
+  OutgoingMessage,
+} from './legacy-channels/index.ts'
 export {
   type McpExposure,
   type McpHttpServerConfig,
@@ -222,25 +234,7 @@ export {
   type McpStdioServerConfig,
   mcp,
   mcpConfig,
-} from '@glows777/vela-mcp'
-export {
-  createEmbedder,
-  type EmbeddingFn,
-  type RagOptions,
-  rag,
-  ragConfig,
-} from '@glows777/vela-rag'
-export {
-  type ExtensionEntry,
-  importExtension,
-  type LoadConfigOptions,
-  loadConfig,
-  loadModels,
-  type ProviderApi,
-  type ProviderConfig,
-  type VelaConfig,
-  type VelaSettings,
-} from './config/index.ts'
+} from './mcp/index.ts'
 export {
   saveLarkSection,
   saveModelSetup,

@@ -6,7 +6,7 @@ import {
   loadModels,
   memoryCredentialStore,
   web,
-} from '@glows777/vela-core'
+} from '../../packages/vela/src/driver/index.ts'
 import { responsesReply } from '../support/responses.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 

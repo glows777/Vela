@@ -9,13 +9,13 @@ import type {
   ChannelRuntime,
   IncomingMessage,
   OutgoingMessage,
-} from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
+} from '../../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../../packages/vela/src/legacy-channels/testing.ts'
 import {
   createFauxModel,
   fauxHang,
   fauxText,
-} from '@glows777/vela-core/testing'
+} from '../../../packages/vela/src/testing/core/index.ts'
 
 let runtime!: ChannelRuntime
 let other!: ChannelRuntime

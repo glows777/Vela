@@ -55,7 +55,7 @@ The listener binds **only `127.0.0.1`**, default port **8788**. Every route, inc
 
 ### SDK startup
 
-The SDK does not read `extensionConfig.local` to enable the transport. For in-process projects/history/events without a listener, use `local({})` and the typed [Local host API](channels-reference.md#local-projects-and-visible-history). To enable HTTP/SSE, pass an explicit token to `local(options)`, exported by `@glows777/vela` and `@glows777/vela-channels`, and start channels explicitly:
+The SDK does not read `extensionConfig.local` to enable the transport. For in-process projects/history/events without a listener, use `local({})` and the typed [Local host API](channels-reference.md#local-projects-and-visible-history). To enable HTTP/SSE, pass an explicit token to `local(options)`, exported by `@glows777/vela`, and start channels explicitly:
 
 ```ts
 import { createVela, local } from '@glows777/vela'

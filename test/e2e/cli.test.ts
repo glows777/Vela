@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import { projectDataDir } from '../../packages/core/src/config/paths.ts'
+import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
@@ -171,8 +171,8 @@ test.concurrent.if(hasScript)(
   async () => {
     const preload = `
       import { mock } from 'bun:test'
-      import * as real from ${JSON.stringify(join(ROOT, 'packages/lark/src/index.ts'))}
-      mock.module(${JSON.stringify(join(ROOT, 'packages/lark/src/index.ts'))}, () => ({ ...real,
+      import * as real from ${JSON.stringify(join(ROOT, 'packages/vela/src/lark/index.ts'))}
+      mock.module(${JSON.stringify(join(ROOT, 'packages/vela/src/lark/index.ts'))}, () => ({ ...real,
         connectLarkSetup: async () => ({
           waitForMention: async () => ({ chatId: 'oc_fake' }),
           send: async (chatId, text) => { await Bun.write(process.env.VELA_DIR + '/sent.json', JSON.stringify({ chatId, text })) },
@@ -951,16 +951,6 @@ test.concurrent('-p prints only the final answer to stdout and saves a new sessi
   expect(files).toHaveLength(1)
   expect(files[0]).toMatch(/(^|\/)\d{8}-\d{6}-[0-9a-f]{4}\/transcript\.jsonl$/)
   expect(await Bun.file(files[0]!).text()).toContain('faux replay')
-})
-
-test.concurrent('unconfigured /rag explains configuration on demand in print mode', async () => {
-  const model = `faux:${scenario('rag-unconfigured')}`
-  const print = await cli(['-p', '/rag'], { model })
-  expect(print.code).toBe(0)
-  expect(print.stdout).toBe('')
-  expect(print.stderr).toContain('Knowledge base disabled')
-  expect(print.stderr).toContain('extensionConfig.rag.embedding')
-  expect(print.stderr).toContain('settings.json')
 })
 
 test.concurrent('-p reports a session save failure on stderr while keeping the answer on stdout', async () => {
@@ -2042,7 +2032,7 @@ test.concurrent('--model picks a provider registered by an extension; the choice
   dirs.push(home)
   await Bun.write(
     join(home.path, 'extensions/local.ts'),
-    `import { createFauxModel, fauxText } from ${JSON.stringify(join(ROOT, 'packages/core/src/testing/faux.ts'))}
+    `import { createFauxModel, fauxText } from ${JSON.stringify(join(ROOT, 'packages/vela/src/testing/core/faux.ts'))}
 export default (vela) => vela.registerProvider('local', {
   models: [{ id: 'm', contextWindow: 32768 }],
   createModel: (id) => createFauxModel({ modelId: id, responses: [(req) => fauxText('from ' + id + ' ' + (req.reasoning ?? '-'))] }),

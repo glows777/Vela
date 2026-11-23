@@ -152,7 +152,7 @@ The model can request several tool calls in one response. As in pi, they run in 
 
 - `write_file` and `edit_file` queue per file (resolved through symlinks): two writes to the same file run one after the other, writes to different files run at the same time. The queue is shared by every session in the process.
 - `bash` and the read-only tools take no lock.
-- A tool with `executionMode: 'sequential'` runs alone within its session: it waits for the session's calls that started before it, and calls that start after it wait for it. Other sessions are not affected. The built-in `memory` and `rag_ingest` tools are sequential.
+- A tool with `executionMode: 'sequential'` runs alone within its session: it waits for the session's calls that started before it, and calls that start after it wait for it. Other sessions are not affected. The built-in `memory` tool is sequential.
 
 Tool availability checks, hooks and extension confirmation prompts run before a call waits for anything, so a tool waiting for approval does not hold back other tools.
 

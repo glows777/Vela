@@ -911,7 +911,7 @@ import {
   fauxError,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
+} from '../../packages/vela/src/testing/core/index.ts'
 import * as larkHelpers from '../../test/support/lark.ts'
 import { runtimePaths } from './layout.ts'
 import { options } from './run.ts'

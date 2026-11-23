@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import * as adapter from '@glows777/vela-lark'
+import * as adapter from '../../packages/vela/src/lark/index.ts'
 import { fakeLark } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

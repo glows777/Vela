@@ -4,7 +4,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import type { VelaSession } from '@glows777/vela-core'
+import type { VelaSession } from '../../driver/index.ts'
 import { formatUsd } from '../format.ts'
 import { sanitize } from './components.ts'
 import { theme } from './theme.ts'

@@ -9,13 +9,6 @@ import {
   tempDir,
 } from '@glows777/vela/testing'
 import {
-  createLocalExecutionEnv,
-  loadConfig,
-  memorySessionStorage,
-  type VelaOptions,
-} from '@glows777/vela-core'
-import { inspectSession } from '@glows777/vela-core/diagnostics'
-import {
   cliHostExtensionConfig,
   cliProjectExtensions,
 } from '../../packages/vela/src/cli/project-extensions.ts'
@@ -24,6 +17,13 @@ import {
   parseArgs,
 } from '../../packages/vela/src/cli/setup.ts'
 import { loadConfig as loadCliConfig } from '../../packages/vela/src/config/index.ts'
+import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
+import {
+  createLocalExecutionEnv,
+  loadConfig,
+  memorySessionStorage,
+  type VelaOptions,
+} from '../../packages/vela/src/driver/index.ts'
 
 interface Record {
   kind: string
@@ -514,7 +514,7 @@ test('CLI memory and RAG stay host-owned across two projects and project idle cl
     agentDir,
     trusted: true,
     env: {},
-    builtins: ['memory', 'rag'],
+    builtins: ['memory'],
   })
   const host = await loadCliExtensions(config, args, () => {}, true)
   const extensionConfig = cliHostExtensionConfig(config, args)
@@ -552,7 +552,7 @@ test('CLI memory and RAG stay host-owned across two projects and project idle cl
     await a.close()
     await b.prompt('B remains active')
     expect(projectFactories).toEqual([])
-    expect(host.map((factory) => factory.name)).toEqual(['memory', 'rag'])
+    expect(host.map((factory) => factory.name)).toEqual(['memory'])
     expect(b.getActiveTools()).toContain('memory')
     expect(extensionConfig.memory).toEqual({ dream: false })
   } finally {

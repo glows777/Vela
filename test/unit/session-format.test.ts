@@ -49,7 +49,7 @@ function section(markdown: string, heading: string, next: string): string {
 test('the session-format Header matches SessionHeader and states how location is written', () => {
   const markdown = readFileSync(join(root, 'docs/session-format.md'), 'utf8')
   const source = readFileSync(
-    join(root, 'packages/core/src/session/entries.ts'),
+    join(root, 'packages/vela/src/driver/session/entries.ts'),
     'utf8',
   )
   const header = section(markdown, '## Header', '## Entries')

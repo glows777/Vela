@@ -4,14 +4,7 @@ import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { $ } from 'bun'
 
-export const WORKSPACE_ORDER = [
-  'core',
-  'channels',
-  'mcp',
-  'rag',
-  'lark',
-  'vela',
-] as const
+export const WORKSPACE_ORDER = ['vela'] as const
 export interface ReleasePackage {
   key: string
   name: string

@@ -1,4 +1,4 @@
-import type { ModelMessage } from '@glows777/vela-core/extension-api'
+import type { ModelMessage } from '../extension-api.ts'
 
 const IMAGE_CHARS = 4800
 const isImageContentPart = (part: {
@@ -16,7 +16,7 @@ const isImageContentPart = (part: {
  * Each category gets its own color (ANSI 256) so you can see at a glance what is eating the context.
  */
 
-import type { UsageTotals } from '@glows777/vela-core/extension-api'
+import type { UsageTotals } from '../extension-api.ts'
 import { formatUsd } from './format.ts'
 
 interface ContextSlice {

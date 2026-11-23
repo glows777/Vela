@@ -9,10 +9,16 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
-import { background, fileSessionStorage } from '@glows777/vela-core'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
 import { runServe } from '../../../packages/vela/src/cli/serve.ts'
+import {
+  background,
+  fileSessionStorage,
+} from '../../../packages/vela/src/driver/index.ts'
+import { lark } from '../../../packages/vela/src/lark/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../../support/lark.ts'
 
 const [cwd, mode, scope] = process.argv.slice(2) as [string, string, string]

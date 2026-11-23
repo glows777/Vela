@@ -3,20 +3,20 @@ import assert from 'node:assert/strict'
 import { mkdir, readFile, symlink } from 'node:fs/promises'
 import { Server } from 'node:net'
 import { resolve } from 'node:path'
+import { lark } from '../../../packages/vela/src/lark/index.ts'
 import {
   createChannelVela,
   type LocalEvent,
   type LocalHost,
   local,
-} from '@glows777/vela-channels'
+} from '../../../packages/vela/src/legacy-channels/index.ts'
 import {
   createFauxModel,
   type FauxRequest,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
+} from '../../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'
 

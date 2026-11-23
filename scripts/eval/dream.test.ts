@@ -47,7 +47,7 @@ import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { command, runAttempt } from './worker.ts'
 
 for (const dream of [false, true]) {

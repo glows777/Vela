@@ -1,5 +1,5 @@
 import type { Component } from '@earendil-works/pi-tui'
-import type { ModelInfo, VelaSession } from '@glows777/vela-core'
+import type { ModelInfo, VelaSession } from '../../driver/index.ts'
 import type { Vela } from '../../vela.ts'
 import { nextModel, scopedModels } from '../model-cycle.ts'
 import { dialogBox, errorMessage } from './components.ts'

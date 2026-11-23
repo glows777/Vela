@@ -4,27 +4,6 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { type LocalOptions, local } from '@glows777/vela-channels'
-import type { ImageContent, VelaSession } from '@glows777/vela-core'
-import {
-  memorySessionStorage,
-  migrateSessionV1,
-  type SessionEntry,
-  type SessionHeader,
-  setDefaultToolModifiers,
-} from '@glows777/vela-core'
-import {
-  buildSessionPath,
-  isSessionV1,
-  newSessionId,
-  renderSessionHtml,
-  resolveModel,
-} from '@glows777/vela-core/diagnostics'
-import {
-  createMockModel,
-  loadFauxScenario,
-  recordModel,
-} from '@glows777/vela-core/testing'
 import type { LanguageModel } from 'ai'
 import {
   defaultAgentDir,
@@ -32,12 +11,33 @@ import {
   savedTrust,
   type VelaConfig,
 } from '../config/index.ts'
+import {
+  buildSessionPath,
+  isSessionV1,
+  newSessionId,
+  renderSessionHtml,
+  resolveModel,
+} from '../driver/diagnostics.ts'
+import type { ImageContent, VelaSession } from '../driver/index.ts'
+import {
+  memorySessionStorage,
+  migrateSessionV1,
+  type SessionEntry,
+  type SessionHeader,
+  setDefaultToolModifiers,
+} from '../driver/index.ts'
+import { type LocalOptions, local } from '../legacy-channels/index.ts'
 import { usableModel } from '../settings.ts'
+import {
+  createMockModel,
+  loadFauxScenario,
+  recordModel,
+} from '../testing/core/index.ts'
 import { createVela } from '../vela.ts'
+import { formatContextFileList } from './context-display.ts'
 import { ownerDocker } from './docker.ts'
 import { errorMessage } from './error.ts'
 import { readAttachments } from './files.ts'
-import { runInteractive } from './interactive.ts'
 import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
 import { localServeOptions } from './local-config.ts'
 import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
@@ -48,7 +48,6 @@ import {
   cliProjectExtensions,
 } from './project-extensions.ts'
 import { runRpcMode } from './rpc-mode.ts'
-import { runServe } from './serve.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
@@ -63,7 +62,6 @@ import {
   USAGE,
 } from './setup.ts'
 import { resolveShellPath } from './shell.ts'
-import { formatContextFileList } from './status-display.ts'
 
 const usageError = (message: string): never => {
   console.error(message)
@@ -580,6 +578,7 @@ try {
     })
     await exit(0)
   } else if (mode === 'serve') {
+    const { runServe } = await import('./serve.ts')
     await exit(
       await runServe({
         vela,
@@ -587,6 +586,7 @@ try {
       }),
     )
   } else {
+    const { runInteractive } = await import('./interactive.ts')
     await runInteractive({
       vela,
       messages,

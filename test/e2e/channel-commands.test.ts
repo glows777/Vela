@@ -3,9 +3,12 @@ import * as fs from 'node:fs/promises'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fauxHang, fauxText } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { ChannelDirectory } from '../../packages/channels/src/directory.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import { ChannelDirectory } from '../../packages/vela/src/legacy-channels/directory.ts'
+import {
+  fauxHang,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

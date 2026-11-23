@@ -16,27 +16,25 @@ test('umbrella replay retains its channel assembly and optional RAG fixture', as
     writeFileSync(
       path,
       JSON.stringify({
-        inputs: ['Ingest the guide'],
+        inputs: ['Read the guide'],
         responses: [
           {
-            toolCalls: [{ name: 'rag_ingest', input: { path: 'guide.md' } }],
+            toolCalls: [{ name: 'read_file', input: { path: 'guide.md' } }],
           },
-          { text: 'Guide ingested' },
+          { text: 'Guide read' },
         ],
       }),
     )
     const { t, errors } = await replayScenario(path, {
-      embedder: true,
       files: { 'guide.md': 'Use blue-green deployments for the service.' },
     })
     expect(errors).toEqual([undefined])
     expect(typeof t.vela.startChannels).toBe('function')
     expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
-      toolName: 'rag_ingest',
+      toolName: 'read_file',
       isError: false,
     })
-    expect(t.exists('rag/knowledge.db')).toBe(true)
-    expect(t.lastAssistantText()).toBe('Guide ingested')
+    expect(t.lastAssistantText()).toBe('Guide read')
   } finally {
     dir.cleanup()
   }

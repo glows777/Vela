@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
 import * as sdk from '@larksuiteoapi/node-sdk'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 // The real Lark transport (`larkTransport`, built by `lark()` from appId / appSecret) and the real

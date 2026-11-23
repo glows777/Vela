@@ -1,9 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ToolExecutionResult } from '@glows777/vela-core'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import z from 'zod'
+import { ToolExecutionResult } from '../../packages/vela/src/driver/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

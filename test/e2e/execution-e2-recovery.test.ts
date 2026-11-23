@@ -14,8 +14,11 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
-import { createLocalExecutionEnv, loadConfig } from '@glows777/vela-core'
-import { inspectSession } from '@glows777/vela-core/diagnostics'
+import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
+import {
+  createLocalExecutionEnv,
+  loadConfig,
+} from '../../packages/vela/src/driver/index.ts'
 
 test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   'an unreadable workspace skill reports its path and leaves the session and neighboring skill usable',
@@ -624,7 +627,7 @@ test('find does not run the host binary when the selected environment rejects ex
 test('background commands use their session environment, not host spawn', async () => {
   const { existsSync } = await import('node:fs')
   const { background } = await import(
-    '../../packages/core/src/extensions/background/index.ts'
+    '../../packages/vela/src/driver/extensions/background/index.ts'
   )
   const dir = tempDir()
   const marker = join(dir.path, 'bg-host-marker')
@@ -670,7 +673,7 @@ test('background commands use their session environment, not host spawn', async 
 
 test('model and user bash report partial effects on a real local spill failure', async () => {
   const { createSessionLocalExecutionEnv } = await import(
-    '../../packages/core/src/execution/local.ts'
+    '../../packages/vela/src/driver/execution/local.ts'
   )
   const { readFileSync } = await import('node:fs')
   const dir = tempDir()
@@ -708,7 +711,7 @@ test.skipIf(process.platform === 'win32')(
   'a denied group signal preserves a spill error and cleanup attempts every tracked group',
   async () => {
     const { createSessionLocalExecutionEnv } = await import(
-      '../../packages/core/src/execution/local.ts'
+      '../../packages/vela/src/driver/execution/local.ts'
     )
     const dir = tempDir()
     const blocked = join(dir.path, 'ordinary-file')
@@ -854,7 +857,9 @@ test('execution environment publishes a complete file by rename and removes stag
 test.each([false, true])(
   'memory session clone retains private spilled bash output after parent closes (custom local factory %p)',
   async (custom) => {
-    const { memorySessionStorage } = await import('@glows777/vela-core')
+    const { memorySessionStorage } = await import(
+      '../../packages/vela/src/driver/index.ts'
+    )
     const { readFileSync } = await import('node:fs')
     const dir = tempDir()
     const vela = createVela({

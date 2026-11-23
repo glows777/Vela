@@ -3,7 +3,10 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela, type VelaOptions } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
-import { loadConfig, type ProviderDefinition } from '@glows777/vela-core'
+import {
+  loadConfig,
+  type ProviderDefinition,
+} from '../../packages/vela/src/driver/index.ts'
 
 function setup() {
   const dir = tempDir()

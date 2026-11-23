@@ -1,16 +1,19 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
 import type {
   ChannelDefinition,
   ChannelRuntime,
   IncomingMessage,
   OutgoingMessage,
-} from '@glows777/vela-channels'
-import { channelSessionId } from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { memorySessionStorage } from '@glows777/vela-core'
-import { fauxHang, fauxText } from '@glows777/vela-core/testing'
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import { channelSessionId } from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
+import {
+  fauxHang,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

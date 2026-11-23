@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
-import { drainChannels } from '@glows777/vela-channels/testing'
+import { lark } from '../../../packages/vela/src/lark/index.ts'
+import { drainChannels } from '../../../packages/vela/src/legacy-channels/testing.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
+} from '../../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'
 

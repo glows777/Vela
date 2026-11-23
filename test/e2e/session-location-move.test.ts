@@ -7,13 +7,12 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
+import { buildSessionPath } from '../../packages/vela/src/driver/diagnostics.ts'
 import {
   createLocalExecutionEnv,
   createVela,
   memorySessionStorage,
-} from '@glows777/vela-core'
-
-import { buildSessionPath } from '@glows777/vela-core/diagnostics'
+} from '../../packages/vela/src/driver/index.ts'
 
 function fixture() {
   const dir = tempDir('vela-move-')

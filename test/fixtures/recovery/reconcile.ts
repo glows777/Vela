@@ -1,13 +1,13 @@
 import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
+import { z } from 'zod'
 import {
   createFauxModel,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { z } from 'zod'
+} from '../../../packages/vela/src/testing/core/index.ts'
 
 const [cwd, phase] = process.argv.slice(2)
 const hosted =

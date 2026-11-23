@@ -1,14 +1,13 @@
 import { join } from 'node:path'
-import { saveModelSetup } from '@glows777/vela'
-import type { Credential } from '@glows777/vela-core'
 import {
+  type Credential,
   fileCredentialStore,
-  loadModels,
   memoryCredentialStore,
   type ProviderDefinition,
+  saveModelSetup,
   verifyProviderModel,
-} from '@glows777/vela-core'
-import { resolveModel } from '@glows777/vela-core/diagnostics'
+} from '@glows777/vela'
+import { loadModels, resolveModel } from '@glows777/vela/legacy-desktop'
 import {
   type ModelSetup,
   type ProviderApi,

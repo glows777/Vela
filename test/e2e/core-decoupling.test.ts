@@ -2,13 +2,13 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tempDir } from '@glows777/vela/testing'
-import { memorySessionStorage } from '@glows777/vela-core'
+import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
+import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { background } from '../../packages/core/src/extensions/background/index.ts'
+} from '../../packages/vela/src/testing/core/index.ts'
 import {
   createVela,
   type Vela,
@@ -120,7 +120,7 @@ test('conflicting routing names the session and both routes without changing its
 test('a real channel logs a conflicting route once without retrying or calling the model', async () => {
   const errors: string[] = []
   let deliver!: (
-    message: import('../../packages/channels/src/types.ts').IncomingMessage,
+    message: import('../../packages/vela/src/legacy-channels/types.ts').IncomingMessage,
   ) => void | Promise<void>
   const model = createFauxModel({ responses: [] })
   const { vela, cwd } = setup({

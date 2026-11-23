@@ -2,7 +2,7 @@ import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { projectDataDir } from '../../packages/core/src/config/paths.ts'
+import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')

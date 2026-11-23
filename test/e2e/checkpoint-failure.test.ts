@@ -2,17 +2,17 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from 'zod'
 import {
   createVela,
   fileSessionStorage,
   type ModelMessage,
-} from '@glows777/vela-core'
+} from '../../packages/vela/src/driver/index.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { z } from 'zod'
+} from '../../packages/vela/src/testing/core/index.ts'
 
 function paired(messages: readonly ModelMessage[]) {
   const calls = messages.flatMap((m) =>

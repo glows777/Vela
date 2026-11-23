@@ -4,7 +4,7 @@ import type {
   LarkHistoryMessage,
   LarkMessageEvent,
   LarkTransport,
-} from '@glows777/vela-lark'
+} from '@glows777/vela'
 
 /**
  * The fake Lark behind `VELA_DESKTOP_LARK=fake`. It keeps a group's history in

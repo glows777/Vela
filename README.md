@@ -90,16 +90,11 @@ See [CLI](docs/cli.md) for flags, run modes and keys.
 
 ## Packages
 
-Vela is a Bun workspace of six npm packages under [`packages/`](packages/). Most people only need `@glows777/vela`, which ships the CLI and re-exports the SDK.
+Vela publishes a single npm package, [`@glows777/vela`](packages/vela) (alongside the private Electron desktop workspace under [`apps/desktop`](apps/desktop)).
 
 | Package | What it contains |
 | --- | --- |
-| [`@glows777/vela`](packages/vela) | The `vela` CLI, TUI and `vela serve`, plus SDK and testing re-exports |
-| [`@glows777/vela-core`](packages/core) | The SDK (`createVela`), the extension API, offline testing helpers and the light built-in extensions (memory, todo, web) |
-| [`@glows777/vela-channels`](packages/channels) | The standard channel interface and the channel runtime (group triage, topics, routines) |
-| [`@glows777/vela-lark`](packages/lark) | The Lark (Feishu) channel adapter |
-| [`@glows777/vela-mcp`](packages/mcp) | The MCP extension |
-| [`@glows777/vela-rag`](packages/rag) | The knowledge base (RAG) extension with SQLite vector storage |
+| [`@glows777/vela`](packages/vela) | The `vela` CLI, TUI, `vela serve`, SDK (`createVela`), `@glows777/vela/extension-api`, `@glows777/vela/testing`, built-in extensions (`background`, `memory`, `todo`, `web`, `mcp`), and Lark / Local channel adapters |
 
 ## Development
 

@@ -6,12 +6,12 @@ import ts from 'typescript'
 
 const hostHelpers: Record<string, readonly string[]> = {
   // Public host resource loaders, including Vela's own installed documentation.
-  'packages/core/src/prompt/context-files.ts': ['fs'],
-  'packages/core/src/prompt/templates.ts': ['fs'],
-  'packages/core/src/prompt/index.ts': ['fs'],
-  'packages/core/src/skills/loader.ts': ['fs'],
-  'packages/core/src/tools/binaries.ts': ['fs', 'child_process'],
-  'packages/core/src/tools/process-tree.ts': ['child_process'],
+  'packages/vela/src/driver/prompt/context-files.ts': ['fs'],
+  'packages/vela/src/driver/prompt/templates.ts': ['fs'],
+  'packages/vela/src/driver/prompt/index.ts': ['fs'],
+  'packages/vela/src/driver/skills/loader.ts': ['fs'],
+  'packages/vela/src/driver/tools/binaries.ts': ['fs', 'child_process'],
+  'packages/vela/src/driver/tools/process-tree.ts': ['child_process'],
 }
 
 /** Reject direct host filesystem/process dependencies in execution-facing code. */
@@ -20,13 +20,13 @@ export async function checkExecutionBoundaries(
 ): Promise<string[]> {
   const paths: string[] = []
   for (const pattern of [
-    'packages/core/src/tools/**/*.ts',
-    'packages/core/src/prompt/**/*.ts',
-    'packages/core/src/skills/**/*.ts',
-    'packages/core/src/extensions/background/**/*.ts',
-    'packages/core/src/session/user-bash.ts',
-    'packages/core/src/context/compressor.ts',
-    'packages/channels/src/attachments.ts',
+    'packages/vela/src/driver/tools/**/*.ts',
+    'packages/vela/src/driver/prompt/**/*.ts',
+    'packages/vela/src/driver/skills/**/*.ts',
+    'packages/vela/src/driver/extensions/background/**/*.ts',
+    'packages/vela/src/driver/session/user-bash.ts',
+    'packages/vela/src/driver/context/compressor.ts',
+    'packages/vela/src/legacy-channels/attachments.ts',
   ]) {
     for await (const path of new Glob(pattern).scan(root))
       paths.push(join(root, path))

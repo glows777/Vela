@@ -1,24 +1,24 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { ChannelVelaOptions } from '@glows777/vela-channels'
+import { projectTrustRequired as coreTrust } from '../driver/diagnostics.ts'
 import {
   type VelaConfig as CoreConfig,
   type VelaSettings as CoreSettings,
   type LoadConfigOptions,
   loadConfig as loadCoreConfig,
-} from '@glows777/vela-core'
-import { projectTrustRequired as coreTrust } from '@glows777/vela-core/diagnostics'
-import { type McpServersFile, mcpConfig } from '@glows777/vela-mcp'
+} from '../driver/index.ts'
+import type { ChannelVelaOptions } from '../legacy-channels/index.ts'
+import { type McpServersFile, mcpConfig } from '../mcp/index.ts'
 
+export { defaultAgentDir, extensionName } from '../driver/diagnostics.ts'
 export type {
   ExtensionEntry,
   LoadConfigOptions,
   ProviderApi,
   ProviderConfig,
-} from '@glows777/vela-core'
-export { importExtension, loadModels } from '@glows777/vela-core'
-export { defaultAgentDir, extensionName } from '@glows777/vela-core/diagnostics'
-export { savedTrust, saveTrust } from '../cli/config-trust.ts'
+} from '../driver/index.ts'
+export { importExtension, loadModels } from '../driver/index.ts'
+export { savedTrust, saveTrust } from './trust.ts'
 
 export interface VelaSettings extends CoreSettings {
   /** Unmatched events may reach this existing enabled top-level chat; unset drops them. */

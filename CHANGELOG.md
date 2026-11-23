@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Vela now publishes a single npm package (`@glows777/vela`) and removes the built-in `rag` extension.** `@glows777/vela-core`, `@glows777/vela-channels`, `@glows777/vela-lark`, `@glows777/vela-mcp`, and `@glows777/vela-rag` (along with `sqlite-vec`, `rag`, `ragConfig`, `createEmbedder`, `EmbeddingFn`, and `createFauxEmbedder`) are retired. Import SDK APIs from `@glows777/vela`, extension authoring helpers from `@glows777/vela/extension-api`, and offline test helpers from `@glows777/vela/testing`. Heavy optional dependencies (`@larksuiteoapi/node-sdk`, `@modelcontextprotocol/sdk`, `@earendil-works/pi-tui`, `@silvia-odwyer/photon-node`) stay lazy-loaded off the cold-start graph ([#535](https://github.com/glows777/Vela/issues/535)).
+
 ### Added
 
 - The TUI header and `/status` show the CLI version, so you can tell which build a session runs without leaving it. The header reads `Vela v0.8.1 · session <id>`, and `/status` starts with a `Version:` line. Both come from the installed `package.json`, the same value `vela --version` prints.
@@ -442,7 +446,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - A request that already started running tools is no longer sent again after an error, so tools don't run twice.
 - Interactive mode no longer stays running and spins a CPU after its terminal closes: on SIGHUP it saves and exits even though restoring the terminal fails, and a read or write error on a dead terminal exits at once with code 129, like pi.
 - When a request is retried, the interactive mode keeps the failed attempt's text marked `(response failed)` and shows the retry as a new message, instead of appending the retry to the old text.
-- **The knowledge base no longer mixes vectors from different embedding models.** It records the embedder that built it, and when the configured one differs, ingesting and searching fail with an error naming both instead of returning meaningless scores. Switch back, or run `/rag clear` and ingest again. A knowledge base from 0.1.0 has no record: the configured embedder is assumed, recorded and a warning logged. See [rag](docs/built-in-extensions.md#rag).
+- **The knowledge base no longer mixes vectors from different embedding models.** It records the embedder that built it, and when the configured one differs, ingesting and searching fail with an error naming both instead of returning meaningless scores. Switch back, or run `/rag clear` and ingest again. A knowledge base from 0.1.0 has no record: the configured embedder is assumed, recorded and a warning logged. See [built-in extensions](docs/built-in-extensions.md) (removed in v0.9).
 
 ### New Features
 

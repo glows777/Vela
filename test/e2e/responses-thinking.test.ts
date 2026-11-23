@@ -1,8 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ModelSpec, ThinkingLevel } from '@glows777/vela-core'
-import { loadModels } from '@glows777/vela-core'
+import type {
+  ModelSpec,
+  ThinkingLevel,
+} from '../../packages/vela/src/driver/index.ts'
+import { loadModels } from '../../packages/vela/src/driver/index.ts'
 import { responsesReply } from '../support/responses.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 

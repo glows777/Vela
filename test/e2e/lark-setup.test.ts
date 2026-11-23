@@ -163,7 +163,9 @@ test.each([
 ])(
   'discovery offers $expected on one listener',
   async ({ excluded, expected, lookup }) => {
-    const { discoverLarkGroup } = await import('@glows777/vela-lark')
+    const { discoverLarkGroup } = await import(
+      '../../packages/vela/src/lark/index.ts'
+    )
     // biome-ignore lint/suspicious/noExplicitAny: fake event fixture exercises partial SDK payloads
     let onMessage: ((event: any) => void) | undefined
     const lookups: string[] = []

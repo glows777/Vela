@@ -1,4 +1,4 @@
-import type { DemoModel } from '@glows777/vela-core/testing'
+import type { DemoModel } from '../../testing/core/index.ts'
 import type { CommandHandler } from './handler.ts'
 
 export const debugCommands: CommandHandler[] = [

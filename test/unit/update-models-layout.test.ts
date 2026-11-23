@@ -38,7 +38,7 @@ test('offline model catalog generation writes the core package, leaving flat src
       await $`${process.execPath} --preload ${join(root, 'offline.ts')} ${join(root, 'scripts/update-models.ts')}`.quiet()
     expect(result.exitCode).toBe(0)
     const output = Bun.file(
-      join(root, 'packages/core/src/models/catalog.generated.ts'),
+      join(root, 'packages/vela/src/providers/models/catalog.generated.ts'),
     )
     expect(await output.exists()).toBe(true)
     expect(await output.text()).toContain('MODEL_CATALOG')

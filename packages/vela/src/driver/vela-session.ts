@@ -1,0 +1,1482 @@
+import { join } from 'node:path'
+import type { LanguageModel } from 'ai'
+import { supportedThinkingLevels } from '../providers/models/catalog.ts'
+import {
+  limitsForModel,
+  type ModelInfo,
+  type ResolvedModel,
+  reasoningOption,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from '../providers/models/index.ts'
+import type { VelaLimits } from '../shared/limits.ts'
+import type {
+  CustomMessage,
+  CustomMessageInfo,
+  VelaEvent,
+  VelaEventListener,
+} from './agent/events.ts'
+import { agentLoop } from './agent/index.ts'
+import { canSummarize } from './context/compressor.ts'
+import { estimateMessageTokens } from './context/defense.ts'
+import { ContextManager } from './context/manager.ts'
+import {
+  createRequestSnapshot,
+  type RequestSnapshot,
+} from './context/request.ts'
+import { abortable, resolveLocation } from './execution/location.ts'
+import type { ExecutionLocation } from './execution/types.ts'
+import type {
+  BeforeAgentStartResult,
+  InputSource,
+} from './extensions/events.ts'
+import { withProviderHooks } from './extensions/provider-hooks.ts'
+import { type ExtensionUI, headlessUI, withDefaults } from './extensions/ui.ts'
+import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
+import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
+import {
+  cloneLeaf,
+  copyFork,
+  forkPoint,
+  prepareTree,
+  selectTreeBranch,
+} from './session/branch-selection.ts'
+import { SessionDefaultState } from './session/defaults.ts'
+import type {
+  SessionDeps as SessionDependencies,
+  ForkResult as SessionForkResult,
+} from './session/deps.ts'
+import { waitForDrain } from './session/drain.ts'
+import {
+  assertCustomType,
+  type SessionContext,
+  type SessionEntry,
+  type SessionTreeNode,
+} from './session/entries.ts'
+import { exportBranch } from './session/export.ts'
+import { SessionStore } from './session/index.ts'
+import { MessageQueue, messageText } from './session/message-queue.ts'
+import { NestedCallLog, takeToolDetails } from './session/nested-calls.ts'
+import type {
+  PromptOptions,
+  SendMessageOptions,
+  SessionOptions,
+  SessionUsage,
+} from './session/options.ts'
+import {
+  assertSessionId,
+  type ForkOptions,
+  type NavigateTreeOptions,
+  type QueueMode,
+} from './session/options.ts'
+import {
+  assertInterruptedTurn,
+  assertLegacyAnchors,
+  pendingToolCalls,
+  reconcileInterruptedTools,
+} from './session/recovery.ts'
+import {
+  busyLocationError,
+  needsRestoredWorkspace,
+  restoredLocation,
+  switchWorkspace,
+} from './session/relocation.ts'
+import type { SessionResources } from './session/resources.ts'
+import * as routing from './session/routing.ts'
+import type { SessionScope } from './session/scope.ts'
+import {
+  type SessionPersistence,
+  sessionArtifactsUseDataDir,
+} from './session/storage.ts'
+import { UserBash } from './session/user-bash.ts'
+import { SessionWork } from './session/work.ts'
+import type { ToolRegistry } from './tools/registry.ts'
+import type { BashResult } from './tools/shell.ts'
+import { getToolListError, isToolModifier } from './tools/tool-selection.ts'
+import { usageLedgerPath } from './usage/ledger.ts'
+import { CONTEXT_WINDOW, TokenTracker } from './usage/tracker.ts'
+
+/** What `fork()` / `clone()` returns. */
+export interface ForkResult extends SessionForkResult<VelaSession> {}
+
+/** Shared parts createVela() hands to every session. */
+export type SessionDeps = SessionDependencies<VelaSession>
+
+/**
+ * One conversation: its own message history, compaction state, usage, tool results and run lock.
+ * Tool definitions, extensions, memory, knowledge base, skills and channels are shared by all sessions in the same Vela.
+ */
+export class VelaSession {
+  readonly id: string
+  /** Effective working directory; not a filesystem sandbox. */
+  readonly cwd: string
+
+  private position: Readonly<ExecutionLocation>
+  private moving = false
+
+  /** Current trusted execution target, restored from the session transcript. */
+  get location(): Readonly<ExecutionLocation> {
+    return this.position
+  }
+
+  /** Prepare and persist an idle session's target before switching its prompt and tools. */
+  async setLocation(location: ExecutionLocation): Promise<void> {
+    this.store.assertLocationKnown()
+    if (!location) throw new Error('Invalid execution location')
+    const target = resolveLocation(location, this.deps.cwd)
+    return this.locationTask((signal) => this.switchLocation(target, signal))
+  }
+
+  private locationTask<T>(
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (
+      this.busy.locked ||
+      this.isBashRunning ||
+      this.hasWork ||
+      this.commands.size ||
+      this.registry.hasActiveCalls
+    )
+      return Promise.reject(busyLocationError())
+    return this.exclusive('change or restore location', async (signal) => {
+      this.moving = true
+      try {
+        return await task(signal)
+      } finally {
+        this.moving = false
+      }
+    })
+  }
+
+  private switchLocation(
+    target: Readonly<ExecutionLocation>,
+    moveSignal?: AbortSignal,
+  ) {
+    return switchWorkspace(
+      this,
+      this.deps,
+      target,
+      this.started,
+      () => {
+        this.position = target
+        Object.assign(this, { cwd: target.cwd })
+        this.started = undefined
+        this.turn = { sections: {}, messages: [] }
+      },
+      moveSignal,
+    )
+  }
+
+  /** Limits in effect (recomputed from the new model's context window on model switch) */
+  readonly limits: VelaLimits
+  /** Message history (in order). SDK users should treat it as read-only and use append() to add. */
+  readonly messages: ModelMessage[] = []
+  /** @internal */
+  readonly timestamps: Map<ModelMessage, number>
+  /** @internal */
+  readonly store: SessionStore
+  /** @internal */
+  readonly tracker: TokenTracker
+  /** @internal */ readonly contextManager: ContextManager
+  /** @internal */ execEnv = (signal?: AbortSignal) =>
+    abortable(this.deps.resolveExecution(this), signal)
+  /** @internal This session's registry: shared tool definitions, separate tool results and discovered deferred tools */
+  readonly registry: ToolRegistry
+  /** @internal Run lock: held while any agent loop (prompt, skill, dream, defend, ingest) runs */
+  readonly busy: { locked: boolean; controller?: AbortController } = {
+    locked: false,
+  }
+  /** @internal UI for extensions */
+  readonly ui: ExtensionUI
+  /** Whether this session has a real UI (idle channel cleanup must preserve it). */
+  readonly hasUI: boolean
+
+  private readonly listeners = new Set<VelaEventListener>()
+  /** Calls tools made through ctx.executeTool(), recorded on their caller's tool result (like pi's nestedCalls) */
+  private readonly nestedCalls = new NestedCallLog()
+  /** Tools' display data from `tool_execution_end`, recorded on their tool message like nestedCalls */
+  private readonly toolDetails = new Map<string, unknown>()
+  private readonly userBash: UserBash
+  private readonly builder: SystemPromptBuilder
+  private readonly deps: SessionDeps
+  /** Options the session was opened with (a fork opens with the same) */
+  private readonly options: SessionOptions
+  private closed = false
+  private draining = false
+  private drained?: Promise<void>
+  /** The close in progress: a second caller waits for the final save instead of returning early */
+  private closing?: Promise<void>
+  private started?: Promise<void>
+  private running?: Promise<void>
+  private turn: BeforeAgentStartResult = { sections: {}, messages: [] }
+  private readonly messageQueue = new MessageQueue((event) => this.emit(event))
+  /** How steer messages are taken (default one-at-a-time, like pi) */
+  steeringMode: QueueMode = 'one-at-a-time'
+  /** How followUp messages are taken (default one-at-a-time, like pi) */
+  followUpMode: QueueMode = 'one-at-a-time'
+
+  /** @internal Created by vela.session() */
+  constructor(id: string, deps: SessionDeps, options: SessionOptions = {}) {
+    assertSessionId(id)
+    this.id = id
+    this.position = resolveLocation(options.location, deps.cwd, options.cwd)
+    this.cwd = this.position.cwd
+    if (this.position.environment !== 'local' && !deps.hasResolver)
+      throw new Error(
+        `Execution environment unavailable for ${this.position.environment}:${this.cwd}`,
+      )
+    this.deps = deps
+    this.options = options
+    this.backgroundWork = new SessionWork(options.unattended === true)
+    this.defaults = new SessionDefaultState(deps, options)
+    this.limits = limitsForModel({}, deps.limitOverrides)
+    this.builder = deps.builder
+    this.store = new SessionStore(
+      id,
+      join(deps.dataDir, 'sessions'),
+      deps.logger,
+      deps.sessionStorage,
+      deps.temporaryDataDir,
+      this.cwd,
+      this.location,
+      () => deps.onSaved(id),
+    )
+    this.hasUI = options.ui !== undefined
+    this.ui = options.ui ? withDefaults(options.ui) : headlessUI(this.emit)
+    this.registry = deps.registry.fork(this.store.results, {
+      onEvent: this.emit,
+      sessionId: id,
+      scope: () => this.scope,
+    })
+    this.registry.isDraining = () => this.draining || this.moving
+    routing.applySessionRouting(this, options)
+    const toolListError = options.tools
+      ? getToolListError(options.tools)
+      : undefined
+    if (toolListError) throw new Error(`Invalid tools option: ${toolListError}`)
+    if (options.tools?.some(isToolModifier))
+      this.registry.setDefaultToolModifiers(options.tools)
+    else this.registry.setSelection(options.tools)
+    // --no-session keeps usage in memory. /usage and /status still read the tracker;
+    // they must not append usage/requests.jsonl under the data directory.
+    this.tracker = new TokenTracker(
+      sessionArtifactsUseDataDir(deps.sessionStorage, id, deps.temporaryDataDir)
+        ? usageLedgerPath(deps.dataDir)
+        : undefined,
+    )
+    this.contextManager = new ContextManager(
+      this.store,
+      this.tracker,
+      { messages: this.messages, timestamps: new Map(), summary: '' },
+      this.emit,
+      this.limits,
+      this.execEnv,
+    )
+    this.timestamps = this.contextManager.state.timestamps
+    this.userBash = new UserBash({
+      store: this.store,
+      emit: this.emit,
+      busy: this.busy,
+      save: () => this.saveOrReport(),
+      messages: this.messages,
+      tracker: this.tracker,
+      timestamps: this.timestamps,
+      prepare: this.execEnv,
+      start: (signal?: AbortSignal) => this.start(signal),
+      background: () => this.registry.background,
+      isClosed: () => this.closed,
+      isDraining: () => this.draining,
+    })
+    this.contextManager.autoCompaction =
+      options.autoCompaction ?? deps.autoCompaction
+    // Like pi: a new session starts with its model and thinking level (written with the first message)
+    if (typeof this.defaults.modelChoice === 'string')
+      this.store.appendModelChange(this.defaults.modelChoice)
+    this.store.appendThinkingLevelChange(this.defaults.thinking)
+  }
+
+  private displayName?: string
+
+  /** Session display name (like pi's session name); saved with the session and shown in the session list. */
+  get name(): string | undefined {
+    return this.displayName
+  }
+
+  /** Sets the display name (empty string clears it), appended to the session like pi's session_info. */
+  setName(name: string | undefined): void {
+    const next = name?.replace(/[\r\n]+/g, ' ').trim() || undefined
+    if (next === this.displayName) return
+    this.displayName = next
+    this.store.appendSessionInfo(next)
+  }
+
+  private readonly defaults: SessionDefaultState
+
+  private resolveModel(): ResolvedModel {
+    if (!this.defaults.resolved)
+      this.applyModel(this.deps.resolveModel(this.defaults.modelChoice, this))
+    return this.defaults.resolved as ResolvedModel
+  }
+
+  private applyModel(resolved: ResolvedModel): void {
+    this.defaults.resolved = resolved
+    this.defaults.hooked = undefined
+    const limits = limitsForModel(
+      resolved.info,
+      this.defaults.effectiveLimitOverrides,
+    )
+    Object.assign(this.limits, limits)
+    Object.assign(this.contextManager.limits, limits)
+    const window = resolved.info.contextWindow ?? CONTEXT_WINDOW
+    this.tracker.setModel(window, resolved.info.cost)
+  }
+
+  private requestModel(): LanguageModel {
+    this.defaults.hooked ??= withProviderHooks(this.model, {
+      has: (event, toolName) =>
+        this.deps.extensions.hasHandlers(event, toolName),
+      beforeRequest: (params) =>
+        this.deps.extensions.beforeProviderRequest(this, params),
+      afterResponse: (headers) =>
+        this.deps.extensions.afterProviderResponse(this, headers),
+      streamEvent: (event) =>
+        this.deps.extensions.providerStreamEvent(this, {
+          type: 'provider_stream_event',
+          ...event,
+        }),
+    })
+    return this.defaults.hooked
+  }
+
+  /** Current model (AI SDK LanguageModel). Throws if the name cannot be resolved. */
+  get model(): LanguageModel {
+    return this.resolveModel().model
+  }
+
+  /** Current model metadata: provider, id, `provider/id`, context window, etc. */
+  get modelInfo(): ModelInfo {
+    return this.resolveModel().info
+  }
+
+  /**
+   * Switches the model (like pi's setModel): `provider/id` or LanguageModel, effective from the next prompt().
+   * Compaction thresholds are recomputed from the new model's context window. Throws and keeps the
+   * current model if the name cannot be resolved. A model chosen by name is appended to the session (`model_change`).
+   */
+  setModel(model: string | LanguageModel): void {
+    this.selectModel(model, true)
+    this.defaults.modelPinned = true
+  }
+
+  private selectModel(model: string | LanguageModel, record: boolean): void {
+    const resolved = this.deps.resolveModel(model, this)
+    const thinking = this.thinkingLevel
+    this.defaults.modelChoice = model
+    this.applyModel(resolved)
+    if (record && typeof model === 'string')
+      this.store.appendModelChange(resolved.info.ref ?? model)
+    // Like pi's setModel: the thinking level is clamped to the new model and saved when that changes it
+    if (record && this.thinkingLevel !== thinking)
+      this.store.appendThinkingLevelChange(this.thinkingLevel)
+  }
+
+  /**
+   * Thinking level (off … max, default medium), clamped to what the current model supports like pi: a model
+   * without thinking uses `off`, and a level the model lacks moves to the nearest one it has.
+   */
+  get thinkingLevel(): ThinkingLevel {
+    let info: ModelInfo
+    try {
+      info = this.resolveModel().info
+    } catch {
+      return this.defaults.thinking
+    }
+    return this.defaults.thinkingLevelFor(info)
+  }
+
+  /** Thinking levels the current model supports (all of them when its metadata doesn't say). */
+  availableThinkingLevels(): ThinkingLevel[] {
+    try {
+      return supportedThinkingLevels(this.resolveModel().info, THINKING_LEVELS)
+    } catch {
+      return [...THINKING_LEVELS]
+    }
+  }
+
+  /**
+   * Sets the thinking level (like pi's setThinkingLevel); effective from the next request. The level actually used
+   * is clamped to the model (see `thinkingLevel`) and saved with the session when it changes. Switching to a model
+   * that supports the requested level uses it again.
+   */
+  setThinkingLevel(level: ThinkingLevel): void {
+    if (!THINKING_LEVELS.includes(level))
+      throw new Error(
+        `Thinking level must be one of ${THINKING_LEVELS.join(' / ')}`,
+      )
+    this.defaults.thinkingPinned = true
+    const before = this.thinkingLevel
+    this.defaults.thinking = level
+    const after = this.thinkingLevel
+    if (after !== before) this.store.appendThinkingLevelChange(after)
+  }
+  /** Channel this session answers on. Open supplies it, and `resume()` restores a saved one. */
+  channel?: string
+
+  /** Transient host-supplied sharing identity; it never enables tools. */
+  get scope(): Readonly<SessionScope> | undefined {
+    return routing.sessionScope(this)
+  }
+
+  /** @internal The host's queue for results produced outside a turn (channels bind it at open). */
+  get host(): SessionOptions['host'] {
+    return routing.sessionHost(this)
+  }
+  /** @internal Work outside a turn; idle cleanup keeps the session open while it runs. */
+  readonly backgroundWork: SessionWork
+  /** @internal */
+  trackWork(work: Promise<unknown>): void {
+    this.backgroundWork.track(work)
+  }
+  /** Whether work outside a turn (a background command) is still running. */
+  get hasWork(): boolean {
+    return this.backgroundWork.active
+  }
+  /** Tool names the model can currently see (after tool selection and deferred loading). */
+  getActiveTools(): string[] {
+    return this.registry.getActiveTools().map((tool) => tool.name)
+  }
+
+  /** Enable only these tools; pass undefined to restore all. Like pi's setActiveTools. */
+  setActiveTools(names: string[] | undefined): void {
+    this.registry.setSelection(names)
+  }
+
+  /** Running extension commands (commands don't hold the run lock; several can run at once and may call prompt()) */
+  private readonly commands = new Map<AbortController, Promise<void>>()
+
+  /** @internal Abort signal while running (agent loop or extension command) */
+  get signal(): AbortSignal | undefined {
+    return (
+      this.busy.controller?.signal ?? this.commands.keys().next().value?.signal
+    )
+  }
+
+  /** Subscribes to this session's events; returns an unsubscribe function. */
+  subscribe(listener: VelaEventListener): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  /** @internal Emits an event to this session's subscribers and Vela's subscribers. */
+  readonly emit = (raw: VelaEvent): void => {
+    let event = raw
+    if (
+      (event.type === 'message_start' || event.type === 'message_end') &&
+      !event.custom
+    ) {
+      const custom = this.messageQueue.customMessages.get(event.message)
+      if (custom) event = { ...event, custom }
+    }
+    this.nestedCalls.observe(event)
+    if (
+      event.type === 'tool_execution_end' &&
+      !event.parentToolCallId &&
+      event.details !== undefined
+    )
+      this.toolDetails.set(event.toolCallId, event.details)
+    for (const listener of this.listeners) listener(event)
+    this.deps.forward(event, this.id)
+    // Like pi: the step's assistant and tool messages are in the history now, so a custom message cannot land
+    // between a tool call and its result
+    if (event.type === 'turn_end')
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
+  }
+
+  /** @internal `override` (`null`: none) keeps a preview or a new turn from inheriting a replacement */
+  promptContext(
+    sections = this.turn.sections,
+    override: string | null | undefined = this.turn.systemPrompt,
+  ): PromptContext {
+    return {
+      extensionSections: sections,
+      deferredToolSummary: this.registry.getDeferredToolSummary(),
+      sessionId: this.id,
+      activeTools: this.registry.getActiveTools(),
+      systemPromptOverride: override,
+    }
+  }
+
+  /** @internal Session-scoped resource inventory for Vela's own CLI. */
+  resources(): Promise<SessionResources> {
+    return this.prepare()
+  }
+
+  private async prepare(signal?: AbortSignal): Promise<SessionResources> {
+    const resources = await this.deps.prepareWorkspace(this, signal)
+    signal?.throwIfAborted()
+    this.defaults.apply(
+      resources.defaults,
+      this.store,
+      this.limits,
+      this.contextManager,
+    )
+    return resources
+  }
+
+  /** @internal This session's system prompt (rebuilt before each turn's requests). */
+  buildSystem(sections?: Record<string, string>, override?: string | null) {
+    return this.builder.build(this.promptContext(sections, override))
+  }
+
+  /** @internal Runs this turn's handlers on a fresh prompt for /context, keeping nothing */
+  async previewPrompt(): Promise<BeforeAgentStartResult> {
+    await this.start()
+    return this.deps.extensions.beforeAgentStart(this, '')
+  }
+
+  /** @internal Prepares the context before a request (microcompaction / summary). */
+  prepareContext(
+    request: RequestSnapshot,
+    options?: { allowSummary?: boolean },
+  ): Promise<void> {
+    request.maxOutputTokens = this.modelInfo.maxTokens
+    return this.contextManager.prepare(request, options)
+  }
+
+  /** Flushes pending entries. Default rejection is unchanged; reportFailure also emits session_save_failed once. */
+  async save(options: { reportFailure?: boolean } = {}): Promise<void> {
+    try {
+      await this.contextManager.save()
+    } catch (error) {
+      if (options.reportFailure)
+        this.emit({ type: 'session_save_failed', error })
+      throw error
+    }
+  }
+
+  /**
+   * The session's entries in append order (a copy; like pi's `getEntries()`): messages, including summarized
+   * ones and aborted messages that are no longer sent to the model, compactions, context edits and setting changes.
+   */
+  getEntries(): SessionEntry[] {
+    return this.store.getEntries()
+  }
+
+  /** The session as a tree (copies; like pi's getTree): every branch, with labels. */
+  getTree(): SessionTreeNode[] {
+    return this.store.getTree()
+  }
+
+  /** The current leaf: new messages are appended under it. Null before the first entry. */
+  getLeafId(): string | null {
+    return this.store.getLeafId()
+  }
+
+  /** The entries from the root to `fromId` (default: the current leaf), like pi's getBranch. */
+  getBranch(fromId?: string): SessionEntry[] {
+    return this.store.getBranch(fromId)
+  }
+
+  /** Id of the session this one was forked or cloned from. */
+  get parentSession(): string | undefined {
+    return this.store.parentSession
+  }
+
+  /**
+   * Where this session's history is kept. `file` is the jsonl path (the file may not exist until
+   * the first user or assistant message). `memory` is not saved and cannot be resumed. `unknown`
+   * means the storage did not report a location; the session may still be persisted.
+   */
+  get persistence(): SessionPersistence {
+    return (
+      this.deps.sessionStorage.persistence?.(this.id) ?? { type: 'unknown' }
+    )
+  }
+
+  /** Sets (or clears, with undefined / empty) a label on an entry, like pi's `/tree` labels. */
+  setLabel(entryId: string, label: string | undefined): void {
+    this.store.appendLabelChange(
+      entryId,
+      label?.replace(/[\r\n]+/g, ' ').trim() || undefined,
+    )
+  }
+
+  /**
+   * Whether the context is compacted automatically (like pi's autoCompactionEnabled). Off: no microcompaction,
+   * no threshold summary, no compact-and-retry on overflow; compact() still works.
+   */
+  get autoCompaction(): boolean {
+    return this.contextManager.autoCompaction
+  }
+
+  set autoCompaction(enabled: boolean) {
+    this.defaults.compactionPinned = true
+    this.contextManager.autoCompaction = enabled
+  }
+
+  /** Takes the run lock for a session-level task (compact, tree navigation); throws if something runs. */
+  private async exclusive<T>(
+    what: string,
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (this.draining) throw this.drainError()
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    if (this.busy.locked)
+      throw new Error(`A task is already running; ${what} after it finishes`)
+    const busy = this.busy
+    busy.locked = true
+    const controller = new AbortController()
+    busy.controller = controller
+    const run = task(controller.signal)
+    const running = run.then(
+      () => {},
+      () => {},
+    )
+    this.running = running
+    try {
+      return await run
+    } finally {
+      if (this.running === running) this.running = undefined
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
+      while (this.userBash.flush()) await this.saveOrReport()
+      busy.locked = false
+      busy.controller = undefined
+    }
+  }
+
+  /**
+   * Moves to another entry of the session tree (like pi's navigateTree); the session file keeps every branch.
+   * Selecting a user message moves to just before it and returns its text (edit and send it to start a new
+   * branch); selecting any other entry continues after it. With `summarize`, the branch being left is
+   * summarized and the summary is attached where the session goes. Throws while running; abort() stops a
+   * summary in progress. `cancelled` is true when an extension (session_before_tree) or abort() stopped it.
+   */
+  async navigateTree(
+    targetId: string,
+    options: NavigateTreeOptions = {},
+  ): Promise<{ editorText?: string; cancelled: boolean }> {
+    const target = this.store.getEntry(targetId)
+    if (!target) throw new Error(`Entry ${targetId} is not in the session`)
+    const oldLeafId = this.store.getLeafId()
+    const isUser = target.type === 'message' && target.message.role === 'user'
+    // Selecting a user message moves to its parent, so only another entry at the leaf is a no-op
+    if (targetId === oldLeafId && !isUser) return { cancelled: false }
+    return this.exclusive('navigate the session tree', async (signal) => {
+      await this.start(signal)
+      const { oldBranch, common, preparation } = prepareTree(
+        this.store,
+        targetId,
+        oldLeafId,
+        options,
+      )
+      const hook = await this.deps.extensions.beforeTree(
+        this,
+        preparation,
+        signal,
+      )
+      if (hook.cancel) return { cancelled: true }
+      const focus = hook.focus ?? options.focus
+      const label = (hook.label ?? options.label)?.trim() || undefined
+      let summary: string | undefined
+      let fromExtension = false
+      if (options.summarize && preparation.entriesToSummarize.length) {
+        if (hook.summary) {
+          summary = hook.summary.summary
+          fromExtension = true
+        } else {
+          try {
+            summary = await this.summarizeBranch(
+              new Set(oldBranch.slice(0, common + 1).map((entry) => entry.id)),
+              focus,
+              signal,
+            )
+          } catch (error) {
+            if (signal.aborted) return { cancelled: true }
+            throw error
+          }
+        }
+      }
+      const { editorText, event } = selectTreeBranch(
+        this.store,
+        target,
+        oldLeafId,
+        summary,
+        label,
+        fromExtension,
+      )
+      await this.loadBranch(this.store.buildContext())
+      await this.deps.extensions.tree(this, event)
+      await this.saveOrReport()
+      return {
+        ...(editorText === undefined ? {} : { editorText }),
+        cancelled: false,
+      }
+    })
+  }
+
+  /**
+   * Summarizes the context messages after the common ancestor (the branch being left). Returns undefined
+   * when that part has no messages.
+   */
+  private async summarizeBranch(
+    ancestorIds: Set<string>,
+    focus: string | undefined,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    let start = 0
+    this.messages.forEach((message, index) => {
+      const id = this.store.idOf(message)
+      if (id && ancestorIds.has(id)) start = index + 1
+    })
+    if (start >= this.messages.length) return
+    const request = await createRequestSnapshot(
+      this.model,
+      this.buildSystem(),
+      this.registry.toAISDKFormat(),
+      this.messages,
+      signal,
+    )
+    request.maxOutputTokens = this.modelInfo.maxTokens
+    return this.contextManager.summarizeBranch(request, start, focus)
+  }
+
+  /** Makes the store's current branch the session's context, model and thinking level. */
+  private async loadBranch(context: SessionContext): Promise<void> {
+    this.contextManager.restore(context)
+    this.registry.discoveredTools = new Set(await this.store.loadedTools())
+    for (const [message, info] of context.custom)
+      this.messageQueue.customMessages.set(message, info)
+    await this.defaults.restore(context, this.deps, this.id, (model) =>
+      this.selectModel(model, false),
+    )
+    // The branch's latest summary points into the tool call history up to this sequence
+    const results = this.store.results
+    const sequence = context.toolHistoryViewSeq
+    await results.history.load()
+    if (sequence !== undefined && sequence <= results.history.throughSequence) {
+      await results.history.snapshot(undefined, sequence)
+      results.historyViewSequence = sequence
+    } else results.historyViewSequence = undefined
+    this.tracker.setEstimatedTokens(estimateMessageTokens(this.messages))
+  }
+
+  /**
+   * Copies the branch up to an entry into a new session (like pi's fork). `before` (default) needs a user
+   * message and ends just before it, returning its text; `at` includes the entry. Unlike pi, which replaces
+   * its one session, Vela opens the copy as another session in the same Vela and leaves this one open.
+   * The new session records this one as `parentSession`. Throws while running.
+   */
+  async fork(entryId: string, options: ForkOptions = {}): Promise<ForkResult> {
+    const position = options.position ?? 'before'
+    const point = forkPoint(this.store, entryId, position)
+    return this.exclusive('fork', async (signal) => {
+      await this.start(signal)
+      if (await this.deps.extensions.beforeFork(this, entryId, position))
+        return { cancelled: true }
+      return copyFork(this, point, options.sessionId, this.deps.openSession, {
+        ...routing.unroutedOptions(this.options),
+        location: this.location,
+        model: this.defaults.modelChoice,
+        thinkingLevel: this.defaults.thinking,
+        autoCompaction: this.autoCompaction,
+      })
+    })
+  }
+
+  /** Copies the current branch into a new session (like pi's /clone, a fork at the leaf). */
+  async clone(
+    options: Omit<ForkOptions, 'position'> = {},
+  ): Promise<ForkResult> {
+    return this.fork(cloneLeaf(this.store), { ...options, position: 'at' })
+  }
+
+  /** @internal Starts this new session as a copy of `parent`'s branch (fork / clone). */
+  async seedFrom(parent: VelaSession, branch: SessionEntry[]): Promise<void> {
+    await this.store.seedFrom(branch, parent, this.execEnv)
+    if (branch.length) await this.loadBranch(this.store.buildContext())
+    await this.store.flush()
+  }
+
+  /**
+   * Writes the current branch as JSONL (like pi's exportToJsonl; the session file format, one branch).
+   * Relative paths resolve against Vela's cwd; returns the path written.
+   */
+  exportJsonl(path?: string): Promise<string> {
+    return this.exportBranch('jsonl', path)
+  }
+
+  /** Exports the current branch as a self-contained HTML page; review it before sharing. */
+  exportHtml(path?: string): Promise<string> {
+    return this.exportBranch('html', path)
+  }
+
+  private exportBranch(
+    format: 'jsonl' | 'html',
+    path?: string,
+  ): Promise<string> {
+    return exportBranch({
+      id: this.id,
+      baseCwd: this.deps.cwd,
+      location: this.location,
+      path,
+      entries: this.store.getBranch(),
+      name: this.name,
+      model: this.defaults.modelChoice,
+      format,
+    })
+  }
+
+  /** Restores saved history and a saved channel. Returns false when nothing was saved.
+   * Throws while running, or `SessionRoutingConflictError` when the opened channel differs. */
+  async resume(): Promise<boolean> {
+    return this.locationTask((signal) => this.restoreHistory(signal))
+  }
+  private async restoreHistory(signal: AbortSignal): Promise<boolean> {
+    // Entries not yet written would be replaced by the loaded ones
+    await this.store.flush()
+    const saved = await this.store.loadSaved()
+    if (!saved) return false
+    const target = restoredLocation(saved.location, this.options, this.deps.cwd)
+    await this.switchLocation(target)
+    this.displayName = saved.name
+    await this.loadBranch(saved)
+    if (saved.channel !== undefined)
+      routing.bindSavedChannel(this, saved.channel)
+    this.defaults.applyOpenChoices(this.options, (model) =>
+      this.selectModel(model, false),
+    )
+    if (needsRestoredWorkspace(this.options, target)) await this.prepare(signal)
+    return true
+  }
+
+  /**
+   * Continues a restored interrupted turn on its current branch, without adding user input.
+   * Repairs missing tool results before asking the model; unsafe interrupted tools are not replayed.
+   * Rejects while another operation holds the session's run lock.
+   */
+  async continueInterrupted(): Promise<void> {
+    if (this.draining) return Promise.reject(this.drainError())
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
+    if (this.busy.locked)
+      return Promise.reject(new Error(`Session ${this.id} is already running`))
+    assertInterruptedTurn(this.messages)
+    return this.trackRun(this.run(undefined, {}))
+  }
+
+  /** Appends a message to history and the session (without calling the model). */
+  append(message: ModelMessage): void {
+    this.messages.push(message)
+    this.tracker.addMessage(message)
+    this.record(message)
+    this.emit({ type: 'message_start', message })
+    this.emit({ type: 'message_end', message })
+  }
+
+  /** Appends a message that entered the history to the session; a tool message carries its tools' nested calls and details. */
+  private record(message: ModelMessage, producedBy?: string): void {
+    this.timestamps.set(message, Date.now())
+    const custom = this.messageQueue.customMessages.get(message)
+    if (custom && message.role === 'user') {
+      this.store.appendCustomMessage(message, custom)
+      return
+    }
+    const audit = takeToolDetails(message, this.nestedCalls, this.toolDetails)
+    this.store.appendMessage(message, { ...audit, producedBy })
+  }
+
+  /** Whether an `executeBash()` command is running */
+  get isBashRunning(): boolean {
+    return this.userBash.isRunning
+  }
+
+  /** Runs a shell command for the user (pi's `executeBash`, the TUI's `!cmd`); see `docs/sdk.md`. */
+  async executeBash(
+    command: string,
+    options: {
+      excludeFromContext?: boolean
+      onUpdate?: (output: string) => void
+      /** Set on this command's `bash_execution_update` events */
+      id?: string
+    } = {},
+  ): Promise<BashResult> {
+    if (this.draining) throw this.drainError()
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    if (this.moving) throw new Error('Session is changing location')
+    return this.userBash.execute(command, options)
+  }
+
+  /** Cancels the running `executeBash()` command (pi's abortBash); it is still recorded, as cancelled. */
+  abortBash(): void {
+    this.userBash.abort()
+  }
+
+  /** Moves running shell commands to the background; see `docs/sdk.md`. */
+  backgroundTasks(toolCallId?: string): Promise<string[]> {
+    return this.userBash.detach(toolCallId)
+  }
+
+  /**
+   * Appends a user message and runs the agent loop to completion (no turn limit, like pi), then saves the session.
+   * steer / followUp messages queued during the run also finish before it resolves (`agent_settled` is emitted last).
+   * If the loop fails, queued messages still run, then it rejects.
+   * While running, pass `streamingBehavior` (or use steer() / followUp()); it then resolves right after enqueueing.
+   * `/name args` matching an extension command runs the command instead of going to the model (immediately, even while running).
+   * Other input goes through the extensions' `input` handlers first (like pi); a handled input resolves without running.
+   */
+  prompt(input: string, options: PromptOptions = {}): Promise<void> {
+    return this.promptInput(input, options, 'command')
+  }
+
+  /** Plain input queues synchronously. Slash commands and hooks can await cancellable work. */
+  private promptInput(
+    input: string,
+    options: PromptOptions,
+    mode: 'command' | 'expand' | 'literal' = 'expand',
+  ): Promise<void> {
+    if (this.draining) return Promise.reject(this.drainError())
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
+    if (this.moving)
+      return Promise.reject(new Error('Session is changing location'))
+    const { expandInput, prepareCommands } = this.deps
+    const slash = mode !== 'literal' && input.startsWith('/')
+    const hooks = prepareCommands || this.deps.extensions.hasHandlers('input')
+    if (!slash && !hooks) return this.promptModel(input, options)
+    return this.trackInput(options.signal, async (signal) => {
+      await abortable(
+        prepareCommands ? this.start(signal) : this.startExtensions(),
+        signal,
+      )
+      if (this.draining) throw this.drainError()
+      if (this.closed) throw new Error(`Session ${this.id} is closed`)
+      signal.throwIfAborted()
+      const extensions = this.deps.extensions
+      const command = mode === 'command' && slash
+      if (command && (await extensions.runCommand(this, input, signal))) return
+      signal.throwIfAborted()
+      let text = input,
+        images = options.images
+      if (extensions.hasHandlers('input')) {
+        const event = await abortable(
+          extensions.input(
+            this,
+            text,
+            options.source ?? 'sdk',
+            this.prompting ? options.streamingBehavior : undefined,
+            images,
+          ),
+          signal,
+        )
+        if (!event) return
+        text = event.text
+        images = event.images
+      }
+      if (this.draining) throw this.drainError()
+      if (mode !== 'literal' && text.startsWith('/')) {
+        signal.throwIfAborted()
+        text = await abortable(expandInput(text, this, signal), signal)
+      }
+      return this.promptModel(text, { ...options, images, signal })
+    })
+  }
+
+  /** Register async input before dispatch so abort also covers resource expansion. */
+  private async trackInput(
+    signal: AbortSignal | undefined,
+    run: (signal: AbortSignal) => Promise<void>,
+  ) {
+    const controller = new AbortController()
+    const forward = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', forward, { once: true })
+    if (signal?.aborted) forward()
+    const task = run(controller.signal)
+    this.commands.set(controller, task)
+    try {
+      return await task
+    } finally {
+      this.commands.delete(controller)
+      signal?.removeEventListener('abort', forward)
+    }
+  }
+
+  /** While running: joins the current task, sent as a user message after this step's tools finish and before the next model request. Same as prompt() when idle. */
+  steer(
+    input: string,
+    options: { source?: InputSource; images?: ImageContent[] } = {},
+  ): Promise<void> {
+    return this.promptInput(input, { ...options, streamingBehavior: 'steer' })
+  }
+
+  /** While running: runs as a user message when the model would otherwise stop (no tool calls, no steer). Same as prompt() when idle. */
+  followUp(
+    input: string,
+    options: { source?: InputSource; images?: ImageContent[] } = {},
+  ): Promise<void> {
+    return this.promptInput(input, {
+      ...options,
+      streamingBehavior: 'followUp',
+    })
+  }
+
+  /**
+   * Adds an extension's custom message to the conversation (like pi's `sendMessage`). The model sees it as a
+   * user message; it is saved as a `custom_message` entry and its events carry `custom`.
+   * - `deliverAs: 'nextTurn'`: added after the user message of the next prompt.
+   * - Running (and `triggerTurn` not false): queued like steer() (or followUp() with `deliverAs: 'followUp'`).
+   * - Idle with `triggerTurn`: runs the agent loop with the message as its input; resolves when the run ends.
+   * - Running with `triggerTurn: false`: appended once the current step's tool results are in.
+   * - Otherwise appended right away.
+   */
+  async sendMessage(
+    message: CustomMessage,
+    options: SendMessageOptions = {},
+  ): Promise<void> {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    const entry = this.messageQueue.customMessage(message)
+    if (options.deliverAs === 'nextTurn') {
+      this.messageQueue.nextTurnMessages.push(entry)
+      return
+    }
+    if (this.prompting && options.triggerTurn !== false) {
+      this.messageQueue.enqueue(
+        options.deliverAs === 'followUp' ? 'followUp' : 'steering',
+        entry,
+      )
+      return
+    }
+    if (options.triggerTurn) return this.promptMessage(entry, {})
+    if (this.busy.locked) {
+      this.messageQueue.pendingCustom.push(entry)
+      return
+    }
+    this.append(entry)
+  }
+
+  /**
+   * Sends a user message as if typed (like pi's `sendUserMessage`): goes through the `input` handlers with
+   * source `extension` but is not expanded as a command, skill or prompt template. While running, pass
+   * `deliverAs` to queue it.
+   */
+  sendUserMessage(
+    content: string | (TextContent | ImageContent)[],
+    options: { deliverAs?: 'steer' | 'followUp' } = {},
+  ): Promise<void> {
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
+    const text =
+      typeof content === 'string'
+        ? content
+        : content
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n')
+    const images =
+      typeof content === 'string'
+        ? undefined
+        : content.filter((part) => part.type === 'image')
+    return this.promptInput(
+      text,
+      {
+        source: 'extension',
+        images,
+        ...(options.deliverAs ? { streamingBehavior: options.deliverAs } : {}),
+      },
+      'literal',
+    )
+  }
+
+  /**
+   * Saves extension state in the session (like pi's `appendEntry`): a `custom` entry that is never sent to the
+   * model. Read it back with `getEntries()` (for example in `session_start` after a resume).
+   */
+  appendEntry(customType: string, data?: unknown): void {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    assertCustomType(customType)
+    this.store.appendCustom(customType, data)
+  }
+
+  /** The custom message fields of a history message an extension sent with sendMessage(); undefined for other messages. */
+  customMessageOf(message: ModelMessage): CustomMessageInfo | undefined {
+    return this.messageQueue.customMessages.get(message)
+  }
+
+  /** Clears queued messages and returns the user inputs among them (the TUI puts them back in the input box before aborting). */
+  clearQueue(): { steering: string[]; followUp: string[] } {
+    return this.messageQueue.clear()
+  }
+
+  /** Currently queued user inputs (a copy; queued custom messages are not listed) */
+  get queue(): { steering: string[]; followUp: string[] } {
+    return this.messageQueue.queue
+  }
+
+  /** Whether an agent loop is running (including loops for queued messages and manual compaction) */
+  get isRunning(): boolean {
+    return this.busy.locked
+  }
+
+  /** Waits for agent loops, queued messages and compaction (like pi's waitForIdle), never for a command. */
+  async waitForIdle(): Promise<void> {
+    while (this.running) await this.running
+  }
+
+  /** Stop admission and wait for active tools without cancelling them; the host owns the deadline. */
+  drain(): Promise<void> {
+    this.draining = true
+    this.drained ??= waitForDrain(this, this.userBash.running)
+    return this.drained
+  }
+
+  private drainError(): Error {
+    return new Error(`Session ${this.id} is draining; new work is not accepted`)
+  }
+
+  /** Takes from the queues by mode: steer first, then followUp. */
+  private dequeue(kind: 'steering' | 'followUp'): ModelMessage[] {
+    if (this.draining) return []
+    return this.messageQueue.dequeue(
+      kind,
+      kind === 'steering' ? this.steeringMode : this.followUpMode,
+    )
+  }
+
+  /** `/xxx` that is not an extension command, or plain input: runs when idle, queued by streamingBehavior while running. */
+  private promptModel(input: string, options: PromptOptions): Promise<void> {
+    const content = options.images?.length
+      ? [
+          { type: 'text' as const, text: input },
+          ...options.images.map((image) => ({ ...image })),
+        ]
+      : input
+    return this.promptMessage({ role: 'user', content }, options)
+  }
+
+  private promptMessage(
+    message: ModelMessage,
+    options: PromptOptions,
+  ): Promise<void> {
+    if (this.draining) return Promise.reject(this.drainError())
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
+    // Input hooks can finish after cancellation, while the aborted loop is still cleaning up.
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason)
+    if (this.busy.locked) {
+      // Only the prompt loop drains the queue; nothing can be queued while /defend, a skill or compact holds the lock
+      if (!this.prompting || !options.streamingBehavior)
+        return Promise.reject(
+          new Error(
+            'A task is already running: queue with steer() / followUp() (or streamingBehavior), or wait for it to finish',
+          ),
+        )
+      this.messageQueue.enqueue(
+        options.streamingBehavior === 'steer' ? 'steering' : 'followUp',
+        message,
+      )
+      return Promise.resolve()
+    }
+    return this.trackRun(this.run(message, options))
+  }
+
+  private trackRun(run: Promise<void>): Promise<void> {
+    const running = run.then(
+      () => {
+        if (this.running === running) this.running = undefined
+      },
+      () => {
+        if (this.running === running) this.running = undefined
+      },
+    )
+    this.running = running
+    return run
+  }
+
+  /** Before first use: waits for extensions to load and fires session_start (once). */
+  private async start(signal?: AbortSignal): Promise<void> {
+    await this.prepare(signal)
+    await this.startExtensions()
+  }
+
+  private startExtensions(): Promise<void> {
+    this.store.assertLocationKnown()
+    this.started ??= this.deps.extensions.ready.then(() =>
+      this.deps.extensions.sessionStart(this),
+    )
+    return this.started
+  }
+
+  private prompting = false
+
+  private async run(
+    input: ModelMessage | undefined,
+    options: PromptOptions,
+  ): Promise<void> {
+    const busy = this.busy
+    busy.locked = true
+    this.prompting = true
+    const controller = new AbortController()
+    busy.controller = controller
+    const forward = () => controller.abort(options.signal?.reason)
+    options.signal?.addEventListener('abort', forward, { once: true })
+    if (options.signal?.aborted) forward()
+    let failure: { error: unknown } | undefined
+    const next = () => {
+      const steering = this.dequeue('steering')
+      return steering.length ? steering : this.dequeue('followUp')
+    }
+    let saved = false
+    try {
+      // steer / followUp are normally taken inside agentLoop (like pi). If the loop ends early (error / budget /
+      // loop detection), remaining messages run in a new loop (steer first). After an abort, stop and keep the queue.
+      if (input === undefined || pendingToolCalls(this.messages).length) {
+        await this.start(controller.signal)
+        await this.store.assertNew()
+        await assertLegacyAnchors(
+          this.store.getEntries(),
+          this.registry.results.history,
+        )
+        await reconcileInterruptedTools({
+          messages: this.messages,
+          recover: (name, id, args, signal) =>
+            this.registry.recoverToolCall(name, id, args, signal),
+          append: (message) => this.append(message),
+          save: () => this.save(),
+          signal: controller.signal,
+        })
+        this.registry.discoveredTools = new Set(await this.store.loadedTools())
+        await this.save()
+      }
+      let inputs = input === undefined ? [] : [input]
+      do {
+        saved = false
+        try {
+          await this.runLoop(inputs, controller.signal)
+        } catch (error) {
+          failure ??= { error }
+        }
+        if (controller.signal.aborted) break
+        inputs = next()
+        if (!inputs.length) {
+          // Messages may be queued while saving: check again after saving; there is no await between here and unlock
+          this.messageQueue.flushPendingCustom((message) =>
+            this.append(message),
+          )
+          await this.saveOrReport()
+          saved = true
+          inputs = next()
+        }
+      } while (inputs.length)
+    } finally {
+      options.signal?.removeEventListener('abort', forward)
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
+      this.toolDetails.clear()
+      if (!saved) await this.saveOrReport()
+      // Until the last flush finds nothing there is no await before unlocking: a later `!` command records itself
+      while (this.userBash.flush()) await this.saveOrReport()
+      busy.locked = false
+      busy.controller = undefined
+      this.prompting = false
+      // Sent while saving (written with the next entry or when the session closes)
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
+      this.emit({ type: 'agent_settled' })
+    }
+    if (failure) throw failure.error
+  }
+
+  private async saveOrReport(): Promise<void> {
+    try {
+      await this.save()
+    } catch (error) {
+      this.emit({ type: 'session_save_failed', error })
+    }
+  }
+
+  /** One agent loop: the inputs are appended in order, then next-turn custom messages and before_agent_start's. */
+  private async runLoop(
+    inputs: ModelMessage[],
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this.start(signal)
+    signal.throwIfAborted()
+    const { info } = this.resolveModel()
+    // Like pi, save a model picked automatically (no model chosen: the first provider with a credential), so a
+    // resumed session keeps it even when the credentials change later
+    if (this.defaults.modelChoice === undefined) {
+      this.defaults.modelChoice = info.ref
+      this.store.appendModelChange(info.ref)
+    }
+    inputs = await Promise.all(
+      inputs.map((message) => this.messageQueue.normalizeInput(message)),
+    )
+    signal.throwIfAborted()
+    const input = inputs.map(messageText).join('\n\n')
+    this.turn = { sections: {}, messages: [] }
+    const started = await this.deps.extensions.beforeAgentStart(this, input)
+    this.turn = started
+    // An invalid message from a before_agent_start handler fails the prompt here, before agent_start
+    const added = started.messages.map((message) =>
+      this.messageQueue.customMessage(message),
+    )
+    // Appending to a saved session that was not resumed would mix two conversations in one log
+    await this.store.assertNew()
+    // `!` commands that finished during an earlier loop of this run come before the new input
+    this.userBash.flush()
+    this.messageQueue.flushPendingCustom((message) => this.append(message))
+    this.emit({ type: 'agent_start', input })
+    const newMessages: ModelMessage[] = []
+    for (const message of [
+      ...inputs,
+      ...this.messageQueue.nextTurnMessages.splice(0),
+      ...added,
+    ]) {
+      this.append(message)
+      newMessages.push(message)
+    }
+    // Recovery notices (including lost background jobs) are their own durable deduplication
+    // evidence. Flush them before the resumed request, even when it calls no tools.
+    if (!inputs.length) await this.save()
+    await agentLoop({
+      model: this.requestModel(),
+      supportsImages: info.input?.includes('image') ?? true,
+      // Like pi, read per request: a level changed during the run applies to the next step. It is
+      // clamped to `info`, the model that serves this loop, like `setModel` waits for the next prompt.
+      reasoning: () =>
+        reasoningOption(this.defaults.thinkingLevelFor(info), info),
+      systemPrompt: () => this.buildSystem(),
+      toolRegistry: this.registry,
+      messages: this.messages,
+      tokenTracker: this.tracker,
+      prepareContext: (request) => this.prepareContext(request),
+      transformContext: (messages, producer) =>
+        this.deps.extensions.transformContext(this, messages, producer),
+      // Like pi: with automatic compaction off, a context overflow is reported as is
+      compactOnOverflow: this.autoCompaction
+        ? (overflowSignal) => this.compactForOverflow(overflowSignal)
+        : undefined,
+      newMessages,
+      abortSignal: signal,
+      onEvent: this.emit,
+      limits: this.limits,
+      takeSteering: () =>
+        Promise.all(
+          this.dequeue('steering').map((message) =>
+            this.messageQueue.normalizeInput(message),
+          ),
+        ),
+      takeFollowUp: () =>
+        Promise.all(
+          this.dequeue('followUp').map((message) =>
+            this.messageQueue.normalizeInput(message),
+          ),
+        ),
+      onMessage: (message, producer) => this.record(message, producer),
+      onCheckpoint: () => this.save(),
+      isDraining: () => this.draining,
+      injectNotice: (content) =>
+        this.messageQueue.customMessage({
+          customType: 'loop',
+          content,
+          display: true,
+        }),
+      // Like pi: kept in the session, never sent to the model again
+      onInterrupted: (message, stopReason) =>
+        this.store.appendMessage(message, { stopReason }),
+    })
+  }
+
+  private async compactionRequest(
+    signal?: AbortSignal,
+  ): Promise<RequestSnapshot> {
+    const request = await createRequestSnapshot(
+      this.requestModel(),
+      this.buildSystem(),
+      this.registry.toAISDKFormat(),
+      this.messages,
+      signal,
+    )
+    if (!canSummarize(request.messages))
+      throw new Error('Nothing to compact (session too small)')
+    request.maxOutputTokens = this.modelInfo.maxTokens
+    return request
+  }
+
+  /** The provider rejected a request as too long: summarize like /compact (like pi's overflow recovery). */
+  private async compactForOverflow(signal?: AbortSignal): Promise<void> {
+    const request = await this.compactionRequest(signal)
+    await this.contextManager.compact(request, undefined, 'overflow')
+  }
+
+  /**
+   * Compacts the context manually (like pi's compact): replaces earlier history with a summary, keeps recent
+   * messages, then saves. `focus` is what the summary should prefer to keep (pi's customInstructions).
+   * Throws while the session is running; can be interrupted by abort().
+   */
+  async compact(focus?: string): Promise<void> {
+    await this.exclusive('compact', async (signal) => {
+      await this.start(signal)
+      const request = await this.compactionRequest(signal)
+      await this.contextManager.compact(request, focus)
+      await this.saveOrReport()
+    })
+  }
+
+  /**
+   * Aborts the current agent loop and extension commands (if any) and waits until the agent loop actually stops
+   * (like pi's `await abort()`). Queued messages stay in the queue; call clearQueue() first if needed.
+   */
+  async abort(
+    reason: unknown = new DOMException(
+      'User cancelled the current operation',
+      'AbortError',
+    ),
+  ): Promise<void> {
+    for (const controller of [this.busy.controller, ...this.commands.keys()])
+      if (controller && !controller.signal.aborted) controller.abort(reason)
+    await this.waitForIdle()
+  }
+
+  /** Token estimate, context usage and this session's total usage. */
+  get usage(): SessionUsage {
+    return this.tracker.snapshot()
+  }
+
+  /** Aborts the running task, waits for it to finish and save, then removes the session from Vela. */
+  close(): Promise<void> {
+    this.closed = true
+    this.closing ??= this.shutdown()
+    return this.closing
+  }
+
+  private async shutdown(): Promise<void> {
+    this.abortBash()
+    this.abort(new DOMException('Session closed', 'AbortError'))
+    // Let extension commands finish first (commands like /dream wait on the prompt they started)
+    await Promise.allSettled(this.commands.values())
+    await this.running
+    // A cancelled `!` command still records itself; wait for that before the final save
+    await this.userBash.running?.catch(() => {})
+    await this.registry.waitForIdle().catch(() => {})
+    const errors: unknown[] = []
+    // Only sessions that fired session_start emit session_shutdown.
+    if (this.started) {
+      await this.started.catch(() => {})
+      try {
+        await this.deps.extensions.sessionShutdown(this)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    // A failing shutdown hook must not skip saving or detaching this session.
+    try {
+      await this.saveOrReport()
+    } catch (error) {
+      errors.push(error)
+    } finally {
+      this.store.releaseTransient()
+      this.listeners.clear()
+      await this.deps.onClose(this)
+    }
+    if (errors.length)
+      throw new AggregateError(errors, 'Session shutdown failed')
+  }
+}

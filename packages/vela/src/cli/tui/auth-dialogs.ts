@@ -2,7 +2,7 @@ import type {
   AuthInteraction,
   AuthPrompt,
   LoginOptions,
-} from '@glows777/vela-core'
+} from '../../driver/index.ts'
 import type { Vela } from '../../vela.ts'
 import { openBrowser } from '../login.ts'
 import { type DialogHost, errorMessage } from './components.ts'

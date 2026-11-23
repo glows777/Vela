@@ -3,13 +3,16 @@ import { readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionUI } from '@glows777/vela'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { mcp } from '@glows777/vela-mcp'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import z from 'zod'
-import type { McpServerEntry } from '../../packages/mcp/src/config.ts'
+import type { McpServerEntry } from '../../packages/vela/src/mcp/config.ts'
+import { mcp } from '../../packages/vela/src/mcp/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

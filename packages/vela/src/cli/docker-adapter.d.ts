@@ -9,5 +9,5 @@ declare module '#docker-adapter' {
       credentials?: { variable: string; value: string; origins: string[] }[]
     },
     cwd: string,
-  ): Promise<import('@glows777/vela-core').ExecutionEnv>
+  ): Promise<import('../driver/index.ts').ExecutionEnv>
 }

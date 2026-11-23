@@ -1,6 +1,6 @@
 import type { SelectItem } from '@earendil-works/pi-tui'
-import type { SessionEntry, SessionTreeNode } from '@glows777/vela-core'
-import { sessionContentText as messageText } from '@glows777/vela-core/diagnostics'
+import { sessionContentText as messageText } from '../../driver/diagnostics.ts'
+import type { SessionEntry, SessionTreeNode } from '../../driver/index.ts'
 import { sanitize } from './components.ts'
 
 /** One line of the entry, or undefined for entries the tree doesn't show (tool results, labels, settings). */

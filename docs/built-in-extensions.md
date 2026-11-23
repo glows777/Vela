@@ -1,20 +1,19 @@
 # Built-in extensions
 
-Vela ships seven selectable built-in extensions: `background`, `memory`, `todo`, `rag`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `background`, `memory`, `todo` and `web` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all seven (see [Packages](sdk.md#packages)).
+Vela ships six selectable built-in extensions in `@glows777/vela`: `background`, `memory`, `todo`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md) and [Packages](sdk.md#packages)).
 
 | Extension | Adds |
 |---|---|
 | `background` | Long-running commands whose result arrives on its own: `bash` with `run_in_background`, plus `background_output` and `background_stop` |
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
 | `todo` | Task checklist: the `todo` tool, shown on the Lark progress card |
-| `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary sent as a message, `/rag` |
 | `web` | `web_fetch`, and `web_search` with a supported hosted search or a search API key |
 | `lark` | The Lark bot channel (see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
 
 ## Local transport
 
-Vela also ships `local` in `@glows777/vela-channels`, re-exported by `@glows777/vela`. It is an explicitly enabled transport, not another `builtin:*` selector or a default CLI extension. It provides authenticated loopback HTTP/SSE for project hubs, task sessions, visible history and run-bound Stop. Lark and Local share the channel gateway and topic tools.
+Vela also ships `local` in `@glows777/vela`. It is an explicitly enabled transport, not another `builtin:*` selector or a default CLI extension. It provides authenticated loopback HTTP/SSE for project hubs, task sessions, visible history and run-bound Stop. Lark and Local share the channel gateway and topic tools.
 
 In the CLI, enable it only through user-level `extensionConfig.local: { "enabled": true, "token": "$VELA_LOCAL_TOKEN", "port": 8788 }` and run `vela serve`. Project settings cannot enable or override it; non-serve modes and `--no-extensions` do not start it. In the SDK, add `local({ token, port: 8788 })` explicitly, then call `await vela.ready()` and `await vela.startChannels()`. Unlike the factories below, Local requires its token as a factory option and does not read it implicitly from extension configuration.
 
@@ -22,7 +21,7 @@ Local binds only `127.0.0.1`, with Bearer authentication and no CORS/cookie supp
 
 ## Loading
 
-**CLI.** All seven load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI.** All six load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
 To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
@@ -31,11 +30,9 @@ To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for e
 ```ts
 import {
   background,
-  createEmbedder,
   createVela,
   memory,
   todo,
-  rag,
   web,
 } from '@glows777/vela'
 
@@ -45,13 +42,6 @@ const vela = createVela({
     background(),
     memory(),
     todo(),
-    rag({
-      embedder: createEmbedder({
-        url: 'https://api.openai.com/v1',
-        modelId: 'text-embedding-3-small',
-        apiKey: process.env.OPENAI_API_KEY!,
-      }),
-    }),
     web({ tavilyKey: process.env.TAVILY_API_KEY }),
   ],
 })
@@ -66,21 +56,14 @@ In the CLI, each built-in reads `extensionConfig.<name>` from [settings](setting
 ```json
 {
   "extensionConfig": {
-    "web": { "tavilyKey": "$TAVILY_API_KEY" },
-    "rag": {
-      "embedding": {
-        "baseUrl": "https://api.openai.com/v1",
-        "model": "text-embedding-3-small",
-        "apiKey": "$OPENAI_API_KEY"
-      }
-    }
+    "web": { "tavilyKey": "$TAVILY_API_KEY" }
   }
 }
 ```
 
 ## Tool names
 
-Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`, and the todo tool is `todo`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
+Extension tools are prefixed with the extension name: the `web` extension's `search` tool is `web_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`, and the todo tool is `todo`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
 
 Remove any of them from the session's `tools` selection; see [Security](security.md#limit-tools).
 
@@ -91,7 +74,6 @@ Built-ins store their data in the project data directory: in the CLI, the [proje
 | Extension | Location |
 |---|---|
 | `memory` | `<dataDir>/memory/` |
-| `rag` | `<dataDir>/rag/knowledge.db` |
 
 ## memory
 
@@ -230,44 +212,6 @@ The model gets a one-line count summary back, not a copy of the list it just sen
 **Lark progress card.** The shared progress card shows the current list above the tool rows: `☐` pending, `◐` in progress, `☑` done. A new run in the same topic starts from the list stored in the session, so a follow-up that makes no `todo` call still shows it, including after a restart. More than ten items are cut off with `… and N more`; the full list stays in the session.
 
 **SDK.** `todo()` takes no options. The CLI loads it by default; the SDK loads it explicitly.
-
-## rag
-
-A local knowledge base with hybrid search, stored in SQLite.
-
-**Tools.**
-
-| Tool | Parameters | Description |
-|---|---|---|
-| `rag_ingest` | `path` | Read a text file (relative to the working directory), chunk it, embed the chunks and store them |
-| `rag_search` | `query`, `top_k` (default 5) | Search the knowledge base; each result shows its source, scores and up to 500 characters |
-
-**Prompt.** When the knowledge base is not empty, a message after the user message says how many chunks it holds, lists the sources, and points the model to `rag_search`. It is sent again only when the count or the sources change, so the cached system prompt stays stable.
-
-**Commands.** `/rag` shows the number of chunks, the sources and the embedder. `/rag ingest <path>` ingests a file. `/rag clear` deletes every chunk. Without embedding configuration, `/rag` (including `ingest` or `clear` arguments) explains how to configure it without calling a model or touching the database. `/extensions` lists the command through normal extension discovery.
-
-**Embeddings.** rag needs an embedding function. With the CLI, set `extensionConfig.rag.embedding` with `baseUrl`, `model` and `apiKey` (or `EMBEDDING_MODEL_BASE_URL`, `EMBEDDING_MODEL` and `EMBEDDING_MODEL_KEY`); any OpenAI-compatible embeddings API works. Vectors have 128 dimensions, so the model must support the `dimensions` parameter. If any of the three values is missing, startup stays quiet and only `/rag` is registered. It points to `extensionConfig.rag.embedding` in `~/.vela/settings.json` (or `$VELA_DIR/settings.json`) and the environment variables above. See [extension settings](settings.md#extensionconfig).
-
-With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, apiKey }) })`. An embedder is any function `(texts: string[], signal?: AbortSignal) => Promise<number[][]>` that returns 128-dimension vectors. For offline tests, use `createFauxEmbedder()` from `@glows777/vela/testing`.
-
-**Changing the embedder.** Vectors from different embedding models can't be compared, so the knowledge base records which embedder built it: the function's `id` property. `createEmbedder()` sets it to `<model> at <baseUrl>`, `createFauxEmbedder()` to `faux` (or its `id` option), and a function without one is recorded as `custom`. When the configured embedder differs from the recorded one, `rag_ingest`, `rag_search` and `/rag ingest` fail with an error naming both, and `/rag` shows the mismatch. Switch back, or run `/rag clear` and ingest the documents again. An empty knowledge base takes whichever embedder is configured. A knowledge base built before Vela 0.2.0 has no record: Vela assumes the configured embedder, records it and logs a warning.
-
-**How it works.**
-
-- Chunking: the text is split on blank lines and paragraphs are packed into chunks of about 1,000 characters (256 estimated tokens). Longer paragraphs are split on sentence boundaries.
-- Storage: each chunk goes into a plain table, a [sqlite-vec](https://github.com/asg017/sqlite-vec) `vec0` table for vectors, and an FTS5 table for keywords. Chunks are keyed by source path, so ingesting a file again replaces all of its earlier chunks in one transaction.
-- Search: vector search and BM25 keyword search each return up to `4 * top_k` candidates. Scores are min-max normalized and combined as `0.7 * vector + 0.3 * keyword`, then MMR picks `top_k` results that are relevant but not near-duplicates.
-
-**SQLite and sqlite-vec.** rag loads the sqlite-vec extension, so the SQLite library must allow loading extensions.
-
-- On Node, rag uses `node:sqlite`, whose bundled SQLite supports extensions. Nothing else is needed.
-- On Bun, rag uses `bun:sqlite` with a custom SQLite library, because the system SQLite on macOS cannot load extensions. It uses the first of these that exists:
-  - `/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib` (macOS, Apple Silicon)
-  - `/usr/local/opt/sqlite/lib/libsqlite3.dylib` (macOS, Intel)
-  - `/usr/lib/x86_64-linux-gnu/libsqlite3.so.0` (Linux x64)
-  - `/usr/lib/aarch64-linux-gnu/libsqlite3.so.0` (Linux ARM64)
-
-  If none exists, loading fails with an error. On macOS, run `brew install sqlite`.
 
 ## web
 

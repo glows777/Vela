@@ -2,11 +2,11 @@ import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-import type { Credential } from '@glows777/vela-core'
-import { memoryCredentialStore } from '@glows777/vela-core'
 import { tempDir } from '../../../../../test/support/vela.ts'
-import { ModelRegistry } from '../../../../core/src/models/index.ts'
 import { loadModels } from '../../../src/config/index.ts'
+import type { Credential } from '../../../src/driver/index.ts'
+import { memoryCredentialStore } from '../../../src/driver/index.ts'
+import { ModelRegistry } from '../../../src/providers/models/index.ts'
 
 const dirs: { cleanup(): void }[] = []
 const realFetch = globalThis.fetch

@@ -1,6 +1,10 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
-import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import {
+  fauxError,
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import {
   cleanupTestVelas,
   createTestVela,

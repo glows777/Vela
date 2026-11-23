@@ -1,13 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { usableModel } from '@glows777/vela'
 import {
   type CredentialStore,
-  loadConfig,
+  larkConfig,
   type ProviderDefinition,
-} from '@glows777/vela-core'
-import { resolveModel } from '@glows777/vela-core/diagnostics'
-import { larkConfig } from '@glows777/vela-lark'
+  usableModel,
+} from '@glows777/vela'
+import { loadConfig, resolveModel } from '@glows777/vela/legacy-desktop'
 import type { SettingsProvider, SettingsState } from '../shared/bridge.ts'
 import { larkState } from './lark-settings.ts'
 
@@ -19,7 +18,7 @@ export function loadDesktopConfig(cwd: string, agentDir?: string) {
     env: process.env,
     trusted: false,
     extensionConfigs: [larkConfig],
-    builtins: ['background', 'memory', 'rag', 'web', 'lark', 'mcp', 'todo'],
+    builtins: ['background', 'memory', 'web', 'lark', 'mcp', 'todo'],
   })
 }
 

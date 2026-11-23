@@ -1,15 +1,11 @@
 /**
- * Consumer smoke test: use Vela the way an external project would.
- * Builds and packs all six packages, serving their unchanged tarballs from a disposable scoped registry.
- * Each package is installed alone into fresh Node and Bun projects outside the workspace.
- * The external dependency registry stays unchanged. It installs into fresh,
- * empty projects (not workspace links):
+ * Consumer smoke test: use `@glows777/vela` the way an external project would.
+ * Builds and packs the single published package, serving its tarball from a disposable local registry.
+ * Installs into fresh, empty Node and Bun projects outside the workspace:
  * - Node project (npm install): strict NodeNext tsconfig (exactOptionalPropertyTypes etc.,
- *   no @types/bun) type-checks `@glows777/vela` / `@glows777/vela/testing`, then runs an
- *   SDK session and the CLI `vela -p` under Node;
- * - Bun project (bun install): default `bun init` tsconfig, runs the same SDK session and CLI under Bun.
- * Installing dependencies needs the network, so this is not part of `bun run test`;
- * CI runs it separately: `bun run smoke:consumer`.
+ *   no @types/bun) type-checks `@glows777/vela`, `@glows777/vela/extension-api`, and `@glows777/vela/testing`,
+ *   then runs SDK sessions (tools, images, grep/find, MCP, Lark fake transport) and CLI under Node;
+ * - Bun project (bun install): default `bun init` tsconfig, runs the same SDK smoke and CLI under Bun.
  */
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -27,11 +23,42 @@ const IMAGE = (
 ).toString('base64')
 
 const SMOKE = `
-import { createVela, memory, type VelaEvent, type VelaExtension, type ImageContent, ToolExecutionResult, type ToolContent } from '@glows777/vela'
+import assert from 'node:assert/strict'
+import { Readable } from 'node:stream'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { cleanupTestVelas, createFauxModel, createTestVela, fauxText, fauxToolCall } from '@glows777/vela/testing'
+import {
+  createVela,
+  inspectSession,
+  inspectVela,
+  lark,
+  local,
+  mcp,
+  memory,
+  ToolExecutionResult,
+  type ImageContent,
+  type LarkMessageEvent,
+  type LarkOptions,
+  type LarkTransport,
+  type McpOptions,
+  type ToolContent,
+  type VelaEvent,
+  type VelaExtension,
+} from '@glows777/vela'
+import { defineJsonSchemaTool } from '@glows777/vela/extension-api'
+import {
+  cleanupTestVelas,
+  createFauxModel,
+  createTestVela,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela/testing'
 import { z } from 'zod'
+
+if (typeof defineJsonSchemaTool !== 'function')
+  throw new Error('missing @glows777/vela/extension-api export')
+if (typeof lark !== 'function' || typeof local !== 'function')
+  throw new Error('missing built-in channel factories')
 
 const hello: VelaExtension = (vela) => {
   vela.registerTool({
@@ -62,6 +89,8 @@ void typeChecks
 // @ts-expect-error no such event type
 const bogus: VelaEvent = { type: 'no_such_event' }
 void bogus
+if (!inspectVela(vela).tools.length || (await inspectSession(vela, session)).windowTokens <= 0)
+  throw new Error('diagnostic consumer failed')
 await vela.dispose()
 if (!types.includes('tool_execution_end') || types.at(-1) !== 'agent_settled')
   throw new Error(\`unexpected events: \${types.join(',')}\`)
@@ -93,21 +122,7 @@ if (toolFiles.length !== 1 || JSON.stringify(imageTool.session.messages).include
   throw new Error('packaged read_file image was not resized and sent')
 console.log('tool image sdk ok')
 
-// rag extension: sqlite-vec loads via bun:sqlite on Bun / node:sqlite on Node (packages/rag/src/sqlite.ts)
-const r = createTestVela({
-  embedder: true,
-  files: { 'guide.md': 'Vela runs on Node and Bun.' },
-  responses: [
-    fauxToolCall('rag_ingest', { path: 'guide.md' }),
-    fauxToolCall('rag_search', { query: 'runs on Node' }),
-    fauxText('ok'),
-  ],
-})
-await r.run('ingest and search')
-if (!JSON.stringify(r.model.calls[2]?.prompt).includes('Vela runs on Node and Bun.'))
-  throw new Error('rag_search did not return the ingested text')
-
-// grep / find run ripgrep / fd as child processes (packages/core/src/tools/search.ts)
+// grep / find run ripgrep / fd as child processes
 const s = createTestVela({
   session: { tools: ['+find', '+grep'] },
   files: { 'src/a.ts': 'export const answer = 42' },
@@ -122,13 +137,78 @@ const searched = Object.fromEntries(
 )
 if (!searched['find']?.includes('src/a.ts') || !searched['grep']?.includes('src/a.ts:1: export const answer = 42'))
   throw new Error(\`grep / find results missing: \${JSON.stringify(searched)}\`)
+
+// MCP stdio extension lazy-loads @modelcontextprotocol/sdk on demand and returns real tool output
+const mcpOptions: McpOptions = { servers: { local: { command: process.execPath, args: ['server.ts'], exposure: 'direct' } } }
+const m = createTestVela({
+  cwd: process.cwd(),
+  dataDir: '.mcp-data',
+  extensions: [mcp(mcpOptions)],
+  responses: [fauxToolCall('mcp__local__echo', { text: 'stdio works' }), fauxText('done')],
+})
+try {
+  await m.run('echo')
+  const echoResult = (m.model.calls[1]?.toolResults ?? []).find((r) => r.toolName === 'mcp__local__echo')
+  const outputText = JSON.stringify(echoResult?.output ?? '')
+  if (!echoResult || outputText.includes('AI_NoSuchToolError') || !outputText.includes('stdio works'))
+    throw new Error(\`mcp tool result missing or failed: \${JSON.stringify(m.model.calls[1]?.toolResults)}\`)
+  console.log('mcp stdio sdk ok')
+} finally {
+  await m.cleanup()
+}
+
+// Lark fake transport round trip (incoming message -> reply)
+let larkReceive: ((event: LarkMessageEvent) => void) | undefined
+const larkSent: string[] = []
+const receipt = () => ({ messageId: 'reply', createTime: String(Date.now()) })
+const transport: LarkTransport = {
+  async start(next) { larkReceive = next },
+  stop() {},
+  async getBotId() { return 'ou_bot' },
+  async getSenderName() { return 'Alice' },
+  async send(_chat, text) { larkSent.push(text); return receipt() },
+  async reply(_message, text) { larkSent.push(text); return receipt() },
+  async startTopic() { return { ...receipt(), rootId: 'root', threadId: 'thread' } },
+  async forward() { return receipt() },
+  async sendCard() { return 'card' },
+  async patchCard() {},
+  async addReaction() { return 'reaction' },
+  async removeReaction() {},
+  async getResource() { return Readable.from([Buffer.from('ok')]) },
+  async listTopicMessages() { return { items: [] } },
+  async searchMessages() { return { items: [] } },
+  async listMessages() { return [] },
+}
+const larkOptions: LarkOptions = { appId: 'offline', owners: ['ou_alice'], transport }
+const larkVela = createVela({
+  contextFiles: false,
+  model: createFauxModel({ responses: [fauxText('lark received')] }),
+  extensions: [lark(larkOptions)],
+})
+try {
+  await larkVela.startChannels()
+  let done!: () => void
+  const replied = new Promise<void>((r) => { done = r })
+  const off = larkVela.subscribe((e) => { if (e.type === 'channel_reply' && e.text.includes('lark received')) done() })
+  larkReceive!({
+    sender: { sender_type: 'user', sender_id: { open_id: 'ou_alice' } },
+    message: { chat_id: 'direct', chat_type: 'p2p', message_id: 'm1', message_type: 'text', content: JSON.stringify({ text: 'hello' }), create_time: String(Date.now()) },
+  })
+  await replied
+  off()
+  assert(larkSent.some((text) => text.includes('lark received')))
+  console.log('lark fake transport round trip ok')
+} finally {
+  await larkVela.dispose()
+}
+
+if (typeof vela.publishEvent !== 'function')
+  throw new Error('publishEvent missing')
+
 await cleanupTestVelas()
 console.log('sdk ok')
 `
 
-// Node project: NodeNext with every strict option that can be enabled. skipLibCheck stays on
-// (the .d.ts of dependencies like ai fail under exactOptionalPropertyTypes / no DOM lib);
-// the @ts-expect-error lines in smoke.ts make sure the types are not any
 const NODE_TSCONFIG = {
   compilerOptions: {
     target: 'ES2023',
@@ -149,7 +229,6 @@ const NODE_TSCONFIG = {
   include: ['smoke.ts'],
 }
 
-// The tsconfig `bun init` generates (the Bun project default); TypeScript 6 defaults types to empty, so list bun explicitly
 const BUN_TSCONFIG = {
   compilerOptions: {
     lib: ['ESNext'],
@@ -171,264 +250,6 @@ const BUN_TSCONFIG = {
   },
 }
 
-const coreSmoke = SMOKE.replaceAll(
-  "'@glows777/vela/testing'",
-  "'@glows777/vela-core/testing'",
-).replaceAll("'@glows777/vela'", "'@glows777/vela-core'")
-const ragStart = coreSmoke.indexOf('// rag extension:')
-const ragEnd = coreSmoke.indexOf('// grep / find', ragStart)
-const CORE = insertCoreSubpaths(
-  coreSmoke.slice(0, ragStart) + coreSmoke.slice(ragEnd),
-)
-function insertCoreSubpaths(source: string) {
-  return (
-    `
-import {defineJsonSchemaTool} from '@glows777/vela-core/extension-api'
-import {imageMimeType,imageMetadata,isBinaryFile} from '@glows777/vela-core/images'
-import {inspectVela,inspectSession} from '@glows777/vela-core/diagnostics'
-import * as frontend from '@glows777/vela-core/diagnostics'
-const functions=[frontend.renderSessionHtml,frontend.buildSessionPath,frontend.contextEntries,frontend.summaryMessageText,frontend.branchSummaryMessageText,frontend.sessionContentText,frontend.isSessionV1,frontend.newSessionId,frontend.assertSessionId,frontend.isToolModifier,frontend.getToolListError,frontend.isToolContent,frontend.defaultAgentDir,frontend.extensionName,frontend.projectTrustRequired,frontend.resolveModel]
-if(functions.some(value=>typeof value!=='function')||frontend.THINKING_LEVELS.length!==7)throw new Error('missing experimental frontend API')
-frontend.assertSessionId(frontend.newSessionId())
-if(frontend.sessionContentText('frontend')!=='frontend'||!frontend.isToolContent([{type:'text',text:'x'}]))throw new Error('frontend contract failed')
-try{frontend.resolveModel(undefined);throw new Error('missing no-model error')}catch(error){if(!(error instanceof Error)||!error.message.startsWith('No model available. Sign in with /login'))throw error}
-if(typeof defineJsonSchemaTool!=='function'||typeof imageMimeType!=='function'||typeof imageMetadata!=='function'||typeof isBinaryFile!=='function')throw new Error('missing public core subpath')
-` +
-    source.replace(
-      'await vela.dispose()',
-      "if(!inspectVela(vela).tools.length||(await inspectSession(vela,session)).windowTokens<=0)throw new Error('diagnostic consumer failed');await vela.dispose()",
-    )
-  )
-}
-const CHANNELS = `
-import assert from 'node:assert/strict'
-import {createHmac} from 'node:crypto'
-import {mkdtemp,mkdir,rm} from 'node:fs/promises'
-import {request as httpRequest} from 'node:http'
-import {tmpdir} from 'node:os'
-import {join} from 'node:path'
-import {createChannelVela,local,type ChannelExtension,type IncomingMessage,type ChannelEvent,type LocalProject,type LocalMessage,type LocalEvent,type LocalHost,LocalError} from '@glows777/vela-channels'
-import {drainChannels} from '@glows777/vela-channels/testing'
-import {createFauxModel,fauxText,fauxToolCall} from '@glows777/vela-core/testing'
-let receive:((m:IncomingMessage)=>void)|undefined;let stopped=0;const replies:string[]=[]
-const probe:ChannelExtension=api=>api.registerChannel({name:'probe',description:'standard adapter',start(){},stop(){stopped++},onMessage(next){receive=next},async send(m){replies.push(m.text)}})
-const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'consumer',key:'build'}),fauxText('channel received'),fauxText('event received'),fauxText('default received')]}),eventDefaultTarget:{channel:' probe ',chatId:' room '},extensions:[probe]})
-try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private');const event:ChannelEvent={source:'consumer',key:'build',deliveryId:'packed',summary:'!stop',final:true};await vela.publishEvent(event);await drainChannels(vela);assert(replies.includes('event received'));await vela.publishEvent({...event,key:'unmatched',deliveryId:'packed-default',final:false});await drainChannels(vela);assert(replies.includes('default received'))}finally{await vela.dispose()}
-assert.equal(stopped,1);console.log('standard channel sdk ok')
-// Host entry must work and typecheck through the packed public package on Node and Bun.
-const hostVela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxText('host received')]}),extensions:[probe]})
-await hostVela.ready()
-const host=hostVela.channel('probe');const connections:boolean[]=[]
-const offConnection=host.onConnection(state=>connections.push(state.connected))
-const offSession=host.onSession(update=>assert.equal(typeof update.session.sessionId,'string'))
-try{
-  assert.deepEqual(host.connection(),{connected:false});await hostVela.startChannels()
-  const receipt=await host.submit({channelId:'host-room',senderId:'consumer',senderName:'Consumer',text:'host prompt'})
-  await drainChannels(hostVela);assert.equal(host.sessions()[0]!.sessionId,receipt.sessionId)
-  assert.equal(host.sessions('missing').length,0);assert.equal(await host.stop({chatId:'host-room'},'expired'),false)
-  const routine=await host.routines.create({chatId:'host-room'},{message:'Review',schedule:{time:'09:00'},creator:{id:'consumer',name:'Consumer'}})
-  assert.equal(host.routines.list({chatId:'host-room'}).routines[0]!.id,routine.id)
-  assert.equal(await host.routines.cancel({chatId:'host-room'},routine.id),true)
-}finally{await hostVela.dispose();offConnection();offSession()}
-assert.deepEqual(connections,[true,false]);assert.deepEqual(host.connection(),{connected:false})
-console.log('packed host snapshots, admission, exact Stop, idle routines and connection lifecycle ok')
-
-const hookLogs:string[]=[]
-const hookModel=createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'github',key:'github:owner/repo#pr/1'}),fauxText('webhook subscribed'),fauxText('webhook handled')]})
-const hooks=createChannelVela({contextFiles:false,model:hookModel,extensions:[probe],extensionConfig:{channel:{eventReceiver:{port:0,github:{secret:'packed-fixture',repositories:['owner/repo']},generic:{secret:'packed-generic',source:'sentry'}}}},logger:{debug(){},info(s){hookLogs.push(s)},warn(){},error(s){hookLogs.push(s)}}})
-let hookURL=''
-try{
-  await hooks.startChannels();hookURL=hookLogs.join(' ').match(/http:\\/\\/127\\.0\\.0\\.1:\\d+\\/events\\/github/)![0]
-  receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'subscribe'});await drainChannels(hooks)
-  const raw=JSON.stringify({action:'closed',repository:{full_name:'owner/repo'},pull_request:{number:1,merged:true,title:'Packed fixture',user:{login:'author'},head:{sha:'a'.repeat(40)},html_url:'https://github.com/owner/repo/pull/1'}})
-  const signed='sha256='+createHmac('sha256','packed-fixture').update(raw).digest('hex')
-  const post=(signature:string,body=raw)=>fetch(hookURL,{method:'POST',headers:{'x-github-event':'pull_request','x-github-delivery':'packed-http','x-hub-signature-256':signature},body})
-  assert.equal((await post('sha256=bad')).status,403);assert.equal((await post(signed)).status,202);await drainChannels(hooks)
-  const calls=hookModel.calls.length;assert(replies.includes('webhook handled'));assert.equal((await post(signed)).status,202);await drainChannels(hooks);assert.equal(hookModel.calls.length,calls)
-  // Inspect the early 413 before uploading: fetch can surface EPIPE when the receiver closes an oversized request.
-  const oversizedStatus=await new Promise<number>((resolve,reject)=>{
-    const req=httpRequest(hookURL,{method:'POST',headers:{'content-length':1048577},signal:AbortSignal.timeout(10000)},res=>{
-      res.resume()
-      res.once('error',reject)
-      res.once('end',()=>{resolve(res.statusCode!);req.destroy()})
-    })
-    req.once('error',reject)
-    req.flushHeaders()
-  })
-  assert.equal(oversizedStatus,413)
-  console.log('packed signed HTTP -> GitHub final event -> channel queue ok; wrong signature/duplicate/oversize blocked')
-  hookModel.push(fauxToolCall('channel_subscriptions',{action:'create',source:'sentry',key:'sentry:project'}),fauxText('generic subscribed'),fauxText('generic handled'))
-  receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'subscribe generic'});await drainChannels(hooks)
-  const genericBody=JSON.stringify({key:'sentry:project',summary:'!stop',final:true})
-  const genericPost=(body:string,signature:string,id='packed-http')=>fetch(hookURL.replace('/events/github','/events/generic'),{method:'POST',headers:{'x-vela-delivery':id,'x-vela-signature-256':signature},body})
-  const genericSignature='sha256='+createHmac('sha256','packed-generic').update(genericBody).digest('hex')
-  assert.equal((await genericPost(genericBody,'sha256=bad')).status,403)
-  assert.equal((await genericPost(genericBody,genericSignature)).status,202);await drainChannels(hooks);assert(replies.includes('generic handled'))
-  const genericCalls=hookModel.calls.length;assert.equal((await genericPost(genericBody,genericSignature)).status,202);await drainChannels(hooks);assert.equal(hookModel.calls.length,genericCalls)
-  const outside=JSON.stringify({key:'github:owner/repo#pr/1',summary:'outside'})
-  assert.equal((await genericPost(outside,'sha256='+createHmac('sha256','packed-generic').update(outside).digest('hex'),'outside')).status,400)
-  console.log('packed generic signed HTTP -> fixed-source final queue ok; same delivery ID isolated from GitHub, duplicates ignored')
-}finally{await hooks.dispose()}
-assert.equal(await fetch(hookURL).catch(()=>undefined),undefined);console.log('packed HTTP ingress disposal ok')
-
-// Only the channels package is installed directly: Local must work without the CLI or Bun APIs.
-const localRoot=await mkdtemp(join(tmpdir(),'vela-packed-local-'))
-const localProjectDir=join(localRoot,'project')
-await mkdir(localProjectDir)
-const localLogs:string[]=[]
-const localVela=createChannelVela({contextFiles:false,dataDir:join(localRoot,'data'),model:createFauxModel({responses:[fauxText('packed local reply')]}),extensions:[local({token:'packed-local-token',port:0})],logger:{debug(){},info(s){localLogs.push(s)},warn(){},error(s){localLogs.push(s)}}})
-let localURL=''
-try{
-  await localVela.startChannels()
-  assert.deepEqual(localVela.runningChannels(),['local'])
-  localURL=localLogs.join(' ').match(/http:\\/\\/127\\.0\\.0\\.1:\\d+/)?.[0]??''
-  assert(localURL,'Local did not report its listening URL')
-  const request=(path:string,body?:unknown)=>fetch(localURL+path,{headers:{authorization:'Bearer packed-local-token','content-type':'application/json'},...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:AbortSignal.timeout(10000)})
-  const unauthenticated=await fetch(localURL+'/v1/info')
-  assert.equal(unauthenticated.status,401);await unauthenticated.text()
-  const info=await request('/v1/info');assert.equal(info.status,200)
-  assert.equal((await info.json() as {channel:string}).channel,'local')
-  const opened=await request('/v1/projects',{cwd:localProjectDir,name:'Packed Local'})
-  assert.equal(opened.status,201)
-  const project=await opened.json() as LocalProject
-  assert.equal(project.channel,'local');assert(project.id);assert(project.sessionId)
-  const events=await request('/v1/events?projectId='+encodeURIComponent(project.id))
-  assert.equal(events.status,200);assert.match(events.headers.get('content-type')??'',/text\\/event-stream/)
-  const reader=events.body!.getReader()
-  try{
-    let frame='';const decoder=new TextDecoder()
-    while(!frame.includes('\\n\\n')){
-      const chunk=await reader.read();assert(!chunk.done,'SSE ended before reset')
-      frame+=decoder.decode(chunk.value,{stream:true})
-    }
-    const data=frame.split('\\n').find(line=>line.startsWith('data: '))
-    assert(data,'SSE reset omitted data')
-    const reset=JSON.parse(data.slice(6)) as LocalEvent
-    assert.equal(reset.type,'reset');assert.equal(reset.version,1);assert.equal(reset.projectId,project.id)
-    assert.deepEqual(reset.data,{reason:'connected',reload:['sessions','messages']})
-  }finally{await reader.cancel()}
-  const messagesPath='/v1/projects/'+encodeURIComponent(project.id)+'/sessions/'+encodeURIComponent(project.sessionId)+'/messages'
-  const accepted=await request(messagesPath,{text:'Hello from a packed consumer',clientMessageId:'packed-local'})
-  assert.equal(accepted.status,202);await accepted.json()
-  const deadline=Date.now()+10000
-  for(;;){
-    const response=await request(messagesPath);assert.equal(response.status,200)
-    const {messages}=await response.json() as {messages:LocalMessage[]}
-    if(messages.some(message=>message.role==='assistant'&&message.text==='packed local reply')){
-      assert(messages.some(message=>message.role==='user'&&message.text==='Hello from a packed consumer'&&message.clientMessageId==='packed-local'))
-      break
-    }
-    assert(Date.now()<deadline,'Local reply did not become visible over HTTP')
-    await new Promise(resolve=>setTimeout(resolve,20))
-  }
-  console.log('packed Local explicit SDK -> authenticated HTTP 202 -> visible reply and SSE reset ok')
-}finally{
-  try{await localVela.dispose()}finally{await rm(localRoot,{recursive:true,force:true})}
-}
-assert.equal(await fetch(localURL+'/v1/info',{signal:AbortSignal.timeout(2000)}).catch(()=>undefined),undefined)
-console.log('packed Local listener disposal ok')
-
-const coreRoot=await mkdtemp(join(tmpdir(),'vela-packed-local-core-'))
-const coreLocal=createChannelVela({contextFiles:false,dataDir:join(coreRoot,'data'),model:createFauxModel({responses:[fauxText('core-only reply')]}),extensions:[local({})]})
-try{
-  await coreLocal.ready()
-  const host:LocalHost=coreLocal.channel('local')
-  const observed:LocalEvent[]=[]
-  host.onEvent(event=>observed.push(event))
-  assert.throws(()=>host.projects(),LocalError)
-  await coreLocal.startChannels()
-  const project=await host.openProject({cwd:coreRoot,name:'Core only'})
-  assert.equal(host.sessions(project.id)[0]?.sessionId,project.sessionId)
-  const receipt=await host.submit({projectId:project.id,sessionId:project.sessionId,text:'visible SDK input',clientMessageId:'core-only'})
-  assert(receipt.messageId)
-  await drainChannels(coreLocal)
-  const messages:LocalMessage[]=host.messages({projectId:project.id,sessionId:project.sessionId}).messages
-  assert(messages.some(message=>message.text==='core-only reply'))
-  assert(observed.some(event=>event.type==='message'&&event.data.id===receipt.messageId))
-  assert(!observed.some(event=>event.type==='reset'))
-  assert.deepEqual(host.connection(),{connected:true})
-  console.log('packed typed Local core-only host, visible submit, events and snapshots ok')
-}finally{try{await coreLocal.dispose()}finally{await rm(coreRoot,{recursive:true,force:true})}}
-
-
-`
-const LARK = `
-import assert from 'node:assert/strict'
-import {Readable} from 'node:stream'
-import {mkdir,symlink,readFile,realpath,writeFile,rm} from 'node:fs/promises'
-import {resolve,join} from 'node:path'
-import {lark,type LarkOptions,type LarkTransport,type LarkMessageEvent} from '@glows777/vela-lark'
-// @ts-expect-error breaking rename removes old public factory
-type LegacyFactory = typeof import('@glows777/vela-lark')['feishu']
-// @ts-expect-error breaking rename removes old public option type
-type LegacyOptions = import('@glows777/vela-lark').FeishuOptions
-import {createChannelVela} from '@glows777/vela-channels'
-import {drainChannels} from '@glows777/vela-channels/testing'
-import {createFauxModel,fauxText} from '@glows777/vela-core/testing'
-let receive:(event:LarkMessageEvent)=>void=()=>{throw new Error('transport not started')};const sent:string[]=[]
-const receipt=()=>({messageId:'reply',createTime:String(Date.now())})
-const transport:LarkTransport={
- async start(next){receive=next},stop(){},async getBotId(){return 'ou_bot'},async getSenderName(){return 'Alice'},
- async send(_chat,text){sent.push(text);return receipt()},async reply(_message,text){sent.push(text);return receipt()},
- async startTopic(){return {...receipt(),rootId:'root',threadId:'thread'}},async forward(){return receipt()},
- async sendCard(){return 'card'},async patchCard(){},async addReaction(){return 'reaction'},async removeReaction(){},
- async getResource(){return Readable.from([Buffer.from('canonical packed attachment')])},async listTopicMessages(){return {items:[]}},async searchMessages(){return {items:[]}},async listMessages(){return []},
-}
-const options:LarkOptions={appId:'offline',owners:['ou_alice'],transport}
-const actual=resolve('lark-data');await mkdir(actual);const archiveId='feishu-oc_archived-ou_alice';const archive=JSON.stringify({type:'session',version:2,id:archiveId,timestamp:'2026-01-01T00:00:00.000Z'})+'\\n'+JSON.stringify({type:'message',id:'old',parentId:null,timestamp:'2026-01-01T00:00:00.000Z',message:{role:'user',content:'ORCHID-PRIVATE'}})+'\\n';await mkdir(join(actual,'sessions',archiveId),{recursive:true});await writeFile(join(actual,'sessions',archiveId+'.jsonl'),archive);await writeFile(join(actual,'sessions',archiveId,'output.txt'),'retained old output');const linked=resolve('linked-lark-data');await symlink(actual,linked,'dir')
-const model=createFauxModel({responses:[fauxText('lark received'),fauxText('file received')]})
-const vela=createChannelVela({dataDir:linked,contextFiles:false,model,extensions:[lark(options)]})
-try{await vela.startChannels();receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'incoming',message_type:'text',content:JSON.stringify({text:'hello'}),create_time:String(Date.now())}});await drainChannels(vela);assert(sent.some(text=>text.includes('lark received')));receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'file',message_type:'file',content:JSON.stringify({file_key:'resource',file_name:'notes.txt'}),create_time:String(Date.now())}});await drainChannels(vela);
-const prefix = '[file: notes.txt, saved at '
-const message = model.calls[1]!.lastUserText
-const start = message.lastIndexOf(prefix)
-assert(start >= 0)
-const path = message.slice(start + prefix.length, message.indexOf(']', start))
-const canonical = await realpath(path)
-assert.equal(canonical, join(await realpath(actual), 'channels', 'lark-direct', 'files', 'file-notes.txt'))
-assert.equal(await readFile(path, 'utf8'), 'canonical packed attachment')
-}finally{await vela.dispose()}
-assert.equal(await readFile(join(actual,'sessions',archiveId+'.jsonl'),'utf8'),archive);assert.equal(await readFile(join(actual,'sessions',archiveId,'output.txt'),'utf8'),'retained old output');assert(!vela.sessions().some(session=>session.id===archiveId));assert(!JSON.stringify(model.calls.map(call=>call.prompt)).includes('ORCHID-PRIVATE'))
-console.log('lark fake transport sdk, retained archive privacy and symlink-root attachment ok')
-// An announcement may fail even while replying to the previous human still works.
-const {fauxToolCall}=await import('@glows777/vela-core/testing')
-const eventModel=createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'consumer',key:'build'}),fauxText('subscribed')]})
-const eventVela=createChannelVela({dataDir:resolve('event-data'),contextFiles:false,model:eventModel,extensions:[lark({...options,chats:['oc_group']})]})
-try{await eventVela.startChannels();let finish!:()=>void;const done=new Promise<void>(resolve=>{finish=resolve});const off=eventVela.subscribe(e=>{if(e.type==='channel_reply'&&e.text==='subscribed')finish()});receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'oc_group',chat_type:'group',message_id:'om_human',message_type:'text',mentions:[{key:'@_user_1',id:{open_id:'ou_bot'}}],content:JSON.stringify({text:'subscribe'}),create_time:String(Date.now())}});await done;off();await drainChannels(eventVela);const before=sent.length;const calls=eventModel.calls.length;const announce=transport.send;transport.send=async()=>{throw new Error('announcement denied')};await eventVela.publishEvent({source:'consumer',key:'build',deliveryId:'failed-send',summary:'build finished'});await drainChannels(eventVela);assert.equal(sent.length,before);assert.equal(eventModel.calls.length,calls);console.log('failed event announcement skipped without a human-message reply');transport.send=announce;const index=join(eventVela.dataDir,'channels/index.json');const committed=await readFile(index,'utf8');await rm(index);await mkdir(index);try{await eventVela.publishEvent({source:'consumer',key:'build',deliveryId:'failed-index',summary:'build finished'});await drainChannels(eventVela);assert.equal(sent.length,before);assert.equal(eventModel.calls.length,calls)}finally{await rm(index,{recursive:true});await writeFile(index,committed);eventModel.push(fauxText('storage restored'));await eventVela.publishEvent({source:'consumer',key:'build',deliveryId:'restored-index',summary:'new event'});await drainChannels(eventVela)}assert(sent.at(-1)!.includes('storage restored'));console.log('failed event index admission skipped without a human-message reply; later event delivered')}finally{await eventVela.dispose()}
-
-`
-const MCP = `
-import assert from 'node:assert/strict'
-import {mcp,type McpOptions} from '@glows777/vela-mcp'
-import {createTestVela,createFauxEmbedder,fauxToolCall,fauxText} from '@glows777/vela-core/testing'
-const options:McpOptions={servers:{local:{command:process.execPath,args:['server.ts'],exposure:'direct'}}}
-const t=createTestVela({cwd:process.cwd(),dataDir:'.mcp-data',extensions:[mcp(options)],responses:[fauxToolCall('mcp__local__echo',{text:'stdio works'}),fauxText('done')]})
-try{await t.run('echo');assert(JSON.stringify(t.model.calls[1]?.prompt).includes('stdio works'));console.log('mcp stdio sdk ok')}finally{await t.cleanup()}
-`
-const RAG = `
-import assert from 'node:assert/strict'
-import {rag,type EmbeddingFn} from '@glows777/vela-rag'
-import {createTestVela,createFauxEmbedder,fauxToolCall,fauxText} from '@glows777/vela-core/testing'
-const embedder:EmbeddingFn=createFauxEmbedder()
-const t=createTestVela({extensions:[rag({embedder})],files:{'guide.md':'Vela runs on Node and Bun.'},responses:[fauxToolCall('rag_ingest',{path:'guide.md'}),fauxToolCall('rag_search',{query:'runs on Node'}),fauxText('ok')]})
-try{await t.run('ingest and search');assert(JSON.stringify(t.model.calls[2]?.prompt).includes('Vela runs on Node and Bun.'));console.log('rag sqlite vector sdk ok')}finally{await t.cleanup()}
-`
-const checks: Record<string, string> = {
-  core: CORE,
-  channels: CHANNELS,
-  lark: LARK,
-  mcp: MCP,
-  rag: RAG,
-  vela:
-    SMOKE +
-    "\nif (typeof vela.publishEvent !== 'function') throw new Error('umbrella publishEvent missing')\n",
-}
-const forbidden = [
-  '@larksuiteoapi/node-sdk',
-  '@modelcontextprotocol/sdk',
-  'sqlite-vec',
-  '@earendil-works/pi-tui',
-]
 const packed = await (async () => {
   await $`bun run build`.cwd(ROOT)
   return packWorkspaces(ROOT, work)
@@ -462,22 +283,7 @@ const registry = Bun.serve({
   },
 })
 registryURL = `http://127.0.0.1:${registry.port}`
-async function assertLightInstall(app: string) {
-  const report = await $`npm ls --all --json`.cwd(app).quiet().nothrow()
-  if (report.exitCode !== 0)
-    throw new Error(
-      'installed dependency tree is invalid: ' + report.stderr.toString(),
-    )
-  const tree = JSON.parse(report.stdout.toString())
-  const visit = (node: { dependencies?: Record<string, unknown> }) => {
-    for (const [name, child] of Object.entries(node.dependencies ?? {})) {
-      if (forbidden.includes(name))
-        throw new Error(`light install contains ${name}`)
-      visit(child as typeof node)
-    }
-  }
-  visit(tree)
-}
+
 async function cli(app: string, runtime: string, version: string) {
   const home = join(app, 'home')
   await mkdir(home, { recursive: true })
@@ -567,11 +373,9 @@ async function cli(app: string, runtime: string, version: string) {
     await stdout
   }
 }
+
 try {
-  const only = process.argv.includes('--only')
-    ? new Set(process.argv[process.argv.indexOf('--only') + 1]!.split(','))
-    : undefined
-  for (const pkg of packed.filter((p) => !only || only.has(p.key)))
+  for (const pkg of packed)
     for (const runtime of ['node', 'bun']) {
       const app = join(work, pkg.key + '-' + runtime)
       await mkdir(app, { recursive: true })
@@ -586,12 +390,6 @@ try {
           tooling.devDependencies[
             runtime === 'node' ? '@types/node' : '@types/bun'
           ],
-        ...(pkg.key === 'mcp'
-          ? {
-              '@modelcontextprotocol/sdk':
-                tooling.devDependencies['@modelcontextprotocol/sdk'],
-            }
-          : {}),
       }
       await writeFile(
         join(app, 'package.json'),
@@ -607,12 +405,11 @@ try {
         join(app, 'tsconfig.json'),
         JSON.stringify(runtime === 'node' ? NODE_TSCONFIG : BUN_TSCONFIG),
       )
-      await writeFile(join(app, 'smoke.ts'), checks[pkg.key]!)
-      if (pkg.key === 'mcp')
-        await cpFixture(
-          'test/fixtures/mcp-echo-server.ts',
-          join(app, 'server.ts'),
-        )
+      await writeFile(join(app, 'smoke.ts'), SMOKE)
+      await writeFile(
+        join(app, 'server.ts'),
+        await readFile(join(ROOT, 'test/fixtures/mcp-echo-server.ts')),
+      )
       console.log(`--- ${pkg.key}: ${runtime} fresh install`)
       if (runtime === 'node')
         await $`npm install --no-audit --no-fund --loglevel=error`.cwd(app)
@@ -621,22 +418,13 @@ try {
           ...process.env,
           BUN_INSTALL_CACHE_DIR: join(work, 'bun-cache'),
         })
-      if (pkg.key === 'core' || pkg.key === 'channels')
-        await assertLightInstall(app)
       await $`./node_modules/.bin/tsc -p .`.cwd(app)
       await $`${runtime} smoke.ts`.cwd(app)
-      if (pkg.key === 'vela') await cli(app, runtime, pkg.version)
+      await cli(app, runtime, pkg.version)
       console.log(`PASS ${pkg.name} on ${runtime}`)
     }
-  console.log(
-    only
-      ? 'selected packed workspace consumer checks passed'
-      : 'all six packed workspace consumer checks passed',
-  )
+  console.log('packed @glows777/vela consumer checks passed on Node and Bun')
 } finally {
   registry.stop(true)
   await rm(work, { recursive: true, force: true })
-}
-async function cpFixture(source: string, destination: string) {
-  await writeFile(destination, await readFile(join(ROOT, source)))
 }

@@ -146,7 +146,6 @@
   interface ContextFile
     content: string
     path: string
-  function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
   function createLocalExecutionEnv: (options: { cwd: string; shellPath?: string; }) => ExecutionEnv
   function createVela: (options?: ChannelVelaOptions) => Vela
   type Credential = ApiKeyCredential | OAuthCredential
@@ -187,10 +186,6 @@
     docs?: string | undefined
     examples?: string | undefined
     readme?: string | undefined
-  type EmbeddingFn = ((
-      texts: string[],
-      signal?: AbortSignal,
-      ) => Promise<number[][]>) & { readonly id?: string }
   interface ExecuteToolOptions
     onUpdate?: ((partialResult: unknown) => void) | undefined
     signal?: AbortSignal | undefined
@@ -691,10 +686,6 @@
     type: "provider_stream_event"
   function publishChannelEvent: (session: VelaSession, event: Extract<VelaEvent, { type: "channel_message" | "channel_reply" | "channel_error"; }>) => void
   type QueueMode = 'one-at-a-time' | 'all'
-  function rag: (options?: RagOptions) => VelaExtension
-  const ragConfig: ExtensionConfigDefinition
-  interface RagOptions
-    embedder?: EmbeddingFn | undefined
   function resolveBinary: (vela: Vela, name: "rg" | "fd") => Promise<string>
   type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
   interface SavedSessionOptions
@@ -1296,10 +1287,472 @@
   function withFileMutationQueue: <T>(filePath: string, fn: () => Promise<T>) => Promise<T>
   function writeProviderPreset: (agentDir: string, provider: string, preset: ProviderConfig) => string
 
+# @glows777/vela/extension-api
+
+  interface AfterProviderResponseEvent
+    headers: Record<string, string>
+    type: "after_provider_response"
+  function agentErrorHint: (kind: AgentErrorKind | undefined) => string | undefined
+  type AgentErrorKind = | 'auth'
+      | 'billing'
+      | 'rate_limit'
+      | 'network'
+      | 'context_overflow'
+      | 'provider'
+      | 'unknown'
+  interface BeforeAgentStartEvent
+    prompt: string
+    sections: Record<string, string>
+    systemPrompt: string
+    type: "before_agent_start"
+  interface BeforeAgentStartEventResult
+    message?: CustomMessage | undefined
+    systemPrompt?: string | undefined
+  interface BeforeProviderRequestEvent
+    params: LanguageModelV4CallOptions
+    type: "before_provider_request"
+  function configString: (config: Readonly<Record<string, unknown>>, key: string) => string | undefined
+  function configStrings: (config: Readonly<Record<string, unknown>>, key: string) => string[] | undefined
+  interface ContextEvent
+    messages: ModelMessage[]
+    type: "context"
+  interface ContextEventResult
+    messages?: ModelMessage[] | undefined
+  interface CustomMessage
+    content: UserContent
+    customType: string
+    details?: unknown
+    display: boolean
+  function customMessageIfChanged: (session: VelaSession, customType: string, content: string) => CustomMessage | undefined
+  function customMessageMissing: (messages: readonly ModelMessage[], markers: readonly string[]) => boolean
+  function defineJsonSchemaTool: (tool: ToolDefinition & { inputSchema: Schema<unknown>; }) => ToolDefinition
+  interface ExecuteToolOptions
+    onUpdate?: ((partialResult: unknown) => void) | undefined
+    signal?: AbortSignal | undefined
+  interface ExtensionAPI
+    on: { <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>): () => void; (event: "tool_call", toolName: string, handler: ExtensionHandler<"tool_call">): () => void; }
+    onShutdown: (handler: () => void | Promise<void>) => void
+    readonly config: Readonly<Record<string, unknown>>
+    readonly cwd: string
+    readonly dataDir: string
+    readonly logger: VelaLogger
+    registerCommand: (name: string, command: ExtensionCommand) => void
+    registerProvider: (name: string, provider: ProviderDefinition) => void
+    registerTool: (tool: ToolDefinition) => string
+    unregisterTool: (name: string) => boolean
+  interface ExtensionCommand
+    description?: string | undefined
+    handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
+  interface ExtensionConfigContext
+    agentDir: string
+    cwd: string
+    env: Record<string, string | undefined>
+    projectDir: string
+    trusted: boolean
+  interface ExtensionConfigDefinition
+    readonly name: string
+    readonly projectResources?: readonly string[] | undefined
+    resolve: (section: Readonly<Record<string, unknown>>, context: ExtensionConfigContext) => Record<string, unknown>
+  interface ExtensionContext
+    cwd: string
+    hasUI: boolean
+    session: VelaSession
+    signal: AbortSignal | undefined
+    ui: ExtensionUI
+  type ExtensionEventName = keyof ExtensionEvents
+  type ExtensionEvents = InterceptEvents & NotifyEvents
+  type ExtensionHandler<K extends ExtensionEventName> = (
+      event: ExtensionEvents[K][0],
+      ctx: ExtensionContext,
+      ) =>
+      | ExtensionEvents[K][1]
+      | undefined
+      | Promise<ExtensionEvents[K][1] | undefined>
+  interface ExtensionUI
+    confirm: (title: string, message: string) => Promise<boolean>
+    input: (title: string, placeholder?: string) => Promise<string | undefined>
+    notify: (message: string, level?: "info" | "warning" | "error") => void
+    select: (title: string, options: string[]) => Promise<string | undefined>
+    setStatus: (key: string, text?: string) => void
+    setWidget: (key: string, lines?: string[]) => void
+  interface ImageContent
+    data: string
+    mimeType: string
+    type: "image"
+  interface InputEvent
+    images?: ImageContent[] | undefined
+    source: InputSource
+    streamingBehavior?: "steer" | "followUp" | undefined
+    text: string
+    type: "input"
+  type InputEventResult = | { action: 'continue' }
+      | { action: 'transform'; text: string; images?: ImageContent[] }
+      | { action: 'handled' }
+  type InputSource = | 'interactive'
+      | 'rpc'
+      | 'extension'
+      | 'channel'
+      | 'sdk'
+  function lastCustomMessage: (session: VelaSession, customType: string) => ModelMessage | undefined
+  function messageText: (message: ModelMessage) => string
+  type ModelMessage = | Exclude<AIModelMessage, UserModelMessage | AIToolModelMessage>
+      | (Omit<UserModelMessage, 'content'> & { content: UserContent })
+      | ToolModelMessage
+  interface ProviderStreamEvent
+    data: unknown
+    model: string
+    provider: string
+    type: "provider_stream_event"
+  function publishChannelEvent: (session: VelaSession, event: Extract<VelaEvent, { type: "channel_message" | "channel_reply" | "channel_error"; }>) => void
+  interface SendMessageOptions
+    deliverAs?: "steer" | "followUp" | "nextTurn" | undefined
+    triggerTurn?: boolean | undefined
+  interface SessionBeforeForkEvent
+    entryId: string
+    position: "before" | "at"
+    type: "session_before_fork"
+  interface SessionBeforeForkEventResult
+    cancel?: boolean | undefined
+  interface SessionBeforeTreeEvent
+    preparation: TreePreparation
+    signal: AbortSignal
+    type: "session_before_tree"
+  interface SessionBeforeTreeEventResult
+    cancel?: boolean | undefined
+    focus?: string | undefined
+    label?: string | undefined
+    summary?: { summary: string; } | undefined
+  interface SessionOptions
+    autoCompaction?: boolean | undefined
+    channel?: string | undefined
+    cwd?: string | undefined
+    host?: { deliver(text: string): void | Promise<void>; background?(event: { type: "started"; token: string; id: string; commandHead: string; } | { type: "result"; token: string; text: string; } | { type: "stopped"; token?: string; }): void | Promise<void>; } | undefined
+    location?: ExecutionLocation | undefined
+    model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
+    scope?: SessionScope | undefined
+    thinkingLevel?: ThinkingLevel | undefined
+    tools?: string[] | undefined
+    ui?: SessionUI | undefined
+    unattended?: boolean | undefined
+  interface SessionScope
+    readonly dataDir: string
+    readonly id: string
+    readonly kind: "private" | "shared"
+  interface SessionShutdownEvent
+    type: "session_shutdown"
+  interface SessionStartEvent
+    type: "session_start"
+  interface SessionTreeEvent
+    fromExtension?: boolean | undefined
+    newLeafId: string | null
+    oldLeafId: string | null
+    summaryEntry?: BranchSummaryEntry | undefined
+    type: "session_tree"
+  type SessionUI = Omit<ExtensionUI, 'setStatus' | 'setWidget'> &
+      Partial<Pick<ExtensionUI, 'setStatus' | 'setWidget'>>
+  const silentLogger: VelaLogger
+  interface StepRecord
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    cost?: number | undefined
+    durationMs?: number | undefined
+    inputTokens: number
+    kind?: "main" | "summary" | "dream" | undefined
+    model: string
+    outputTokens: number
+    ts: number
+    usage?: LanguageModelUsage | undefined
+  interface StepUsage
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    inputTokens: number
+    outputTokens: number
+  interface ToolAnnotations
+    destructiveHint?: boolean | undefined
+    idempotentHint?: boolean | undefined
+    openWorldHint?: boolean | undefined
+    readOnlyHint?: boolean | undefined
+  interface ToolCallEvent
+    input: Record<string, unknown>
+    parentToolCallId?: string | undefined
+    toolCallId: string | undefined
+    toolName: string
+    type: "tool_call"
+  interface ToolCallEventResult
+    block?: boolean | undefined
+    reason?: string | undefined
+  interface ToolCallOutcome
+    durationMs?: number | undefined
+    isError: boolean
+    result: unknown
+    toolCallId: string
+    toolName: string
+  type ToolContent = (TextContent | ImageContent)[]
+  interface ToolContext
+    executeTool?: ((name: string, args: unknown, options?: ExecuteToolOptions) => Promise<ToolCallOutcome>) | undefined
+    onUpdate?: ((partialResult: unknown) => void) | undefined
+    scope?: Readonly<SessionScope> | undefined
+    sessionId?: string | undefined
+    signal?: AbortSignal | undefined
+    toolCallId?: string | undefined
+  interface ToolDefinition
+    activeByDefault?: false | undefined
+    annotations?: ToolAnnotations | undefined
+    channel?: string | true | undefined
+    description: string
+    execute: (input: any, context?: ToolContext) => Promise<unknown>
+    executionMode?: ToolExecutionMode | undefined
+    exposure?: ToolExposure | undefined
+    hostedOnly?: true | undefined
+    inputSchema: FlexibleSchema<any>
+    maxResultChars?: number | undefined
+    name: string
+    namespace?: ToolNamespace | undefined
+    promptGuidelines?: readonly string[] | undefined
+    promptSnippet?: string | undefined
+    replay?: "safe" | "unsafe" | undefined
+    searchHint?: string | undefined
+  type ToolExecutionMode = 'sequential' | 'parallel'
+  class ToolExecutionResult
+    readonly content?: ToolContent | undefined
+    readonly execution: ExecutionMetadata
+    readonly text: string
+    readonly value: unknown
+  type ToolExposure = | 'direct'
+      | 'model-only'
+      | 'codemode'
+      | 'deferred'
+      | 'hidden'
+  interface ToolNamespace
+    description?: string | undefined
+    instructions?: string | undefined
+    name: string
+  interface ToolResultEvent
+    content?: ToolContent | undefined
+    input: unknown
+    output: string
+    parentToolCallId?: string | undefined
+    toolCallId: string | undefined
+    toolName: string
+    type: "tool_result"
+  interface ToolResultEventResult
+    content?: ToolContent | undefined
+    output?: string | undefined
+  interface TreePreparation
+    commonAncestorId: string | null
+    entriesToSummarize: SessionEntry[]
+    focus?: string | undefined
+    label?: string | undefined
+    oldLeafId: string | null
+    targetId: string
+    userWantsSummary: boolean
+  interface UsageTotals
+    baselineCost?: number | undefined
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    cost?: number | undefined
+    hitRate: number
+    inputTokens: number
+    outputTokens: number
+    savedCost?: number | undefined
+    steps: number
+  type VelaEvent = | { type: 'agent_start'; input: string }
+      | { type: 'turn_start'; turn: number }
+      | {
+      type: 'message_start'
+      message: ModelMessage
+      custom?: CustomMessageInfo
+      }
+      | {
+      type: 'message_update'
+      message: AssistantModelMessage
+      assistantMessageEvent: AssistantMessageEvent
+      }
+      | {
+      type: 'message_end'
+      message: ModelMessage
+      stopReason?: StopReason
+      errorMessage?: string
+      custom?: CustomMessageInfo
+      }
+      | {
+      type: 'tool_execution_start'
+      toolCallId: string
+      toolName: string
+      args: unknown
+      parentToolCallId?: string
+      }
+      | {
+      type: 'tool_execution_update'
+      toolCallId: string
+      toolName: string
+      args: unknown
+      partialResult: unknown
+      parentToolCallId?: string
+      }
+      | {
+      type: 'tool_execution_end'
+      toolCallId: string
+      toolName: string
+      result: unknown
+      isError: boolean
+      details?: unknown
+      durationMs?: number
+      parentToolCallId?: string
+      }
+      | {
+      type: 'loop_detected'
+      level: 'warning' | 'critical'
+      detector: string
+      message: string
+      }
+      | {
+      type: 'auto_retry_start'
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      errorMessage: string
+      }
+      | {
+      type: 'auto_retry_end'
+      success: boolean
+      attempt: number
+      finalError?: string
+      }
+      | {
+      type: 'usage'
+      modelId: string
+      usage: StepUsage
+      record?: StepRecord
+      }
+      | {
+      type: 'turn_end'
+      turn: number
+      message: AssistantModelMessage
+      toolResults: ToolResultPart[]
+      }
+      | {
+      type: 'agent_end'
+      messages: ModelMessage[]
+      reason: 'done' | 'loop' | 'aborted' | 'error'
+      error?: unknown
+      errorKind?: AgentErrorKind
+      }
+      | { type: 'queue_update'; steering: string[]; followUp: string[] }
+      | { type: 'agent_settled' }
+      | { type: 'bash_execution_update'; id?: string; delta: string }
+      | {
+      type: 'context_prepare'
+      action: 'micro' | 'summary-required'
+      before: number
+      after?: number
+      saved?: number
+      calls?: number
+      }
+      | { type: 'compaction_start'; reason: CompactionReason }
+      | {
+      type: 'compaction_end'
+      reason: CompactionReason
+      result?: CompactionResult
+      aborted: boolean
+      willRetry: boolean
+      errorMessage?: string
+      }
+      | { type: 'session_save_failed'; error: unknown }
+      | { type: 'audit'; toolName: string; path: string }
+      | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
+      | {
+      type: 'channel_message'
+      channel: string
+      senderId: string
+      senderName: string
+      text: string
+      }
+      | {
+      type: 'channel_reply'
+      channel: string
+      recipientId: string
+      text: string
+      }
+      | {
+      type: 'channel_error'
+      channel: string
+      senderId: string
+      error: unknown
+      aborted: boolean
+      source?: 'feedback'
+      }
+  type VelaExtension = (vela: ExtensionAPI) => void | Promise<void>
+  interface VelaLogger
+    debug: (message: string) => void
+    error: (message: string) => void
+    info: (message: string) => void
+    warn: (message: string) => void
+  class VelaSession
+    abort: (reason?: unknown) => Promise<void>
+    abortBash: () => void
+    append: (message: ModelMessage) => void
+    appendEntry: (customType: string, data?: unknown) => void
+    autoCompaction: boolean
+    availableThinkingLevels: () => ThinkingLevel[]
+    backgroundTasks: (toolCallId?: string) => Promise<string[]>
+    channel?: string | undefined
+    clearQueue: () => { steering: string[]; followUp: string[]; }
+    clone: (options?: Omit<ForkOptions, "position">) => Promise<ForkResult>
+    close: () => Promise<void>
+    compact: (focus?: string) => Promise<void>
+    continueInterrupted: () => Promise<void>
+    customMessageOf: (message: ModelMessage) => CustomMessageInfo | undefined
+    drain: () => Promise<void>
+    executeBash: (command: string, options?: { excludeFromContext?: boolean; onUpdate?: (output: string) => void; id?: string; }) => Promise<BashResult>
+    exportHtml: (path?: string) => Promise<string>
+    exportJsonl: (path?: string) => Promise<string>
+    followUp: (input: string, options?: { source?: InputSource; images?: ImageContent[]; }) => Promise<void>
+    followUpMode: QueueMode
+    fork: (entryId: string, options?: ForkOptions) => Promise<ForkResult>
+    get hasWork: boolean
+    get isBashRunning: boolean
+    get isRunning: boolean
+    get location: Readonly<ExecutionLocation>
+    get model: LanguageModel
+    get modelInfo: ModelInfo
+    get name: string | undefined
+    get parentSession: string | undefined
+    get persistence: SessionPersistence
+    get queue: { steering: string[]; followUp: string[]; }
+    get scope: Readonly<SessionScope> | undefined
+    get thinkingLevel: ThinkingLevel
+    get usage: SessionUsage
+    getActiveTools: () => string[]
+    getBranch: (fromId?: string) => SessionEntry[]
+    getEntries: () => SessionEntry[]
+    getLeafId: () => string | null
+    getTree: () => SessionTreeNode[]
+    navigateTree: (targetId: string, options?: NavigateTreeOptions) => Promise<{ editorText?: string; cancelled: boolean; }>
+    prompt: (input: string, options?: PromptOptions) => Promise<void>
+    readonly cwd: string
+    readonly hasUI: boolean
+    readonly id: string
+    readonly limits: VelaLimits
+    readonly messages: ModelMessage[]
+    resume: () => Promise<boolean>
+    save: (options?: { reportFailure?: boolean; }) => Promise<void>
+    sendMessage: (message: CustomMessage, options?: SendMessageOptions) => Promise<void>
+    sendUserMessage: (content: string | (TextContent | ImageContent)[], options?: { deliverAs?: "steer" | "followUp"; }) => Promise<void>
+    setActiveTools: (names: string[] | undefined) => void
+    setLabel: (entryId: string, label: string | undefined) => void
+    setLocation: (location: ExecutionLocation) => Promise<void>
+    setModel: (model: string | LanguageModel) => void
+    setName: (name: string | undefined) => void
+    setThinkingLevel: (level: ThinkingLevel) => void
+    steer: (input: string, options?: { source?: InputSource; images?: ImageContent[]; }) => Promise<void>
+    steeringMode: QueueMode
+    subscribe: (listener: VelaEventListener) => () => void
+    waitForIdle: () => Promise<void>
+
 # @glows777/vela/testing
 
   function cleanupTestVelas: () => Promise<void>
-  function createFauxEmbedder: (options?: { dims?: number; id?: string; onCall?: (texts: string[]) => void; }) => EmbeddingFn
   function createFauxModel: (options?: FauxModelOptions) => FauxModel
   function createTestVela: (options?: TestVelaOptions, assemble?: TestVelaAssembler) => Omit<CoreTestVela, "vela"> & { vela: Vela; }
   const fauxError: (error: string | Error) => FauxResponse
@@ -1395,7 +1848,6 @@
     channelIdleMs?: number | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
-    embedder?: boolean | EmbeddingFn | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: ChannelExtension[] | undefined
     faux?: Omit<FauxModelOptions, "generate" | "responses"> | undefined

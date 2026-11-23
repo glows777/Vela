@@ -14,6 +14,12 @@ import {
   TruncatedText,
   type TuiAltScreen,
 } from '@earendil-works/pi-tui'
+import {
+  branchSummaryMessageText,
+  contextEntries,
+  inspectSession,
+  summaryMessageText,
+} from '../driver/diagnostics.ts'
 import type {
   ImageContent,
   ModelMessage,
@@ -21,15 +27,9 @@ import type {
   ThinkingLevel,
   VelaEvent,
   VelaSession,
-} from '@glows777/vela-core'
-import { resolveBinary, type SessionEntry } from '@glows777/vela-core'
-import {
-  branchSummaryMessageText,
-  contextEntries,
-  inspectSession,
-  summaryMessageText,
-} from '@glows777/vela-core/diagnostics'
-import { imageMimeType } from '@glows777/vela-core/images'
+} from '../driver/index.ts'
+import { resolveBinary, type SessionEntry } from '../driver/index.ts'
+import { imageMimeType } from '../shared/images/index.ts'
 import type { Vela } from '../vela.ts'
 import {
   copyToClipboard,

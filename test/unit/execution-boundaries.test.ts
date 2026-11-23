@@ -7,10 +7,11 @@ import { checkExecutionBoundaries } from '../../scripts/check-execution-boundari
 test('quality reports host dependencies in workspace prompt, skill and background code', async () => {
   const root = mkdtempSync(join(tmpdir(), 'vela-boundary-'))
   const sources = {
-    'core/src/prompt/environment-context-files.ts': "import 'node:fs/promises'",
-    'core/src/skills/environment-skills.ts': "await import('fs')",
-    'core/src/extensions/background/jobs.ts': "require('child_process')",
-    'channels/src/attachments.ts': "export * from 'node:fs'",
+    'vela/src/driver/prompt/environment-context-files.ts':
+      "import 'node:fs/promises'",
+    'vela/src/driver/skills/environment-skills.ts': "await import('fs')",
+    'vela/src/driver/extensions/background/jobs.ts': "require('child_process')",
+    'vela/src/legacy-channels/attachments.ts': "export * from 'node:fs'",
   }
   try {
     for (const [file, content] of Object.entries(sources)) {

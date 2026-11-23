@@ -5,11 +5,11 @@ import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createServer, globalAgent } from 'node:https'
 import { join } from 'node:path'
 import { tempDir } from '@glows777/vela/testing'
-import type { ExecutionEnv } from '@glows777/vela-core'
 import { buildDockerAdapter } from '../../extensions/docker/build.ts'
 import { runDocker } from '../../extensions/docker/container.ts'
 import { createCredentialIdentity } from '../../extensions/docker/credential-identity.ts'
 import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
+import type { ExecutionEnv } from '../../packages/vela/src/driver/index.ts'
 import { checkDockerOperations } from '../support/docker-conformance.ts'
 
 const image = process.env.VELA_TEST_DOCKER_IMAGE

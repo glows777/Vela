@@ -1,5 +1,5 @@
 import { CombinedAutocompleteProvider } from '@earendil-works/pi-tui'
-import type { VelaSession } from '@glows777/vela-core'
+import type { VelaSession } from '../../driver/index.ts'
 import type { Vela } from '../../vela.ts'
 import { keyLabel } from './editor.ts'
 

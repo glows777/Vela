@@ -8,7 +8,7 @@ import { join, relative, resolve } from 'node:path'
 const SRC = resolve(import.meta.dir, '../../packages')
 
 /** Allowed places: the CLI and test tools */
-const ALLOWED = ['vela/src/cli/', 'core/src/testing/', 'vela/src/testing/']
+const ALLOWED = ['vela/src/cli/', 'vela/src/testing/']
 
 const FORBIDDEN: [RegExp, string][] = [
   [/\bconsole\.\w+/, 'console'],
@@ -53,7 +53,9 @@ test('the allow list only names paths that exist', async () => {
 
 test('image modules do not depend on the higher-level messages module', async () => {
   const violations: string[] = []
-  for await (const file of new Bun.Glob('core/src/images/**/*.ts').scan(SRC)) {
+  for await (const file of new Bun.Glob('vela/src/shared/images/**/*.ts').scan(
+    SRC,
+  )) {
     const source = stripComments(await Bun.file(join(SRC, file)).text())
     if (/['"][^'"]*\bmessages\.ts['"]/.test(source)) {
       violations.push(file)

@@ -10,14 +10,14 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { silentLogger } from '@glows777/vela-core'
+import { silentLogger } from '../../packages/vela/src/driver/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
 import {
   fauxError,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

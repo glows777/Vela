@@ -1,4 +1,4 @@
-import { resolveShellPath as resolveCoreShellPath } from '@glows777/vela-core'
+import { resolveShellPath as resolveCoreShellPath } from '../driver/index.ts'
 
 interface ShellPathOptions {
   platform?: NodeJS.Platform

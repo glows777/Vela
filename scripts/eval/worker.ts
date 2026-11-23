@@ -1,10 +1,10 @@
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { mkdir, readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LanguageModelV4, LanguageModelV4Usage } from '@ai-sdk/provider'
-import type { VelaEvent } from '@glows777/vela-core'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
+import type { VelaEvent } from '../../packages/vela/src/driver/index.ts'
 import {
   type Call,
   chars,
@@ -182,13 +182,12 @@ export async function runAttempt(
     typeof import('@glows777/vela/testing')
   >(config.runtime, paths.testing)
   const { loadModels } = await load<
-    typeof import('../../packages/core/src/config/models.ts')
+    typeof import('../../packages/vela/src/providers/models-config.ts')
   >(config.runtime, paths.models)
   const channelTesting = existsSync(join(config.runtime, paths.channelTesting))
-    ? await load<typeof import('@glows777/vela-channels/testing')>(
-        config.runtime,
-        paths.channelTesting,
-      )
+    ? await load<
+        typeof import('../../packages/vela/src/legacy-channels/testing.ts')
+      >(config.runtime, paths.channelTesting)
     : undefined
   const historicalVela = channelTesting
     ? undefined
@@ -252,7 +251,7 @@ export async function runAttempt(
     existsSync(join(config.runtime, paths.todo))
   ) {
     const todo = await load<
-      typeof import('../../packages/core/src/extensions/todo/index.ts')
+      typeof import('../../packages/vela/src/driver/extensions/todo/index.ts')
     >(config.runtime, paths.todo)
     extensions.push(todo.todo())
   }
@@ -280,7 +279,7 @@ export async function runAttempt(
     | undefined
   if (config.scenario === 'C3') {
     const { web } = await load<
-      typeof import('../../packages/core/src/extensions/web/index.ts')
+      typeof import('../../packages/vela/src/driver/extensions/web/index.ts')
     >(config.runtime, paths.web)
     extensions.push(web())
     server = Bun.serve({
@@ -311,7 +310,7 @@ export async function runAttempt(
     )
     const lark = adapter[
       paths.channelName
-    ] as typeof import('../../packages/lark/src/index.ts')['lark']
+    ] as typeof import('../../packages/vela/src/lark/index.ts')['lark']
     fake = helpers.fakeLark()
     eventFactory = helpers.larkEvent
     extensions.push(
@@ -362,14 +361,13 @@ export async function runAttempt(
         ? ['g8_store', 'g8_recall']
         : ['g7_store', 'g7_recall']
   const { channelSessionId } = await load<
-    typeof import('../../packages/channels/src/session-id.ts')
+    typeof import('../../packages/vela/src/legacy-channels/session-id.ts')
   >(config.runtime, paths.channelId)
   const scope =
     exitScenario || workspaceScenario
-      ? await load<typeof import('../../packages/channels/src/scope.ts')>(
-          config.runtime,
-          paths.scope,
-        )
+      ? await load<
+          typeof import('../../packages/vela/src/legacy-channels/scope.ts')
+        >(config.runtime, paths.scope)
       : undefined
   const bun = (...args: string[]) =>
     command(config.cwd, [process.execPath, '--no-env-file', ...args])
@@ -396,8 +394,12 @@ export async function runAttempt(
   let phase = 0
   const recallScenario = config.scenario === 'G7' || config.scenario === 'G8'
   const workspace = scope
-    ? scope.groupWorkspace(t.dataDir, paths.channelName, 'oc_group')
+    ? join(
+        scope.chatDirectory(t.dataDir, paths.channelName, 'oc_group'),
+        'workspace',
+      )
     : config.cwd
+  if (scope) mkdirSync(workspace, { recursive: true })
   const recallSessionId = channelSessionId(
     paths.channelName,
     'oc_group',
@@ -574,7 +576,7 @@ export async function runAttempt(
           }
           if (['G7', 'G8'].includes(config.scenario) && index === 0) {
             const { MemoryStore } = await load<
-              typeof import('../../packages/core/src/extensions/memory/store.ts')
+              typeof import('../../packages/vela/src/driver/extensions/memory/store.ts')
             >(config.runtime, paths.memoryStore)
             // Inspect persisted entries, not tool arguments or MEMORY.md. Snapshot
             // before the fresh topic starts so its writes cannot earn store credit.
@@ -656,7 +658,7 @@ export async function runAttempt(
       }
     } else if (config.scenario === 'M1') {
       const { MemoryStore } = await load<
-        typeof import('../../packages/core/src/extensions/memory/store.ts')
+        typeof import('../../packages/vela/src/driver/extensions/memory/store.ts')
       >(config.runtime, paths.memoryStore)
       const store = new MemoryStore(join(t.dataDir, 'memory'))
       store.save({

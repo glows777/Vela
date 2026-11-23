@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SelectItem } from '@earendil-works/pi-tui'
+import { THINKING_LEVELS } from '../../driver/diagnostics.ts'
 import {
   type AuthInteraction,
   loadModels,
@@ -12,8 +13,7 @@ import {
   type ThinkingLevel,
   type VelaSession,
   verifyProviderModel,
-} from '@glows777/vela-core'
-import { THINKING_LEVELS } from '@glows777/vela-core/diagnostics'
+} from '../../driver/index.ts'
 import { saveModelSetup } from '../../settings.ts'
 import type { Vela } from '../../vela.ts'
 import { createVela } from '../../vela.ts'
@@ -63,7 +63,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
       string,
       ProviderConfig
     >
-    const credential = (await import('@glows777/vela-core'))
+    const credential = (await import('../../driver/index.ts'))
       .fileCredentialStore(authPath)
       .get(name)
     const current = await host.select(
@@ -149,7 +149,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
     .loginProviders()
     .find((p) => p.provider === provider)
   const diskCredentials = (
-    await import('@glows777/vela-core')
+    await import('../../driver/index.ts')
   ).fileCredentialStore(authPath)
   const stored = diskCredentials.get(provider)
   const memory = memoryCredentialStore(stored ? { [provider]: stored } : {})

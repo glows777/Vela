@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 
 const root = resolve(import.meta.dir, '../..')
 /** The agent-loop tests, which build tool registries whose default result store resolves `./sessions` under the cwd. */
-const agentTests = join(root, 'packages/core/test/unit/agent')
+const agentTests = join(root, 'packages/vela/test/unit/core/agent')
 
 test('the agent unit tests write nothing into the working directory', async () => {
   const cwd = mkdtempSync(join(tmpdir(), 'vela-unit-cwd-'))

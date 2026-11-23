@@ -3,9 +3,6 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela, type VelaOptions } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { createLocalExecutionEnv } from '@glows777/vela-core'
-import { lark } from '@glows777/vela-lark'
 import { ownerDocker } from '../../packages/vela/src/cli/docker.ts'
 import {
   cliHostExtensionConfig,
@@ -16,6 +13,9 @@ import {
   parseArgs,
 } from '../../packages/vela/src/cli/setup.ts'
 import { loadConfig } from '../../packages/vela/src/config/index.ts'
+import { createLocalExecutionEnv } from '../../packages/vela/src/driver/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 
 test('project settings cannot redirect an owner environment, group or Docker data directory', () => {
@@ -397,7 +397,7 @@ test.each([false, true])(
     let h = host(dir.path)
     const attempts: { anchor: string; text: string; uuid?: string }[] = []
     function intercept(fail: boolean) {
-      const transport: import('@glows777/vela-lark').LarkTransport =
+      const transport: import('../../packages/vela/src/lark/index.ts').LarkTransport =
         h.fake.transport
       const reply = transport.reply.bind(transport)
       transport.reply = async (anchor, text, uuid) => {
