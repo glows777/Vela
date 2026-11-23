@@ -58,4 +58,13 @@ export function estimateRequestTokens(
   )
 }
 
+/** Prefer the provider's latest prompt size plus the local message delta. */
+export function contextRequestTokens(
+  request: RequestSnapshot,
+  reported: number | undefined,
+  estimate?: number,
+): number {
+  return reported ?? estimate ?? estimateRequestTokens(request)
+}
+
 export const MAX_INPUT_TOKENS = DEFAULT_LIMITS.maxInputTokens

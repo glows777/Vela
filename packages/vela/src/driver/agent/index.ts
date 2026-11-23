@@ -6,8 +6,8 @@ import {
 } from '../../providers/models/index.ts'
 import { resolveLimits, type VelaLimits } from '../../shared/limits.ts'
 import {
+  contextRequestTokens,
   createRequestSnapshot,
-  estimateRequestTokens,
   type RequestSnapshot,
 } from '../context/request.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
@@ -61,8 +61,8 @@ interface AgentLoopParameter {
     producer: string,
   ) => Promise<ModelMessage[]>
   /**
-   * Called once per step when the provider rejects the request because the context is too long (like pi's
-   * overflow recovery): compacts the history, then the step is sent again. A second overflow fails the loop.
+   * Called at most once per step when the local cap or provider rejects an oversized request.
+   * Compacts the history before the next attempt.
    */
   compactOnOverflow?: (signal?: AbortSignal) => Promise<void>
   abortSignal?: AbortSignal
@@ -220,19 +220,9 @@ export const agentLoop = async ({
       await prepareContext?.(request)
       abortSignal?.throwIfAborted()
       const inferenceSystem = currentSystem()
-      let requestMessages = transformContext
-        ? await transformContext(messages, producer)
-        : messages
-      abortSignal?.throwIfAborted()
-      if (
-        estimateRequestTokens(
-          { ...request, systemPrompt: inferenceSystem },
-          requestMessages,
-        ) > limits.maxInputTokens
-      )
-        throw new Error(
-          'Request exceeds the safe input size; this turn was stopped.',
-        )
+      const messagesForRequest = async () =>
+        transformContext ? transformContext(messages, producer) : messages
+      let requestMessages = await messagesForRequest()
 
       let shouldBreak = false
       const sources = new Map<string, string>()
@@ -253,9 +243,44 @@ export const agentLoop = async ({
       // Retry attempts that already failed (auto_retry_start was emitted for each)
       let retried = 0
       let compactedForOverflow = false
+      const recoverOverflow = async (signal?: AbortSignal) => {
+        compactedForOverflow = true
+        await compactOnOverflow?.(signal)
+        requestMessages = await messagesForRequest()
+      }
+      const sizeError =
+        'Request exceeds the safe input size; this turn was stopped.'
 
       const started = performance.now()
       for (;;) {
+        checkDrain()
+        abortSignal?.throwIfAborted()
+        if (
+          contextRequestTokens(
+            {
+              ...request,
+              systemPrompt: inferenceSystem,
+              messages: requestMessages,
+            },
+            tokenTracker.reportedContextTokens,
+          ) > limits.maxInputTokens
+        ) {
+          if (compactedForOverflow || !compactOnOverflow) {
+            endTurnEmpty()
+            throw new Error(sizeError)
+          }
+          try {
+            await recoverOverflow(abortSignal)
+          } catch (error) {
+            endTurnEmpty()
+            abortSignal?.throwIfAborted()
+            throw new Error(
+              `${sizeError} (compacting the context to recover failed: ${errorMessageOf(error)})`,
+              { cause: error },
+            )
+          }
+          continue
+        }
         const current = new StepMessage(emit)
         step = current
         shouldBreak = false
@@ -493,13 +518,8 @@ export const agentLoop = async ({
           ) {
             // Like pi: the provider said the context is too long; compact once and send the step again
             step.endInterrupted('error', errorMessage)
-            compactedForOverflow = true
             try {
-              await compactOnOverflow(abortSignal)
-              // The compacted history is sent again through the context handlers
-              requestMessages = transformContext
-                ? await transformContext(messages, producer)
-                : messages
+              await recoverOverflow(abortSignal)
             } catch (compactError) {
               endTurnEmpty()
               abortSignal?.throwIfAborted()
@@ -749,18 +769,15 @@ export const agentLoop = async ({
         content: assistant.content.flatMap((part) => {
           if (part.type !== 'tool-call' || !ids.has(part.toolCallId))
             return [part]
-          const result = step.results.get(part.toolCallId)
-          const detail = JSON.stringify(result?.output, (key, value) =>
-            key === 'encrypted_content' || key === 'encryptedContent'
-              ? undefined
-              : value,
+          const detail = JSON.stringify(
+            step.results.get(part.toolCallId)?.output,
+            (key, value) =>
+              key === 'encrypted_content' || key === 'encryptedContent'
+                ? undefined
+                : value,
           )
-          return [
-            {
-              type: 'text' as const,
-              text: `Provider search: ${JSON.stringify(part.input)}\nProvider search result: ${detail ?? 'unavailable'}`,
-            },
-          ]
+          const text = `Provider search: ${JSON.stringify(part.input)}\nProvider search result: ${detail ?? 'unavailable'}`
+          return [{ type: 'text' as const, text }]
         }),
       }
     }

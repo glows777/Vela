@@ -507,3 +507,131 @@ test('an overflow with nothing to compact fails and says why', async () => {
     'prompt is too long: 213462 tokens > 200000 maximum (compacting the context to recover failed: Nothing to compact',
   )
 })
+
+test('the hard cap trusts reported usage over a larger local envelope', async () => {
+  const t = createTestVela({
+    limits: { maxInputTokens: 20_000, summaryThreshold: 15_000 },
+    responses: [
+      fauxText('history recorded', { usage: { input: 5_000, output: 10 } }),
+      fauxText('still fits'),
+    ],
+  })
+  await t.run('a'.repeat(50_000))
+  expect(t.tracker().reportedContextTokens).toBeLessThan(6_000)
+
+  await t.run('b'.repeat(30_000))
+
+  expect(await requestTokens(t)).toBeGreaterThan(20_000)
+  expect(t.lastAssistantText()).toBe('still fits')
+  expect(t.eventsOf('compaction_start')).toHaveLength(0)
+})
+
+test('encrypted reasoning is sent without counting its payload toward an unanchored cap', async () => {
+  const blob = 'opaque'.repeat(15_000)
+  const t = createTestVela({
+    limits: { maxInputTokens: 20_000, summaryThreshold: 15_000 },
+    responses: [fauxText('still fits')],
+    extensions: [
+      (vela) => {
+        vela.on('context', ({ messages }) => {
+          messages.unshift({
+            role: 'assistant',
+            content: [
+              {
+                type: 'reasoning',
+                text: 'thinking',
+                providerOptions: {
+                  openai: { reasoningEncryptedContent: blob },
+                },
+              },
+            ],
+          })
+        })
+      },
+    ],
+  })
+  expect(t.tracker().reportedContextTokens).toBeUndefined()
+
+  await t.run('Continue')
+
+  expect(t.lastAssistantText()).toBe('still fits')
+  expect(JSON.stringify(t.model.calls[0]?.prompt)).toContain(blob)
+  expect(t.eventsOf('compaction_start')).toHaveLength(0)
+})
+
+for (const overflow of [
+  'local-recoverable',
+  'local-terminal',
+  'provider-then-local',
+] as const) {
+  const stillTooLarge = overflow !== 'local-recoverable'
+  const providerFirst = overflow === 'provider-then-local'
+  test(
+    providerFirst
+      ? 'the local cap rechecks provider overflow recovery and closes a blocked turn'
+      : stillTooLarge
+        ? 'a request still above the local cap after recovery fails without sending'
+        : 'a request above the local cap compacts once and sends the shorter context',
+    async () => {
+      const t = createTestVela({
+        limits: { maxInputTokens: 20_000, summaryThreshold: 15_000 },
+        generate: [fauxSummary()],
+        responses: [
+          ...Array.from({ length: 5 }, () =>
+            fauxText('Seed reply', { usage: { input: 0, output: 1 } }),
+          ),
+          ...(providerFirst
+            ? [
+                fauxError(
+                  '400 prompt is too long: 213462 tokens > 200000 maximum',
+                ),
+              ]
+            : stillTooLarge
+              ? []
+              : [fauxText('fits after compaction')]),
+        ],
+        extensions: [
+          (vela) => {
+            vela.on('context', ({ messages }) => {
+              const hasOldTopic = messages.some(
+                (message) => message.content === 'Old topic',
+              )
+              if (
+                messages.at(-1)?.content === 'Continue' &&
+                (providerFirst ? !hasOldTopic : stillTooLarge || hasOldTopic)
+              )
+                messages.push({ role: 'user', content: 'z'.repeat(100_000) })
+            })
+          },
+        ],
+      })
+      await t.run('Old topic')
+      for (let i = 0; i < 4; i++) await t.run(`New topic ${i}`)
+      expect(t.tracker().reportedContextTokens).toBeUndefined()
+      const callsBefore = t.model.calls.length
+
+      if (stillTooLarge)
+        await expect(t.run('Continue')).rejects.toThrow(
+          'Request exceeds the safe input size',
+        )
+      else {
+        await t.run('Continue')
+        expect(t.lastAssistantText()).toBe('fits after compaction')
+      }
+
+      expect(t.eventsOf('compaction_start')).toEqual([
+        { type: 'compaction_start', reason: 'overflow' },
+      ])
+      expect(t.model.calls.slice(callsBefore).map((call) => call.kind)).toEqual(
+        providerFirst
+          ? ['stream', 'generate']
+          : stillTooLarge
+            ? ['generate']
+            : ['generate', 'stream'],
+      )
+      expect(t.eventsOf('turn_end')).toHaveLength(
+        t.eventsOf('turn_start').length,
+      )
+    },
+  )
+}
