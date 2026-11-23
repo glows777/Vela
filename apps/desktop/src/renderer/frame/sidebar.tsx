@@ -70,6 +70,7 @@ export function Sidebar({
   onRoutines,
   onProject,
   onSettings,
+  newSessionShortcut,
   onNewSession,
   onNewProject,
 }: {
@@ -80,6 +81,7 @@ export function Sidebar({
   onRoutines: () => void
   onProject: (projectId: string) => void
   onSettings: () => void
+  newSessionShortcut: string
   onNewSession: () => void
   onNewProject: () => void
 }) {
@@ -104,7 +106,7 @@ export function Sidebar({
               <SquarePen size={15} />
             </span>
             <span className={styles.rowLabel}>New session</span>
-            <kbd className={styles.shortcut}>⌘N</kbd>
+            <kbd className={styles.shortcut}>{newSessionShortcut}</kbd>
           </button>
           <Row
             icon={<House size={15} />}

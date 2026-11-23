@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import styles from './app.module.css'
 import { needsYou } from './format.ts'
 import { HeaderBar } from './frame/header-bar.tsx'
@@ -11,7 +11,9 @@ import { ProjectPage } from './project/project-page.tsx'
 import { RoutinesPage } from './routines/routines-page.tsx'
 import { SettingsPage } from './settings/settings-page.tsx'
 import { FirstRun } from './setup/first-run.tsx'
-import { loadProject, start, useStore } from './store.ts'
+import { loadProject, setErrorView, start, useStore } from './store.ts'
+
+const isMac = navigator.platform.startsWith('Mac')
 
 type View =
   | { name: 'home' }
@@ -31,6 +33,41 @@ export function App() {
     void start()
   }, [])
 
+  const navigate = useCallback((next: View) => {
+    setErrorView(
+      next.name === 'project' ? `project:${next.projectId}` : next.name,
+    )
+    setView(next)
+  }, [])
+
+  const newSession = useCallback(() => {
+    navigate({ name: 'home' })
+    setFocusSignal((value) => value + 1)
+  }, [navigate])
+
+  const ready = snapshot.settings?.setup.required === false
+  useEffect(() => {
+    if (!ready) return
+    const onShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.repeat ||
+        event.key.toLowerCase() !== 'n' ||
+        event.altKey ||
+        event.shiftKey ||
+        event.metaKey !== isMac ||
+        event.ctrlKey === isMac ||
+        document.querySelector('[role="dialog"][data-state="open"]')
+      )
+        return
+      event.preventDefault()
+      newSession()
+    }
+    window.addEventListener('keydown', onShortcut)
+    return () => window.removeEventListener('keydown', onShortcut)
+  }, [ready, newSession])
+
   const project =
     view.name === 'project'
       ? snapshot.projects.find((item) => item.id === view.projectId)
@@ -43,7 +80,7 @@ export function App() {
    * only picks a project, and opens when the destination is a session.
    */
   const openProjectPage = (projectId: string, sessionId?: string) => {
-    setView({ name: 'project', projectId })
+    navigate({ name: 'project', projectId })
     setPanel(sessionId ? { open: true, sessionId } : { open: panel.open })
     void loadProject(projectId)
   }
@@ -79,14 +116,12 @@ export function App() {
         projects={snapshot.projects}
         connections={snapshot.connections}
         current={view.name === 'project' ? view.projectId : view.name}
-        onHome={() => setView({ name: 'home' })}
-        onRoutines={() => setView({ name: 'routines' })}
+        onHome={() => navigate({ name: 'home' })}
+        onRoutines={() => navigate({ name: 'routines' })}
         onProject={openProjectPage}
-        onSettings={() => setView({ name: 'settings' })}
-        onNewSession={() => {
-          setView({ name: 'home' })
-          setFocusSignal((value) => value + 1)
-        }}
+        onSettings={() => navigate({ name: 'settings' })}
+        newSessionShortcut={isMac ? '⌘N' : 'Ctrl+N'}
+        onNewSession={newSession}
         onNewProject={() => setCreating(true)}
       />
       <div className={styles.main}>

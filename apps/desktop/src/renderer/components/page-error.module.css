@@ -1,0 +1,23 @@
+.banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dismiss {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  border: 0;
+  border-radius: var(--vela-radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.dismiss:hover {
+  background: var(--vela-bubble);
+}

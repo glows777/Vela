@@ -13,7 +13,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { _electron, chromium, type Page } from 'playwright'
+import {
+  _electron,
+  chromium,
+  type ElectronApplication,
+  type Page,
+} from 'playwright'
 import tokens from '../design/tokens.json'
 import type { DesktopBridge } from '../src/shared/bridge.ts'
 import { verifyControls } from './verify-controls.ts'
@@ -122,7 +127,32 @@ await Bun.write(
       },
       { text: 'Desktop faux reply' },
       { text: 'Image processed' },
-      { text: 'Alpha answer' },
+      {
+        text: [
+          'Alpha answer',
+          '',
+          '## Summary',
+          '',
+          '- **Found** the `index.ts` file',
+          '- *Ready* to go',
+          '',
+          '> A note',
+          '',
+          '| File | Status |',
+          '| --- | --- |',
+          '| index.ts | Ready |',
+          '',
+          '```ts',
+          'const answer = 42',
+          '```',
+          '',
+          '[Reference](https://example.com/docs) · [Email](mailto:demo@example.com)',
+          '',
+          '<b>Plain HTML example</b>',
+          '',
+          '![Remote illustration](https://example.com/image.png)',
+        ].join('\n'),
+      },
       { text: 'Second answer' },
       // Journey 2: bigger work in a session, stopped, continued, failed, then asked a
       // question that journey 3 answers in the same session.
@@ -422,7 +452,7 @@ const bridgeJourney = async (page: Page) => {
 }
 
 /** Journey 1: a Local project, a short question in its chat, the answer. */
-const journeyOne = async (page: Page) => {
+const journeyOne = async (page: Page, app?: ElectronApplication) => {
   await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
   const sidebar = page.getByLabel('Sidebar')
   await sidebar
@@ -477,13 +507,49 @@ const journeyOne = async (page: Page) => {
   await page.getByText(/Ask Vela about this folder/).waitFor()
   checks.push('The project appears in the sidebar and its chat starts empty.')
 
+  const shortcut = process.platform === 'darwin' ? 'Meta+n' : 'Control+n'
+  await sidebar.getByRole('button', { name: 'New project' }).click()
+  await dialog.getByLabel('Folder path').waitFor()
+  await page.keyboard.press(shortcut)
+  await dialog.getByLabel('Folder path').waitFor()
+  await dialog.getByRole('button', { name: 'Close dialog' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+  await page.getByRole('heading', { name: 'Alpha', exact: true }).waitFor()
+  const shortcutComposer = page.getByRole('textbox', {
+    name: 'Message Vela',
+    exact: true,
+  })
+  const focus = () => shortcutComposer.and(page.locator(':focus')).waitFor()
+  await page.keyboard.press(shortcut)
+  await focus()
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+  await sidebar.getByRole('button', { name: 'New session' }).click()
+  await focus()
+  checks.push(
+    'The shortcut and sidebar focus the Home composer, without leaving an open modal.',
+  )
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+
   const composer = page.getByLabel('Message Vela in this project')
-  await composer.fill('What does this project contain?')
+  const height = () => composer.evaluate((node) => node.clientHeight)
+  const initialHeight = await height()
+  await composer.fill('One\nTwo\nThree\nFour')
+  assert(
+    (await height()) > initialHeight,
+    'The composer grows with multiple lines',
+  )
+  await composer.fill(Array.from({ length: 40 }, () => 'Line').join('\n'))
+  assert(
+    await composer.evaluate((node) => node.scrollHeight > node.clientHeight),
+  )
+  const question = 'What does this project contain?\n**Keep this literal**'
+  await composer.fill(question)
   await page.getByRole('button', { name: 'Send' }).click()
-  await page
-    .getByText('What does this project contain?', { exact: true })
-    .waitFor()
-  checks.push("The person's message appears as a bubble.")
+  await page.getByText(question, { exact: true }).waitFor()
+  const bubble = page.locator('[data-role="user"]')
+  assert.equal(await bubble.locator('p').textContent(), question)
+  assert.equal(await bubble.locator('strong').count(), 0)
+  checks.push("The person's message remains a plain-text bubble with newlines.")
 
   await page
     .getByText('Alpha answer', { exact: true })
@@ -491,7 +557,7 @@ const journeyOne = async (page: Page) => {
   assert.equal(
     await page
       .locator('[data-role="user"]')
-      .getByText('What does this project contain?', { exact: true })
+      .getByText(question, { exact: true })
       .count(),
     1,
   )
@@ -504,6 +570,11 @@ const journeyOne = async (page: Page) => {
   )
   assert.equal(await composer.inputValue(), '')
   assert.equal(
+    await height(),
+    initialHeight,
+    'The composer resets after sending',
+  )
+  assert.equal(
     await page.evaluate(() =>
       document
         .querySelector('[aria-label="Project chat"]')
@@ -511,8 +582,31 @@ const journeyOne = async (page: Page) => {
     ),
     'assistant',
   )
+  const answer = page.locator('[data-role="assistant"]').last()
+  await answer.getByRole('heading', { name: 'Summary' }).waitFor()
+  await answer.getByRole('list').getByText('Found', { exact: true }).waitFor()
+  await answer.locator('li code').filter({ hasText: 'index.ts' }).waitFor()
+  await answer.locator('blockquote').getByText('A note').waitFor()
+  await answer.getByRole('table').getByRole('cell', { name: 'Ready' }).waitFor()
+  assert.equal(
+    await answer.getByRole('link', { name: 'Reference' }).getAttribute('href'),
+    'https://example.com/docs',
+  )
+  assert.equal(await answer.getByRole('link', { name: 'Email' }).count(), 0)
+  assert.equal(await answer.locator('img, b').count(), 0)
+  await assert.rejects(
+    page.evaluate(() => window.vela.openMessageLink('mailto:demo@example.com')),
+    /Only HTTP and HTTPS/,
+  )
+  await answer.getByRole('button', { name: 'Copy', exact: true }).click()
+  await answer.getByRole('button', { name: 'Copied', exact: true }).waitFor()
+  if (app)
+    assert.equal(
+      await app.evaluate(({ clipboard }) => clipboard.readText()),
+      'const answer = 42',
+    )
   checks.push(
-    'Vela answers in plain text, the field clears, and the answer is the last turn.',
+    'Vela renders Markdown, copies code, excludes non-web links, raw HTML and images, and keeps the answer as the last turn.',
   )
 
   await page.reload()
@@ -521,9 +615,7 @@ const journeyOne = async (page: Page) => {
     .getByLabel('Sidebar')
     .getByRole('button', { name: 'Alpha Local' })
     .click()
-  await page
-    .getByText('What does this project contain?', { exact: true })
-    .waitFor()
+  await page.getByText(question, { exact: true }).waitFor()
   await page.getByText('Alpha answer', { exact: true }).waitFor()
   checks.push(
     'After a reload the project and both messages come back from recorded history.',
@@ -574,6 +666,16 @@ const journeyOne = async (page: Page) => {
   checks.push(
     'A submission the host rejects shows the reason in words a person can act on, restores the draft and records no message.',
   )
+  await page.getByRole('button', { name: 'Dismiss error' }).click()
+  await tooLongAlert.waitFor({ state: 'hidden' })
+  await page.getByRole('button', { name: 'Send' }).click()
+  await tooLongAlert.waitFor()
+  await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+  await tooLongAlert.waitFor({ state: 'hidden' })
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+  await projectComposer.waitFor()
+  await tooLongAlert.waitFor({ state: 'hidden' })
+  checks.push('A transient error can be dismissed and is gone on navigation.')
   await projectComposer.fill('')
 
   const hint = page.getByText(/on this computer/)
@@ -2476,11 +2578,20 @@ async function larkJourneys() {
       active: true,
     })
     await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    const topicHistoryError = page.getByRole('alert').filter({
+      hasText: 'Fake Lark denied the topic history',
+    })
     await panel
       .getByRole('alert')
-      .filter({ hasText: 'Fake Lark denied the topic history' })
+      .and(topicHistoryError)
       .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await topicHistoryError.count(),
+      1,
+      'A topic history error is not shown on the group composer',
+    )
     await panel.getByRole('button', { name: 'All sessions' }).click()
+    await topicHistoryError.waitFor({ state: 'hidden' })
     await larkSays({
       op: 'setTopicHistoryFailure',
       threadId: threadIdent.threadId,
@@ -3244,7 +3355,7 @@ async function packaged(appPath: string) {
     await snapshot(page, 'packaged-system-high-contrast')
     await page.setViewportSize({ width: 1280, height: 800 })
     await bridgeJourney(page)
-    await journeyOne(page)
+    await journeyOne(page, app)
     const asar = await import('@electron/asar')
     const files = asar.listPackage(resolve(resources, 'app.asar'), {
       isPack: false,
