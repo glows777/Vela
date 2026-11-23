@@ -5,9 +5,11 @@ import styles from './page-error.module.css'
 export function PageError({
   message,
   className,
+  onDismiss = dismissPageError,
 }: {
   message: string
   className?: string
+  onDismiss?: () => void
 }) {
   return (
     <div className={[className, styles.banner].filter(Boolean).join(' ')}>
@@ -16,7 +18,7 @@ export function PageError({
         type="button"
         className={styles.dismiss}
         aria-label="Dismiss error"
-        onClick={dismissPageError}
+        onClick={onDismiss}
       >
         <X size={14} aria-hidden="true" />
       </button>

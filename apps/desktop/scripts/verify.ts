@@ -2578,11 +2578,20 @@ async function larkJourneys() {
       active: true,
     })
     await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    const topicHistoryError = page.getByRole('alert').filter({
+      hasText: 'Fake Lark denied the topic history',
+    })
     await panel
       .getByRole('alert')
-      .filter({ hasText: 'Fake Lark denied the topic history' })
+      .and(topicHistoryError)
       .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await topicHistoryError.count(),
+      1,
+      'A topic history error is not shown on the group composer',
+    )
     await panel.getByRole('button', { name: 'All sessions' }).click()
+    await topicHistoryError.waitFor({ state: 'hidden' })
     await larkSays({
       op: 'setTopicHistoryFailure',
       threadId: threadIdent.threadId,

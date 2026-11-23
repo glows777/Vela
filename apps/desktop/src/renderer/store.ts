@@ -245,7 +245,9 @@ async function loadMessages(
 }
 
 let visibleLarkGroup: Project | undefined
-let visibleLarkTopic: { projectId: string; session: Session } | undefined
+let visibleLarkTopic:
+  | { projectId: string; session: Session; report: (notice: string) => void }
+  | undefined
 
 /** Only the mounted group page receives automatic history refreshes. */
 export function watchLarkProject(project: Project) {
@@ -257,16 +259,19 @@ export function watchLarkProject(project: Project) {
 }
 
 /** Reads one session's whole history; the panel needs it when a session opens. */
-export function loadSession(projectId: string, sessionId: string) {
+export function loadSession(
+  projectId: string,
+  sessionId: string,
+  report: (notice: string) => void,
+) {
   const project = snapshot.projects.find((item) => item.id === projectId)
   const session = snapshot.sessions[sessionId]
   if (project?.channel !== 'lark' || session?.channel !== 'lark') {
     void loadMessages(projectId, sessionId)
     return
   }
-  const topic = { projectId, session }
+  const topic = { projectId, session, report }
   visibleLarkTopic = topic
-  const report = pageError(`project:${projectId}`)
   void history.loadTopic(projectId, session).then((error) => {
     if (error && visibleLarkTopic === topic) report(error)
   })
@@ -464,9 +469,14 @@ const larkNotice = (result: SubmitReceipt, place: string) => {
 
 async function submitLark(
   input: LarkSubmit,
-  onAccepted?: (notice: string) => void,
+  {
+    onAccepted,
+    report = pageError(),
+  }: {
+    onAccepted?: (notice: string) => void
+    report?: (notice: string) => void
+  } = {},
 ): Promise<boolean> {
-  const report = pageError()
   try {
     const result = await vela.submit('lark', input)
     if (result.outcome === 'not-sent') {
@@ -550,7 +560,7 @@ export async function startSession(
         newTopic: { title: topicTitle(body) },
         text: body,
       },
-      open,
+      { onAccepted: open },
     )
   const accepted = await sendLocal(project.id, project.sessionId, body)
   if (accepted) open('')
@@ -562,21 +572,27 @@ export async function sendInSession(
   project: Project,
   session: Session,
   text: string,
+  report: (notice: string) => void,
 ) {
   const body = text.trim()
   if (!body) return false
   if (project.channel === 'lark')
-    return submitLark({
-      chatId: project.id,
-      sessionId: session.sessionId,
-      text: body,
-    })
+    return submitLark(
+      {
+        chatId: project.id,
+        sessionId: session.sessionId,
+        text: body,
+      },
+      { report },
+    )
   return sendLocal(project.id, session.sessionId, body)
 }
 
 /** Opens the enabled group in Lark; a topic has no documented deep link. */
-export async function openLarkChat(chatId: string) {
-  const report = pageError()
+export async function openLarkChat(
+  chatId: string,
+  report: (notice: string) => void,
+) {
   try {
     await vela.openLarkChat(chatId)
     report('')
@@ -677,17 +693,15 @@ function applyLark(value: Extract<Event, { type: 'lark' }>['value']) {
       (value.chatId === topic.projectId &&
         value.sessionId === topic.session.sessionId))
   ) {
-    const report = pageError(`project:${topic.projectId}`)
     void history.loadTopic(topic.projectId, topic.session).then((error) => {
-      if (error && visibleLarkTopic === topic) report(error)
+      if (error && visibleLarkTopic === topic) topic.report(error)
     })
   }
 }
 
 /** Stops the run this session is in, if it still has one. */
-export async function stop(session: Session) {
+export async function stop(session: Session, report = pageError()) {
   if (!session.runId) return
-  const report = pageError()
   try {
     await vela.stop(
       session.channel,

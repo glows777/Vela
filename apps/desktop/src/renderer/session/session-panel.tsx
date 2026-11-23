@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { Project, Session } from '../../shared/bridge.ts'
 import { Composer } from '../components/composer.tsx'
 import { Conversation } from '../components/conversation.tsx'
@@ -77,6 +77,7 @@ export function SessionPanel({
         >
           {session && started(session) ? (
             <SessionDetail
+              key={session.sessionId}
               snapshot={snapshot}
               project={project}
               session={session}
@@ -182,8 +183,11 @@ function SessionDetail({
   onBack: () => void
   onClose: () => void
 }) {
+  // This detail is keyed by session. An in-flight result from a closed topic
+  // can only update its old component, never the group or the next topic.
+  const [notice, setNotice] = useState('')
   useEffect(() => {
-    return loadSession(project.id, session.sessionId)
+    return loadSession(project.id, session.sessionId, setNotice)
   }, [project.id, session.sessionId])
 
   const progress = snapshot.progress[session.sessionId]
@@ -211,7 +215,7 @@ function SessionDetail({
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => void stop(session)}
+              onClick={() => void stop(session, lark ? setNotice : undefined)}
             >
               Stop
             </Button>
@@ -242,7 +246,7 @@ function SessionDetail({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => void openLarkChat(project.id)}
+            onClick={() => void openLarkChat(project.id, setNotice)}
           >
             <ExternalLink size={16} aria-hidden="true" />
             Open the group in Lark
@@ -271,10 +275,14 @@ function SessionDetail({
         draftKey={`session:${session.sessionId}`}
         running={running}
         hint={lark ? larkTopicComposer : undefined}
-        onSend={(text) => sendInSession(project, session, text)}
+        onSend={(text) => sendInSession(project, session, text, setNotice)}
       />
-      {lark && snapshot.error ? (
-        <PageError message={snapshot.error} className={styles.notice} />
+      {lark && notice ? (
+        <PageError
+          message={notice}
+          className={styles.notice}
+          onDismiss={() => setNotice('')}
+        />
       ) : null}
     </>
   )
