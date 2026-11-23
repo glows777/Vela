@@ -171,11 +171,9 @@ export function Home({
                   </>
                 )
               }
-              onSend={async (text) => {
-                const accepted = await startSession(project, text)
-                if (accepted) onOpenProject(project.id)
-                return accepted
-              }}
+              onSend={(text) =>
+                startSession(project, text, () => onOpenProject(project.id))
+              }
             >
               <div className={styles.pickerWrap}>
                 <span className={styles.pickerDot} aria-hidden="true" />

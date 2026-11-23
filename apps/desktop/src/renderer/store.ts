@@ -462,7 +462,10 @@ const larkNotice = (result: SubmitReceipt, place: string) => {
   return `It may have been posted.${reason} Vela did not send it again; check the ${place} before sending.`
 }
 
-async function submitLark(input: LarkSubmit): Promise<boolean> {
+async function submitLark(
+  input: LarkSubmit,
+  onAccepted?: (notice: string) => void,
+): Promise<boolean> {
   const report = pageError()
   try {
     const result = await vela.submit('lark', input)
@@ -489,14 +492,14 @@ async function submitLark(input: LarkSubmit): Promise<boolean> {
       }
     }
     // The three-state notice is what the person must see; a failed re-read comes next.
-    report(
-      result.error
-        ? larkNotice(
-            result,
-            'newTopic' in input ? 'group' : placeOf(input.sessionId),
-          )
-        : (refreshError ?? ''),
-    )
+    const notice = result.error
+      ? larkNotice(
+          result,
+          'newTopic' in input ? 'group' : placeOf(input.sessionId),
+        )
+      : (refreshError ?? '')
+    if (onAccepted) onAccepted(notice)
+    else report(notice)
     return true
   } catch (cause) {
     report(errorMessage(cause))
@@ -525,16 +528,33 @@ export async function sendInProject(project: Project, text: string) {
 }
 
 /** Starts work from Home. In a Lark project that opens a topic in the group. */
-export async function startSession(project: Project, text: string) {
+export async function startSession(
+  project: Project,
+  text: string,
+  openProject: () => void,
+) {
   const body = text.trim()
   if (!body) return false
+  const generation = viewGeneration
+  const open = (notice: string) => {
+    if (generation !== viewGeneration) return
+    openProject()
+    // Home intentionally opens this project for an accepted send. Its Lark
+    // receipt belongs at that destination, not to any later manual navigation.
+    if (notice) pageError(`project:${project.id}`)(notice)
+  }
   if (project.channel === 'lark')
-    return submitLark({
-      chatId: project.id,
-      newTopic: { title: topicTitle(body) },
-      text: body,
-    })
-  return sendLocal(project.id, project.sessionId, body)
+    return submitLark(
+      {
+        chatId: project.id,
+        newTopic: { title: topicTitle(body) },
+        text: body,
+      },
+      open,
+    )
+  const accepted = await sendLocal(project.id, project.sessionId, body)
+  if (accepted) open('')
+  return accepted
 }
 
 /** A reply in one open session; in Lark it continues that topic. */
