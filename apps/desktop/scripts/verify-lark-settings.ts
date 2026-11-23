@@ -28,7 +28,9 @@ export async function verifyLarkSettings(
   const input = page.getByLabel('App secret', { exact: true })
   const save = page.getByRole('button', { name: 'Save credentials' })
   const submit = async (message: string) => {
-    await sidebar.getByRole('button', { name: 'Setup project' }).click()
+    await sidebar
+      .getByRole('button', { name: 'Setup project Local', exact: true })
+      .click()
     const panel = page.getByRole('complementary', { name: 'Sessions' })
     const close = panel.getByRole('button', { name: 'Close sessions' })
     if (await close.isVisible()) {
@@ -70,6 +72,10 @@ export async function verifyLarkSettings(
     'Turning ownership off clears the startup diagnostic even with the same invalid chats',
   )
   await page.getByRole('button', { name: 'Remove oc_duplicate' }).click()
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Remove chat', exact: true })
+    .click()
   await page
     .getByText('oc_duplicate', { exact: true })
     .waitFor({ state: 'detached' })
@@ -143,7 +149,24 @@ export async function verifyLarkSettings(
     release()
   }
   await waitForLocalWork(page, false)
-  await page.getByRole('button', { name: 'Remove oc_settings' }).click()
+  const removeChat = page.getByRole('button', { name: 'Remove oc_settings' })
+  const beforeRemove = await readFile(path, 'utf8')
+  await removeChat.click()
+  const confirm = page.getByRole('dialog')
+  const cancel = confirm.getByRole('button', { name: 'Cancel', exact: true })
+  await cancel.waitFor()
+  assert(await cancel.evaluate((node) => node === document.activeElement))
+  await cancel.click()
+  await confirm.waitFor({ state: 'hidden' })
+  assert.equal(
+    await readFile(path, 'utf8'),
+    beforeRemove,
+    'Cancel leaves settings intact',
+  )
+  await removeChat.click()
+  await confirm
+    .getByRole('button', { name: 'Remove chat', exact: true })
+    .click()
   await page.getByText('No enabled chats.', { exact: true }).waitFor()
   const saved = (await disk()).extensionConfig.lark
   assert.deepEqual(saved.chats, [])

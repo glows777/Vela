@@ -28,6 +28,8 @@ function stream(reply: { model?: string }, text: string): Response {
 }
 
 export function startVerifyProvider() {
+  let streams = 0
+  let effort: string | undefined
   let held: Promise<void> | undefined
   const server = Bun.serve({
     port: 0,
@@ -44,6 +46,7 @@ export function startVerifyProvider() {
       const body = (await request.json()) as {
         model?: string
         stream?: boolean
+        reasoning_effort?: string
       }
       const answer = {
         id: 'verify-reply',
@@ -59,11 +62,17 @@ export function startVerifyProvider() {
         ],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
       }
-      if (body.stream) await held
+      if (body.stream) {
+        streams += 1
+        effort = body.reasoning_effort
+        await held
+      }
       return body.stream ? stream(body, 'Local answer') : Response.json(answer)
     },
   })
   return {
+    lastStreamEffort: () => effort,
+    streamCount: () => streams,
     hold() {
       const gate = Promise.withResolvers<void>()
       held = gate.promise

@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Changed
+
+- **Desktop conversations and settings are easier to use.** Vela replies render Markdown with copyable code; `⌘N` / `Ctrl+N` starts a new session, the composer grows as you type, and view-specific errors can be dismissed. Project, routine and model pickers support keyboard selection. Deleting a routine or removing a Lark chat requires confirmation, and Settings › Models can set the Thinking level for new sessions ([#531](https://github.com/glows777/Vela/issues/531)).
+
 ## [0.8.0] - 2026-11-23
 
 ### Breaking Changes

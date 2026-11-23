@@ -3,6 +3,7 @@ import type { LarkSetup, SettingsState } from '../../shared/bridge.ts'
 import { Field, Input } from '../components/field.tsx'
 import { errorMessage, saveLark } from '../store.ts'
 import { Button } from '../ui/button.tsx'
+import { ConfirmDialog } from '../ui/confirm-dialog.tsx'
 import { Switch } from '../ui/switch.tsx'
 import { vela } from '../vela.ts'
 import form from './model-form.module.css'
@@ -14,6 +15,10 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
+  const [removing, setRemoving] = useState<{
+    chat: string
+    trigger: HTMLButtonElement
+  }>()
   useEffect(() => {
     if (!settings.loaded) return
     let current = true
@@ -145,7 +150,9 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
                 variant="secondary"
                 aria-label={`Remove ${chat}`}
                 disabled={pending || settings.envExpression}
-                onClick={() => void save({ removeChat: chat })}
+                onClick={(event) =>
+                  setRemoving({ chat, trigger: event.currentTarget })
+                }
               >
                 Remove
               </Button>
@@ -155,6 +162,18 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
       ) : (
         <p className={styles.note}>No enabled chats.</p>
       )}
+      {removing ? (
+        <ConfirmDialog
+          title="Remove chat"
+          description={`Vela will stop answering in ${removing.chat}.`}
+          trigger={removing.trigger}
+          onCancel={() => setRemoving(undefined)}
+          onConfirm={() => {
+            setRemoving(undefined)
+            void save({ removeChat: removing.chat })
+          }}
+        />
+      ) : null}
     </>
   )
 }

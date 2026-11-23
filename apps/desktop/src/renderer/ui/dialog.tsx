@@ -51,10 +51,20 @@ export function DialogContent({
   description,
   children,
   className,
+  onEscapeKeyDown,
   ...props
 }: DialogContentProps) {
   const open = useContext(OpenContext)
   const reduced = useReducedMotion() ?? false
+  const handleEscape: NonNullable<DialogContentProps['onEscapeKeyDown']> = (
+    event,
+  ) => {
+    if (
+      document.activeElement?.matches('[role="combobox"][aria-expanded="true"]')
+    )
+      event.preventDefault()
+    onEscapeKeyDown?.(event)
+  }
   const classes = [styles.content, className].filter(Boolean).join(' ')
   const inner = (
     <>
@@ -84,7 +94,11 @@ export function DialogContent({
     return (
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className={styles.overlay} />
-        <DialogPrimitive.Content {...props} className={classes}>
+        <DialogPrimitive.Content
+          {...props}
+          className={classes}
+          onEscapeKeyDown={handleEscape}
+        >
           {inner}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
@@ -109,7 +123,12 @@ export function DialogContent({
               transition={transition}
             />
           </DialogPrimitive.Overlay>
-          <DialogPrimitive.Content {...props} asChild forceMount>
+          <DialogPrimitive.Content
+            {...props}
+            onEscapeKeyDown={handleEscape}
+            asChild
+            forceMount
+          >
             <motion.div
               className={classes}
               initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98 }}

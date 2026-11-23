@@ -42,15 +42,3 @@ export function Input({
     />
   )
 }
-
-export function Select({
-  className,
-  ...props
-}: ComponentPropsWithoutRef<'select'>) {
-  return (
-    <select
-      className={className ? `${styles.input} ${className}` : styles.input}
-      {...props}
-    />
-  )
-}

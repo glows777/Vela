@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Project, Routine } from '../../shared/bridge.ts'
 import { errorMessage, type Snapshot } from '../store.ts'
 import { Button } from '../ui/button.tsx'
+import { ConfirmDialog } from '../ui/confirm-dialog.tsx'
 import { vela } from '../vela.ts'
 import { RoutineDialog } from './routine-dialog.tsx'
 import styles from './routines-page.module.css'
@@ -61,6 +62,12 @@ export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
   const [editing, setEditing] = useState<{
     project: Project
     routine: Routine
+  }>()
+
+  const [deleting, setDeleting] = useState<{
+    group: Group
+    routine: Routine
+    trigger: HTMLButtonElement
   }>()
 
   useEffect(() => {
@@ -214,7 +221,13 @@ export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
                       variant="ghost"
                       size="sm"
                       aria-label={`Delete routine: ${routine.message}`}
-                      onClick={() => void remove(group, routine)}
+                      onClick={(event) =>
+                        setDeleting({
+                          group,
+                          routine,
+                          trigger: event.currentTarget,
+                        })
+                      }
                     >
                       <Trash2 size={16} aria-hidden="true" />
                     </Button>
@@ -227,6 +240,18 @@ export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
           </section>
         ))}
       </div>
+      {deleting ? (
+        <ConfirmDialog
+          title="Delete routine"
+          description={`“${deleting.routine.message}” will no longer run.`}
+          trigger={deleting.trigger}
+          onCancel={() => setDeleting(undefined)}
+          onConfirm={() => {
+            setDeleting(undefined)
+            void remove(deleting.group, deleting.routine)
+          }}
+        />
+      ) : null}
       <RoutineDialog
         open={creating || editing !== undefined}
         targets={targets}

@@ -223,12 +223,9 @@ export async function openHost(
             env: process.env,
           })
           vela.configureProvider(saved.provider, saved.definition)
-          vela.setDefaults(
-            saved.ref,
-            // The host's own default when settings.json has no level (core's DEFAULT_THINKING_LEVEL).
-            config.settings.defaultThinkingLevel ?? 'medium',
-          )
-          return settings()
+          const current = settings()
+          vela.setDefaults(saved.ref, current.thinkingLevel ?? 'medium')
+          return current
         }
         case 'sessions':
           return sessions(request.channel, request.chatId)

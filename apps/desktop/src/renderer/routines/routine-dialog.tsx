@@ -8,6 +8,7 @@ import type {
 import { errorMessage } from '../store.ts'
 import { Button } from '../ui/button.tsx'
 import { Dialog, DialogClose, DialogContent } from '../ui/dialog.tsx'
+import { Select } from '../ui/select.tsx'
 import { vela } from '../vela.ts'
 import styles from './routine-dialog.module.css'
 
@@ -303,18 +304,16 @@ export function RoutineDialog({
                   project first.
                 </p>
               ) : (
-                <select
+                <Select
                   id="routine-where"
-                  className={styles.input}
+                  label="Where"
                   value={where}
-                  onChange={(event) => setWhere(event.target.value)}
-                >
-                  {places.map((place) => (
-                    <option key={place.key} value={place.key}>
-                      {place.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setWhere}
+                  options={places.map(({ key, label }) => ({
+                    value: key,
+                    label,
+                  }))}
+                />
               )}
               <p className={styles.note}>
                 Vela answers there, so anyone in that chat can read the answer.
