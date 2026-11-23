@@ -127,6 +127,17 @@ interface ToolApprovalRequestPart {
   providerOptions?: ProviderOptions
 }
 
+/** Tool approval response carried on a tool message. */
+interface ToolApprovalResponsePart {
+  type: 'tool-approval-response'
+  approvalId: string
+  approved: boolean
+  reason?: string
+  providerOptions?: ProviderOptions
+}
+
+export type ToolMessageContentPart = ToolResultPart | ToolApprovalResponsePart
+
 type UserContentPart = TextPart | ImageContent | FilePart
 export type UserContent = string | UserContentPart[]
 
@@ -153,6 +164,7 @@ export type VelaPart =
   | ToolCallPart
   | ToolResultPart
   | ToolApprovalRequestPart
+  | ToolApprovalResponsePart
 
 export interface VelaSystemMessage {
   role: 'system'
@@ -174,7 +186,7 @@ export interface VelaAssistantMessage {
 
 export interface VelaToolMessage {
   role: 'tool'
-  content: ToolResultPart[]
+  content: ToolMessageContentPart[]
   providerOptions?: ProviderOptions
 }
 

@@ -588,6 +588,23 @@ test('resuming a transcript with tool-approval-request preserves approval parts 
             ],
           },
         }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e3',
+          parentId: 'e2',
+          timestamp: now,
+          message: {
+            role: 'tool',
+            content: [
+              {
+                type: 'tool-approval-response',
+                approvalId: 'apr-1',
+                approved: true,
+                reason: 'ok',
+              },
+            ],
+          },
+        }),
       ].join('\n')}\n`,
     )
     const model = createFauxModel({ responses: [fauxText('ok')] })
@@ -597,6 +614,30 @@ test('resuming a transcript with tool-approval-request preserves approval parts 
       expect(await session.resume()).toBe(true)
       await session.prompt('follow up')
       expect(model.calls).toHaveLength(1)
+      const aiTool = toAiModelMessages([
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-approval-response',
+              approvalId: 'apr-1',
+              approved: true,
+              reason: 'ok',
+            },
+          ],
+        },
+      ])
+      expect(aiTool[0]).toEqual({
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-approval-response',
+            approvalId: 'apr-1',
+            approved: true,
+            reason: 'ok',
+          },
+        ],
+      })
     } finally {
       await vela.dispose()
     }
@@ -617,6 +658,28 @@ test('resuming a transcript with tool-approval-request preserves approval parts 
           type: 'tool-approval-request',
           approvalId: 'apr-2',
           toolCallId: 'c2',
+        },
+      ],
+    })
+    const roundTrippedResp = fromAiResponseMessage({
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-approval-response',
+          approvalId: 'apr-2',
+          approved: false,
+          reason: 'denied',
+        },
+      ],
+    })
+    expect(roundTrippedResp).toEqual({
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-approval-response',
+          approvalId: 'apr-2',
+          approved: false,
+          reason: 'denied',
         },
       ],
     })

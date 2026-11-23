@@ -1397,6 +1397,7 @@
       | ToolCallPart
       | ToolResultPart
       | ToolApprovalRequestPart
+      | ToolApprovalResponsePart
   class VelaSession
     abort: (reason?: unknown) => Promise<void>
     abortBash: () => void
@@ -1483,7 +1484,7 @@
     providerOptions?: ProviderOptions | undefined
     role: "system"
   interface VelaToolMessage
-    content: ToolResultPart[]
+    content: ToolMessageContentPart[]
     providerOptions?: ProviderOptions | undefined
     role: "tool"
   interface VelaUserMessage
@@ -1910,6 +1911,7 @@
       | ToolCallPart
       | ToolResultPart
       | ToolApprovalRequestPart
+      | ToolApprovalResponsePart
   class VelaSession
     abort: (reason?: unknown) => Promise<void>
     abortBash: () => void

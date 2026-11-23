@@ -14,8 +14,8 @@ import type {
 import type {
   AssistantContentPart,
   ProviderOptions,
+  ToolMessageContentPart,
   ToolResultOutput,
-  ToolResultPart,
   VelaAssistantMessage,
   VelaMessage,
   VelaToolMessage,
@@ -236,31 +236,48 @@ export function toAiModelMessages(
             providerOptions: message.providerOptions as SharedV4ProviderOptions,
           }
         : {}),
-      content: message.content.map((part) => ({
-        type: 'tool-result' as const,
-        toolCallId: part.toolCallId,
-        toolName: part.toolName,
-        ...(part.providerOptions
-          ? {
-              providerOptions: part.providerOptions as SharedV4ProviderOptions,
-            }
-          : {}),
-        output: toAiToolOutput(
-          part.output.type === 'content' && !supportsImages
+      content: message.content.map((part) => {
+        if (part.type === 'tool-approval-response') {
+          return {
+            type: 'tool-approval-response' as const,
+            approvalId: part.approvalId,
+            approved: part.approved,
+            ...(part.reason !== undefined ? { reason: part.reason } : {}),
+            ...(part.providerOptions
+              ? {
+                  providerOptions:
+                    part.providerOptions as SharedV4ProviderOptions,
+                }
+              : {}),
+          }
+        }
+        return {
+          type: 'tool-result' as const,
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          ...(part.providerOptions
             ? {
-                ...part.output,
-                value: part.output.value.map((item) =>
-                  isImagePart(item)
-                    ? {
-                        type: 'text' as const,
-                        text: '(tool image omitted: model does not support images)',
-                      }
-                    : item,
-                ),
+                providerOptions:
+                  part.providerOptions as SharedV4ProviderOptions,
               }
-            : part.output,
-        ),
-      })),
+            : {}),
+          output: toAiToolOutput(
+            part.output.type === 'content' && !supportsImages
+              ? {
+                  ...part.output,
+                  value: part.output.value.map((item) =>
+                    isImagePart(item)
+                      ? {
+                          type: 'text' as const,
+                          text: '(tool image omitted: model does not support images)',
+                        }
+                      : item,
+                  ),
+                }
+              : part.output,
+          ),
+        }
+      }),
     } as AIModelMessage
   })
 
@@ -333,8 +350,20 @@ export function fromAiResponseMessage(
 ): VelaAssistantMessage | VelaToolMessage {
   const providerOptions = message.providerOptions as ProviderOptions | undefined
   if (message.role === 'tool') {
-    const content: ToolResultPart[] = []
+    const content: ToolMessageContentPart[] = []
     for (const part of message.content) {
+      if (part.type === 'tool-approval-response') {
+        content.push({
+          type: 'tool-approval-response',
+          approvalId: part.approvalId,
+          approved: part.approved,
+          ...(part.reason !== undefined ? { reason: part.reason } : {}),
+          ...('providerOptions' in part && part.providerOptions
+            ? { providerOptions: part.providerOptions as ProviderOptions }
+            : {}),
+        })
+        continue
+      }
       if (part.type !== 'tool-result') continue
       content.push({
         type: 'tool_result',

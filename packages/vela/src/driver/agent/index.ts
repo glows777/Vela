@@ -282,6 +282,7 @@ export const agentLoop = async ({
               return {
                 ...message,
                 content: message.content.map((part) => {
+                  if (part.type !== 'tool_result') return part
                   const stored = getStoredResult(part.output)
                   if (!stored) return part
                   return {
