@@ -19,7 +19,7 @@ const LAYER_ALLOWED: Record<string, readonly string[]> = {
   mcp: ['shared', 'runtime', 'driver'],
   lark: ['shared', 'runtime', 'driver', 'legacy-channels'],
   'legacy-channels': ['shared', 'providers', 'driver'],
-  config: ['shared', 'providers', 'driver', 'mcp', 'legacy-channels', 'cli'],
+  config: ['shared', 'providers', 'driver', 'mcp', 'legacy-channels'],
   daemon: ['shared', 'db', 'runtime', 'providers', 'driver', 'mcp', 'lark'],
   cli: [
     'shared',
@@ -52,40 +52,54 @@ const HEAVY_OWNER: Record<string, string> = {
 const HEAVY = new Set(Object.keys(HEAVY_OWNER))
 
 /**
- * Ratchet allowlist for files outside `src/providers/` (and `src/testing/`) that still import
- * `'ai'` / `'@ai-sdk/*'` until S1a replaces them with VelaMessage. Shrink-only: S1a empties this set.
+ * Shrink-only exact edge allowlist for files outside `src/providers/` (and `src/testing/`)
+ * that still import `'ai'` / `'@ai-sdk/*'` until S1a replaces them with VelaMessage.
+ * Each entry pins `type:<spec>` vs `runtime:<spec>` so adding a new package or turning a
+ * type-only import into a runtime import fails immediately.
  */
-const AI_SDK_S1A_ALLOWLIST = new Set([
-  'packages/vela/src/cli/main.ts',
-  'packages/vela/src/cli/tui/logs.ts',
-  'packages/vela/src/driver/agent/cache.ts',
-  'packages/vela/src/driver/agent/checkpoint.ts',
-  'packages/vela/src/driver/agent/events.ts',
-  'packages/vela/src/driver/agent/index.ts',
-  'packages/vela/src/driver/agent/overflow.ts',
-  'packages/vela/src/driver/agent/retry.ts',
-  'packages/vela/src/driver/agent/step.ts',
-  'packages/vela/src/driver/context/compressor.ts',
-  'packages/vela/src/driver/context/request.ts',
-  'packages/vela/src/driver/extensions/events.ts',
-  'packages/vela/src/driver/extensions/memory/dream.ts',
-  'packages/vela/src/driver/extensions/provider-hooks.ts',
-  'packages/vela/src/driver/extensions/runner.ts',
-  'packages/vela/src/driver/messages.ts',
-  'packages/vela/src/driver/session/defaults.ts',
-  'packages/vela/src/driver/session/deps.ts',
-  'packages/vela/src/driver/session/export.ts',
-  'packages/vela/src/driver/session/options.ts',
-  'packages/vela/src/driver/session/resources.ts',
-  'packages/vela/src/driver/tools/json-schema.ts',
-  'packages/vela/src/driver/tools/registry.ts',
-  'packages/vela/src/driver/tools/sdk-tools.ts',
-  'packages/vela/src/driver/tools/validation.ts',
-  'packages/vela/src/driver/usage/tracker.ts',
-  'packages/vela/src/driver/vela-session.ts',
-  'packages/vela/src/driver/vela.ts',
-  'packages/vela/src/mcp/tools.ts',
-])
+const AI_SDK_S1A_ALLOWLIST: Record<string, readonly string[]> = {
+  'packages/vela/src/cli/main.ts': ['type:ai'],
+  'packages/vela/src/cli/tui/logs.ts': ['type:ai'],
+  'packages/vela/src/driver/agent/cache.ts': [
+    'type:@ai-sdk/provider',
+    'type:ai',
+  ],
+  'packages/vela/src/driver/agent/checkpoint.ts': ['type:ai'],
+  'packages/vela/src/driver/agent/events.ts': ['type:ai'],
+  'packages/vela/src/driver/agent/index.ts': [
+    'runtime:@ai-sdk/provider',
+    'runtime:ai',
+  ],
+  'packages/vela/src/driver/agent/overflow.ts': ['runtime:@ai-sdk/provider'],
+  'packages/vela/src/driver/agent/retry.ts': ['runtime:@ai-sdk/provider'],
+  'packages/vela/src/driver/agent/step.ts': ['runtime:ai'],
+  'packages/vela/src/driver/context/compressor.ts': ['runtime:ai'],
+  'packages/vela/src/driver/context/request.ts': ['runtime:ai'],
+  'packages/vela/src/driver/extensions/events.ts': ['type:@ai-sdk/provider'],
+  'packages/vela/src/driver/extensions/memory/dream.ts': ['runtime:ai'],
+  'packages/vela/src/driver/extensions/provider-hooks.ts': [
+    'runtime:ai',
+    'type:@ai-sdk/provider',
+  ],
+  'packages/vela/src/driver/extensions/runner.ts': ['type:@ai-sdk/provider'],
+  'packages/vela/src/driver/messages.ts': ['type:ai'],
+  'packages/vela/src/driver/session/defaults.ts': ['type:ai'],
+  'packages/vela/src/driver/session/deps.ts': [
+    'type:@ai-sdk/provider',
+    'type:ai',
+  ],
+  'packages/vela/src/driver/session/export.ts': ['type:ai'],
+  'packages/vela/src/driver/session/options.ts': ['type:ai'],
+  'packages/vela/src/driver/session/resources.ts': ['type:ai'],
+  'packages/vela/src/driver/tools/json-schema.ts': ['runtime:ai'],
+  'packages/vela/src/driver/tools/registry.ts': ['runtime:ai', 'type:ai'],
+  'packages/vela/src/driver/tools/sdk-tools.ts': ['runtime:ai'],
+  'packages/vela/src/driver/tools/validation.ts': ['runtime:ai'],
+  'packages/vela/src/driver/usage/tracker.ts': ['type:ai'],
+  'packages/vela/src/driver/vela-session.ts': ['type:ai'],
+  'packages/vela/src/driver/vela.ts': ['type:ai'],
+  'packages/vela/src/mcp/tools.ts': ['runtime:ai'],
+}
 
 interface Package {
   name: string
@@ -363,17 +377,18 @@ export async function checkBoundaries(root: string): Promise<string[]> {
           if (!destination)
             report(file, edge.at, `private or missing export ${spec}`)
         }
-        // Gate 2: AI SDK confinement to src/providers/ (+ src/testing/ + shrink-only S1a allowlist)
+        // Gate 2: AI SDK confinement to src/providers/ (+ src/testing/ + shrink-only S1a exact edge allowlist)
         if (isAiSdk(spec)) {
+          const edgeKey = `${edge.typeOnly ? 'type' : 'runtime'}:${spec}`
           if (srcLayer === 'providers' || srcLayer === 'testing') {
             // allowed
-          } else if (AI_SDK_S1A_ALLOWLIST.has(localRel)) {
-            seenAiAllowlist.add(localRel)
+          } else if (AI_SDK_S1A_ALLOWLIST[localRel]?.includes(edgeKey)) {
+            seenAiAllowlist.add(`${localRel}#${edgeKey}`)
           } else {
             report(
               file,
               edge.at,
-              `AI SDK import "${spec}" is confined to src/providers/`,
+              `AI SDK import "${edgeKey}" is confined to src/providers/`,
             )
           }
         }
@@ -395,10 +410,25 @@ export async function checkBoundaries(root: string): Promise<string[]> {
         }
       }
 
-      // Gate 1: One-way layer DAG inside packages/vela/src/
+      // Gate 1: One-way layer DAG inside packages/vela/src/ (and block root barrel bypasses)
       if (destination && sourceMap.has(destination)) {
         const dstLayer = layerOf(pkg.dir, destination)
-        if (
+        if (srcLayer && !dstLayer) {
+          const dstBase = relative(
+            join(pkg.dir, 'src'),
+            destination,
+          ).replaceAll('\\', '/')
+          const allowedRoot =
+            dstBase === 'extension-api.ts' ||
+            ((srcLayer === 'cli' || srcLayer === 'testing') &&
+              (dstBase === 'vela.ts' || dstBase === 'settings.ts'))
+          if (!allowedRoot)
+            report(
+              file,
+              edge.at,
+              `layer ${srcLayer} may not import root barrel ${dstBase} (${spec})`,
+            )
+        } else if (
           srcLayer &&
           dstLayer &&
           srcLayer !== dstLayer &&

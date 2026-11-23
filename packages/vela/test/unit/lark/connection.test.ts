@@ -279,3 +279,15 @@ test('SDK token request errors keep credential payloads out of console output', 
     console.warn = originalWarn
   }
 })
+
+test('stop() while start() is awaiting the lazy Lark SDK does not start a socket', async () => {
+  intercept()
+  const transport = larkTransport('app', 'secret')
+  const pending = transport.start(
+    () => {},
+    () => ({ toast: { type: 'info', content: '' } }),
+  )
+  transport.stop()
+  await pending
+  expect(sockets).toHaveLength(0)
+})

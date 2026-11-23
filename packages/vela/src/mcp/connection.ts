@@ -62,12 +62,12 @@ function expandHome(value: string): string {
   return value
 }
 
-/** Vela's version for `initialize`, from package.json (three levels up from src/ and dist/). */
+/** Vela's version for `initialize`, from package.json (two levels up from src/mcp and dist/mcp). */
 function velaVersion(): string {
   try {
     return (
       JSON.parse(
-        readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+        readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
       ) as { version: string }
     ).version
   } catch {

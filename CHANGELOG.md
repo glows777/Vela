@@ -436,7 +436,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - A request that already started running tools is no longer sent again after an error, so tools don't run twice.
 - Interactive mode no longer stays running and spins a CPU after its terminal closes: on SIGHUP it saves and exits even though restoring the terminal fails, and a read or write error on a dead terminal exits at once with code 129, like pi.
 - When a request is retried, the interactive mode keeps the failed attempt's text marked `(response failed)` and shows the retry as a new message, instead of appending the retry to the old text.
-- **The knowledge base no longer mixes vectors from different embedding models.** It records the embedder that built it, and when the configured one differs, ingesting and searching fail with an error naming both instead of returning meaningless scores. Switch back, or run `/rag clear` and ingest again. A knowledge base from 0.1.0 has no record: the configured embedder is assumed, recorded and a warning logged. See [rag](docs/built-in-extensions.md#rag).
+- **The knowledge base no longer mixes vectors from different embedding models.** It records the embedder that built it, and when the configured one differs, ingesting and searching fail with an error naming both instead of returning meaningless scores. Switch back, or run `/rag clear` and ingest again. A knowledge base from 0.1.0 has no record: the configured embedder is assumed, recorded and a warning logged. See [built-in extensions](docs/built-in-extensions.md) (removed in v0.9).
 
 ### New Features
 

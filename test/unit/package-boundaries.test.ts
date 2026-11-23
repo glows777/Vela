@@ -114,7 +114,7 @@ for (const [label, files, pattern] of [
       'packages/vela/src/runtime/bad.ts':
         "import type { ModelMessage } from 'ai'; export type M = ModelMessage",
     },
-    /AI SDK import "ai" is confined to src\/providers\//,
+    /AI SDK import "type:ai" is confined to src\/providers\//,
   ],
   [
     'AI SDK provider package outside src/providers/',
@@ -122,7 +122,39 @@ for (const [label, files, pattern] of [
       'packages/vela/src/driver/new-file.ts':
         "import { createOpenAI } from '@ai-sdk/openai'; export { createOpenAI }",
     },
-    /AI SDK import "@ai-sdk\/openai" is confined to src\/providers\//,
+    /AI SDK import "runtime:@ai-sdk\/openai" is confined to src\/providers\//,
+  ],
+  [
+    'allowlisted file adding a new AI SDK package',
+    {
+      'packages/vela/src/cli/main.ts':
+        "import { createOpenAI } from '@ai-sdk/openai'; export { createOpenAI }",
+    },
+    /AI SDK import "runtime:@ai-sdk\/openai" is confined to src\/providers\//,
+  ],
+  [
+    'allowlisted type-only file adding a runtime AI SDK import',
+    {
+      'packages/vela/src/cli/main.ts':
+        "import { streamText } from 'ai'; export { streamText }",
+    },
+    /AI SDK import "runtime:ai" is confined to src\/providers\//,
+  ],
+  [
+    'runtime bypassing layer checks via root barrel',
+    {
+      'packages/vela/src/runtime/bad.ts':
+        "export { product } from '@glows777/vela'",
+    },
+    /layer runtime may not import root barrel/,
+  ],
+  [
+    'config importing cli (bidirectional cycle)',
+    {
+      'packages/vela/src/cli/ok.ts': 'export const c = 1',
+      'packages/vela/src/config/bad.ts': "export { c } from '../cli/ok.ts'",
+    },
+    /layer direction config -> cli/,
   ],
   [
     'eager heavy dependency reachable from root entry',
@@ -265,4 +297,42 @@ test('memory dream alone may import the internal usage tracker', async () => {
       ).join('\n'),
     ).toMatch(/light builtin/)
   }
+})
+
+test('print mode with AGENTS.md does not load @earendil-works/pi-tui', async () => {
+  const work = await mkdtemp(join(tmpdir(), 'vela-cold-print-'))
+  dirs.push(work)
+  const home = join(work, 'home')
+  await mkdir(home, { recursive: true })
+  await writeFile(join(work, 'AGENTS.md'), 'Keep answers short.\n')
+  const preload = join(work, 'block-tui.ts')
+  await writeFile(
+    preload,
+    `import { mock } from 'bun:test'\nmock.module('@earendil-works/pi-tui', () => { throw new Error('pi-tui must not load in print mode') })\n`,
+  )
+  const main = join(import.meta.dir, '../../packages/vela/src/cli/main.ts')
+  const child = Bun.spawn(
+    [process.execPath, '--preload', preload, main, '-p', 'hello'],
+    {
+      cwd: work,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: home,
+        VELA_DIR: join(home, '.vela'),
+        VELA_MODEL: 'mock',
+        VELA_OFFLINE: '1',
+      },
+    },
+  )
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  expect(code, stderr).toBe(0)
+  expect(stdout.trim().length).toBeGreaterThan(0)
+  expect(stderr).not.toContain('pi-tui must not load')
 })

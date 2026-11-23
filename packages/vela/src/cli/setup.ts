@@ -458,10 +458,13 @@ function toolMatcher(entry: string): (name: string) => boolean {
   return (name) => pattern.test(name)
 }
 
-/** Space-separated case-insensitive subsequence match (keeps `--list-models` off pi-tui). */
+/** Space- and slash-separated case-insensitive subsequence match (keeps `--list-models` off pi-tui). */
 function matchesTokens(text: string, query: string): boolean {
   const haystack = text.toLowerCase()
-  for (const token of query.trim().toLowerCase().split(/\s+/)) {
+  for (const token of query
+    .trim()
+    .toLowerCase()
+    .split(/[\s/]+/)) {
     if (!token) continue
     let pos = 0
     for (const ch of token) {

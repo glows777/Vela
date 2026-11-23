@@ -162,6 +162,7 @@ export function larkTransport(
       const current = ++lifetime
       wsClient?.close()
       const sdk = await loadLarkSdk()
+      if (current !== lifetime) return
       const dispatcher = new sdk.EventDispatcher({})
       dispatcher.register({
         'im.message.receive_v1': (data) => onMessage(data as LarkMessageEvent),

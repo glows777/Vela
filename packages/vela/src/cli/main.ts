@@ -34,6 +34,7 @@ import {
   recordModel,
 } from '../testing/core/index.ts'
 import { createVela } from '../vela.ts'
+import { formatContextFileList } from './context-display.ts'
 import { ownerDocker } from './docker.ts'
 import { errorMessage } from './error.ts'
 import { readAttachments } from './files.ts'
@@ -499,8 +500,6 @@ function applyModelArgs(
 
 async function reportContextFiles(session: VelaSession) {
   const resources = await session.resources()
-  if (resources.contextFiles.length === 0) return resources
-  const { formatContextFileList } = await import('./status-display.ts')
   const line = formatContextFileList(resources.contextFiles, {
     cwd: session.cwd,
     homeDir: homedir(),

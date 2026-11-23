@@ -10,7 +10,6 @@ import {
 import type { ChannelVelaOptions } from '../legacy-channels/index.ts'
 import { type McpServersFile, mcpConfig } from '../mcp/index.ts'
 
-export { savedTrust, saveTrust } from '../cli/config-trust.ts'
 export { defaultAgentDir, extensionName } from '../driver/diagnostics.ts'
 export type {
   ExtensionEntry,
@@ -19,6 +18,7 @@ export type {
   ProviderConfig,
 } from '../driver/index.ts'
 export { importExtension, loadModels } from '../driver/index.ts'
+export { savedTrust, saveTrust } from './trust.ts'
 
 export interface VelaSettings extends CoreSettings {
   /** Unmatched events may reach this existing enabled top-level chat; unset drops them. */
