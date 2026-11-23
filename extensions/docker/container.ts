@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { ExecutionEnv } from '@glows777/vela-core'
+import type { ExecutionEnv } from '../../packages/vela/src/driver/index.ts'
 import type { GuestCredentialConfig } from './guest-credential-env.ts'
 import { dockerOperations } from './operations.ts'
 

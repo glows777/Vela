@@ -67,7 +67,9 @@ test('nonlocal location cannot silently execute on the host before migration', (
 })
 
 test('local execution environment reads, writes and executes within its cwd', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -119,7 +121,9 @@ test('new sessions persist their default local location', async () => {
 })
 
 test('local environment spills complete output and distinguishes errors from exit codes', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -151,7 +155,9 @@ test('local environment spills complete output and distinguishes errors from exi
 })
 
 test('local environment reports invalid reader operations without throwing', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -184,7 +190,9 @@ test('local environment reports invalid reader operations without throwing', asy
 })
 
 test('local shell aborts an in-flight process without replay', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -206,7 +214,9 @@ test('local shell aborts an in-flight process without replay', async () => {
 })
 
 test('line spill counts a trailing partial line', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -224,7 +234,9 @@ test('line spill counts a trailing partial line', async () => {
 })
 
 test('local shell returns timeout and spawn failures as results', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -241,7 +253,9 @@ test('local shell returns timeout and spawn failures as results', async () => {
 })
 
 test('execution environment resolver is consulted for each tool call and fails closed', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { fauxToolCall } = await import('@glows777/vela/testing')
   const dir = tempDir()
   const calls: string[] = []
@@ -301,7 +315,9 @@ test('a missing resolver cannot run a user shell command on the host', async () 
 })
 
 test('a failing output callback aborts the command and returns callback_error', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -351,7 +367,9 @@ test('legacy session without location retains existing cwd fallback', async () =
 })
 
 test('local file operations follow the environment contract for directories and symlinks', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { symlinkSync } = await import('node:fs')
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
@@ -376,7 +394,9 @@ test('local file operations follow the environment contract for directories and 
 })
 
 test('local directory creation defaults recursive and exists recognizes dangling symlinks', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { symlinkSync } = await import('node:fs')
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
@@ -393,7 +413,9 @@ test('local directory creation defaults recursive and exists recognizes dangling
 })
 
 test('local temp file preserves the requested filename prefix and suffix', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { basename } = await import('node:path')
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
@@ -414,7 +436,9 @@ test('local temp file preserves the requested filename prefix and suffix', async
 test.skipIf(process.platform === 'win32')(
   'local listing skips unsupported file kinds',
   async () => {
-    const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+    const { createLocalExecutionEnv } = await import(
+      '../../packages/vela/src/driver/index.ts'
+    )
     const dir = tempDir()
     const env = createLocalExecutionEnv({ cwd: dir.path })
     try {
@@ -433,7 +457,9 @@ test.skipIf(process.platform === 'win32')(
 )
 
 test('local exec returns after the shell exits even if a background child retains stdout', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -450,7 +476,9 @@ test('local exec returns after the shell exits even if a background child retain
 test.skipIf(process.platform === 'win32')(
   'local exists reports unsupported file kinds as invalid',
   async () => {
-    const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+    const { createLocalExecutionEnv } = await import(
+      '../../packages/vela/src/driver/index.ts'
+    )
     const dir = tempDir()
     const env = createLocalExecutionEnv({ cwd: dir.path })
     try {
@@ -496,7 +524,9 @@ test('malformed stored locations fail closed instead of falling back to the host
 })
 
 test('local shell honors configured shell path and reports unavailable shell', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({
     cwd: dir.path,
@@ -515,7 +545,9 @@ test('local shell honors configured shell path and reports unavailable shell', a
 })
 
 test('large shell output spills all bytes without truncation', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -555,7 +587,9 @@ test('exported session JSONL keeps its execution location', async () => {
 })
 
 test('binary reader scans unicode line boundaries and preserves positional reads', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -579,7 +613,9 @@ test('binary reader scans unicode line boundaries and preserves positional reads
 })
 
 test('a spill storage failure is distinguished from a callback failure', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -600,7 +636,9 @@ test('a spill storage failure is distinguished from a callback failure', async (
 })
 
 test('local paths accept file URLs', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { pathToFileURL } = await import('node:url')
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
@@ -616,7 +654,9 @@ test('local paths accept file URLs', async () => {
 })
 
 test('a missing working directory is a spawn failure, not a missing shell', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -629,7 +669,9 @@ test('a missing working directory is a spawn failure, not a missing shell', asyn
 })
 
 test('local exec flushes an incomplete UTF-8 sequence when the shell exits', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -651,7 +693,9 @@ test('local exec flushes an incomplete UTF-8 sequence when the shell exits', asy
 })
 
 test('environment cleanup stops a command and its descendants', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { existsSync } = await import('node:fs')
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
@@ -680,7 +724,9 @@ test('environment cleanup stops a command and its descendants', async () => {
 })
 
 test('closing a session while its environment resolves cannot start a user command', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { existsSync } = await import('node:fs')
   const dir = tempDir()
   let release!: (env: ReturnType<typeof createLocalExecutionEnv>) => void
@@ -708,7 +754,9 @@ test('closing a session while its environment resolves cannot start a user comma
 })
 
 test('shell output is delivered before a slow spill file is created', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   try {
@@ -740,7 +788,9 @@ test('shell output is delivered before a slow spill file is created', async () =
 })
 
 test('aborting while resolving a working directory never starts the command', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { existsSync } = await import('node:fs')
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
@@ -771,7 +821,9 @@ test('aborting while resolving a working directory never starts the command', as
 })
 
 test('aborting a user command while its environment resolves never runs it', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { existsSync } = await import('node:fs')
   const dir = tempDir()
   let release!: (env: ReturnType<typeof createLocalExecutionEnv>) => void
@@ -819,7 +871,9 @@ test('immediately aborting a default user command prevents its side effect', asy
 })
 
 test('local commands inherit and override the host environment only when requested', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
   const key = 'VELA_EXEC_INHERIT_TEST'
@@ -857,7 +911,9 @@ test('local commands inherit and override the host environment only when request
 })
 
 test('stopping a model tool call does not wait for an unresolved environment', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { fauxToolCall } = await import('@glows777/vela/testing')
   const dir = tempDir()
   let release!: (env: ReturnType<typeof createLocalExecutionEnv>) => void
@@ -907,7 +963,9 @@ test('stopping a model tool call does not wait for an unresolved environment', a
 
 test('cleanup stops a background descendant after its shell has exited', async () => {
   if (process.platform === 'win32') return
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { existsSync } = await import('node:fs')
   const dir = tempDir()
   const env = createLocalExecutionEnv({ cwd: dir.path })
@@ -925,7 +983,9 @@ test('cleanup stops a background descendant after its shell has exited', async (
 test.skipIf(process.platform === 'win32')(
   'cleanup reports a denied signal to a surviving group and can retry it',
   async () => {
-    const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+    const { createLocalExecutionEnv } = await import(
+      '../../packages/vela/src/driver/index.ts'
+    )
     const dir = tempDir()
     const env = createLocalExecutionEnv({ cwd: dir.path })
     const kill = process.kill.bind(process)

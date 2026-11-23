@@ -1,4 +1,4 @@
-import type { LocalOptions } from '@glows777/vela-channels'
+import type { LocalOptions } from '../legacy-channels/index.ts'
 
 /** Only the CLI's real serve mode may enable the user-configured local listener. */
 export function localServeOptions(

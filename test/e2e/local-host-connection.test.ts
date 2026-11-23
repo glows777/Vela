@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
-import { local } from '@glows777/vela-channels'
-import { lark } from '@glows777/vela-lark'
 import * as sdk from '@larksuiteoapi/node-sdk'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import { local } from '../../packages/vela/src/legacy-channels/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 type Callbacks = {

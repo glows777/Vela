@@ -5,7 +5,7 @@ import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
+} from '../../packages/vela/src/testing/core/index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -13,7 +13,7 @@ afterEach(async () => {
 })
 
 test('core assembly supports memory and schema tools without installing a channel runtime', async () => {
-  const core = await import('@glows777/vela-core')
+  const core = await import('../../packages/vela/src/driver/index.ts')
   const { jsonSchema } = await import('ai')
   const model = createFauxModel({
     responses: [
@@ -54,7 +54,7 @@ test('core assembly supports memory and schema tools without installing a channe
 
 test('the SDK testing entry and replay use a core-only assembly', async () => {
   const { createTestVela, replayScenario } = await import(
-    '@glows777/vela-core/testing'
+    '../../packages/vela/src/testing/core/index.ts'
   )
   const fixture = createTestVela({ responses: [fauxText('core fixture')] })
   cleanups.push(() => fixture.cleanup())
@@ -74,7 +74,7 @@ test('the SDK testing entry and replay use a core-only assembly', async () => {
 })
 
 test('the public publisher cannot forge agent events; ordinary inspection does not run extension hooks', async () => {
-  const core = await import('@glows777/vela-core')
+  const core = await import('../../packages/vela/src/driver/index.ts')
   let previews = 0
   const vela = core.createVela({
     contextFiles: false,
@@ -115,7 +115,7 @@ test('the public publisher cannot forge agent events; ordinary inspection does n
 
 test('JSON Schema construction requires the SDK wrapper and leaves ordinary schema registration strict', async () => {
   const { defineJsonSchemaTool } = await import(
-    '../../packages/core/src/tools/json-schema.ts'
+    '../../packages/vela/src/driver/tools/json-schema.ts'
   )
   expect(() =>
     defineJsonSchemaTool({

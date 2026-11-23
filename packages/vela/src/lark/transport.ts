@@ -1,0 +1,505 @@
+import { Buffer } from 'node:buffer'
+import { extname } from 'node:path'
+import type { Readable } from 'node:stream'
+import type * as LarkSdk from '@larksuiteoapi/node-sdk'
+import type { ChannelConnection } from '../legacy-channels/index.ts'
+import type { LarkCard, LarkCardAction, LarkCardResponse } from './cards.ts'
+
+let larkSdkPromise: Promise<typeof LarkSdk> | undefined
+function loadLarkSdk(): Promise<typeof LarkSdk> {
+  if (!larkSdkPromise) larkSdkPromise = import('@larksuiteoapi/node-sdk')
+  return larkSdkPromise
+}
+
+/** The parts of an `im.message.receive_v1` event the channel reads */
+export interface LarkMessageEvent {
+  message: {
+    message_id?: string
+    root_id?: string
+    thread_id?: string
+    create_time?: string
+    chat_id: string
+    /** `p2p` or `group` */
+    chat_type?: string
+    message_type: string
+    content: string
+    mentions?: { key: string; id?: { open_id?: string } }[]
+  }
+  sender: { sender_id?: { open_id?: string }; sender_type: string }
+}
+
+/** History items returned newest first by Lark's message API. Times are milliseconds. */
+export interface LarkHistoryMessage {
+  message_id?: string
+  create_time?: string
+  msg_type?: string
+  body?: { content?: string }
+  sender?: { id?: string; sender_type?: string }
+  mentions?: { key: string }[]
+  deleted?: boolean
+}
+
+export interface LarkSentMessage {
+  messageId: string
+  createTime: string
+}
+
+/** The connection to Lark: receives message events and sends text to a chat (lark's long connection by default). */
+export interface LarkTransport {
+  start(
+    onMessage: (event: LarkMessageEvent) => void,
+    onAction: (event: LarkCardAction) => LarkCardResponse,
+  ): Promise<void>
+  stop(): void
+  startTopic(
+    messageId: string,
+    title: string,
+    uuid?: string,
+  ): Promise<LarkSentMessage & { rootId: string; threadId: string }>
+  forward(messageId: string, threadId: string): Promise<LarkSentMessage>
+  send(
+    chatId: string,
+    text: string,
+    uuid?: string,
+    // biome-ignore lint/suspicious/noConfusingVoidType: public shape: callers may ignore the sent message (Promise<void>)
+  ): Promise<void | LarkSentMessage>
+  reply(
+    messageId: string,
+    text: string,
+    uuid?: string,
+  ): Promise<LarkSentMessage>
+  sendFile?(
+    chatId: string,
+    file: { kind: 'image' | 'file'; name: string; bytes: Uint8Array },
+    options?: { replyToId?: string; replyInThread?: boolean; uuid?: string },
+  ): Promise<LarkSentMessage>
+  sendCard(chatId: string, card: LarkCard, replyToId?: string): Promise<string>
+  patchCard(messageId: string, card: LarkCard): Promise<void>
+  addReaction(
+    messageId: string,
+    emoji: 'OnIt' | 'DONE' | 'CrossMark',
+  ): Promise<string>
+  removeReaction(messageId: string, reactionId: string): Promise<void>
+  getResource(
+    messageId: string,
+    key: string,
+    type: 'image' | 'file',
+  ): Promise<Readable>
+  getBotId(): Promise<string>
+  getSenderName(openId: string): Promise<string | undefined>
+  listTopicMessages(
+    threadId: string,
+    pageToken?: string,
+  ): Promise<{ items: LarkHistoryMessage[]; pageToken?: string }>
+  searchMessages(
+    chatId: string,
+    options: {
+      startTime: string
+      endTime: string
+      limit: number
+      pageToken?: string
+    },
+  ): Promise<{ items: LarkHistoryMessage[]; pageToken?: string }>
+  listMessages(
+    chatId: string,
+    options: { before?: string; limit: number },
+  ): Promise<LarkHistoryMessage[]>
+}
+
+export class LarkResponseError extends Error {}
+
+/**
+ * The default transport also answers a group's display name. `LarkTransport` stays the
+ * custom-transport contract, so a transport without this lists groups by their chat id.
+ */
+export interface LarkChatNames {
+  getChat(chatId: string): Promise<{ name?: string } | undefined>
+}
+
+/** A name is display only: any failure leaves the group listed by its chat id. */
+export async function larkChatName(
+  transport: (LarkTransport & Partial<LarkChatNames>) | undefined,
+  chatId: string,
+): Promise<string | undefined> {
+  try {
+    return (await transport?.getChat?.(chatId))?.name?.trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function checked<T extends { code?: number; msg?: string }>(response: T): T {
+  if (response.code !== undefined && response.code !== 0)
+    throw new LarkResponseError(
+      `Lark ${response.code}: ${response.msg ?? 'request failed'}`,
+    )
+  return response
+}
+
+export function larkTransport(
+  appId: string,
+  appSecret: string,
+  quiet = false,
+  onSetupError?: (error: Error) => void,
+  onSetupReady?: () => void,
+  onConnection?: (connection: ChannelConnection) => void,
+): LarkTransport & LarkChatNames {
+  const silent = { error() {}, warn() {}, info() {}, debug() {}, trace() {} }
+  // SDK diagnostics can print the entire token request. The channel reports connection state itself.
+  let clientPromise: Promise<LarkSdk.Client> | undefined
+  const getClient = () => {
+    if (!clientPromise) {
+      clientPromise = loadLarkSdk().then(
+        (sdk) => new sdk.Client({ appId, appSecret, logger: silent }),
+      )
+    }
+    return clientPromise
+  }
+  let wsClient: LarkSdk.WSClient | undefined
+  let lifetime = 0
+  return {
+    async start(onMessage, onAction) {
+      const current = ++lifetime
+      wsClient?.close()
+      const sdk = await loadLarkSdk()
+      const dispatcher = new sdk.EventDispatcher({})
+      dispatcher.register({
+        'im.message.receive_v1': (data) => onMessage(data as LarkMessageEvent),
+        'card.action.trigger': (data: LarkCardAction) => onAction(data),
+      })
+      wsClient = new sdk.WSClient({
+        appId,
+        appSecret,
+        logger: silent,
+        ...(quiet
+          ? {
+              autoReconnect: true,
+              handshakeTimeoutMs: 15000,
+            }
+          : {}),
+        onReady: () => {
+          if (current !== lifetime) return
+          onConnection?.({ connected: true })
+          if (quiet) onSetupReady?.()
+        },
+        onReconnected: () => {
+          if (current !== lifetime) return
+          onConnection?.({ connected: true })
+        },
+        onError: (error) => {
+          if (current !== lifetime) return
+          // Provider errors may contain credentials or request objects.
+          onConnection?.({ connected: false, error: 'Lark connection failed' })
+          if (quiet) onSetupError?.(error)
+        },
+        onReconnecting: () => {
+          if (current !== lifetime) return
+          onConnection?.({
+            connected: false,
+            error: 'Lark connection lost; reconnecting',
+          })
+          if (quiet)
+            onSetupError?.(new Error('Lark connection dropped; retry setup'))
+        },
+      })
+      await wsClient.start({ eventDispatcher: dispatcher })
+    },
+    stop() {
+      ++lifetime
+      wsClient?.close()
+    },
+    async startTopic(messageId, title, uuid) {
+      const client = await getClient()
+      const { data } = checked(
+        await client.im.message.reply({
+          path: { message_id: messageId },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text: title }),
+            reply_in_thread: true,
+            ...(uuid === undefined ? {} : { uuid }),
+          },
+        }),
+      )
+      if (
+        !data?.message_id ||
+        !data.create_time ||
+        !data.root_id ||
+        !data.thread_id
+      )
+        throw new Error('Lark topic reply returned no root/thread receipt')
+      return {
+        messageId: data.message_id,
+        createTime: data.create_time,
+        rootId: data.root_id,
+        threadId: data.thread_id,
+      }
+    },
+    async forward(messageId, threadId) {
+      const client = await getClient()
+      const { data } = checked(
+        await client.im.message.forward({
+          path: { message_id: messageId },
+          params: { receive_id_type: 'thread_id' },
+          data: { receive_id: threadId },
+        }),
+      )
+      if (!data?.message_id || !data.create_time)
+        throw new Error('Lark forward returned no message receipt')
+      return { messageId: data.message_id, createTime: data.create_time }
+    },
+    async send(chatId, text, uuid) {
+      const client = await getClient()
+      const { data } = checked(
+        await client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            ...(uuid === undefined ? {} : { uuid }),
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+          },
+        }),
+      )
+      if (!data?.message_id || !data.create_time)
+        throw new Error('Lark send returned no message receipt')
+      return { messageId: data.message_id, createTime: data.create_time }
+    },
+    sendFile: larkFileSender(getClient),
+    async sendCard(chatId, card, replyToId) {
+      const client = await getClient()
+      const data = { msg_type: 'interactive', content: JSON.stringify(card) }
+      const response = checked(
+        replyToId
+          ? await client.im.message.reply({
+              path: { message_id: replyToId },
+              data,
+            })
+          : await client.im.message.create({
+              params: { receive_id_type: 'chat_id' },
+              data: { ...data, receive_id: chatId },
+            }),
+      )
+      if (!response.data?.message_id)
+        throw new Error('Lark card returned no message ID')
+      return response.data.message_id
+    },
+    async patchCard(messageId, card) {
+      const client = await getClient()
+      checked(
+        await client.im.message.patch({
+          path: { message_id: messageId },
+          data: { content: JSON.stringify(card) },
+        }),
+      )
+    },
+    async addReaction(messageId, emoji) {
+      const client = await getClient()
+      const response = checked(
+        await client.im.messageReaction.create({
+          path: { message_id: messageId },
+          data: { reaction_type: { emoji_type: emoji } },
+        }),
+      )
+      if (!response.data?.reaction_id)
+        throw new Error('Lark reaction returned no reaction ID')
+      return response.data.reaction_id
+    },
+    async removeReaction(messageId, reactionId) {
+      const client = await getClient()
+      checked(
+        await client.im.messageReaction.delete({
+          path: { message_id: messageId, reaction_id: reactionId },
+        }),
+      )
+    },
+    async reply(messageId, text, uuid) {
+      const client = await getClient()
+      const response = checked(
+        await client.im.message.reply({
+          path: { message_id: messageId },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+            ...(uuid === undefined ? {} : { uuid }),
+          },
+        }),
+      )
+      const data = response.data
+      if (!data?.message_id || !data.create_time)
+        throw new Error('Lark reply returned no message receipt')
+      return { messageId: data.message_id, createTime: data.create_time }
+    },
+    async getResource(messageId, key, type) {
+      const client = await getClient()
+      const resource = await client.im.messageResource.get({
+        path: { message_id: messageId, file_key: key },
+        params: { type },
+      })
+      return resource.getReadableStream()
+    },
+    async getBotId() {
+      const client = await getClient()
+      const response = checked(
+        await client.request<{
+          code?: number
+          msg?: string
+          bot?: { open_id?: string }
+        }>({ url: '/open-apis/bot/v3/info', method: 'GET' }),
+      )
+      if (!response.bot?.open_id)
+        throw new Error('Lark bot info returned no open_id')
+      return response.bot.open_id
+    },
+    async getSenderName(openId) {
+      const client = await getClient()
+      const response = checked(
+        await client.contact.user.get({
+          path: { user_id: openId },
+          params: { user_id_type: 'open_id' },
+        }),
+      )
+      return response.data?.user?.name
+    },
+    async getChat(chatId) {
+      const client = await getClient()
+      const response = checked(
+        await client.im.chat.get({
+          path: { chat_id: chatId },
+          params: { user_id_type: 'open_id' },
+        }),
+      )
+      return response.data?.name ? { name: response.data.name } : undefined
+    },
+    async listTopicMessages(threadId, pageToken) {
+      const client = await getClient()
+      const response = checked(
+        await client.im.message.list({
+          params: {
+            container_id_type: 'thread',
+            container_id: threadId,
+            sort_type: 'ByCreateTimeAsc',
+            page_size: 50,
+            page_token: pageToken,
+          },
+        }),
+      )
+      return {
+        items: response.data?.items ?? [],
+        pageToken: response.data?.has_more
+          ? response.data.page_token
+          : undefined,
+      }
+    },
+    async searchMessages(chatId, { startTime, endTime, limit, pageToken }) {
+      const client = await getClient()
+      const response = checked(
+        await client.im.message.list({
+          params: {
+            container_id_type: 'chat',
+            container_id: chatId,
+            sort_type: 'ByCreateTimeDesc',
+            start_time: startTime,
+            end_time: endTime,
+            page_size: Math.min(50, limit),
+            page_token: pageToken,
+          },
+        }),
+      )
+      return {
+        items: response.data?.items ?? [],
+        pageToken: response.data?.has_more
+          ? response.data.page_token
+          : undefined,
+      }
+    },
+    async listMessages(chatId, { before, limit }) {
+      const client = await getClient()
+      const response = checked(
+        await client.im.message.list({
+          params: {
+            container_id_type: 'chat',
+            container_id: chatId,
+            sort_type: 'ByCreateTimeDesc',
+            page_size: Math.min(50, limit),
+            ...(before
+              ? { end_time: String(Math.floor(Number(before) / 1000) + 1) }
+              : {}),
+          },
+        }),
+      )
+      return response.data?.items ?? []
+    },
+  }
+}
+
+export class LarkUploadError extends Error {}
+
+function filePostRejection(error: unknown) {
+  // The SDK rejects non-2xx HTTP responses and leaves the Feishu body on the error.
+  const body = (
+    error as { response?: { data?: { code?: unknown; msg?: unknown } } } | null
+  )?.response?.data
+  if (typeof body?.code !== 'number' || !body.code) throw error
+  return {
+    code: body.code,
+    msg: typeof body.msg === 'string' ? body.msg : undefined,
+    data: undefined,
+  }
+}
+
+function larkFileSender(
+  getClient: () => Promise<LarkSdk.Client>,
+): NonNullable<LarkTransport['sendFile']> {
+  return async (chatId, file, options = {}) => {
+    const client = await getClient()
+    const bytes = Buffer.from(
+      file.bytes.buffer,
+      file.bytes.byteOffset,
+      file.bytes.byteLength,
+    )
+    let content: string
+    try {
+      if (file.kind === 'image') {
+        const uploaded = await client.im.image.create({
+          data: { image_type: 'message', image: bytes },
+        })
+        if (!uploaded?.image_key) throw new Error('Missing image key')
+        content = JSON.stringify({ image_key: uploaded.image_key })
+      } else {
+        const ext = extname(file.name).slice(1).toLowerCase()
+        const file_type =
+          ext === 'pdf' || ext === 'doc' || ext === 'xls' || ext === 'ppt'
+            ? ext
+            : 'stream'
+        const uploaded = await client.im.file.create({
+          data: { file_type, file_name: file.name, file: bytes },
+        })
+        if (!uploaded?.file_key) throw new Error('Missing file key')
+        content = JSON.stringify({ file_key: uploaded.file_key })
+      }
+    } catch (cause) {
+      throw new LarkUploadError(
+        `Lark could not upload ${file.name}. Check its format and the bot's upload permission.`,
+        { cause },
+      )
+    }
+    const data = { msg_type: file.kind, content, uuid: options.uuid }
+    const post = options.replyToId
+      ? client.im.message.reply({
+          path: { message_id: options.replyToId },
+          data: { ...data, reply_in_thread: options.replyInThread },
+        })
+      : client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: { ...data, receive_id: chatId },
+        })
+    const { data: receipt } = checked(await post.catch(filePostRejection))
+    if (!receipt?.message_id || !receipt.create_time)
+      throw new Error('Missing Lark file delivery receipt')
+    return {
+      messageId: receipt.message_id,
+      createTime: receipt.create_time,
+    }
+  }
+}

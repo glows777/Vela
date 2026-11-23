@@ -2,15 +2,18 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { createChannelVela, local } from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
+import { lark } from '../../../packages/vela/src/lark/index.ts'
+import {
+  createChannelVela,
+  local,
+} from '../../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../../packages/vela/src/legacy-channels/testing.ts'
 import {
   createFauxModel,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
+} from '../../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'
 

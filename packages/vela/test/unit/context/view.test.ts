@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import { TokenTracker } from '../../../../core/src/usage/tracker.ts'
 import { renderUsageView } from '../../../src/cli/context-view.ts'
+import { TokenTracker } from '../../../src/driver/usage/tracker.ts'
 
 const usage = {
   inputTokens: 60,

@@ -2,8 +2,15 @@ import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fileSessionStorage, type SessionStorage } from '@glows777/vela-core'
-import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import {
+  fileSessionStorage,
+  type SessionStorage,
+} from '../../packages/vela/src/driver/index.ts'
+import {
+  fauxHang,
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -221,10 +228,9 @@ test('sessions with different ids are stored separately', async () => {
   }
 })
 
-test('dataDir keeps sessions, memory, usage and knowledge base out of the working directory', async () => {
+test('dataDir keeps sessions, memory and usage out of the working directory', async () => {
   const t = createTestVela({
     dataDir: '.vela-data',
-    embedder: true,
     responses: [fauxText('ok')],
   })
   await t.run('hi')
@@ -233,7 +239,6 @@ test('dataDir keeps sessions, memory, usage and knowledge base out of the workin
     'sessions/default/transcript.jsonl',
     'memory/MEMORY.md',
     'usage/requests.jsonl',
-    'rag/knowledge.db',
   ])
     expect(t.exists(path)).toBe(true)
   expect(t.dataDir).toBe(t.path('.vela-data'))

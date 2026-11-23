@@ -1,17 +1,17 @@
 import { afterEach, expect, test } from 'bun:test'
 import { APICallError } from '@ai-sdk/provider'
 import {
+  createRequestSnapshot,
+  estimateRequestTokens,
+} from '../../packages/vela/src/driver/context/request.ts'
+import {
   createFauxModel,
   fauxError,
   fauxHang,
   fauxSummary,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import {
-  createRequestSnapshot,
-  estimateRequestTokens,
-} from '../../packages/core/src/context/request.ts'
+} from '../../packages/vela/src/testing/core/index.ts'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -361,7 +361,7 @@ test('when the provider says the context is too long, Vela compacts once and sen
 })
 
 test('hosted search still recovers an explicitly rejected oversized request', async () => {
-  const { web } = await import('@glows777/vela-core')
+  const { web } = await import('../../packages/vela/src/driver/index.ts')
   const { openai } = await import('@ai-sdk/openai')
   const model = Object.assign(
     createFauxModel({

@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import type { ImageContent } from '@glows777/vela-core'
-import { imageMimeType, isBinaryFile } from '@glows777/vela-core/images'
+import type { ImageContent } from '../driver/index.ts'
+import { imageMimeType, isBinaryFile } from '../shared/images/index.ts'
 
 /** Command-line attachments are added to the first prompt, like pi. Core normalizes images once. */
 export async function readAttachments(paths: string[]): Promise<{

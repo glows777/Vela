@@ -1,6 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -66,7 +69,7 @@ test('history search bounds pages, matches and characters and uses the logical g
   }
   const search = () => fauxToolCall('lark_search_history', query)
   const answer = (
-    req: import('../../packages/core/src/testing/faux.ts').FauxRequest,
+    req: import('../../packages/vela/src/testing/core/faux.ts').FauxRequest,
   ) => fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
   const t = createTestVela({
     responses: [

@@ -1,22 +1,92 @@
-/** Package ownership and entry costs, using real manifests; knip owns declared-dependency checks. */
+/**
+ * Single-package directory boundaries, AI SDK confinement, and lazy heavy-dependency gates.
+ * Uses real manifests; knip owns declared-dependency checks.
+ */
 import { readdir, readFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import ts from 'typescript'
 
-const allowed: Record<string, readonly string[]> = {
-  core: [],
-  channels: ['core'],
-  mcp: ['core'],
-  rag: ['core'],
-  lark: ['core', 'channels'],
-  vela: ['core', 'channels', 'mcp', 'rag', 'lark'],
+/**
+ * One-way layer DAG inside `packages/vela/src/<layer>/`.
+ * Tightened further as S1a–S4 remove transitional layers (`legacy-channels`, old CLI direct calls).
+ */
+const LAYER_ALLOWED: Record<string, readonly string[]> = {
+  shared: [],
+  db: ['shared'],
+  runtime: ['shared', 'db'],
+  providers: ['shared'],
+  driver: ['shared', 'db', 'providers'],
+  mcp: ['shared', 'runtime', 'driver'],
+  lark: ['shared', 'runtime', 'driver', 'legacy-channels'],
+  'legacy-channels': ['shared', 'providers', 'driver'],
+  config: ['shared', 'providers', 'driver', 'mcp', 'legacy-channels', 'cli'],
+  daemon: ['shared', 'db', 'runtime', 'providers', 'driver', 'mcp', 'lark'],
+  cli: [
+    'shared',
+    'daemon',
+    'providers',
+    'driver',
+    'mcp',
+    'lark',
+    'legacy-channels',
+    'config',
+    'testing',
+  ],
+  testing: [
+    'shared',
+    'db',
+    'runtime',
+    'providers',
+    'driver',
+    'legacy-channels',
+  ],
 }
-const heavy = new Set([
-  '@larksuiteoapi/node-sdk',
-  '@modelcontextprotocol/sdk',
-  'sqlite-vec',
-  '@earendil-works/pi-tui',
+
+/** Heavy packages must stay off the eager cold-start graph and confined to their owning layer. */
+const HEAVY_OWNER: Record<string, string> = {
+  '@larksuiteoapi/node-sdk': 'lark',
+  '@modelcontextprotocol/sdk': 'mcp',
+  '@earendil-works/pi-tui': 'cli',
+  '@silvia-odwyer/photon-node': 'shared',
+}
+const HEAVY = new Set(Object.keys(HEAVY_OWNER))
+
+/**
+ * Ratchet allowlist for files outside `src/providers/` (and `src/testing/`) that still import
+ * `'ai'` / `'@ai-sdk/*'` until S1a replaces them with VelaMessage. Shrink-only: S1a empties this set.
+ */
+const AI_SDK_S1A_ALLOWLIST = new Set([
+  'packages/vela/src/cli/main.ts',
+  'packages/vela/src/cli/tui/logs.ts',
+  'packages/vela/src/driver/agent/cache.ts',
+  'packages/vela/src/driver/agent/checkpoint.ts',
+  'packages/vela/src/driver/agent/events.ts',
+  'packages/vela/src/driver/agent/index.ts',
+  'packages/vela/src/driver/agent/overflow.ts',
+  'packages/vela/src/driver/agent/retry.ts',
+  'packages/vela/src/driver/agent/step.ts',
+  'packages/vela/src/driver/context/compressor.ts',
+  'packages/vela/src/driver/context/request.ts',
+  'packages/vela/src/driver/extensions/events.ts',
+  'packages/vela/src/driver/extensions/memory/dream.ts',
+  'packages/vela/src/driver/extensions/provider-hooks.ts',
+  'packages/vela/src/driver/extensions/runner.ts',
+  'packages/vela/src/driver/messages.ts',
+  'packages/vela/src/driver/session/defaults.ts',
+  'packages/vela/src/driver/session/deps.ts',
+  'packages/vela/src/driver/session/export.ts',
+  'packages/vela/src/driver/session/options.ts',
+  'packages/vela/src/driver/session/resources.ts',
+  'packages/vela/src/driver/tools/json-schema.ts',
+  'packages/vela/src/driver/tools/registry.ts',
+  'packages/vela/src/driver/tools/sdk-tools.ts',
+  'packages/vela/src/driver/tools/validation.ts',
+  'packages/vela/src/driver/usage/tracker.ts',
+  'packages/vela/src/driver/vela-session.ts',
+  'packages/vela/src/driver/vela.ts',
+  'packages/vela/src/mcp/tools.ts',
 ])
+
 interface Package {
   name: string
   dir: string
@@ -32,6 +102,7 @@ interface Edge {
 }
 const inside = (file: string, dir: string) =>
   file === dir || file.startsWith(dir + sep)
+
 async function files(dir: string): Promise<string[]> {
   const found: string[] = []
   for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
@@ -41,10 +112,20 @@ async function files(dir: string): Promise<string[]> {
   }
   return found
 }
+
 const packageName = (spec: string) =>
   spec.startsWith('@')
     ? spec.split('/').slice(0, 2).join('/')
     : spec.split('/')[0]!
+
+const isAiSdk = (spec: string) => spec === 'ai' || spec.startsWith('@ai-sdk/')
+
+function layerOf(pkgDir: string, file: string): string | undefined {
+  const rel = relative(join(pkgDir, 'src'), file).replaceAll('\\', '/')
+  if (rel.startsWith('..') || !rel.includes('/')) return undefined
+  return rel.split('/')[0]
+}
+
 function edges(source: ts.SourceFile): Edge[] {
   const out: Edge[] = []
   const literal = (n: ts.Node | undefined) =>
@@ -99,6 +180,7 @@ function edges(source: ts.SourceFile): Edge[] {
   visit(source)
   return out
 }
+
 export async function checkBoundaries(root: string): Promise<string[]> {
   root = resolve(root)
   const errors: string[] = []
@@ -119,6 +201,12 @@ export async function checkBoundaries(root: string): Promise<string[]> {
       manifest,
     })
   }
+  if (packages.length !== 1 || packages[0]!.key !== 'vela') {
+    errors.push(
+      `packages/: expected single published package "vela", found ${packages.map((p) => p.key).join(', ') || '(none)'}`,
+    )
+  }
+
   const publicPaths: Record<string, string[]> = {}
   for (const pkg of packages)
     for (const [subpath, entry] of Object.entries(pkg.exports)) {
@@ -170,6 +258,7 @@ export async function checkBoundaries(root: string): Promise<string[]> {
         )
     }
   }
+
   const byName = new Map(packages.map((p) => [p.name, p]))
   const sourceMap = new Map<
     string,
@@ -182,31 +271,11 @@ export async function checkBoundaries(root: string): Promise<string[]> {
           ?.source.getLineAndCharacterOfPosition(node.getStart()).line
       : undefined
     errors.push(
-      `${relative(root, file)}${at === undefined ? '' : ':' + (at + 1)}: ${message}`,
+      `${relative(root, file).replaceAll('\\', '/')}${at === undefined ? '' : ':' + (at + 1)}: ${message}`,
     )
   }
+
   for (const pkg of packages) {
-    for (const field of [
-      'dependencies',
-      'peerDependencies',
-      'optionalDependencies',
-    ]) {
-      for (const name of Object.keys((pkg.manifest[field] ?? {}) as object)) {
-        const target = byName.get(name)
-        if (target && !(allowed[pkg.key] ?? []).includes(target.key))
-          report(
-            join(pkg.dir, 'package.json'),
-            undefined,
-            `package direction ${pkg.key} -> ${target.key}`,
-          )
-        if ((pkg.key === 'core' || pkg.key === 'channels') && heavy.has(name))
-          report(
-            join(pkg.dir, 'package.json'),
-            undefined,
-            `heavy dependency ${name} in lightweight ${pkg.key}`,
-          )
-      }
-    }
     for (const [subpath, conditions] of Object.entries(pkg.exports)) {
       if (subpath.includes('*'))
         report(
@@ -236,6 +305,7 @@ export async function checkBoundaries(root: string): Promise<string[]> {
       sourceMap.set(file, { pkg, source, edges: edges(source) })
     }
   }
+
   const sourceTarget = (pkg: Package, subpath: string) => {
     const entry = pkg.exports[subpath]
     const target = entry?.import ?? entry?.types
@@ -249,28 +319,28 @@ export async function checkBoundaries(root: string): Promise<string[]> {
         )
       : undefined
   }
-  const targets = new Map<string, string[]>()
+
+  const eagerTargets = new Map<string, string[]>()
+  const seenAiAllowlist = new Set<string>()
+
   for (const [file, record] of sourceMap) {
     const { pkg, edges: imports } = record
-    const localTargets: string[] = []
-    const builtin =
-      /[\\/]extensions[\\/](memory|web)[\\/]/.test(file) && pkg.key === 'core'
+    const localRel = relative(root, file).replaceAll('\\', '/')
+    const srcLayer = layerOf(pkg.dir, file)
+    const eager: string[] = []
+    const builtin = /[\\/]driver[\\/]extensions[\\/](memory|web)[\\/]/.test(
+      file,
+    )
     const builtinDir = builtin
       ? file.slice(0, file.indexOf(`${sep}extensions${sep}`)) +
         `${sep}extensions${sep}` +
         file.split(`${sep}extensions${sep}`)[1]!.split(sep)[0]
       : ''
+
     for (const edge of imports) {
       const { spec } = edge
       if (spec === '<nonliteral>') {
-        // Existing user-extension loading and the Node/Bun SQLite adapter are intentional nonliteral loaders.
-        const local = relative(root, file).replaceAll('\\', '/')
-        if (
-          ![
-            'packages/core/src/config/extensions.ts',
-            'packages/rag/src/sqlite.ts',
-          ].includes(local)
-        )
+        if (localRel !== 'packages/vela/src/driver/config/extensions.ts')
           report(file, edge.at, 'unreviewed nonliteral module loader')
         continue
       }
@@ -292,38 +362,70 @@ export async function checkBoundaries(root: string): Promise<string[]> {
           destination = sourceTarget(target, subpath)
           if (!destination)
             report(file, edge.at, `private or missing export ${spec}`)
-          if (
-            target !== pkg &&
-            !['dependencies', 'peerDependencies', 'optionalDependencies'].some(
-              (field) => name in ((pkg.manifest[field] ?? {}) as object),
-            )
-          )
-            report(file, edge.at, `undeclared runtime dependency ${name}`)
-          if (target !== pkg && !(allowed[pkg.key] ?? []).includes(target.key))
+        }
+        // Gate 2: AI SDK confinement to src/providers/ (+ src/testing/ + shrink-only S1a allowlist)
+        if (isAiSdk(spec)) {
+          if (srcLayer === 'providers' || srcLayer === 'testing') {
+            // allowed
+          } else if (AI_SDK_S1A_ALLOWLIST.has(localRel)) {
+            seenAiAllowlist.add(localRel)
+          } else {
             report(
               file,
               edge.at,
-              `package direction ${pkg.key} -> ${target.key}`,
+              `AI SDK import "${spec}" is confined to src/providers/`,
+            )
+          }
+        }
+        // Gate 3a: Heavy dependency layer ownership & Photon lazy rule
+        if (HEAVY.has(name)) {
+          const owner = HEAVY_OWNER[name]
+          if (srcLayer !== owner && srcLayer !== 'testing')
+            report(
+              file,
+              edge.at,
+              `heavy dependency ${name} is confined to src/${owner}/`,
+            )
+          if (
+            name === '@silvia-odwyer/photon-node' &&
+            !edge.lazy &&
+            !edge.typeOnly
+          )
+            report(file, edge.at, 'Photon must remain lazy')
+        }
+      }
+
+      // Gate 1: One-way layer DAG inside packages/vela/src/
+      if (destination && sourceMap.has(destination)) {
+        const dstLayer = layerOf(pkg.dir, destination)
+        if (
+          srcLayer &&
+          dstLayer &&
+          srcLayer !== dstLayer &&
+          srcLayer in LAYER_ALLOWED
+        ) {
+          const allowed = LAYER_ALLOWED[srcLayer]!
+          if (!allowed.includes(dstLayer))
+            report(
+              file,
+              edge.at,
+              `layer direction ${srcLayer} -> ${dstLayer} is forbidden (${spec})`,
             )
         }
-        if ((pkg.key === 'core' || pkg.key === 'channels') && heavy.has(name))
-          report(file, edge.at, `heavy entry edge ${spec}`)
-        if (
-          name === '@silvia-odwyer/photon-node' &&
-          !edge.lazy &&
-          !edge.typeOnly
-        )
-          report(file, edge.at, 'Photon must remain lazy')
+        if (!edge.lazy && !edge.typeOnly) eager.push(destination)
       }
+
       if (builtin) {
         const publicAPI = resolve(pkg.dir, 'src/extension-api.ts')
+        const driverAPI = resolve(pkg.dir, 'src/driver/extension-api.ts')
         const local =
           destination &&
           (inside(destination, builtinDir) ||
             destination === publicAPI ||
-            (file === resolve(pkg.dir, 'src/extensions/memory/dream.ts') &&
-              destination === resolve(pkg.dir, 'src/usage/tracker.ts')))
-        // External dependencies are checked by knip. Dream alone has the internal usage path; no public API is added.
+            destination === driverAPI ||
+            (file ===
+              resolve(pkg.dir, 'src/driver/extensions/memory/dream.ts') &&
+              destination === resolve(pkg.dir, 'src/driver/usage/tracker.ts')))
         if (destination && !local)
           report(
             file,
@@ -331,93 +433,105 @@ export async function checkBoundaries(root: string): Promise<string[]> {
             `light builtin must use its own files or extension-api: ${spec}`,
           )
       }
-      if (destination && sourceMap.has(destination))
-        localTargets.push(destination)
     }
-    targets.set(file, localTargets)
+    eagerTargets.set(file, eager)
   }
-  // Follow each public core/channels entry across package exports, including type and lazy edges.
-  for (const pkg of packages.filter(
-    (p) => p.key === 'core' || p.key === 'channels',
-  )) {
-    for (const subpath of Object.keys(pkg.exports)) {
-      const entry = sourceTarget(pkg, subpath)
+
+  // Gate 3b: Cold-start graph check — no eager runtime edge to any heavy package from `.`, `./extension-api`, or `cli/main.ts`
+  const vela = byName.get('@glows777/vela')
+  if (vela) {
+    const coldEntries: [string, string | undefined][] = [
+      ['@glows777/vela', sourceTarget(vela, '.')],
+      ['@glows777/vela/extension-api', sourceTarget(vela, './extension-api')],
+      ['cli/main.ts', resolve(vela.dir, 'src/cli/main.ts')],
+    ]
+    for (const [label, entry] of coldEntries) {
+      if (!entry || !sourceMap.has(entry)) continue
       const visited = new Set<string>()
       const visit = (file: string) => {
         if (visited.has(file)) return
         visited.add(file)
         const record = sourceMap.get(file)
         if (!record) return
-        for (const edge of record.edges)
-          if (heavy.has(packageName(edge.spec)))
+        for (const edge of record.edges) {
+          if (edge.lazy || edge.typeOnly) continue
+          const name = packageName(edge.spec)
+          if (HEAVY.has(name))
             report(
               file,
               edge.at,
-              `heavy dependency reachable from ${pkg.name}${subpath === '.' ? '' : subpath.slice(1)}`,
+              `heavy dependency ${name} eagerly reachable from ${label}`,
             )
-        for (const target of targets.get(file) ?? []) visit(target)
+        }
+        for (const next of eagerTargets.get(file) ?? []) visit(next)
       }
-      if (entry) visit(entry)
+      visit(entry)
     }
   }
+
   // Resolve symbols only for the virtual light-built-in boundary; own implementation members are allowed.
-  const program = ts.createProgram([...sourceMap.keys()], {
-    target: ts.ScriptTarget.ESNext,
-    module: ts.ModuleKind.Preserve,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    allowImportingTsExtensions: true,
-    skipLibCheck: true,
-    baseUrl: root,
-    paths: publicPaths,
-  })
-  const checker = program.getTypeChecker()
-  for (const [file, record] of sourceMap) {
-    if (
-      record.pkg.key !== 'core' ||
-      !/[\\/]extensions[\\/](memory|web)[\\/]/.test(file)
-    )
-      continue
-    const source = program.getSourceFile(file)
-    if (!source) continue
-    const visit = (node: ts.Node) => {
-      if (
-        ts.isPropertyAccessExpression(node) ||
-        ts.isElementAccessExpression(node)
-      ) {
-        const member = ts.isPropertyAccessExpression(node)
-          ? node.name.text
-          : node.argumentExpression &&
-              ts.isStringLiteralLike(node.argumentExpression)
-            ? node.argumentExpression.text
-            : undefined
-        const symbol = member
-          ? checker.getPropertyOfType(
-              checker.getTypeAtLocation(node.expression),
-              member,
-            )
-          : undefined
+  const builtinFiles = [...sourceMap.keys()].filter((file) =>
+    /[\\/]driver[\\/]extensions[\\/](memory|web)[\\/]/.test(file),
+  )
+  if (builtinFiles.length) {
+    const program = ts.createProgram([...sourceMap.keys()], {
+      target: ts.ScriptTarget.ESNext,
+      module: ts.ModuleKind.Preserve,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      allowImportingTsExtensions: true,
+      skipLibCheck: true,
+      baseUrl: root,
+      paths: publicPaths,
+    })
+    const checker = program.getTypeChecker()
+    for (const file of builtinFiles) {
+      const record = sourceMap.get(file)!
+      const source = program.getSourceFile(file)
+      if (!source) continue
+      const visit = (node: ts.Node) => {
         if (
-          !(
-            file ===
-              resolve(record.pkg.dir, 'src/extensions/memory/dream.ts') &&
-            member === 'tracker'
-          ) &&
-          symbol?.declarations?.some((d) =>
-            ts.getJSDocTags(d).some((t) => t.tagName.text === 'internal'),
+          ts.isPropertyAccessExpression(node) ||
+          ts.isElementAccessExpression(node)
+        ) {
+          const member = ts.isPropertyAccessExpression(node)
+            ? node.name.text
+            : node.argumentExpression &&
+                ts.isStringLiteralLike(node.argumentExpression)
+              ? node.argumentExpression.text
+              : undefined
+          const symbol = member
+            ? checker.getPropertyOfType(
+                checker.getTypeAtLocation(node.expression),
+                member,
+              )
+            : undefined
+          if (
+            !(
+              file ===
+                resolve(
+                  record.pkg.dir,
+                  'src/driver/extensions/memory/dream.ts',
+                ) && member === 'tracker'
+            ) &&
+            symbol?.declarations?.some((d) =>
+              ts.getJSDocTags(d).some((t) => t.tagName.text === 'internal'),
+            )
           )
-        )
-          report(
-            file,
-            undefined,
-            `light builtin accesses internal member ${member}`,
-          )
+            report(
+              file,
+              undefined,
+              `light builtin accesses internal member ${member}`,
+            )
+        }
+        ts.forEachChild(node, visit)
       }
-      ts.forEachChild(node, visit)
+      visit(source)
     }
-    visit(source)
   }
+
   return [...new Set(errors)].sort()
 }
+
 if (import.meta.main) {
   const failures = await checkBoundaries(resolve(import.meta.dir, '..'))
   if (failures.length) {

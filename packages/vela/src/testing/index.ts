@@ -6,7 +6,6 @@
  */
 
 export {
-  createFauxEmbedder,
   createFauxModel,
   type FauxModel,
   type FauxModelOptions,
@@ -27,7 +26,7 @@ export {
   type RecordOptions,
   readFauxScenario,
   recordModel,
-} from '@glows777/vela-core/testing'
+} from './core/index.ts'
 export { type ReplayResult, replayScenario } from './replay.ts'
 export {
   cleanupTestVelas,

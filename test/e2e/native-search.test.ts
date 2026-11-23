@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-import type { ExtensionAPI } from '@glows777/vela-core'
-import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
+import type { ExtensionAPI } from '../../packages/vela/src/driver/index.ts'
+import {
+  createFauxModel,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -54,7 +57,9 @@ test('a provider-executed search completes in one turn and retains its answer', 
 
 // Real SDK serialization with a fake transport: no provider request leaves the test.
 test('supported OpenAI Responses requests expose hosted search without independent keys', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { responsesReply } = await import('../support/responses.ts')
   const { tempDir } = await import('../support/vela.ts')
   const dir = tempDir('vela-native-search-')
@@ -92,7 +97,9 @@ test('supported OpenAI Responses requests expose hosted search without independe
 })
 
 test('GPT-5 minimal reasoning keeps independent search; higher reasoning uses hosted search', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { responsesReply } = await import('../support/responses.ts')
   const { tempDir } = await import('../support/vela.ts')
   const dir = tempDir('vela-gpt5-minimal-')
@@ -133,7 +140,9 @@ test('GPT-5 minimal reasoning keeps independent search; higher reasoning uses ho
 })
 
 test('Responses model reasoning map to minimal keeps independent search', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { responsesReply } = await import('../support/responses.ts')
   const { tempDir } = await import('../support/vela.ts')
   const { writeFileSync } = await import('node:fs')
@@ -186,7 +195,7 @@ test('Responses model reasoning map to minimal keeps independent search', async 
 })
 
 test('a tool_search-scoped hook does not disable hosted web_search', async () => {
-  const { web } = await import('@glows777/vela-core')
+  const { web } = await import('../../packages/vela/src/driver/index.ts')
   const { openai } = await import('@ai-sdk/openai')
   const model = Object.assign(
     createFauxModel({ responses: [fauxText('OK')] }),
@@ -211,7 +220,7 @@ test('a tool_search-scoped hook does not disable hosted web_search', async () =>
 })
 
 test('a web_search-scoped blocking hook prevents hosted search', async () => {
-  const { web } = await import('@glows777/vela-core')
+  const { web } = await import('../../packages/vela/src/driver/index.ts')
   const { openai } = await import('@ai-sdk/openai')
   const model = Object.assign(
     createFauxModel({ responses: [fauxText('OK')] }),
@@ -238,8 +247,8 @@ test('a web_search-scoped blocking hook prevents hosted search', async () => {
 })
 
 test('default MCP extension does not suppress hosted search', async () => {
-  const { web } = await import('@glows777/vela-core')
-  const { mcp } = await import('@glows777/vela-mcp')
+  const { web } = await import('../../packages/vela/src/driver/index.ts')
+  const { mcp } = await import('../../packages/vela/src/mcp/index.ts')
   const { openai } = await import('@ai-sdk/openai')
   const model = Object.assign(
     createFauxModel({ responses: [fauxText('OK')] }),
@@ -258,7 +267,9 @@ test.each([
 ] as const)(
   'search selection $mode selects only an available path',
   async ({ native }) => {
-    const { loadModels, web } = await import('@glows777/vela-core')
+    const { loadModels, web } = await import(
+      '../../packages/vela/src/driver/index.ts'
+    )
     const { responsesReply } = await import('../support/responses.ts')
     const { tempDir } = await import('../support/vela.ts')
     const dir = tempDir('vela-native-selection-')
@@ -297,7 +308,9 @@ test.each([
 )
 
 test('a hosted search does not prevent a local tool from completing its required next turn', async () => {
-  const { fauxToolCall } = await import('@glows777/vela-core/testing')
+  const { fauxToolCall } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const faux = createFauxModel({
     responses: [
       fauxToolCall('read_file', { path: 'a.txt' }),
@@ -349,7 +362,9 @@ test('a hosted search does not prevent a local tool from completing its required
 })
 
 test('supported Anthropic Messages requests expose hosted search without independent keys', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { tempDir } = await import('../support/vela.ts')
   const dir = tempDir('vela-anthropic-search-')
   const originalFetch = globalThis.fetch
@@ -422,7 +437,9 @@ test('supported Anthropic Messages requests expose hosted search without indepen
 })
 
 test('default Anthropic Opus supports hosted search', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { tempDir } = await import('../support/vela.ts')
   const dir = tempDir('vela-anthropic-search-')
   const originalFetch = globalThis.fetch
@@ -506,7 +523,9 @@ test.each([
 ])(
   'unsupported $label does not expose hosted search',
   async ({ overrides }) => {
-    const { loadModels, web } = await import('@glows777/vela-core')
+    const { loadModels, web } = await import(
+      '../../packages/vela/src/driver/index.ts'
+    )
     const { responsesReply } = await import('../support/responses.ts')
     const { tempDir } = await import('../support/vela.ts')
     const dir = tempDir('vela-native-unsupported-')
@@ -566,7 +585,9 @@ test.each([
 ])(
   '$label does not expose an unapproved hosted search',
   async ({ session }) => {
-    const { loadModels, web } = await import('@glows777/vela-core')
+    const { loadModels, web } = await import(
+      '../../packages/vela/src/driver/index.ts'
+    )
     const { responsesReply } = await import('../support/responses.ts')
     const { tempDir } = await import('../support/vela.ts')
     const dir = tempDir('vela-native-unavailable-')
@@ -640,7 +661,9 @@ test('provider search sources remain readable in the saved conversation', async 
 })
 
 test('OpenAI hosted search stream is processed once and its source is retained', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { tempDir } = await import('../support/vela.ts')
   const dir = tempDir('vela-search-stream-')
   const originalFetch = globalThis.fetch
@@ -716,8 +739,10 @@ test('OpenAI hosted search stream is processed once and its source is retained',
 })
 
 test('hosted-only search cannot be executed as a local tool on unsupported models', async () => {
-  const { web } = await import('@glows777/vela-core')
-  const { fauxToolCall } = await import('@glows777/vela-core/testing')
+  const { web } = await import('../../packages/vela/src/driver/index.ts')
+  const { fauxToolCall } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const t = createTestVela({
     extensions: [web()],
     responses: [
@@ -783,7 +808,9 @@ test('switching providers replays hosted search as readable text without provide
 })
 
 test('an interrupted hosted search does not leave an orphan result after switching providers', async () => {
-  const { fauxStreamError } = await import('@glows777/vela-core/testing')
+  const { fauxStreamError } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const first = createFauxModel({
     modelId: 'first',
     responses: [fauxStreamError('ECONNRESET', 'partial')],
@@ -885,7 +912,9 @@ test('a truncated hosted search does not duplicate the server result as a local 
 })
 
 test('an interrupted hosted search resumes safely on the same provider', async () => {
-  const { fauxStreamError } = await import('@glows777/vela-core/testing')
+  const { fauxStreamError } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const model = createFauxModel({
     responses: [
       fauxStreamError('ECONNRESET', 'partial'),
@@ -934,7 +963,9 @@ test('an interrupted hosted search resumes safely on the same provider', async (
 })
 
 test('a disconnected hosted search is not retried after the server starts it', async () => {
-  const { fauxStreamError } = await import('@glows777/vela-core/testing')
+  const { fauxStreamError } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const model = createFauxModel({
     responses: [
       fauxStreamError('ECONNRESET', 'partial'),
@@ -972,9 +1003,11 @@ test('a disconnected hosted search is not retried after the server starts it', a
 })
 
 test('a failed request with hosted search enabled is not automatically resent', async () => {
-  const { web } = await import('@glows777/vela-core')
+  const { web } = await import('../../packages/vela/src/driver/index.ts')
   const { openai } = await import('@ai-sdk/openai')
-  const { fauxError } = await import('@glows777/vela-core/testing')
+  const { fauxError } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const model = createFauxModel({
     responses: [
       fauxError('429 Too Many Requests'),
@@ -1036,7 +1069,7 @@ test('a provider pause resumes the hosted search rather than reporting an empty 
 })
 
 test('a provider hosted-tool declaration keeps its model receiver', async () => {
-  const { web } = await import('@glows777/vela-core')
+  const { web } = await import('../../packages/vela/src/driver/index.ts')
   const { openai } = await import('@ai-sdk/openai')
   const model = Object.assign(
     createFauxModel({ responses: [fauxText('OK')] }),
@@ -1118,7 +1151,9 @@ test('a hosted search result arriving after provider pause remains portable acro
 })
 
 test('custom Responses provider opts in to hosted search and stateless requests', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { responsesReply } = await import('../support/responses.ts')
   const { tempDir } = await import('../support/vela.ts')
   const { writeFileSync } = await import('node:fs')
@@ -1174,7 +1209,9 @@ test('custom Responses provider opts in to hosted search and stateless requests'
 })
 
 test('a model-level empty hostedTools list disables provider opt-in', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { responsesReply } = await import('../support/responses.ts')
   const { tempDir } = await import('../support/vela.ts')
   const { writeFileSync } = await import('node:fs')
@@ -1220,7 +1257,9 @@ test('a model-level empty hostedTools list disables provider opt-in', async () =
 })
 
 test('custom Anthropic Messages provider sends opt-in hosted search and configured bearer header', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { tempDir } = await import('../support/vela.ts')
   const { writeFileSync } = await import('node:fs')
   const { join } = await import('node:path')
@@ -1323,7 +1362,9 @@ test('custom Anthropic Messages provider sends opt-in hosted search and configur
 })
 
 test('hosted-search opt-in rejects a Chat Completions provider', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { tempDir } = await import('../support/vela.ts')
   const { writeFileSync } = await import('node:fs')
   const { join } = await import('node:path')
@@ -1357,7 +1398,7 @@ test('hosted-search opt-in rejects a Chat Completions provider', async () => {
 })
 
 test('malformed hosted-tools configuration is rejected instead of enabling search', async () => {
-  const { loadModels } = await import('@glows777/vela-core')
+  const { loadModels } = await import('../../packages/vela/src/driver/index.ts')
   const { tempDir } = await import('../support/vela.ts')
   const { writeFileSync } = await import('node:fs')
   const { join } = await import('node:path')
@@ -1383,7 +1424,9 @@ test('malformed hosted-tools configuration is rejected instead of enabling searc
 })
 
 test('model-level hosted search opt-in works when its provider has none', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { responsesReply } = await import('../support/responses.ts')
   const { tempDir } = await import('../support/vela.ts')
   const { writeFileSync } = await import('node:fs')
@@ -1426,7 +1469,9 @@ test('model-level hosted search opt-in works when its provider has none', async 
 })
 
 test('SDK ambient base URL variables do not override Vela model configuration', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
+  const { loadModels, web } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { responsesReply } = await import('../support/responses.ts')
   const { tempDir } = await import('../support/vela.ts')
   const dir = tempDir('vela-ambient-gateway-')

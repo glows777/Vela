@@ -1,5 +1,5 @@
-import type { VelaSession } from '@glows777/vela-core'
-import { inspectSession } from '@glows777/vela-core/diagnostics'
+import { inspectSession } from '../../driver/diagnostics.ts'
+import type { VelaSession } from '../../driver/index.ts'
 import {
   buildContextSnapshot,
   renderContextView,

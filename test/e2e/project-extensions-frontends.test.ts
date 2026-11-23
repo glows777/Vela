@@ -3,10 +3,10 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
-import { local } from '@glows777/vela-channels'
-import { loadConfig } from '@glows777/vela-core'
 import { extensionCommands } from '../../packages/vela/src/cli/commands/extensions.ts'
 import { runRpcMode } from '../../packages/vela/src/cli/rpc-mode.ts'
+import { loadConfig } from '../../packages/vela/src/driver/index.ts'
+import { local } from '../../packages/vela/src/legacy-channels/index.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 
 function setup() {

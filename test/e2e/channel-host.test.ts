@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { connect } from 'node:net'
+import { lark } from '../../packages/vela/src/lark/index.ts'
 import {
   type ChannelDefinition,
   type ChannelRuntime,
@@ -8,10 +9,13 @@ import {
   type ChannelStatusLine,
   channelSessionId,
   local,
-} from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
+import {
+  fauxHang,
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { localStore } from '../support/compat-vela.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import {

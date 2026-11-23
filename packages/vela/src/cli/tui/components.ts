@@ -11,12 +11,12 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
+import { isToolContent } from '../../driver/diagnostics.ts'
 import {
   agentErrorHint,
   type ModelMessage,
   type VelaEvent,
-} from '@glows777/vela-core'
-import { isToolContent } from '@glows777/vela-core/diagnostics'
+} from '../../driver/index.ts'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'

@@ -29,20 +29,15 @@ All [SDK examples](../examples/sdk/) run offline with the faux model from `@glow
 
 ## Packages
 
-The examples on this page import from `@glows777/vela`, which bundles everything. The six packages share one version. Choose the smallest consumer dependency:
+Vela publishes a single npm package, `@glows777/vela`, with explicit export-map entries:
 
-| Package | Public entries and ownership |
+| Entry | Public contract |
 |---|---|
-| `@glows777/vela-core` | Root SDK (including images, memory and web), `/testing`, `/extension-api`, `/images`, experimental `/diagnostics`; no channels or optional heavy integration |
-| `@glows777/vela-channels` | Root standard interfaces and `createChannelVela`, `/testing` drain helper; depends on core |
-| `@glows777/vela-lark` | Root Lark transport/factory/config exports; depends on core and channels. Canonical `lark` factory/types/config |
-| `@glows777/vela-mcp` | Root MCP factory/config exports; depends on core |
-| `@glows777/vela-rag` | Root RAG factory; depends on core |
-| `@glows777/vela` | Compatibility SDK, built-in composition and CLI/TUI; depends on all five |
+| `@glows777/vela` | Root SDK (`createVela`, built-in extensions, Lark and Local channel adapters) and CLI/TUI (`vela`) |
+| `@glows777/vela/extension-api` | Extension authoring types and hook helpers |
+| `@glows777/vela/testing` | Offline faux model, test harness (`createTestVela`), and scenario recording/replay |
 
-For a core-only app, import `createVela` from `@glows777/vela-core` and its faux helpers from `@glows777/vela-core/testing`. For custom channel composition, use `createChannelVela` from `@glows777/vela-channels` and install only the adapters you need. Each extension owns its config descriptor; supply descriptors through core `loadConfig({ extensionConfigs })` when composing configuration yourself. The umbrella continues to supply built-in defaults and descriptors.
-
-Only listed export-map entries are supported. Private `src/` or `dist/` paths are not package APIs. Core normalizes images with Photon lazily when an image is used; core and channels exclude the Lark SDK, MCP SDK, sqlite-vec and pi-tui. For production artifacts use `bun run build`; development maps exactly the 12 public entries to source; package builds clear the mapping and packed consumers resolve the real artifacts.
+Only listed export-map entries are supported. Private `src/` or `dist/` paths are not package APIs. Heavy optional integrations (`@larksuiteoapi/node-sdk`, `@modelcontextprotocol/sdk`, `@earendil-works/pi-tui`, `@silvia-odwyer/photon-node`) are loaded lazily on demand and stay off the cold-start import graph. For production artifacts use `bun run build`; development maps the declared export entries to source, while package builds clear the mapping so packed consumers resolve the real artifacts.
 
 ## createVela options
 

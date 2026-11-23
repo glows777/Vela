@@ -2,11 +2,14 @@ import { afterEach, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
-import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
-import type { ImageContent, ModelMessage } from '@glows777/vela-core'
-import { ToolExecutionResult } from '@glows777/vela-core'
 import { simulateStreamingMiddleware, wrapLanguageModel } from 'ai'
 import { z } from 'zod'
+import type {
+  ImageContent,
+  ModelMessage,
+} from '../../packages/vela/src/driver/index.ts'
+import { ToolExecutionResult } from '../../packages/vela/src/driver/index.ts'
+import type { ChannelExtension as VelaExtension } from '../../packages/vela/src/legacy-channels/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

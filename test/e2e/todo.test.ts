@@ -1,8 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
-import { todo } from '@glows777/vela-core'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { latestTodoList } from '../../packages/core/src/extensions/todo/list.ts'
-import type { TodoList } from '../../packages/core/src/extensions/todo/tool.ts'
+import { latestTodoList } from '../../packages/vela/src/driver/extensions/todo/list.ts'
+import type { TodoList } from '../../packages/vela/src/driver/extensions/todo/tool.ts'
+import { todo } from '../../packages/vela/src/driver/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

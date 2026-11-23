@@ -1,9 +1,9 @@
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
-import { fauxText } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
 import { runServe } from '../../../packages/vela/src/cli/serve.ts'
+import { lark } from '../../../packages/vela/src/lark/index.ts'
+import { fauxText } from '../../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../../support/lark.ts'
 
 const cwd = process.argv[2]!

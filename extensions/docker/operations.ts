@@ -6,12 +6,12 @@ import type {
   FileError,
   Result,
   ShellExecOptions,
-} from '@glows777/vela-core'
-import type { readEnvironmentInventory } from '../../packages/core/src/session/environment-inventory.ts'
+} from '../../packages/vela/src/driver/index.ts'
+import type { readEnvironmentInventory } from '../../packages/vela/src/driver/session/environment-inventory.ts'
 import {
   type InventoryEnv,
   workspaceDiscovery,
-} from '../../packages/core/src/session/workspace-discovery.ts'
+} from '../../packages/vela/src/driver/session/workspace-discovery.ts'
 
 type Failure = FileError | ExecutionError
 function failure<C extends Failure['code']>(code: C, message: string) {

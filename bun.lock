@@ -11,11 +11,6 @@
         "@biomejs/biome": "2.5.8",
         "@earendil-works/pi-tui": "^1.0.4",
         "@glows777/vela": "workspace:*",
-        "@glows777/vela-channels": "workspace:*",
-        "@glows777/vela-core": "workspace:*",
-        "@glows777/vela-lark": "workspace:*",
-        "@glows777/vela-mcp": "workspace:*",
-        "@glows777/vela-rag": "workspace:*",
         "@larksuiteoapi/node-sdk": "^1.73.3",
         "@modelcontextprotocol/sdk": "^1.32.1",
         "@silvia-odwyer/photon-node": "^0.3.4",
@@ -56,60 +51,6 @@
         "vite": "8.3.8",
       },
     },
-    "packages/channels": {
-      "name": "@glows777/vela-channels",
-      "version": "0.8.0",
-      "dependencies": {
-        "@glows777/vela-core": "workspace:*",
-        "zod": "^4.4.3",
-      },
-    },
-    "packages/core": {
-      "name": "@glows777/vela-core",
-      "version": "0.8.0",
-      "dependencies": {
-        "@ai-sdk/anthropic": "^4.0.102",
-        "@ai-sdk/openai": "^4.0.115",
-        "@ai-sdk/provider": "^4.0.37",
-        "@cfworker/json-schema": "^4.1.1",
-        "@silvia-odwyer/photon-node": "^0.3.4",
-        "ai": "^7.0.170",
-        "diff": "8.0.4",
-        "turndown": "^7.2.4",
-        "yaml": "^2.9.1",
-        "zod": "^4.4.3",
-      },
-    },
-    "packages/lark": {
-      "name": "@glows777/vela-lark",
-      "version": "0.8.0",
-      "dependencies": {
-        "@glows777/vela-channels": "workspace:*",
-        "@glows777/vela-core": "workspace:*",
-        "@larksuiteoapi/node-sdk": "^1.73.3",
-        "zod": "^4.4.3",
-      },
-    },
-    "packages/mcp": {
-      "name": "@glows777/vela-mcp",
-      "version": "0.8.0",
-      "dependencies": {
-        "@glows777/vela-core": "workspace:*",
-        "@modelcontextprotocol/sdk": "^1.32.1",
-        "ai": "^7.0.170",
-      },
-    },
-    "packages/rag": {
-      "name": "@glows777/vela-rag",
-      "version": "0.8.0",
-      "dependencies": {
-        "@ai-sdk/openai": "^4.0.115",
-        "@glows777/vela-core": "workspace:*",
-        "ai": "^7.0.170",
-        "sqlite-vec": "^0.1.9",
-        "zod": "^4.4.3",
-      },
-    },
     "packages/vela": {
       "name": "@glows777/vela",
       "version": "0.8.0",
@@ -117,14 +58,19 @@
         "vela": "dist/cli/main.js",
       },
       "dependencies": {
+        "@ai-sdk/anthropic": "^4.0.102",
+        "@ai-sdk/openai": "^4.0.115",
+        "@ai-sdk/provider": "^4.0.37",
+        "@cfworker/json-schema": "^4.1.1",
         "@earendil-works/pi-tui": "^1.0.4",
-        "@glows777/vela-channels": "workspace:*",
-        "@glows777/vela-core": "workspace:*",
-        "@glows777/vela-lark": "workspace:*",
-        "@glows777/vela-mcp": "workspace:*",
-        "@glows777/vela-rag": "workspace:*",
+        "@larksuiteoapi/node-sdk": "^1.73.3",
+        "@modelcontextprotocol/sdk": "^1.32.1",
+        "@silvia-odwyer/photon-node": "^0.3.4",
         "ai": "^7.0.170",
         "diff": "8.0.4",
+        "turndown": "^7.2.4",
+        "yaml": "^2.9.1",
+        "zod": "^4.4.3",
       },
     },
   },
@@ -223,16 +169,6 @@
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA=="],
 
     "@glows777/vela": ["@glows777/vela@workspace:packages/vela"],
-
-    "@glows777/vela-channels": ["@glows777/vela-channels@workspace:packages/channels"],
-
-    "@glows777/vela-core": ["@glows777/vela-core@workspace:packages/core"],
-
-    "@glows777/vela-lark": ["@glows777/vela-lark@workspace:packages/lark"],
-
-    "@glows777/vela-mcp": ["@glows777/vela-mcp@workspace:packages/mcp"],
-
-    "@glows777/vela-rag": ["@glows777/vela-rag@workspace:packages/rag"],
 
     "@hono/node-server": ["@hono/node-server@2.1.6", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ=="],
 
@@ -1213,18 +1149,6 @@
     "source-map-js": ["source-map-js@1.2.2", "", {}, "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw=="],
 
     "space-separated-tokens": ["space-separated-tokens@2.0.2", "", {}, "sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q=="],
-
-    "sqlite-vec": ["sqlite-vec@0.1.9", "", { "optionalDependencies": { "sqlite-vec-darwin-arm64": "0.1.9", "sqlite-vec-darwin-x64": "0.1.9", "sqlite-vec-linux-arm64": "0.1.9", "sqlite-vec-linux-x64": "0.1.9", "sqlite-vec-windows-x64": "0.1.9" } }, "sha512-L7XJWRIBNvR9O5+vh1FQ+IGkh/3D2AzVksW5gdtk28m78Hy8skFD0pqReKH1Yp0/BUKRGcffgKvyO/EON5JXpA=="],
-
-    "sqlite-vec-darwin-arm64": ["sqlite-vec-darwin-arm64@0.1.9", "", { "os": "darwin", "cpu": "arm64" }, "sha512-jSsZpE42OfBkGL/ItyJTVCUwl6o6Ka3U5rc4j+UBDIQzC1ulSSKMEhQLthsOnF/MdAf1MuAkYhkdKmmcjaIZQg=="],
-
-    "sqlite-vec-darwin-x64": ["sqlite-vec-darwin-x64@0.1.9", "", { "os": "darwin", "cpu": "x64" }, "sha512-KDlVyqQT7pnOhU1ymB9gs7dMbSoVmKHitT+k1/xkjarcX8bBqPxWrGlK/R+C5WmWkfvWwyq5FfXfiBYCBs6PlA=="],
-
-    "sqlite-vec-linux-arm64": ["sqlite-vec-linux-arm64@0.1.9", "", { "os": "linux", "cpu": "arm64" }, "sha512-5wXVJ9c9kR4CHm/wVqXb/R+XUHTdpZ4nWbPHlS+gc9qQFVHs92Km4bPnCKX4rtcPMzvNis+SIzMJR1SCEwpuUw=="],
-
-    "sqlite-vec-linux-x64": ["sqlite-vec-linux-x64@0.1.9", "", { "os": "linux", "cpu": "x64" }, "sha512-w3tCH8xK2finW8fQJ/m8uqKodXUZ9KAuAar2UIhz4BHILfpE0WM/MTGCRfa7RjYbrYim5Luk3guvMOGI7T7JQA=="],
-
-    "sqlite-vec-windows-x64": ["sqlite-vec-windows-x64@0.1.9", "", { "os": "win32", "cpu": "x64" }, "sha512-y3gEIyy/17bq2QFPQOWLE68TYWcRZkBQVA2XLrTPHNTOp55xJi/BBBmOm40tVMDMjtP+Elpk6UBUXdaq+46b0Q=="],
 
     "stack-utils": ["stack-utils@2.0.6", "", { "dependencies": { "escape-string-regexp": "^2.0.0" } }, "sha512-XlkWvfIm6RmsWtNJx+uqtKLS8eqFbxUg0ZzLXqY0caEy9l7hruX8IpiDnjsLavoBgqCCR71TqWO8MaXYheJ3RQ=="],
 

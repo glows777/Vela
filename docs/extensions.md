@@ -45,7 +45,7 @@ Project registrations are isolated, not arbitrary JavaScript execution: A and B 
 
 The CLI composes two sources:
 
-- **Host:** the Lark listener, storage-owning `memory` and `rag`, user-discovered extensions, user-listed extensions, and explicit `-e` extensions. Configure `memory` and `rag` in the user settings: they share the host data directory and survive the close of an individual project session. Explicit SDK factories are host-owned too.
+- **Host:** the Lark listener, storage-owning `memory`, user-discovered extensions, user-listed extensions, and explicit `-e` extensions. Configure `memory` in the user settings: it shares the host data directory and survives the close of an individual project session. Explicit SDK factories are host-owned too.
 - **Selected project:** configuration-driven `background`, `todo`, `web` and local `mcp` built-ins, followed by the trusted session project's discovered and listed files. Built-ins come first within their scope. A denied project contributes no project code or settings; user configuration still applies.
 
 Handlers run in stable **host → matching project → core** order. Core audit handlers remain last. Compared with the old flat startup list, user-listed host extensions now precede project-discovered extensions. Opening B does not dispatch A's project handlers for B or change A's registrations.
@@ -97,7 +97,7 @@ On Bun any TypeScript works. On Node (>= 22.18) the CLI imports the file and Nod
 - For an ES-module `.ts` extension, set `"type": "module"` in its nearest parent `package.json` (for example, `~/.vela/extensions/package.json`). This avoids Node's `MODULE_TYPELESS_PACKAGE_JSON` warning when that package has no `type` field. See [Node's module-system rules](https://nodejs.org/docs/latest-v22.x/api/typescript.html#determining-module-system).
 - Only erasable syntax works. `enum`, `namespace` with values, constructor parameter properties (`constructor(private x: T)`) and other syntax that generates code fail with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. Use plain objects, union types and explicit fields.
 - Node does not strip types in files under `node_modules`. Ship compiled `.js` in a package.
-- Imports must resolve from the extension's own location. Import Vela's types with `import type { ... } from '@glows777/vela'`; the import is erased and works anywhere. An extension published as its own package can depend on `@glows777/vela-core` alone and import the same types from `@glows777/vela-core/extension-api`. A value import (`import { createVela } from '@glows777/vela'`) or a third-party import such as `zod` needs that package installed where the extension can resolve it, for example a `package.json` and `node_modules` next to the extension. This applies on Bun too.
+- Imports must resolve from the extension's own location. Import Vela's types with `import type { ... } from '@glows777/vela'` or `@glows777/vela/extension-api`; the import is erased and works anywhere. A value import (`import { createVela } from '@glows777/vela'`) or a third-party import such as `zod` needs that package installed where the extension can resolve it, for example a `package.json` and `node_modules` next to the extension. This applies on Bun too.
 
 ## The extension API
 

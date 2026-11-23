@@ -60,7 +60,7 @@ Local reports connected after its store and optional listener are ready. `local(
 
 ### Lark groups and visible history
 
-The umbrella SDK (`@glows777/vela`) returns a typed `LarkHost` from `createVela().channel('lark')`. `@glows777/vela-lark` owns `LarkHost`, `LarkVisibleMessage` and `LarkHostEvent`. Both Local and Lark attach their scoped host operations through the optional `ChannelDefinition.host(base)` decorator. `createChannelVela()` keeps its platform-neutral Lark accessor.
+The SDK (`@glows777/vela`) returns a typed `LarkHost` from `createVela().channel('lark')`. Both Local and Lark attach their scoped host operations through the optional `ChannelDefinition.host(base)` decorator.
 
 ```ts
 const vela = createVela({ extensions: [lark(options)] })
@@ -94,7 +94,7 @@ off()
 
 An assistant message with `file: { name, size }` identifies a snapshot of the file at send time. Use `await host.readAttachment({ projectId, sessionId, messageId: message.id })` for its bytes. The owning Local history and its message events expose the same metadata. SDK pickup survives workspace edits, deletion and host restart.
 
-`vela.channel('local')` returns a typed `LocalHost`, extending `ChannelHost` without another factory, store or runtime. The literal overload is available through both `@glows777/vela-channels` and `@glows777/vela`.
+`vela.channel('local')` returns a typed `LocalHost`, extending `ChannelHost` without another factory, store or runtime.
 
 ```ts
 const vela = createChannelVela({ extensions: [local({ timezone: 'UTC' })] })
@@ -126,7 +126,7 @@ Project cwd, opaque identities, visible-history boundaries, shared triage/task d
 
 The shared channel contract is exercised by both Lark and the Local HTTP/SSE transport, including admission, task dispatch, run controls and recovery. The documented public interfaces follow the [SDK API stability policy](sdk.md#api-stability); the earlier blanket experimental qualification no longer applies. For the app-facing wire protocol, see [Local](channels.md#local).
 
-Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The channel types and `createChannelVela` come from `@glows777/vela-channels` (also re-exported by `@glows777/vela`); an adapter for another platform depends on it and `@glows777/vela-core`, like `@glows777/vela-lark` does. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway gives every sender the session's full access and a shared transcript.
+Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The channel types come from `@glows777/vela`. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway gives every sender the session's full access and a shared transcript.
 
 | Member | Required | Contract |
 | --- | --- | --- |
@@ -282,7 +282,7 @@ For run controls, implement `sendCard(chatId, card, replyToId?)` returning the s
 
 ## External event subscriptions
 
-The channel-aware SDK (`@glows777/vela-channels` or `@glows777/vela`) can wake an existing conversation from the same process. In a channel conversation, `channel_subscriptions` creates, lists or removes subscriptions. Create takes an exact `source` and `key` and targets the current group, topic or DM; list/remove are limited to the current chat. Curated tool lists must include `channel_subscriptions` explicitly; tool selection still applies. Ordinary SDK sessions cannot use this tool.
+The SDK (`@glows777/vela`) can wake an existing conversation from the same process. In a channel conversation, `channel_subscriptions` creates, lists or removes subscriptions. Create takes an exact `source` and `key` and targets the current group, topic or DM; list/remove are limited to the current chat. Curated tool lists must include `channel_subscriptions` explicitly; tool selection still applies. Ordinary SDK sessions cannot use this tool.
 
 ```ts
 await vela.startChannels()

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { ExecutionEnv, Result } from '@glows777/vela-core'
+import type {
+  ExecutionEnv,
+  Result,
+} from '../../packages/vela/src/driver/index.ts'
 
 function value<T>(result: Result<T, Error>): T {
   if (!result.ok) throw result.error

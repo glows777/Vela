@@ -10,20 +10,23 @@ import { join, resolve } from 'node:path'
 import ts from 'typescript'
 
 const ROOT = resolve(import.meta.dir, '..')
-const PACKAGES = ['core', 'channels', 'mcp', 'rag', 'lark', 'vela']
+const PACKAGES = ['vela']
+const PUBLIC_SUBPATHS = new Set(['.', './extension-api', './testing'])
 const entriesFor = (key: string): [string, string][] => {
   const pkg = JSON.parse(
     readFileSync(join(ROOT, 'packages', key, 'package.json'), 'utf8'),
   )
-  return Object.entries(pkg.exports).map(([subpath, conditions]) => [
-    pkg.name + (subpath === '.' ? '' : subpath.slice(1)),
-    'packages/' +
-      key +
-      '/' +
-      (conditions as { import: string }).import
-        .replace('./dist/', 'src/')
-        .replace(/\.js$/, '.ts'),
-  ])
+  return Object.entries(pkg.exports)
+    .filter(([subpath]) => PUBLIC_SUBPATHS.has(subpath))
+    .map(([subpath, conditions]) => [
+      pkg.name + (subpath === '.' ? '' : subpath.slice(1)),
+      'packages/' +
+        key +
+        '/' +
+        (conditions as { import: string }).import
+          .replace('./dist/', 'src/')
+          .replace(/\.js$/, '.ts'),
+    ])
 }
 const FLAGS =
   ts.TypeFormatFlags.NoTruncation |

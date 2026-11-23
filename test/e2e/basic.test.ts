@@ -1,5 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

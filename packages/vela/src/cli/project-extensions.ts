@@ -1,11 +1,11 @@
 import { join, resolve } from 'node:path'
-import type { ChannelExtension } from '@glows777/vela-channels'
-import { mcpConfig } from '@glows777/vela-mcp'
 import {
   extensionName,
   importExtension,
   type VelaConfig,
 } from '../config/index.ts'
+import type { ChannelExtension } from '../legacy-channels/index.ts'
+import { mcpConfig } from '../mcp/index.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,

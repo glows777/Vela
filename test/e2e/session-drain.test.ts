@@ -2,8 +2,11 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
-import { createLocalExecutionEnv } from '@glows777/vela-core'
-import { fauxSummary, fauxText } from '@glows777/vela-core/testing'
+import { createLocalExecutionEnv } from '../../packages/vela/src/driver/index.ts'
+import {
+  fauxSummary,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

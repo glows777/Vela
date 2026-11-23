@@ -9,13 +9,13 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setupWizard } from '../../packages/vela/src/cli/tui/setup-wizard.ts'
 import {
   fileCredentialStore,
   loadModels,
   memoryCredentialStore,
   verifyProviderModel,
-} from '@glows777/vela-core'
-import { setupWizard } from '../../packages/vela/src/cli/tui/setup-wizard.ts'
+} from '../../packages/vela/src/driver/index.ts'
 import { createVela } from '../../packages/vela/src/vela.ts'
 import { responsesReply } from '../support/responses.ts'
 

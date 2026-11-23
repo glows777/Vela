@@ -1,9 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import type { LarkHistoryMessage } from '@glows777/vela-lark'
-import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { messageTime } from '../../packages/lark/src/history.ts'
+import { messageTime } from '../../packages/vela/src/lark/history.ts'
+import type { LarkHistoryMessage } from '../../packages/vela/src/lark/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

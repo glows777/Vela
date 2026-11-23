@@ -1,58 +1,46 @@
-import type { ChannelExtension } from '@glows777/vela-channels'
-import type { VelaOptions as CoreVelaOptions } from '@glows777/vela-core'
+import type { VelaOptions as CoreVelaOptions } from '../driver/index.ts'
+import type { ChannelExtension } from '../legacy-channels/index.ts'
+import { resolveShellPath } from '../shared/shell-path.ts'
+import { createVela, type Vela } from '../vela.ts'
 import {
   type TestVelaOptions as CoreOptions,
   type TestVela as CoreTestVela,
   createTestVela as createCoreTestVela,
-  createFauxEmbedder,
-} from '@glows777/vela-core/testing'
-import type { EmbeddingFn } from '@glows777/vela-rag'
-import { rag } from '@glows777/vela-rag'
-import { resolveShellPath } from '../cli/shell.ts'
-import { createVela, type Vela } from '../vela.ts'
+} from './core/index.ts'
 
 export {
   cleanupTestVelas,
   type FixtureSkill,
   tempDir,
-} from '@glows777/vela-core/testing'
+} from './core/index.ts'
 
 export interface TestVelaOptions extends Omit<CoreOptions, 'extensions'> {
   extensions?: ChannelExtension[]
-  embedder?: boolean | EmbeddingFn
   channelIdleMs?: number
 }
 
 type TestVelaAssembler = (options: CoreVelaOptions) => Vela
 
-/** Compatibility fixture retains memory, optional RAG and channels. */
+/** Compatibility fixture retains memory and channels. */
 export function createTestVela(
   options: TestVelaOptions = {},
   assemble?: TestVelaAssembler,
 ): Omit<CoreTestVela, 'vela'> & { vela: Vela } {
-  const {
-    extensions,
-    embedder: requestedEmbedder,
-    channelIdleMs,
-    ...base
-  } = options
-  const embedder =
-    requestedEmbedder === true
-      ? createFauxEmbedder()
-      : requestedEmbedder || undefined
+  const { extensions, channelIdleMs, ...base } = options
   let vela!: Vela
   const create: TestVelaAssembler =
     assemble ??
     ((coreOptions) =>
       createVela({
         ...coreOptions,
-        shellPath: coreOptions.shellPath ?? resolveShellPath(),
+        shellPath:
+          coreOptions.shellPath ??
+          resolveShellPath(undefined, {
+            platform: process.platform,
+            env: process.env,
+          }),
         channelIdleMs,
-        extensions: [
-          ...(coreOptions.extensions ?? []),
-          ...(embedder ? [rag({ embedder })] : []),
-          ...(extensions ?? []),
-        ],
+        extensions: [...(coreOptions.extensions ?? []), ...(extensions ?? [])],
       }))
   const fixture = createCoreTestVela(base, (coreOptions) => {
     vela = create(coreOptions)

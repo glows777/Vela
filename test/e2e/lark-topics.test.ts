@@ -1,10 +1,16 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileSessionStorage, silentLogger } from '@glows777/vela-core'
-import { fauxHang, fauxText } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { background } from '../../packages/core/src/extensions/background/index.ts'
+import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
+import {
+  fileSessionStorage,
+  silentLogger,
+} from '../../packages/vela/src/driver/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import {
+  fauxHang,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

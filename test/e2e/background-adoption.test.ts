@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { background } from '../../packages/core/src/extensions/background/index.ts'
+import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

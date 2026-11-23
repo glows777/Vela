@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Vela now publishes a single npm package (`@glows777/vela`) and removes the built-in `rag` extension.** `@glows777/vela-core`, `@glows777/vela-channels`, `@glows777/vela-lark`, `@glows777/vela-mcp`, and `@glows777/vela-rag` (along with `sqlite-vec`, `rag`, `ragConfig`, `createEmbedder`, `EmbeddingFn`, and `createFauxEmbedder`) are retired. Import SDK APIs from `@glows777/vela`, extension authoring helpers from `@glows777/vela/extension-api`, and offline test helpers from `@glows777/vela/testing`. Heavy optional dependencies (`@larksuiteoapi/node-sdk`, `@modelcontextprotocol/sdk`, `@earendil-works/pi-tui`, `@silvia-odwyer/photon-node`) stay lazy-loaded off the cold-start graph ([#535](https://github.com/glows777/Vela/issues/535)).
+
 ### Changed
 
 - **Desktop conversations and settings are easier to use.** Vela replies render Markdown with copyable code; `⌘N` / `Ctrl+N` starts a new session, the composer grows as you type, and view-specific errors can be dismissed. Project, routine and model pickers support keyboard selection. Deleting a routine or removing a Lark chat requires confirmation, and Settings › Models can set the Thinking level for new sessions ([#531](https://github.com/glows777/Vela/issues/531)).

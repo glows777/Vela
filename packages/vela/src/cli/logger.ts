@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { VelaLogger } from '@glows777/vela-core'
+import type { VelaLogger } from '../driver/index.ts'
 
 /**
  * CLI logger: prints to the terminal; debug only when VELA_DEBUG=1.

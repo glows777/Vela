@@ -1,16 +1,16 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { todo } from '@glows777/vela-core'
+import { z } from 'zod'
+import { todo } from '../../packages/vela/src/driver/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import type { ChannelExtension as VelaExtension } from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
   fauxError,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { z } from 'zod'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -341,7 +341,7 @@ test('handoff keeps the original acknowledgement pending until the topic task fi
   let release!: () => void
   let entered = false
   const respond = (
-    request: import('../../packages/core/src/testing/faux.ts').FauxRequest,
+    request: import('../../packages/vela/src/testing/core/faux.ts').FauxRequest,
   ) => {
     if (request.tools.includes('channel_start_topic'))
       return request.toolResults.length

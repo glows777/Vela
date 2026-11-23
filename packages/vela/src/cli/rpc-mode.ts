@@ -4,8 +4,8 @@ import type {
   SessionUI,
   ThinkingLevel,
   VelaSession,
-} from '@glows777/vela-core'
-import { messageText } from '@glows777/vela-core'
+} from '../driver/index.ts'
+import { messageText } from '../driver/index.ts'
 import type { Vela } from '../vela.ts'
 import { jsonEvent, toJsonLine } from './json-event.ts'
 import { nextModel, scopedModels } from './model-cycle.ts'

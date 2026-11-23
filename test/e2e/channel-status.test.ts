@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
+import { lark } from '../../packages/vela/src/lark/index.ts'
 import {
   createFauxModel,
   type FauxStep,
   fauxHang,
   fauxSummary,
-} from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

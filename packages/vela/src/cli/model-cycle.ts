@@ -1,4 +1,4 @@
-import type { ModelInfo } from '@glows777/vela-core'
+import type { ModelInfo } from '../driver/index.ts'
 
 const toRegExp = (pattern: string) =>
   new RegExp(

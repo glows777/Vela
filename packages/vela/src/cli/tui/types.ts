@@ -3,7 +3,7 @@ import type {
   ImageContent,
   LoginOptions,
   VelaSession,
-} from '@glows777/vela-core'
+} from '../../driver/index.ts'
 import type { Vela } from '../../vela.ts'
 
 export type LogLevel = 'info' | 'warning' | 'error'

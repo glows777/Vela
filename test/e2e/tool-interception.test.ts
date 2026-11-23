@@ -6,7 +6,7 @@ import {
   createTestVela,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
+} from '../../packages/vela/src/testing/core/index.ts'
 
 afterEach(cleanupTestVelas)
 

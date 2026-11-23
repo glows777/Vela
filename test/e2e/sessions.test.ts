@@ -7,19 +7,19 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
+import { z } from 'zod'
 import {
   memorySessionStorage,
   type SessionStorage,
   type VelaEvent,
-} from '@glows777/vela-core'
+} from '../../packages/vela/src/driver/index.ts'
+import { createVela } from '../../packages/vela/src/index.ts'
 import {
   createFauxModel,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { z } from 'zod'
-import { createVela } from '../../packages/vela/src/index.ts'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

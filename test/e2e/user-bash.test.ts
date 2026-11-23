@@ -1,8 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ModelMessage } from '@glows777/vela-core'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import type { ModelMessage } from '../../packages/vela/src/driver/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { createVela } from '../../packages/vela/src/vela.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

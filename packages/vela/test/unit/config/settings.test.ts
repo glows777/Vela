@@ -2,14 +2,14 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
-import { interpolate } from '../../../../core/src/config/interpolate.ts'
-import { projectDataDir } from '../../../../core/src/config/paths.ts'
 import {
   loadConfig,
   projectTrustRequired,
   savedTrust,
   saveTrust,
 } from '../../../src/config/index.ts'
+import { projectDataDir } from '../../../src/driver/config/paths.ts'
+import { interpolate } from '../../../src/shared/interpolate.ts'
 
 const dirs: { cleanup(): void }[] = []
 afterEach(() => {

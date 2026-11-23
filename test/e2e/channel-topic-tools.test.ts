@@ -3,10 +3,16 @@ import type {
   ChannelDefinition,
   IncomingMessage,
   OutgoingMessage,
-} from '@glows777/vela-channels'
-import { channelSessionId, topicSessionOptions } from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import {
+  channelSessionId,
+  topicSessionOptions,
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

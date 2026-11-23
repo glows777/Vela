@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { posix } from 'node:path'
-import type { ExecutionEnv } from '@glows777/vela-core'
+import type { ExecutionEnv } from '../../packages/vela/src/driver/index.ts'
 import { containerOperations, runDocker } from './container.ts'
 import {
   type DockerCredential,

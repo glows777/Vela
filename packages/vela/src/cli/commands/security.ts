@@ -1,4 +1,4 @@
-import { inspectVela } from '@glows777/vela-core/diagnostics'
+import { inspectVela } from '../../driver/diagnostics.ts'
 import type { CommandHandler } from './index.ts'
 
 export const securityCommands: CommandHandler[] = [

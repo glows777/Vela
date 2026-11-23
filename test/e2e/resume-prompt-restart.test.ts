@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { projectDataDir } from '../../packages/core/src/config/paths.ts'
+import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 
 const roots: string[] = []
 const entry = new URL('../../packages/vela/src/cli/main.ts', import.meta.url)

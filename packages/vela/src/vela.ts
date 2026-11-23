@@ -1,15 +1,14 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { DocsPaths } from './driver/index.ts'
+import type { LarkHost } from './lark/index.ts'
 import {
   type ChannelHost,
   type ChannelVela,
   type ChannelVelaOptions,
   createChannelVela,
   type LocalHost,
-} from '@glows777/vela-channels'
-import type { DocsPaths } from '@glows777/vela-core'
-
-import type { LarkHost } from '@glows777/vela-lark'
+} from './legacy-channels/index.ts'
 
 export type { ChannelVelaOptions as VelaOptions }
 

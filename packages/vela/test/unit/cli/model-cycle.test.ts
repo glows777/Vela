@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import type { ModelInfo } from '@glows777/vela-core'
 import { nextModel, scopedModels } from '../../../src/cli/model-cycle.ts'
+import type { ModelInfo } from '../../../src/driver/index.ts'
 
 const info = (ref: string): ModelInfo => {
   const [provider, id] = [

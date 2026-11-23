@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import type { UsageTotals, VelaSession } from '@glows777/vela-core'
+import type { UsageTotals, VelaSession } from '../../driver/index.ts'
 import { formatUsd } from '../format.ts'
 import { formatContextFileList, formatStatusPath } from '../status-display.ts'
 import { sanitize } from '../tui/components.ts'

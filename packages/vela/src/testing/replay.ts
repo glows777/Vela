@@ -1,4 +1,4 @@
-import { readFauxScenario } from '@glows777/vela-core/testing'
+import { readFauxScenario } from './core/index.ts'
 import {
   createTestVela,
   type TestVela,

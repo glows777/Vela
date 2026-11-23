@@ -1,20 +1,19 @@
 # Built-in extensions
 
-Vela ships seven selectable built-in extensions: `background`, `memory`, `todo`, `rag`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `background`, `memory`, `todo` and `web` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all seven (see [Packages](sdk.md#packages)).
+Vela ships six selectable built-in extensions in `@glows777/vela`: `background`, `memory`, `todo`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md) and [Packages](sdk.md#packages)).
 
 | Extension | Adds |
 |---|---|
 | `background` | Long-running commands whose result arrives on its own: `bash` with `run_in_background`, plus `background_output` and `background_stop` |
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
 | `todo` | Task checklist: the `todo` tool, shown on the Lark progress card |
-| `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary sent as a message, `/rag` |
 | `web` | `web_fetch`, and `web_search` with a supported hosted search or a search API key |
 | `lark` | The Lark bot channel (see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
 
 ## Local transport
 
-Vela also ships `local` in `@glows777/vela-channels`, re-exported by `@glows777/vela`. It is an explicitly enabled transport, not another `builtin:*` selector or a default CLI extension. It provides authenticated loopback HTTP/SSE for project hubs, task sessions, visible history and run-bound Stop. Lark and Local share the channel gateway and topic tools.
+Vela also ships `local` in `@glows777/vela`. It is an explicitly enabled transport, not another `builtin:*` selector or a default CLI extension. It provides authenticated loopback HTTP/SSE for project hubs, task sessions, visible history and run-bound Stop. Lark and Local share the channel gateway and topic tools.
 
 In the CLI, enable it only through user-level `extensionConfig.local: { "enabled": true, "token": "$VELA_LOCAL_TOKEN", "port": 8788 }` and run `vela serve`. Project settings cannot enable or override it; non-serve modes and `--no-extensions` do not start it. In the SDK, add `local({ token, port: 8788 })` explicitly, then call `await vela.ready()` and `await vela.startChannels()`. Unlike the factories below, Local requires its token as a factory option and does not read it implicitly from extension configuration.
 

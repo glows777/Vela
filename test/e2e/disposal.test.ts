@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { tempDir } from '@glows777/vela/testing'
-import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
+import {
+  createFauxModel,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { createVela } from '../support/compat-vela.ts'
 
 function deferred() {

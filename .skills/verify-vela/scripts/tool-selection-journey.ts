@@ -3,12 +3,12 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
+import confirmDangerous from '../../../examples/extensions/confirm-dangerous.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import confirmDangerous from '../../../examples/extensions/confirm-dangerous.ts'
+} from '../../../packages/vela/src/testing/core/index.ts'
 import { prepareWorkspace } from './workspace.ts'
 
 prepareWorkspace()

@@ -13,8 +13,8 @@ import {
   type ExecutionEnv,
 } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { lark } from '@glows777/vela-lark'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 
 function guest(root: string, name: string) {

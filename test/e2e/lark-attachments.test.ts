@@ -13,9 +13,13 @@ import type {
   LanguageModelV4Prompt,
 } from '@ai-sdk/provider'
 import type { VelaExtension, VelaLogger } from '@glows777/vela'
-import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import {
+  fauxError,
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
@@ -340,8 +344,12 @@ test('Lark file prepared by expired Steer is reused when the gateway processes i
   const f = await setup()
   f.resources.set('file', [Buffer.from('once')])
   const event = dm('file', { file_key: 'file', file_name: 'once.txt' })
-  const { LarkChannel } = await import('../../packages/lark/src/channel.ts')
-  const { silentLogger } = await import('../../packages/core/src/logger.ts')
+  const { LarkChannel } = await import(
+    '../../packages/vela/src/lark/channel.ts'
+  )
+  const { silentLogger } = await import(
+    '../../packages/vela/src/shared/logger.ts'
+  )
   const channel = new LarkChannel({
     appId: '',
     appSecret: '',
@@ -493,7 +501,9 @@ test.each(['settle', 'stop'])(
   'a file Steer waiting for its environment handles %s while preparing attachment delivery',
   async (outcome) => {
     const { createVela } = await import('@glows777/vela')
-    const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+    const { createLocalExecutionEnv } = await import(
+      '../../packages/vela/src/driver/index.ts'
+    )
     const fake = fakeLark()
     fake.resources.set('file', [Buffer.from('queued bytes')])
     let finish!: () => void
@@ -869,9 +879,13 @@ test('Lark still rejects a symlink inside the attachment storage directory', asy
 })
 
 test('a custom local adapter reads the canonical Lark attachment after restart without copying or downloading it', async () => {
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createLocalExecutionEnv } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { createVela } = await import('@glows777/vela')
-  const { createFauxModel } = await import('@glows777/vela-core/testing')
+  const { createFauxModel } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const dir = tempDir()
   const fake = fakeLark()
   fake.resources.set('file', [Buffer.from('attachment bytes')])
@@ -926,7 +940,9 @@ test('a custom local adapter reads the canonical Lark attachment after restart w
 
 test('a Lark attachment cannot publish a host path to an unavailable environment', async () => {
   const { createVela } = await import('@glows777/vela')
-  const { createFauxModel } = await import('@glows777/vela-core/testing')
+  const { createFauxModel } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const dir = tempDir()
   const fake = fakeLark()
   fake.resources.set('file', [Buffer.from('private')])
@@ -951,9 +967,13 @@ test('a Lark attachment cannot publish a host path to an unavailable environment
 })
 
 test('cloned memory session retains referenced attachment after parent closes', async () => {
-  const { memorySessionStorage } = await import('@glows777/vela-core')
+  const { memorySessionStorage } = await import(
+    '../../packages/vela/src/driver/index.ts'
+  )
   const { createVela } = await import('@glows777/vela')
-  const { createFauxModel } = await import('@glows777/vela-core/testing')
+  const { createFauxModel } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
   const dir = tempDir()
   const fake = fakeLark()
   fake.resources.set('file', [Buffer.from('clone attachment')])

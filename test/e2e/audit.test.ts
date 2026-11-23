@@ -1,13 +1,16 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createVela, type VelaEvent } from '@glows777/vela-core'
+import { z } from 'zod'
+import {
+  createVela,
+  type VelaEvent,
+} from '../../packages/vela/src/driver/index.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { z } from 'zod'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

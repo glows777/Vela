@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
+import { z } from 'zod'
+import { LarkChannel } from '../../packages/vela/src/lark/channel.ts'
 import type {
   ChannelDefinition,
   ChannelFeedbackUpdate,
@@ -6,10 +8,11 @@ import type {
   ChannelRuntime,
   IncomingMessage,
   OutgoingMessage,
-} from '@glows777/vela-channels'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { z } from 'zod'
-import { LarkChannel } from '../../packages/lark/src/channel.ts'
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -86,7 +89,7 @@ test('handoff transfers input feedback and starts destination presentation witho
   let release!: () => void
   let entered = false
   const respond = (
-    req: import('../../packages/core/src/testing/faux.ts').FauxRequest,
+    req: import('../../packages/vela/src/testing/core/faux.ts').FauxRequest,
   ) => {
     const source = req.lastUserText === 'source'
     return req.toolResults.length

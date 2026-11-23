@@ -1,7 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
-import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
-import { background } from '../../packages/core/src/extensions/background/index.ts'
+import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import {
+  fauxHang,
+  fauxText,
+  fauxToolCall,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

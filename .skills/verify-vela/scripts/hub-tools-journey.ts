@@ -11,8 +11,8 @@ import {
   type FauxRequest,
   type FauxResponse,
 } from '@glows777/vela/testing'
-import { lark } from '@glows777/vela-lark'
-import { background } from '../../../packages/core/src/extensions/background/index.ts'
+import { background } from '../../../packages/vela/src/driver/extensions/background/index.ts'
+import { lark } from '../../../packages/vela/src/lark/index.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'
 

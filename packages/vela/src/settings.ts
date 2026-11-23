@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { saveUserSettings } from './cli/user-settings.ts'
 import {
   type Credential,
   type CredentialStore,
@@ -8,8 +9,7 @@ import {
   type ProviderDefinition,
   type ThinkingLevel,
   writeProviderPreset,
-} from '@glows777/vela-core'
-import { saveUserSettings } from './cli/user-settings.ts'
+} from './driver/index.ts'
 
 /**
  * The non-interactive half of setup, shared by `vela setup` and SDK hosts such as the desktop app:

@@ -2,15 +2,15 @@ import { afterEach, expect, mock, test } from 'bun:test'
 import { mkdir, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
-import { local } from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { createLocalExecutionEnv } from '@glows777/vela-core'
+import { createLocalExecutionEnv } from '../../packages/vela/src/driver/index.ts'
+import { type LarkTransport, lark } from '../../packages/vela/src/lark/index.ts'
+import { local } from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
   type FauxRequest,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { type LarkTransport, lark } from '@glows777/vela-lark'
+} from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

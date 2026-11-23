@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
 import { tempDir } from '../../../../../test/support/vela.ts'
 import {
   BUILTIN_EXTENSIONS,
@@ -16,6 +15,7 @@ import {
   selectTools,
 } from '../../../src/cli/setup.ts'
 import { loadConfig } from '../../../src/config/index.ts'
+import { createFauxModel, fauxText } from '../../../src/testing/core/index.ts'
 import { createVela } from '../../../src/vela.ts'
 
 const dirs: { cleanup(): void }[] = []
@@ -204,18 +204,13 @@ test('settings.json extension config overrides the environment defaults key by k
     {
       TAVILY_API_KEY: 'env-tavily',
       SERPER_API_KEY: 'env-serper',
-      EMBEDDING_MODEL: 'm',
     },
     {
       web: { tavilyKey: 'file' },
-      rag: { embedding: { apiKey: 'k' } },
       mine: { a: 1 },
     },
   )
   expect(config.web).toEqual({ tavilyKey: 'file', serperKey: 'env-serper' })
-  expect(config.rag).toEqual({
-    embedding: { baseUrl: undefined, model: 'm', apiKey: 'k' },
-  })
   expect(config.mine).toEqual({ a: 1 })
 })
 
@@ -333,7 +328,6 @@ test('the removed supabase built-in is unknown, so an old -builtin:supabase fail
   expect(Object.keys(BUILTIN_EXTENSIONS)).toEqual([
     'background',
     'memory',
-    'rag',
     'web',
     'lark',
     'mcp',

@@ -1,11 +1,11 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { z } from 'zod'
 import {
   createTestVela,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { z } from 'zod'
+} from '../../../packages/vela/src/testing/core/index.ts'
 
 const [cwd, mode] = process.argv.slice(2)
 if (!cwd) throw new Error('Expected workspace')

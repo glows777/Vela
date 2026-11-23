@@ -4,17 +4,17 @@ import { mkdirSync, readFileSync, symlinkSync } from 'node:fs'
 import { hostname, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { APICallError } from '@ai-sdk/provider'
-import { local } from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { memorySessionStorage } from '@glows777/vela-core'
+import { z } from 'zod'
+import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
+import { local } from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
   type FauxRequest,
   fauxError,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { z } from 'zod'
+} from '../../packages/vela/src/testing/core/index.ts'
 import {
   freeLocalPort,
   LOCAL_TOKEN,

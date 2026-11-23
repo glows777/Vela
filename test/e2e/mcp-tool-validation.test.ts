@@ -1,8 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadModels } from '@glows777/vela-core'
-import { mcp } from '@glows777/vela-mcp'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -10,7 +8,9 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import type { McpServerEntry } from '../../packages/mcp/src/config.ts'
+import { loadModels } from '../../packages/vela/src/driver/index.ts'
+import type { McpServerEntry } from '../../packages/vela/src/mcp/config.ts'
+import { mcp } from '../../packages/vela/src/mcp/index.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 /**

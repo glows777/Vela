@@ -1,8 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { APICallError } from '@ai-sdk/provider'
-import type { OutgoingMessage } from '@glows777/vela-channels'
-import { fauxError, fauxHang, fauxText } from '@glows777/vela-core/testing'
 import { runPrintMode } from '../../packages/vela/src/cli/print-mode.ts'
+import type { OutgoingMessage } from '../../packages/vela/src/legacy-channels/index.ts'
+import {
+  fauxError,
+  fauxHang,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
 import {
   captureConsole,

@@ -1,11 +1,11 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { projectDataDir } from '../../../packages/vela/src/driver/config/paths.ts'
 import {
   createTestVela,
   fauxText,
   fauxToolCall,
-} from '@glows777/vela-core/testing'
-import { projectDataDir } from '../../../packages/core/src/config/paths.ts'
+} from '../../../packages/vela/src/testing/core/index.ts'
 
 const [cwd, mode] = process.argv.slice(2) as [string, string]
 const t = createTestVela({

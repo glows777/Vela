@@ -5,7 +5,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import type { SessionPersistence } from '@glows777/vela-core'
+import type { SessionPersistence } from '../driver/index.ts'
 
 const PATH_LABEL = '  Path: '
 const PENDING_MARKER = 'not written yet'

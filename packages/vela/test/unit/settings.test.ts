@@ -13,7 +13,7 @@ import {
   fileCredentialStore,
   loadModels,
   memoryCredentialStore,
-} from '@glows777/vela-core'
+} from '../../src/driver/index.ts'
 import {
   saveLarkSection,
   saveModelSetup,

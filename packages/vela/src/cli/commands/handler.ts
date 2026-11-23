@@ -1,4 +1,4 @@
-import type { VelaSession } from '@glows777/vela-core'
+import type { VelaSession } from '../../driver/index.ts'
 import type { Vela } from '../../vela.ts'
 
 /**

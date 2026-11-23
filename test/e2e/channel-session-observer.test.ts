@@ -3,9 +3,12 @@ import type {
   ChannelDefinition,
   ChannelRuntime,
   ChannelSessionUpdate,
-} from '@glows777/vela-channels'
-import { drainChannels } from '@glows777/vela-channels/testing'
-import { fauxHang, fauxText } from '@glows777/vela-core/testing'
+} from '../../packages/vela/src/legacy-channels/index.ts'
+import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
+import {
+  fauxHang,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

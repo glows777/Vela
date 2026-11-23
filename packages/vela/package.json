@@ -18,9 +18,17 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./extension-api": {
+      "types": "./dist/extension-api.d.ts",
+      "import": "./dist/extension-api.js"
+    },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js"
+    },
+    "./legacy-desktop": {
+      "types": "./dist/legacy-desktop.d.ts",
+      "import": "./dist/legacy-desktop.js"
     }
   },
   "engines": {
@@ -31,14 +39,19 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.102",
+    "@ai-sdk/openai": "^4.0.115",
+    "@ai-sdk/provider": "^4.0.37",
+    "@cfworker/json-schema": "^4.1.1",
     "@earendil-works/pi-tui": "^1.0.4",
-    "@glows777/vela-channels": "workspace:*",
-    "@glows777/vela-core": "workspace:*",
-    "@glows777/vela-lark": "workspace:*",
-    "@glows777/vela-mcp": "workspace:*",
-    "@glows777/vela-rag": "workspace:*",
+    "@larksuiteoapi/node-sdk": "^1.73.3",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@silvia-odwyer/photon-node": "^0.3.4",
     "ai": "^7.0.170",
-    "diff": "8.0.4"
+    "diff": "8.0.4",
+    "turndown": "^7.2.4",
+    "yaml": "^2.9.1",
+    "zod": "^4.4.3"
   },
   "files": [
     "dist",

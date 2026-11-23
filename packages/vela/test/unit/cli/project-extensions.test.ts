@@ -1,13 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tempDir } from '@glows777/vela-core/testing'
 import {
   cliHostExtensionConfig,
   cliProjectExtensions,
 } from '../../../src/cli/project-extensions.ts'
 import { loadCliExtensions, parseArgs } from '../../../src/cli/setup.ts'
 import { loadConfig } from '../../../src/config/index.ts'
+import { tempDir } from '../../../src/testing/core/index.ts'
 
 const dirs: ReturnType<typeof tempDir>[] = []
 afterEach(() => {

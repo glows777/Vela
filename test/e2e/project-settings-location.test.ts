@@ -3,8 +3,11 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
-import { loadConfig, type ThinkingLevel } from '@glows777/vela-core'
 import { selectTools } from '../../packages/vela/src/cli/setup.ts'
+import {
+  loadConfig,
+  type ThinkingLevel,
+} from '../../packages/vela/src/driver/index.ts'
 import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
 
 function project(cwd: string, label: string, thinking: ThinkingLevel) {

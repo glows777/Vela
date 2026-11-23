@@ -9,7 +9,7 @@
     "ignoreUnknown": true,
     "includes": [
       "**",
-      "!packages/core/src/models/catalog.generated.ts",
+      "!packages/vela/src/providers/models/catalog.generated.ts",
       "!apps/desktop/src/styles/tokens.generated.css",
       "!apps/desktop/design/vela-app.html"
     ]

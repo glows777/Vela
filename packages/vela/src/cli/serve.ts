@@ -1,4 +1,4 @@
-import type { VelaEvent } from '@glows777/vela-core'
+import type { VelaEvent } from '../driver/index.ts'
 import type { Vela } from '../vela.ts'
 import { errorMessage } from './error.ts'
 import { sanitize } from './tui/components.ts'

@@ -1,13 +1,13 @@
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
-import { LocalExecutionEnv } from '../../packages/core/src/execution/local.ts'
+import { LocalExecutionEnv } from '../../packages/vela/src/driver/execution/local.ts'
 import type {
   BinaryReader,
   Result,
   ShellExecOptions,
-} from '../../packages/core/src/execution/types.ts'
-import { readEnvironmentInventory } from '../../packages/core/src/session/environment-inventory.ts'
+} from '../../packages/vela/src/driver/execution/types.ts'
+import { readEnvironmentInventory } from '../../packages/vela/src/driver/session/environment-inventory.ts'
 import {
   type GuestCredentialConfig,
   prepareGuestCredentials,

@@ -1,10 +1,13 @@
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
 import { runServe } from '../../../packages/vela/src/cli/serve.ts'
+import { lark } from '../../../packages/vela/src/lark/index.ts'
+import {
+  fauxText,
+  fauxToolCall,
+} from '../../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../../support/lark.ts'
 
 const [cwd, mode] = process.argv.slice(2) as [string, string]

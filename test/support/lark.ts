@@ -4,7 +4,7 @@ import type {
   LarkHistoryMessage,
   LarkMessageEvent,
   LarkTransport,
-} from '@glows777/vela-lark'
+} from '../../packages/vela/src/lark/index.ts'
 
 /** Offline Lark boundary; the actual extension and gateway still process every event. */
 export function fakeLark() {

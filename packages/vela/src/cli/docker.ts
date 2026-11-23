@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
-import type { ExecutionEnv, VelaOptions } from '@glows777/vela-core'
 import type { VelaConfig } from '../config/index.ts'
+import type { ExecutionEnv, VelaOptions } from '../driver/index.ts'
 import { ownerDockerCredentials } from './docker-credentials.ts'
 
 const require = createRequire(import.meta.url)

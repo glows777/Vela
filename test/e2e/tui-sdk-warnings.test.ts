@@ -1,9 +1,12 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ExtensionAPI } from '@glows777/vela-core'
-import { defineJsonSchemaTool, loadModels } from '@glows777/vela-core'
 import { jsonSchema } from 'ai'
+import type { ExtensionAPI } from '../../packages/vela/src/driver/index.ts'
+import {
+  defineJsonSchemaTool,
+  loadModels,
+} from '../../packages/vela/src/driver/index.ts'
 import { responsesReply } from '../support/responses.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'

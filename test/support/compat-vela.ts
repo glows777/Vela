@@ -1,7 +1,7 @@
-import type { ChannelDefinition } from '@glows777/vela-channels'
-import { LocalStore } from '../../packages/channels/src/local-store.ts'
-import { channelInternals } from '../../packages/channels/src/vela.ts'
-import { velaInternals as coreInternals } from '../../packages/core/src/vela.ts'
+import { velaInternals as coreInternals } from '../../packages/vela/src/driver/vela.ts'
+import type { ChannelDefinition } from '../../packages/vela/src/legacy-channels/index.ts'
+import { LocalStore } from '../../packages/vela/src/legacy-channels/local-store.ts'
+import { channelInternals } from '../../packages/vela/src/legacy-channels/vela.ts'
 
 export { createVela, type Vela, type VelaOptions } from '@glows777/vela'
 

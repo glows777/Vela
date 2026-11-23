@@ -3,8 +3,8 @@ import type {
   ImageContent,
   ModelMessage,
   VelaSession,
-} from '@glows777/vela-core'
-import { agentErrorHint } from '@glows777/vela-core'
+} from '../driver/index.ts'
+import { agentErrorHint } from '../driver/index.ts'
 import type { Vela } from '../vela.ts'
 import { jsonEvent, toJsonLine, writeStdout } from './json-event.ts'
 

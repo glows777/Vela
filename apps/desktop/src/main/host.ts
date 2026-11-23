@@ -1,18 +1,18 @@
 import { join } from 'node:path'
-import type { IncomingMessage } from '@glows777/vela-channels'
+import {
+  type IncomingMessage,
+  type LarkHost,
+  lark,
+  local,
+} from '@glows777/vela'
 import {
   channelSessionId,
-  createChannelVela,
-  local,
-} from '@glows777/vela-channels'
-import { resolveShellPath } from '@glows777/vela-core'
-import {
   connectLarkSetup,
+  createChannelVela,
   discoverLarkGroup,
-  type LarkHost,
   LarkSubmitError,
-  lark,
-} from '@glows777/vela-lark'
+  resolveShellPath,
+} from '@glows777/vela/legacy-desktop'
 import { BrowserWindow, clipboard, dialog, shell } from 'electron'
 import {
   EVENT,
@@ -72,7 +72,7 @@ export async function openHost(
   const cwd = config.cwd
   const larkSettings = config.extensionConfig.lark ?? {}
   const model = process.env.VELA_MODEL?.startsWith('faux:')
-    ? await (await import('@glows777/vela-core/testing')).loadFauxScenario(
+    ? await (await import('@glows777/vela/testing')).loadFauxScenario(
         process.env.VELA_MODEL.slice(5),
       )
     : config.settings.defaultModel

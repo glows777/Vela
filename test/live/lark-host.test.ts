@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { createTestVela } from '@glows777/vela/testing'
-import { channelSessionId } from '@glows777/vela-channels'
-import { fauxText } from '@glows777/vela-core/testing'
-import { lark } from '@glows777/vela-lark'
+import { lark } from '../../packages/vela/src/lark/index.ts'
+import { channelSessionId } from '../../packages/vela/src/legacy-channels/index.ts'
+import { fauxText } from '../../packages/vela/src/testing/core/index.ts'
 
 const live = process.env.VELA_LARK_HOST_LIVE === '1'
 
