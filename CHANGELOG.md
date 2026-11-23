@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Added
+
+- The TUI header and `/status` show the CLI version, so you can tell which build a session runs without leaving it. The header reads `Vela v0.8.1 · session <id>`, and `/status` starts with a `Version:` line. Both come from the installed `package.json`, the same value `vela --version` prints.
+
 ## [0.8.1] - 2026-11-23
 
 ### Changed

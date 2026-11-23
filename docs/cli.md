@@ -129,7 +129,7 @@ The TUI does not start channels; run [`vela serve`](#serve) for those, in a sepa
 
 AI SDK warnings (for example a provider compatibility notice) appear in the chat log as notices instead of on the terminal, once per session even when the provider repeats them. Print, JSON and RPC modes keep them on stderr.
 
-The fullscreen screen has, from top to bottom: a header with the session id and loaded extensions, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. When context files were loaded, the chat log starts with a `[context]` line naming them. `/status` lists the same paths. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, followed by any extension status texts. The editor border color follows the thinking level.
+The fullscreen screen has, from top to bottom: a header with the CLI version, the session id and loaded extensions, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. When context files were loaded, the chat log starts with a `[context]` line naming them. `/status` lists the same paths. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, followed by any extension status texts. The editor border color follows the thinking level.
 
 The header, editor and footer stay in place while the transcript scrolls. The transcript follows streamed output while you are at the bottom. If you scroll up, output continues but the viewport stays at your reading position, and Vela shows `↓ New output · scroll to bottom`. Scroll back to the bottom or press Ctrl+End to jump to the latest output and resume following it.
 
@@ -230,7 +230,7 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 
 | Command | Description |
 |---|---|
-| `/status` | Session overview: id, where the session file is (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, loaded context files, model, thinking level, message count, context estimate and token usage. The dollar amount uses the same rounding as the footer. A channel session also shows its channel; a fork shows the session it was copied from. |
+| `/status` | Session overview: CLI version, id, where the session file is (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, loaded context files, model, thinking level, message count, context estimate and token usage. The dollar amount uses the same rounding as the footer. A channel session also shows its channel; a fork shows the session it was copied from. |
 | `/context` | Context window usage by category (system prompt, tools, memory, skills index, messages) and the autocompact buffer (the window above the summary threshold). |
 | `/usage` | Token usage, cache hits and cost for this session. |
 | `/skill`, `/skills` | List skills. |

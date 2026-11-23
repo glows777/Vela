@@ -6,6 +6,7 @@ import {
   visibleWidth,
 } from '@earendil-works/pi-tui'
 import type { SessionPersistence } from '@glows777/vela-core'
+import { cliVersion } from './version.ts'
 
 const PATH_LABEL = '  Path: '
 const PENDING_MARKER = 'not written yet'
@@ -122,6 +123,14 @@ function isUnder(path: string, root: string): boolean {
   if (path === root) return true
   const prefix = root.endsWith(sep) ? root : root + sep
   return path.startsWith(prefix)
+}
+
+/**
+ * The header's session label, `v0.8.1 · session <id>`: the running CLI version next to the id, so a
+ * session says which build it is. The header applies its own colors to the result.
+ */
+export function headerSessionLabel(sessionId: string): string {
+  return `v${cliVersion()} · session ${sessionId}`
 }
 
 /**

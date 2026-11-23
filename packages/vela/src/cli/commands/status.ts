@@ -4,6 +4,7 @@ import type { UsageTotals, VelaSession } from '@glows777/vela-core'
 import { formatUsd } from '../format.ts'
 import { formatContextFileList, formatStatusPath } from '../status-display.ts'
 import { sanitize } from '../tui/components.ts'
+import { cliVersion } from '../version.ts'
 import type { CommandHandler } from './index.ts'
 
 /** `/status`: session overview (model, id and where it is saved, context and token usage). */
@@ -25,6 +26,7 @@ export const statusCommands: CommandHandler[] = [
       const name = session.name ? plain(session.name) : ''
       const lines = [
         '\n[status]',
+        `  Version: ${cliVersion()}`,
         `  Session: ${name ? `${name} (${session.id})` : session.id}`,
         `  Path: ${sessionPath(session, agentDir)}`,
         `  Cwd: ${plain(session.cwd)}`,

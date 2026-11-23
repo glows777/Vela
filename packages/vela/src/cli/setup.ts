@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fuzzyFilter } from '@earendil-works/pi-tui'
@@ -217,11 +217,8 @@ Environment variables:
   VELA_DEBUG                    1: debug logging (interactive mode: ~/.vela/debug.log)
 `
 
-/** The package version, read from package.json two levels up (src/cli/ and dist/cli/ both sit there). */
-export function packageVersion(): string {
-  const file = new URL('../../package.json', import.meta.url)
-  return (JSON.parse(readFileSync(file, 'utf8')) as { version: string }).version
-}
+/** The package version; `--version` prints it. See [version.ts](./version.ts). */
+export { cliVersion as packageVersion } from './version.ts'
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
