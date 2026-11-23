@@ -4,7 +4,12 @@ import type { VelaLogger } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
 import { genericEvent, genericOptions } from './generic-events.ts'
 import { githubEvents, githubOptions } from './github-events.ts'
-import { HttpError, HttpListener, readBody } from './http.ts'
+import {
+  closeIncompleteRequest,
+  HttpError,
+  HttpListener,
+  readBody,
+} from './http.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelEvent } from './types.ts'
 
@@ -77,7 +82,7 @@ export class EventReceiver {
         connection: 'close',
       })
       res.end(text, () => {
-        if (!req.complete) req.destroy()
+        closeIncompleteRequest(req)
       })
     }
     try {

@@ -2,7 +2,12 @@ import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { VelaLogger } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
-import { HttpError, HttpListener, readBody } from './http.ts'
+import {
+  closeIncompleteRequest,
+  HttpError,
+  HttpListener,
+  readBody,
+} from './http.ts'
 import type { LocalEvents } from './local-events.ts'
 import type {
   LocalHost,
@@ -66,7 +71,7 @@ export class LocalHttp {
         connection: 'close',
       })
       res.end(JSON.stringify(value), () => {
-        if (!req.complete) req.destroy()
+        closeIncompleteRequest(req)
       })
     }
     try {

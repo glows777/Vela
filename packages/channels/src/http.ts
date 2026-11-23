@@ -14,6 +14,16 @@ export class HttpError extends Error {
   }
 }
 
+export function closeIncompleteRequest(req: IncomingMessage): void {
+  if (req.complete) return
+  const socket = req.socket
+  if (!socket || socket.destroyed) return
+  socket.end()
+  setTimeout(() => {
+    if (!socket.destroyed) socket.destroy()
+  }, 50).unref?.()
+}
+
 export function readBody(
   req: IncomingMessage,
   maxBody = 1024 * 1024,
