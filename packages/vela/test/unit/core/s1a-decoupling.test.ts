@@ -601,6 +601,7 @@ test('resuming a transcript with tool-approval-request preserves approval parts 
                 approvalId: 'apr-1',
                 approved: true,
                 reason: 'ok',
+                providerExecuted: true,
               },
             ],
           },
@@ -614,29 +615,14 @@ test('resuming a transcript with tool-approval-request preserves approval parts 
       expect(await session.resume()).toBe(true)
       await session.prompt('follow up')
       expect(model.calls).toHaveLength(1)
-      const aiTool = toAiModelMessages([
-        {
-          role: 'tool',
-          content: [
-            {
-              type: 'tool-approval-response',
-              approvalId: 'apr-1',
-              approved: true,
-              reason: 'ok',
-            },
-          ],
-        },
-      ])
-      expect(aiTool[0]).toEqual({
-        role: 'tool',
-        content: [
-          {
-            type: 'tool-approval-response',
-            approvalId: 'apr-1',
-            approved: true,
-            reason: 'ok',
-          },
-        ],
+      const approvalPart = model.calls[0]!.prompt.flatMap((m) =>
+        m.role === 'tool' ? m.content : [],
+      ).find((p) => p.type === 'tool-approval-response')
+      expect(approvalPart).toMatchObject({
+        type: 'tool-approval-response',
+        approvalId: 'apr-1',
+        approved: true,
+        reason: 'ok',
       })
     } finally {
       await vela.dispose()

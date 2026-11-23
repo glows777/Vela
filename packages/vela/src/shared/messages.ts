@@ -133,6 +133,7 @@ interface ToolApprovalResponsePart {
   approvalId: string
   approved: boolean
   reason?: string
+  providerExecuted?: boolean
   providerOptions?: ProviderOptions
 }
 

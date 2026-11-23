@@ -243,6 +243,9 @@ export function toAiModelMessages(
             approvalId: part.approvalId,
             approved: part.approved,
             ...(part.reason !== undefined ? { reason: part.reason } : {}),
+            ...(part.providerExecuted !== undefined
+              ? { providerExecuted: part.providerExecuted }
+              : {}),
             ...(part.providerOptions
               ? {
                   providerOptions:
@@ -358,6 +361,9 @@ export function fromAiResponseMessage(
           approvalId: part.approvalId,
           approved: part.approved,
           ...(part.reason !== undefined ? { reason: part.reason } : {}),
+          ...('providerExecuted' in part && part.providerExecuted !== undefined
+            ? { providerExecuted: Boolean(part.providerExecuted) }
+            : {}),
           ...('providerOptions' in part && part.providerOptions
             ? { providerOptions: part.providerOptions as ProviderOptions }
             : {}),
