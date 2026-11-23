@@ -12,7 +12,11 @@ import {
   planMicrocompact,
   summarize,
 } from './compressor.ts'
-import { estimateRequestTokens, type RequestSnapshot } from './request.ts'
+import {
+  contextRequestTokens,
+  estimateRequestTokens,
+  type RequestSnapshot,
+} from './request.ts'
 
 export { createRequestSnapshot } from './request.ts'
 
@@ -89,17 +93,6 @@ export class ContextManager {
     await this.store.flush()
   }
 
-  /**
-   * Context size for thresholds: what the provider reported for the latest prompt plus the local estimate
-   * of messages added since (like pi); the full request estimate until a provider reports usage.
-   */
-  private contextTokens(
-    request: RequestSnapshot,
-    estimate = estimateRequestTokens(request),
-  ): number {
-    return this.tracker.reportedContextTokens ?? estimate
-  }
-
   /** Keeps the tracker's displayed estimate in sync when no provider report anchors it. */
   private syncContextEstimate(tokens: number): void {
     if (this.tracker.reportedContextTokens === undefined)
@@ -131,7 +124,10 @@ export class ContextManager {
   ): Promise<void> {
     this.onEvent?.({ type: 'compaction_start', reason })
     try {
-      const before = this.contextTokens(request)
+      const before = contextRequestTokens(
+        request,
+        this.tracker.reportedContextTokens,
+      )
       const compacted = await summarize(
         request,
         this.store,
@@ -202,7 +198,11 @@ export class ContextManager {
   ): Promise<void> {
     request.abortSignal?.throwIfAborted()
     const estimate = estimateRequestTokens(request)
-    const before = this.contextTokens(request, estimate)
+    const before = contextRequestTokens(
+      request,
+      this.tracker.reportedContextTokens,
+      estimate,
+    )
     if (!this.autoCompaction) {
       if (before > this.limits.maxInputTokens)
         throw new Error(
@@ -297,7 +297,7 @@ export class ContextManager {
       await this.summarizeHistory(request, 'threshold')
       return
     }
-    if (before > this.limits.maxInputTokens)
+    if (before > this.limits.maxInputTokens && !canSummarize(request.messages))
       throw new Error(
         'Context exceeds the safe input size; this turn was stopped and the original history kept.',
       )

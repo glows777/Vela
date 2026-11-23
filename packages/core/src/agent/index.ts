@@ -1,8 +1,8 @@
 import { APICallError } from '@ai-sdk/provider'
 import { type AssistantModelMessage, type LanguageModel, streamText } from 'ai'
 import {
+  contextRequestTokens,
   createRequestSnapshot,
-  estimateRequestTokens,
   type RequestSnapshot,
 } from '../context/request.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
@@ -58,8 +58,8 @@ interface AgentLoopParameter {
     producer: string,
   ) => Promise<ModelMessage[]>
   /**
-   * Called once per step when the provider rejects the request because the context is too long (like pi's
-   * overflow recovery): compacts the history, then the step is sent again. A second overflow fails the loop.
+   * Called at most once per step when the local cap or provider rejects an oversized request.
+   * Compacts the history before the next attempt.
    */
   compactOnOverflow?: (signal?: AbortSignal) => Promise<void>
   abortSignal?: AbortSignal
@@ -217,19 +217,9 @@ export const agentLoop = async ({
       await prepareContext?.(request)
       abortSignal?.throwIfAborted()
       const inferenceSystem = currentSystem()
-      let requestMessages = transformContext
-        ? await transformContext(messages, producer)
-        : messages
-      abortSignal?.throwIfAborted()
-      if (
-        estimateRequestTokens(
-          { ...request, systemPrompt: inferenceSystem },
-          requestMessages,
-        ) > limits.maxInputTokens
-      )
-        throw new Error(
-          'Request exceeds the safe input size; this turn was stopped.',
-        )
+      const messagesForRequest = async () =>
+        transformContext ? transformContext(messages, producer) : messages
+      let requestMessages = await messagesForRequest()
 
       let shouldBreak = false
       const sources = new Map<string, string>()
@@ -250,9 +240,44 @@ export const agentLoop = async ({
       // Retry attempts that already failed (auto_retry_start was emitted for each)
       let retried = 0
       let compactedForOverflow = false
+      const recoverOverflow = async (signal?: AbortSignal) => {
+        compactedForOverflow = true
+        await compactOnOverflow?.(signal)
+        requestMessages = await messagesForRequest()
+      }
+      const sizeError =
+        'Request exceeds the safe input size; this turn was stopped.'
 
       const started = performance.now()
       for (;;) {
+        checkDrain()
+        abortSignal?.throwIfAborted()
+        if (
+          contextRequestTokens(
+            {
+              ...request,
+              systemPrompt: inferenceSystem,
+              messages: requestMessages,
+            },
+            tokenTracker.reportedContextTokens,
+          ) > limits.maxInputTokens
+        ) {
+          if (compactedForOverflow || !compactOnOverflow) {
+            endTurnEmpty()
+            throw new Error(sizeError)
+          }
+          try {
+            await recoverOverflow(abortSignal)
+          } catch (error) {
+            endTurnEmpty()
+            abortSignal?.throwIfAborted()
+            throw new Error(
+              `${sizeError} (compacting the context to recover failed: ${errorMessageOf(error)})`,
+              { cause: error },
+            )
+          }
+          continue
+        }
         const current = new StepMessage(emit)
         step = current
         shouldBreak = false
@@ -490,13 +515,8 @@ export const agentLoop = async ({
           ) {
             // Like pi: the provider said the context is too long; compact once and send the step again
             step.endInterrupted('error', errorMessage)
-            compactedForOverflow = true
             try {
-              await compactOnOverflow(abortSignal)
-              // The compacted history is sent again through the context handlers
-              requestMessages = transformContext
-                ? await transformContext(messages, producer)
-                : messages
+              await recoverOverflow(abortSignal)
             } catch (compactError) {
               endTurnEmpty()
               abortSignal?.throwIfAborted()

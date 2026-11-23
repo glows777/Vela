@@ -334,8 +334,25 @@ export function withoutForeignReasoning(
   })
 }
 
-/** JSON-envelope estimate that replaces image payloads instead of counting base64 as prose. */
+/** JSON-envelope estimate: replace image payloads and exclude opaque encrypted provider data. */
 export function messageEnvelopeChars(messages: ModelMessage[]): number {
+  const withoutOpaqueOptions = <
+    T extends { providerOptions?: AssistantModelMessage['providerOptions'] },
+  >(
+    part: T,
+  ): T => {
+    const options = part.providerOptions
+    const openai = options?.openai
+    if (
+      !openai ||
+      !('reasoningEncryptedContent' in openai || 'encryptedContent' in openai)
+    )
+      return part
+    const counted = { ...openai }
+    delete counted.reasoningEncryptedContent
+    delete counted.encryptedContent
+    return { ...part, providerOptions: { ...options, openai: counted } }
+  }
   let imageCount = 0
   const image = () => {
     imageCount++
@@ -348,9 +365,9 @@ export function messageEnvelopeChars(messages: ModelMessage[]): number {
       content: message.content.map((part) => {
         if (isImageContentPart(part)) return image()
         if (part.type !== 'tool-result' || part.output.type !== 'content')
-          return part
+          return withoutOpaqueOptions(part)
         return {
-          ...part,
+          ...withoutOpaqueOptions(part),
           output: {
             ...part.output,
             value: part.output.value.map((item) =>

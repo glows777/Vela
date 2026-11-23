@@ -74,6 +74,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- Long sessions no longer get stuck at the pre-request context cap when the provider reports that the history fits. Opaque encrypted reasoning is not counted as text, and recoverable oversized requests get one compaction attempt ([#536](https://github.com/glows777/Vela/issues/536)).
+
 - **Lark startup recovery no longer repeats feedback errors for expired or conflicting saved delivery intents**; terminal refusals settle locally without another chat message.
 
 - **Hosted background jobs no longer disappear silently after a service restart.** The existing channel directory records jobs before execution, and startup queues one unknown-result input for each lost job without a new human message. A saved normal-result input or explicit Stop/close clears the record; SIGTERM shutdown preserves it. Durable input markers reconcile interrupted notification persistence without claiming exactly-once remote replies ([#411](https://github.com/glows777/Vela/issues/411)).
