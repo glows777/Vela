@@ -141,10 +141,26 @@ for (const [label, files, pattern] of [
     /AI SDK import "runtime:ai" is confined to src\/providers\//,
   ],
   [
+    'AI SDK subpath outside src/providers/',
+    {
+      'packages/vela/src/runtime/bad.ts':
+        "import { MockLanguageModelV4 } from 'ai/test'; export { MockLanguageModelV4 }",
+    },
+    /AI SDK import "runtime:ai\/test" is confined to src\/providers\//,
+  ],
+  [
     'runtime bypassing layer checks via root barrel',
     {
       'packages/vela/src/runtime/bad.ts':
         "export { product } from '@glows777/vela'",
+    },
+    /layer runtime may not import root barrel/,
+  ],
+  [
+    'runtime bypassing layer checks via extension-api barrel',
+    {
+      'packages/vela/src/runtime/bad.ts':
+        "export type { Session } from '@glows777/vela/extension-api'",
     },
     /layer runtime may not import root barrel/,
   ],
@@ -308,8 +324,32 @@ test('print mode with AGENTS.md does not load @earendil-works/pi-tui', async () 
   const preload = join(work, 'block-tui.ts')
   await writeFile(
     preload,
-    `import { mock } from 'bun:test'\nmock.module('@earendil-works/pi-tui', () => { throw new Error('pi-tui must not load in print mode') })\n`,
+    `Bun.plugin({ name: 'block-tui', setup(build) { build.onLoad({ filter: /pi-tui/ }, () => { throw new Error('pi-tui must not load in print mode') }) } })\n`,
   )
+  // Positive control: prove the resolution hook catches an actual import that pulls in pi-tui.
+  const statusDisplay = join(
+    import.meta.dir,
+    '../../packages/vela/src/cli/status-display.ts',
+  )
+  const probe = join(work, 'probe-tui.ts')
+  await writeFile(probe, `await import(${JSON.stringify(statusDisplay)})\n`)
+  const probeChild = Bun.spawn(
+    [process.execPath, '--preload', preload, probe],
+    {
+      cwd: work,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { PATH: process.env.PATH ?? '', HOME: home },
+    },
+  )
+  const [probeErr, probeCode] = await Promise.all([
+    new Response(probeChild.stderr).text(),
+    probeChild.exited,
+  ])
+  expect(probeCode).not.toBe(0)
+  expect(probeErr).toContain('pi-tui must not load in print mode')
+
   const main = join(import.meta.dir, '../../packages/vela/src/cli/main.ts')
   const child = Bun.spawn(
     [process.execPath, '--preload', preload, main, '-p', 'hello'],
@@ -335,4 +375,4 @@ test('print mode with AGENTS.md does not load @earendil-works/pi-tui', async () 
   expect(code, stderr).toBe(0)
   expect(stdout.trim().length).toBeGreaterThan(0)
   expect(stderr).not.toContain('pi-tui must not load')
-})
+}, 20_000)

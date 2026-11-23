@@ -51,7 +51,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `thinkingLevel` | `medium` | Thinking level for new sessions: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `autoCompaction` | `true` | Automatic compaction for new sessions (pi's `compaction.enabled`). `false`: no microcompaction, threshold summary or compact-and-retry on overflow; `compact()` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
 | `cwd` | `process.cwd()` | Working directory for file, search and bash tools and for skills. |
-| `dataDir` | temp dir | Project data directory: `sessions/`, `usage/` and extension data such as `memory/` and `rag/`. Relative paths resolve against `cwd`. Without it nothing persists: sessions stay in memory and long tool output goes to a temp dir that `dispose()` deletes. The CLI uses the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. |
+| `dataDir` | temp dir | Project data directory: `sessions/`, `usage/` and extension data such as `memory/`. Relative paths resolve against `cwd`. Without it nothing persists: sessions stay in memory and long tool output goes to a temp dir that `dispose()` deletes. The CLI uses the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. |
 | `env` | local environment | Optional per-tool resolver `({ sessionId, location }) => ExecutionEnv \| undefined` (also async). File tools, search, bash (including user commands), and background jobs use the returned adapter. Resource preparation also resolves the session environment. A local location requires `node:local`. For a non-local location the trusted resolver supplies a distinct, stable adapter identity and the requested environment cwd. An adapter that implements `exec` keeps its existing contract: a background command passes `spill` like a foreground one, so the complete output lands in the adapter's own spill file, whose `spillPath` the exit delivery names. The first turn, fork or compaction that needs to prepare workspace instructions fails before contacting the model if the resolver is unavailable, even for plain text. Retry after the environment returns. Later tool calls still resolve independently. The default session shell is a login shell; a custom adapter made with `createLocalExecutionEnv` runs commands with `bash -c`. Local commands have the host user's authority. |
 | `sessionStorage` | see [Session storage](#session-storage) | Where session history is stored. |
 | `skillDirs` | `<cwd>/.vela/skills`, `<cwd>/.skills` | Skill directories or files in the [Agent Skills format](settings.md#skills). The first skill with a name wins. |
@@ -345,7 +345,7 @@ Sessions in one Vela run concurrently. Tool definitions, extensions, skills, mem
 import { createVela, fileSessionStorage, memorySessionStorage } from '@glows777/vela'
 
 createVela({ dataDir: '.vela-data' })                          // files under .vela-data/sessions
-createVela({ dataDir: '.vela-data', sessionStorage: memorySessionStorage() }) // keep memory/rag data, not sessions
+createVela({ dataDir: '.vela-data', sessionStorage: memorySessionStorage() }) // keep memory data, not sessions
 createVela({ sessionStorage: fileSessionStorage('/var/lib/app/sessions') })
 ```
 
@@ -374,12 +374,12 @@ Long tool output and the tool call history are always written to files under `<d
 
 ```typescript
 import {
-  createVela, lark, importExtension, loadConfig, mcp, memory, rag, web,
+  createVela, lark, importExtension, loadConfig, mcp, memory, web,
   type VelaExtension,
 } from '@glows777/vela'
 
 const builtins: Record<string, () => VelaExtension> = {
-  memory: () => memory(), rag: () => rag(), web: () => web(),
+  memory: () => memory(), web: () => web(),
   lark: () => lark(), mcp: () => mcp({ servers: config.mcp.servers }),
 }
 const config = loadConfig({ cwd: process.cwd(), env: process.env, builtins: Object.keys(builtins) })
@@ -446,7 +446,7 @@ Extensions get the same logger as `vela.logger`.
 The SDK loads no extensions by default. The CLI's built-in extensions are exported as factories:
 
 ```typescript
-import { background, createVela, memory, todo, rag, createEmbedder, web, lark, mcp } from '@glows777/vela'
+import { background, createVela, memory, todo, web, lark, mcp } from '@glows777/vela'
 
 const vela = createVela({
   dataDir: '.vela-data',
@@ -454,7 +454,6 @@ const vela = createVela({
     background(),
     memory(),
     todo(),
-    rag({ embedder: createEmbedder({ modelId, apiKey, url }) }),
     web({ tavilyKey: process.env.TAVILY_API_KEY }),
     mcp({ servers: { docs: { url: 'https://example.com/mcp' } } }),
   ],

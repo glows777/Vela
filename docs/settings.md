@@ -172,19 +172,13 @@ Each extension reads its own section, `extensionConfig.<name>`, as `vela.config`
 ```json
 {
   "extensionConfig": {
-    "rag": {
-      "embedding": {
-        "baseUrl": "https://api.example.com/v1",
-        "model": "text-embedding-3-small",
-        "apiKey": "${EMBEDDING_KEY}"
-      }
-    },
+    "web": { "tavilyKey": "${TAVILY_API_KEY}" },
     "lark": { "owners": "ou_xxx,ou_yyy", "timezone": "Asia/Shanghai" }
   }
 }
 ```
 
-The CLI fills the built-in extensions' sections from environment variables first (`TAVILY_API_KEY`, `LARK_APP_ID`, `EMBEDDING_MODEL_KEY` and the others listed in [CLI](cli.md#environment-variables)); values in `extensionConfig` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
+The CLI fills the built-in extensions' sections from environment variables first (`TAVILY_API_KEY`, `LARK_APP_ID` and the others listed in [CLI](cli.md#environment-variables)); values in `extensionConfig` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
 
 `extensionConfig.lark.timezone` is the single IANA timezone for scheduled wake-ups (for example `Asia/Shanghai`); omitted, it uses the process timezone. Startup rejects invalid names. Reminder creation accepts local dates/times in this zone, and both tool confirmations and `!routines` show it explicitly. Recurring schedules follow the configured wall time; changing the zone shifts their UTC occurrences. Saved one-off instants do not change. See [scheduled wake-ups](channels.md#scheduled-wake-ups-m4) for weekday, DST and cancellation behavior.
 
@@ -212,8 +206,7 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
         │       ├── transcript.jsonl  the conversation
         │       └── …                 long tool output and tool call history
         ├── memory/                   memory extension (MEMORY.md and one file per memory)
-        ├── usage/requests.jsonl      token usage records
-        └── rag/knowledge.db          rag extension
+        └── usage/requests.jsonl      token usage records
 ```
 
 The hash keeps two folders whose readable names collide (`/a-b/c` and `/a/b-c`) apart. Set `dataDir` to store a project's data somewhere else. Session files are described in [Session format](session-format.md).

@@ -11,7 +11,6 @@ import { createTestVela, fauxText, fauxToolCall } from '@glows777/vela/testing'
 | [`createFauxModel()`](#faux-model) and the `faux*` helpers | A scripted model that plays back responses you write. |
 | [`createTestVela()`](#createtestvela) | A real Vela assembled in a temp directory with the faux model. |
 | [`recordModel()`, `replayScenario()`](#record-and-replay) | Record a real model run as a scenario file, then replay it offline. |
-| [`createFauxEmbedder()`](#faux-embedder) | Deterministic offline embeddings for the RAG extension. |
 | `loadFauxScenario()`, `readFauxScenario()` | Read a scenario JSON file (as a model, or as data). |
 | `tempDir()`, `cleanupTestVelas()` | Temp directories and cleanup. |
 
@@ -125,7 +124,7 @@ The built-in memory extension is always loaded, like in the CLI; the RAG extensi
 | `t.clearEvents()` | Forget recorded events. |
 | `t.streamedText()`, `t.lastAssistantText()`, `t.messages` | Streamed text, last answer, session history. |
 | `t.cwd`, `t.path(rel)`, `t.readFile(rel)`, `t.writeFile(rel, text)` | Files in the temp cwd. |
-| `t.dataDir`, `t.dataPath(rel)`, `t.readData(rel)`, `t.exists(rel)` | Files in the data directory (`sessions/`, `usage/`, `memory/`, `rag/`). |
+| `t.dataDir`, `t.dataPath(rel)`, `t.readData(rel)`, `t.exists(rel)` | Files in the data directory (`sessions/`, `usage/`, `memory/`). |
 | `t.tracker()` | The default session's usage tracker. |
 | `t.cleanup({ keepDir? })` | Dispose and delete the temp directory. |
 
@@ -271,15 +270,6 @@ A scenario file is a faux script plus the inputs:
 Failed requests are recorded as `error`, broken streams as `streamError`, aborted requests as `hang`, and compaction summaries go to `generate`. You can also write scenario files by hand; `chunkSize`, `chunkDelayMs` and `cache` are accepted at the top level.
 
 **A recording contains the conversation verbatim**: your prompts, the model's answers, tool calls with their arguments, and whatever the tools returned (file contents, command output). Vela writes it with mode `0600`. Review and strip anything sensitive before you commit one or share it.
-
-## Faux embedder
-
-```ts
-const t = createTestVela({ embedder: true })   // RAG with the faux embedder
-const embed = createFauxEmbedder({ dims: 128 }) // or use it directly
-```
-
-Text is split into words and hashed into a unit vector (default 128 dimensions). The same text gives the same vector, and more shared words give higher similarity, so RAG ingest and search rank results sensibly without a network. `onCall(texts)` lets a test see what was embedded.
 
 ## Demo model
 

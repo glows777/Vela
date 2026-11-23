@@ -29,7 +29,7 @@ JSON mode has no UI. Extension dialogs answer "no": `confirm` returns `false`, `
 
 Each record is one JSON object terminated by LF (`\n`). Split records only on LF. Unicode line and paragraph separators (U+2028, U+2029) are valid inside JSON strings and are not record boundaries, so don't use Node's `readline`, which splits on them; use a byte or UTF-8 stream decoder and split on `\n`.
 
-Stdout carries only JSON lines. Diagnostics, extension `console.log` output and warnings such as `[rag] embedding ... not configured` go to stderr.
+Stdout carries only JSON lines. Diagnostics, extension `console.log` output and warnings go to stderr.
 
 Vela waits for stdout to drain when the pipe is full, so a slow reader slows Vela down instead of growing its memory. Keep reading until the process exits. If the reader closes stdout early (`vela --mode json "..." | head -3`), Vela stops and exits quietly with code 0.
 

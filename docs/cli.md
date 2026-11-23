@@ -249,9 +249,6 @@ Two more kinds of `/` input are expanded by the session itself, so they also wor
 | `/memory search <keywords>` | `memory` | Search memories. |
 | `/memory lint` | `memory` | Check the memory store for problems. |
 | `/dream` | `memory` | Consolidate memory against recent conversations in an isolated call and show the report. |
-| `/rag` | `rag` | Show the knowledge base size and sources. |
-| `/rag ingest <path>` | `rag` | Ingest a document into the knowledge base. |
-| `/rag clear` | `rag` | Delete every chunk, for example after changing the embedding model. |
 | `/tasks`, `/bashes` | `background` | List this session's background tasks: id, state, elapsed time, command head and output tail. |
 | `/tasks stop <id>` | `background` | End a running background task through `background_stop` and print its final tail. An id that already delivered prints the same unknown-command message as `background_stop`. |
 
@@ -279,7 +276,6 @@ Set `VELA_DEBUG=1` to see debug logs. In interactive mode they are appended to `
 | `TAVILY_API_KEY`, `SERPER_API_KEY` | Independent search keys for the `web` extension (`extensionConfig.web.tavilyKey`, `.serperKey`). Tavily wins if both are set; supported models may use provider-hosted search without either key. |
 | `LARK_APP_ID`, `LARK_APP_SECRET` | Credentials for the `lark` channel (`extensionConfig.lark.appId`, `.appSecret`); without them it does not connect. |
 | `LARK_OWNERS` | Comma-separated Lark open_ids whose direct chats are always enabled (`extensionConfig.lark.owners`). |
-| `EMBEDDING_MODEL_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_MODEL_KEY` | Embedding API for the `rag` extension (`extensionConfig.rag.embedding.baseUrl`, `.model`, `.apiKey`); the knowledge base is enabled only when all three are set. |
 
 The extension variables are defaults for the `extensionConfig` keys shown in parentheses: a value set in `settings.json` overrides them, and an empty string counts as unset. `models.json` and `extensionConfig` can read any other variable with `$NAME` or `${NAME}`. Vela does not implicitly read the SDK's `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; configure a provider `baseUrl` instead.
 

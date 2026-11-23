@@ -458,7 +458,17 @@ function toolMatcher(entry: string): (name: string) => boolean {
   return (name) => pattern.test(name)
 }
 
-/** Space- and slash-separated case-insensitive subsequence match (keeps `--list-models` off pi-tui). */
+function isSubsequence(haystack: string, needle: string): boolean {
+  let pos = 0
+  for (const ch of needle) {
+    const idx = haystack.indexOf(ch, pos)
+    if (idx === -1) return false
+    pos = idx + 1
+  }
+  return true
+}
+
+/** Space- and slash-separated case-insensitive subsequence match with alpha/digit swap fallback (keeps `--list-models` off pi-tui). */
 function matchesTokens(text: string, query: string): boolean {
   const haystack = text.toLowerCase()
   for (const token of query
@@ -466,12 +476,11 @@ function matchesTokens(text: string, query: string): boolean {
     .toLowerCase()
     .split(/[\s/]+/)) {
     if (!token) continue
-    let pos = 0
-    for (const ch of token) {
-      const idx = haystack.indexOf(ch, pos)
-      if (idx === -1) return false
-      pos = idx + 1
-    }
+    if (isSubsequence(haystack, token)) continue
+    const swapped =
+      token.match(/^([a-z]+)([0-9]+.*)$/) ?? token.match(/^([0-9]+)([a-z]+.*)$/)
+    if (!swapped || !isSubsequence(haystack, `${swapped[2]}${swapped[1]}`))
+      return false
   }
   return true
 }

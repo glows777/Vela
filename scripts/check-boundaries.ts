@@ -132,7 +132,10 @@ const packageName = (spec: string) =>
     ? spec.split('/').slice(0, 2).join('/')
     : spec.split('/')[0]!
 
-const isAiSdk = (spec: string) => spec === 'ai' || spec.startsWith('@ai-sdk/')
+const isAiSdk = (spec: string) => {
+  const name = packageName(spec)
+  return name === 'ai' || name.startsWith('@ai-sdk/')
+}
 
 function layerOf(pkgDir: string, file: string): string | undefined {
   const rel = relative(join(pkgDir, 'src'), file).replaceAll('\\', '/')
@@ -418,8 +421,11 @@ export async function checkBoundaries(root: string): Promise<string[]> {
             join(pkg.dir, 'src'),
             destination,
           ).replaceAll('\\', '/')
+          const canUseDriver =
+            srcLayer === 'driver' ||
+            (LAYER_ALLOWED[srcLayer]?.includes('driver') ?? false)
           const allowedRoot =
-            dstBase === 'extension-api.ts' ||
+            (dstBase === 'extension-api.ts' && canUseDriver) ||
             ((srcLayer === 'cli' || srcLayer === 'testing') &&
               (dstBase === 'vela.ts' || dstBase === 'settings.ts'))
           if (!allowedRoot)
