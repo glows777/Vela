@@ -20,6 +20,7 @@
 }
 
 .assistant {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -35,9 +36,80 @@
   font-size: var(--vela-text-base);
   line-height: 1.6;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
   user-select: text;
   -webkit-user-select: text;
+}
+
+.text :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre) {
+  margin-block: 0 0.65em;
+}
+
+.text > :last-child {
+  margin-block-end: 0;
+}
+
+.text :is(h1, h2, h3) {
+  font-size: 1.15em;
+}
+
+.text a {
+  color: var(--vela-accent);
+  text-decoration: underline;
+}
+
+.text blockquote {
+  margin-inline: 0;
+  padding-inline-start: 12px;
+  border-inline-start: 2px solid var(--vela-border-strong);
+  color: var(--vela-muted);
+}
+
+.text code {
+  font-family: var(--vela-family-mono);
+}
+
+.text :not(pre) > code {
+  background: var(--vela-bubble);
+  border-radius: var(--vela-radius-sm);
+  padding-inline: 0.25em;
+}
+
+.codeBlock,
+.table {
+  max-width: 100%;
+  margin-block-end: 0.65em;
+}
+
+.codeBlock {
+  background: var(--vela-bubble);
+  border-radius: var(--vela-radius-sm);
+  padding: 8px 12px;
+}
+
+.codeBlock pre,
+.table {
+  overflow-x: auto;
+}
+
+.codeBlock pre {
+  margin: 0;
+  white-space: pre;
+}
+
+.copy {
+  display: block;
+  margin-inline-start: auto;
+  color: var(--vela-muted);
+  cursor: pointer;
+}
+
+.table table {
+  border-collapse: collapse;
+}
+
+.table :is(th, td) {
+  border: 1px solid var(--vela-border-strong);
+  padding: 4px 8px;
 }
 
 .system {

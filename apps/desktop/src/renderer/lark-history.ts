@@ -14,7 +14,6 @@ export type LarkHistoryHost = {
   set(sessionId: string, messages: Message[]): void
   /** `false` removes the “Show earlier messages” action for that session. */
   mark(sessionId: string, hasOlder: boolean): void
-  fail(reason: string): void
   read(input: {
     chatId: string
     sessionId: string
@@ -159,7 +158,6 @@ export function larkHistory(host: LarkHistoryHost) {
       // whatever it already showed, and the reason goes next to it.
       host.set(sessionId, host.shown(sessionId))
       const error = errorMessage(cause)
-      host.fail(error)
       return error
     }
   }

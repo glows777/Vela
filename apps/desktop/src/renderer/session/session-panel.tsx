@@ -5,6 +5,7 @@ import type { Project, Session } from '../../shared/bridge.ts'
 import { Composer } from '../components/composer.tsx'
 import { Conversation } from '../components/conversation.tsx'
 import { MessageView } from '../components/message.tsx'
+import { PageError } from '../components/page-error.tsx'
 import { StateMark } from '../components/state-mark.tsx'
 import {
   larkTopicComposer,
@@ -273,9 +274,7 @@ function SessionDetail({
         onSend={(text) => sendInSession(project, session, text)}
       />
       {lark && snapshot.error ? (
-        <p className={styles.notice} role="alert">
-          {snapshot.error}
-        </p>
+        <PageError message={snapshot.error} className={styles.notice} />
       ) : null}
     </>
   )

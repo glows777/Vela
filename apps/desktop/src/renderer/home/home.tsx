@@ -1,6 +1,7 @@
 import { ArrowRight, ChevronDown } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Composer } from '../components/composer.tsx'
+import { PageError } from '../components/page-error.tsx'
 import {
   larkStartHint,
   lastUsedProject,
@@ -203,9 +204,7 @@ export function Home({
             </p>
           )}
           {snapshot.error ? (
-            <p className={styles.error} role="alert">
-              {snapshot.error}
-            </p>
+            <PageError message={snapshot.error} className={styles.error} />
           ) : null}
         </div>
       </section>

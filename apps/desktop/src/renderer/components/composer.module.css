@@ -24,6 +24,7 @@
 }
 
 .text {
+  field-sizing: content;
   width: 100%;
   min-height: 46px;
   max-height: 12rem;
@@ -33,6 +34,7 @@
   color: var(--vela-ink);
   font-size: var(--vela-text-base);
   line-height: 1.5;
+  overflow-y: auto;
   resize: none;
   outline: none;
 }

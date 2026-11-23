@@ -259,6 +259,8 @@ export interface DesktopBridge {
   }): Promise<{ messages: Message[]; nextCursor?: string }>
   /** Opens the enabled group in Lark. A topic has no documented deep link. */
   openLarkChat(chatId: string): Promise<void>
+  openMessageLink(url: string): Promise<void>
+  copyMessageCode(text: string): Promise<void>
   listRoutines(
     channel: string,
     chatId: string,
@@ -329,6 +331,8 @@ export type Request =
       }
     }
   | { method: 'openLarkChat'; chatId: string }
+  | { method: 'openMessageLink'; url: string }
+  | { method: 'copyMessageCode'; text: string }
   | { method: 'listRoutines'; channel: string; chatId: string }
   | {
       method: 'createRoutine'

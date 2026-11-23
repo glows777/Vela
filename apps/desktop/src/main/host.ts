@@ -13,7 +13,7 @@ import {
   LarkSubmitError,
   lark,
 } from '@glows777/vela-lark'
-import { BrowserWindow, dialog, shell } from 'electron'
+import { BrowserWindow, clipboard, dialog, shell } from 'electron'
 import {
   EVENT,
   type Event,
@@ -289,6 +289,21 @@ export async function openHost(
             ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
           }
         }
+        case 'openMessageLink': {
+          const url =
+            typeof request.url === 'string' && URL.canParse(request.url)
+              ? new URL(request.url)
+              : undefined
+          if (url?.protocol !== 'https:' && url?.protocol !== 'http:')
+            throw new Error('Only HTTP and HTTPS links can be opened')
+          await shell.openExternal(url.href)
+          return
+        }
+        case 'copyMessageCode':
+          if (typeof request.text !== 'string')
+            throw new Error('Code to copy must be text')
+          clipboard.writeText(request.text)
+          return
         case 'openLarkChat': {
           if (!larkHost) throw new Error('Lark is not available in this app')
           const chats = await larkHost.chats()

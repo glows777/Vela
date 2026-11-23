@@ -3,6 +3,7 @@ import type { Project } from '../../shared/bridge.ts'
 import { Composer } from '../components/composer.tsx'
 import { Conversation } from '../components/conversation.tsx'
 import { MessageView } from '../components/message.tsx'
+import { PageError } from '../components/page-error.tsx'
 import { larkGroupComposer, projectName, projectTimeline } from '../format.ts'
 import type { Panel } from '../panel.ts'
 import { SessionPanel } from '../session/session-panel.tsx'
@@ -99,9 +100,7 @@ export function ProjectPage({
             onSend={(text) => sendInProject(project, text)}
           />
           {snapshot.error ? (
-            <p className={styles.error} role="alert">
-              {snapshot.error}
-            </p>
+            <PageError message={snapshot.error} className={styles.error} />
           ) : null}
         </div>
       </div>

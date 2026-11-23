@@ -42,6 +42,8 @@ const bridge: DesktopBridge = {
   chooseFolder: () => invoke({ method: 'chooseFolder' }),
   messages: (input) => invoke({ method: 'messages', input }),
   larkMessages: (input) => invoke({ method: 'larkMessages', input }),
+  openMessageLink: (url) => invoke({ method: 'openMessageLink', url }),
+  copyMessageCode: (text) => invoke({ method: 'copyMessageCode', text }),
   openLarkChat: (chatId) => invoke({ method: 'openLarkChat', chatId }),
   listRoutines: (channel, chatId) =>
     invoke({ method: 'listRoutines', channel, chatId }),

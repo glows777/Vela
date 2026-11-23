@@ -90,7 +90,6 @@ const history = larkHistory({
         ? { ...snapshot.earlier, [sessionId]: true }
         : withoutKey(snapshot.earlier, sessionId),
     }),
-  fail: (error) => publish({ error }),
   read: (input) => vela.larkMessages(input),
 })
 
@@ -98,6 +97,28 @@ const publish = (change: Partial<Snapshot>) => {
   snapshot = { ...snapshot, ...change }
   for (const listener of listeners) listener()
 }
+let errorView = 'home'
+let viewGeneration = 0
+
+export function dismissPageError() {
+  if (snapshot.error) publish({ error: '' })
+}
+
+export function setErrorView(view: string) {
+  if (view === errorView) return
+  errorView = view
+  viewGeneration++
+  dismissPageError()
+}
+
+/** Capture the page before the operation can outlive it. */
+function pageError(view = errorView) {
+  const generation = viewGeneration
+  return (error: string) => {
+    if (view === errorView && generation === viewGeneration) publish({ error })
+  }
+}
+
 const subscribe = (listener: () => void) => {
   listeners.add(listener)
   return () => {
@@ -160,6 +181,7 @@ async function readHistory(
   sessionId: string,
   firstOnly: boolean,
 ) {
+  const report = pageError(`project:${projectId}`)
   try {
     const collected: Message[] = []
     let after: string | undefined
@@ -177,7 +199,7 @@ async function readHistory(
     mergeMessages(sessionId, collected)
     return true
   } catch (cause) {
-    publish({ error: errorMessage(cause) })
+    report(errorMessage(cause))
     return false
   }
 }
@@ -244,8 +266,9 @@ export function loadSession(projectId: string, sessionId: string) {
   }
   const topic = { projectId, session }
   visibleLarkTopic = topic
+  const report = pageError(`project:${projectId}`)
   void history.loadTopic(projectId, session).then((error) => {
-    if (error && visibleLarkTopic === topic) publish({ error })
+    if (error && visibleLarkTopic === topic) report(error)
   })
   return () => {
     if (visibleLarkTopic === topic) visibleLarkTopic = undefined
@@ -254,6 +277,7 @@ export function loadSession(projectId: string, sessionId: string) {
 
 /** Reads the project chat and the first message of every started session, which anchors its card. */
 export async function loadProject(projectId: string) {
+  const report = pageError(`project:${projectId}`)
   const project = snapshot.projects.find((item) => item.id === projectId)
   if (!project) return
   if (project.channel === 'lark') {
@@ -261,11 +285,11 @@ export async function loadProject(projectId: string) {
     try {
       mergeSessions(await vela.sessions('lark', project.id))
     } catch (cause) {
-      publish({ error: errorMessage(cause) })
+      report(errorMessage(cause))
       return
     }
     const error = await history.load(project)
-    if (error) publish({ error })
+    if (error) report(error)
     return
   }
   try {
@@ -275,14 +299,15 @@ export async function loadProject(projectId: string) {
     for (const session of sessions)
       if (session.topic) await loadMessages(projectId, session.sessionId, true)
   } catch (cause) {
-    publish({ error: errorMessage(cause) })
+    report(errorMessage(cause))
   }
 }
 
 /** One older page of a Lark group's history. */
 export function loadEarlierLark(project: Project) {
+  const report = pageError(`project:${project.id}`)
   void history.load(project, true).then((error) => {
-    if (error) publish({ error })
+    if (error) report(error)
   })
 }
 
@@ -316,6 +341,7 @@ const sessionMap = (sessions: Session[]) =>
 
 /** Re-reads the frame after a channel connects or drops. */
 async function refresh() {
+  const report = pageError()
   try {
     const { projects, sessions, connections } = await readFrame()
     publish({
@@ -324,11 +350,12 @@ async function refresh() {
       connections,
     })
   } catch (cause) {
-    publish({ error: errorMessage(cause) })
+    report(errorMessage(cause))
   }
 }
 
 async function reload() {
+  const report = pageError()
   try {
     const [settings, frame] = await Promise.all([vela.settings(), readFrame()])
     publish({
@@ -337,10 +364,10 @@ async function reload() {
       projects: frame.projects,
       sessions: sessionMap(frame.sessions),
       connections: frame.connections,
-      error: '',
     })
+    report('')
   } catch (cause) {
-    publish({ error: errorMessage(cause) })
+    report(errorMessage(cause))
   }
 }
 
@@ -378,6 +405,7 @@ async function sendLocal(
   sessionId: string,
   text: string,
 ): Promise<boolean> {
+  const report = pageError()
   const clientMessageId = crypto.randomUUID()
   mergeMessages(sessionId, [
     {
@@ -396,7 +424,7 @@ async function sendLocal(
       text,
       clientMessageId,
     })
-    publish({ error: '' })
+    report('')
     return true
   } catch (cause) {
     publish({
@@ -406,8 +434,8 @@ async function sendLocal(
           (message) => message.clientMessageId !== clientMessageId,
         ),
       },
-      error: errorMessage(cause),
     })
+    report(errorMessage(cause))
     return false
   }
 }
@@ -435,10 +463,11 @@ const larkNotice = (result: SubmitReceipt, place: string) => {
 }
 
 async function submitLark(input: LarkSubmit): Promise<boolean> {
+  const report = pageError()
   try {
     const result = await vela.submit('lark', input)
     if (result.outcome === 'not-sent') {
-      publish({ error: result.error ?? 'Lark did not accept the message.' })
+      report(result.error ?? 'Lark did not accept the message.')
       return false
     }
     const project = snapshot.projects.find(
@@ -460,17 +489,17 @@ async function submitLark(input: LarkSubmit): Promise<boolean> {
       }
     }
     // The three-state notice is what the person must see; a failed re-read comes next.
-    publish({
-      error: result.error
+    report(
+      result.error
         ? larkNotice(
             result,
             'newTopic' in input ? 'group' : placeOf(input.sessionId),
           )
         : (refreshError ?? ''),
-    })
+    )
     return true
   } catch (cause) {
-    publish({ error: errorMessage(cause) })
+    report(errorMessage(cause))
     return false
   }
 }
@@ -527,11 +556,12 @@ export async function sendInSession(
 
 /** Opens the enabled group in Lark; a topic has no documented deep link. */
 export async function openLarkChat(chatId: string) {
+  const report = pageError()
   try {
     await vela.openLarkChat(chatId)
-    publish({ error: '' })
+    report('')
   } catch (cause) {
-    publish({ error: errorMessage(cause) })
+    report(errorMessage(cause))
   }
 }
 
@@ -613,10 +643,12 @@ function applyLark(value: Extract<Event, { type: 'lark' }>['value']) {
   if (reset) void refresh()
 
   const group = visibleLarkGroup
-  if (group && (reset || value.chatId === group.id))
+  if (group && (reset || value.chatId === group.id)) {
+    const report = pageError(`project:${group.id}`)
     void history.load(group).then((error) => {
-      if (error && visibleLarkGroup === group) publish({ error })
+      if (error && visibleLarkGroup === group) report(error)
     })
+  }
 
   const topic = visibleLarkTopic
   if (
@@ -624,15 +656,18 @@ function applyLark(value: Extract<Event, { type: 'lark' }>['value']) {
     (reset ||
       (value.chatId === topic.projectId &&
         value.sessionId === topic.session.sessionId))
-  )
+  ) {
+    const report = pageError(`project:${topic.projectId}`)
     void history.loadTopic(topic.projectId, topic.session).then((error) => {
-      if (error && visibleLarkTopic === topic) publish({ error })
+      if (error && visibleLarkTopic === topic) report(error)
     })
+  }
 }
 
 /** Stops the run this session is in, if it still has one. */
 export async function stop(session: Session) {
   if (!session.runId) return
+  const report = pageError()
   try {
     await vela.stop(
       session.channel,
@@ -643,7 +678,7 @@ export async function stop(session: Session) {
       session.runId,
     )
   } catch (cause) {
-    publish({ error: errorMessage(cause) })
+    report(errorMessage(cause))
   }
 }
 
