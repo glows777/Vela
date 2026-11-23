@@ -337,7 +337,7 @@ export function withoutForeignReasoning(
 /** JSON-envelope estimate: replace image payloads and exclude opaque encrypted provider data. */
 export function messageEnvelopeChars(messages: ModelMessage[]): number {
   const withoutOpaqueOptions = <
-    T extends { providerOptions?: AssistantModelMessage['providerOptions'] },
+    T extends { providerOptions?: AIModelMessage['providerOptions'] },
   >(
     part: T,
   ): T => {
@@ -364,10 +364,12 @@ export function messageEnvelopeChars(messages: ModelMessage[]): number {
       ...message,
       content: message.content.map((part) => {
         if (isImageContentPart(part)) return image()
+        const counted =
+          'providerOptions' in part ? withoutOpaqueOptions(part) : part
         if (part.type !== 'tool-result' || part.output.type !== 'content')
-          return withoutOpaqueOptions(part)
+          return counted
         return {
-          ...withoutOpaqueOptions(part),
+          ...counted,
           output: {
             ...part.output,
             value: part.output.value.map((item) =>
