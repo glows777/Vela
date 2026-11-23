@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import type {
@@ -30,6 +30,16 @@ import {
 
 afterEach(cleanupTestVelas)
 
+/** The version `--version` prints: the CLI package manifest. */
+const VERSION = (
+  JSON.parse(
+    readFileSync(
+      new URL('../../packages/vela/package.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { version: string }
+).version
+
 test('/status reports the session, model and context usage', async () => {
   const t = createTestVela({
     responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
@@ -43,6 +53,7 @@ test('/status reports the session, model and context usage', async () => {
   })
   const plain = stripTerminalSequences(output)
   expect(plain).toContain('[status]')
+  expect(plain).toContain(`Version: ${VERSION}`)
   expect(plain).toContain(`Session: refactor (${t.session.id})`)
   expect(plain).toContain(
     `Path: ${join(t.vela.dataDir, 'sessions', t.session.id, 'transcript.jsonl')}`,
@@ -286,6 +297,17 @@ test('in the TUI, /status cost matches the footer for the same session', async (
   }
 })
 
+test('the TUI header names the CLI version', async () => {
+  const t = createTestVela()
+  const tui = await startTui(t.vela, { sessionId: t.session.id })
+  try {
+    await tui.started
+    expect(tui.screen()).toContain(`Vela v${VERSION} · session ${t.session.id}`)
+  } finally {
+    await stopTuis()
+  }
+})
+
 test('in the TUI, /status prints the session overview into the chat', async () => {
   const t = createTestVela({
     responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
@@ -297,6 +319,7 @@ test('in the TUI, /status prints the session overview into the chat', async () =
     tui.submit('/status')
     await tui.until('[status]')
     const screen = tui.screen()
+    expect(screen).toContain(`Version: ${VERSION}`)
     expect(screen).toContain(`Session: ${t.session.id}`)
     expect(screen).toContain('Model: faux/faux')
     expect(screen).toContain('Context:')

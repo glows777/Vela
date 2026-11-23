@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { formatUsd } from '../../../src/cli/format.ts'
 import {
   fitStatusLines,
   formatStatusPath,
+  headerSessionLabel,
   noticeContentWidth,
 } from '../../../src/cli/status-display.ts'
 import { notice } from '../../../src/cli/tui/components.ts'
@@ -336,4 +338,14 @@ test('memory and unknown storage stay honest', () => {
       isFile: () => true,
     }),
   ).toBe('custom storage (path unknown)')
+})
+
+test('the header label puts the CLI version next to the session id', () => {
+  const pkg = JSON.parse(
+    readFileSync(
+      new URL('../../../../../package.json', import.meta.url),
+      'utf8',
+    ),
+  )
+  expect(headerSessionLabel(ID)).toBe(`v${pkg.version} · session ${ID}`)
 })
