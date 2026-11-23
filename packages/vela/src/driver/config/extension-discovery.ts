@@ -67,8 +67,11 @@ export function resolveExtensionEntries(
     const builtin = /^([+-]?)builtin:(.+)$/.exec(entry)
     if (builtin) {
       const name = builtin[2]!
-      if (!builtins.includes(name))
+      if (!builtins.includes(name)) {
+        // Accept legacy opt-outs for the retired built-in `rag` so upgrading users don't fail startup.
+        if (builtin[1] === '-' && name === 'rag') continue
         throw new Error(`Unknown built-in extension builtin:${name}`)
+      }
       if (builtin[1] === '-') disabled.add(name)
       else disabled.delete(name)
     } else paths.push(...discoverExtensions(entry, true))

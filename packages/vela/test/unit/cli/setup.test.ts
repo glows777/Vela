@@ -222,13 +222,11 @@ test('legacy data in the working directory gets a copy-and-remove hint', () => {
   mkdirSync(join(dir.path, '.sessions'))
   writeFileSync(join(dir.path, 'knowledge.db'), '')
   const hint = legacyDataHint(dir.path, dataDir) ?? ''
-  expect(hint).toContain('.sessions, knowledge.db')
+  expect(hint).toContain('.sessions')
+  expect(hint).not.toContain('knowledge.db')
   const sessions = `'${join(dataDir, 'sessions')}'`
   expect(hint).toContain(
     `mkdir -p ${sessions} && cp -R '${join(dir.path, '.sessions')}'/. ${sessions}/ && rm -r '${join(dir.path, '.sessions')}'`,
-  )
-  expect(hint).toContain(
-    `mv '${join(dir.path, 'knowledge.db')}'* '${join(dataDir, 'rag')}'/`,
   )
   // Still move when dataDir is the project directory (the new layout's subdirectories have no leading dot)
   expect(legacyDataHint(dir.path, dir.path)).toContain('.sessions')
@@ -245,35 +243,55 @@ test('the migration commands keep old data, win over startup files and can run t
   writeFileSync(join(cwd, '.sessions/default/tool-results/a.txt'), 'output')
   mkdirSync(join(cwd, '.memory'))
   writeFileSync(join(cwd, '.memory/MEMORY.md'), '# Memory Index\n- old')
-  writeFileSync(join(cwd, 'knowledge.db'), 'db')
-  writeFileSync(join(cwd, 'knowledge.db-journal'), 'journal')
-  // This startup already created an empty memory index and knowledge base in the new directory
+  // This startup already created an empty memory index in the new directory
   mkdirSync(join(dataDir, 'memory'), { recursive: true })
   writeFileSync(join(dataDir, 'memory/MEMORY.md'), '# Memory Index\n')
-  mkdirSync(join(dataDir, 'rag'))
-  writeFileSync(join(dataDir, 'rag/knowledge.db'), '')
 
   const commands = (legacyDataHint(cwd, dataDir) ?? '')
     .split('\n')
     .filter((line) => line.startsWith('  '))
-  expect(commands).toHaveLength(3)
+  expect(commands).toHaveLength(2)
   const run = () =>
     commands.map(
       (command) =>
         Bun.spawnSync(['sh', '-c', command], { cwd: dir.path }).exitCode,
     )
-  expect(run()).toEqual([0, 0, 0])
+  expect(run()).toEqual([0, 0])
   const read = (path: string) => readFileSync(join(dataDir, path), 'utf-8')
   expect(read('sessions/default.jsonl')).toBe('old session')
   expect(read('sessions/default/tool-results/a.txt')).toBe('output')
   expect(read('memory/MEMORY.md')).toBe('# Memory Index\n- old')
-  expect(read('rag/knowledge.db')).toBe('db')
-  expect(read('rag/knowledge.db-journal')).toBe('journal')
   expect(legacyDataHint(cwd, dataDir)).toBeUndefined()
   // Run again: the old data is gone, the commands fail and the new directory is unchanged
   expect(run().every((code) => code !== 0)).toBe(true)
   expect(read('sessions/default.jsonl')).toBe('old session')
-  expect(read('rag/knowledge.db')).toBe('db')
+})
+
+test('legacy -builtin:rag opt-out is accepted while positive builtin:rag fails loudly', () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  writeFileSync(
+    join(dir.path, 'settings.json'),
+    JSON.stringify({ extensions: ['-builtin:rag'] }),
+  )
+  const ok = loadConfig({
+    cwd: dir.path,
+    agentDir: dir.path,
+    builtins: Object.keys(BUILTIN_EXTENSIONS),
+  })
+  expect(ok.extensions.map((e) => e.name)).not.toContain('rag')
+
+  writeFileSync(
+    join(dir.path, 'settings.json'),
+    JSON.stringify({ extensions: ['builtin:rag'] }),
+  )
+  expect(() =>
+    loadConfig({
+      cwd: dir.path,
+      agentDir: dir.path,
+      builtins: Object.keys(BUILTIN_EXTENSIONS),
+    }),
+  ).toThrow('Unknown built-in extension builtin:rag')
 })
 
 test('an extension that throws or rejects while loading is reported and skipped, not fatal', async () => {

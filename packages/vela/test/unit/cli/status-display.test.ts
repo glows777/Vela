@@ -3,6 +3,7 @@ import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { formatUsd } from '../../../src/cli/format.ts'
 import {
   fitStatusLines,
+  formatContextFileList,
   formatStatusPath,
   noticeContentWidth,
 } from '../../../src/cli/status-display.ts'
@@ -336,4 +337,13 @@ test('memory and unknown storage stay honest', () => {
       isFile: () => true,
     }),
   ).toBe('custom storage (path unknown)')
+})
+
+test('formatContextFileList strips APC sequences including their payload', () => {
+  expect(
+    formatContextFileList(
+      [{ path: '/work/project\x1b_hidden\x1b\\/AGENTS.md' }],
+      { cwd: '/work', homeDir: HOME, agentDir: AGENT },
+    ),
+  ).toBe('project/AGENTS.md')
 })

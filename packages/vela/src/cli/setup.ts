@@ -739,16 +739,12 @@ export function legacyDataHint(
       ['.sessions', 'sessions'],
       ['.memory', 'memory'],
       ['.usage', 'usage'],
-      ['knowledge.db', 'rag'],
     ] as const
   ).filter(([old]) => existsSync(join(cwd, old)))
   if (!moves.length) return
   const lines = moves.map(([old, next]) => {
     const from = shellQuote(join(resolve(cwd), old))
     const target = shellQuote(join(resolve(dataDir), next))
-    // knowledge.db* moves together with any -journal / -wal / -shm files
-    if (old === 'knowledge.db')
-      return `  mkdir -p ${target} && mv ${from}* ${target}/`
     // The new dir may already hold files created by this launch (e.g. an empty MEMORY.md): merge, old data wins on name clashes
     return `  mkdir -p ${target} && cp -R ${from}/. ${target}/ && rm -r ${from}`
   })

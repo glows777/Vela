@@ -68,6 +68,25 @@ test('boundary checker accepts valid single-package layer DAG', async () => {
   expect(await errors({})).toEqual([])
 })
 
+test('boundary checker ignores retired build artifact dirs without package.json but rejects extra packages', async () => {
+  expect(
+    await errors({
+      'packages/core/dist/index.js': 'export {}',
+    }),
+  ).toEqual([])
+  expect(
+    (
+      await errors({
+        'packages/extra/package.json': JSON.stringify({
+          name: '@glows777/vela-extra',
+          version: '0.9.0',
+          exports: { '.': { import: './dist/index.js' } },
+        }),
+      })
+    ).join('\n'),
+  ).toMatch(/expected single published package/)
+})
+
 for (const [label, files, pattern] of [
   [
     'runtime importing driver',
@@ -178,6 +197,15 @@ for (const [label, files, pattern] of [
       'packages/vela/src/lark/transport.ts':
         "import * as lark from '@larksuiteoapi/node-sdk'; export { lark }",
       'packages/vela/src/index.ts': "export * from './lark/transport.ts'",
+    },
+    /heavy dependency @larksuiteoapi\/node-sdk eagerly reachable from @glows777\/vela/,
+  ],
+  [
+    'top-level dynamic heavy import reachable from root entry',
+    {
+      'packages/vela/src/lark/load.ts':
+        "export const sdk = await import('@larksuiteoapi/node-sdk')",
+      'packages/vela/src/index.ts': "export * from './lark/load.ts'",
     },
     /heavy dependency @larksuiteoapi\/node-sdk eagerly reachable from @glows777\/vela/,
   ],

@@ -24,6 +24,7 @@ const IMAGE = (
 
 const SMOKE = `
 import assert from 'node:assert/strict'
+import { Readable } from 'node:stream'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -36,7 +37,9 @@ import {
   memory,
   ToolExecutionResult,
   type ImageContent,
+  type LarkMessageEvent,
   type LarkOptions,
+  type LarkTransport,
   type McpOptions,
   type ToolContent,
   type VelaEvent,
@@ -135,7 +138,7 @@ const searched = Object.fromEntries(
 if (!searched['find']?.includes('src/a.ts') || !searched['grep']?.includes('src/a.ts:1: export const answer = 42'))
   throw new Error(\`grep / find results missing: \${JSON.stringify(searched)}\`)
 
-// MCP stdio extension lazy-loads @modelcontextprotocol/sdk on demand
+// MCP stdio extension lazy-loads @modelcontextprotocol/sdk on demand and returns real tool output
 const mcpOptions: McpOptions = { servers: { local: { command: process.execPath, args: ['server.ts'], exposure: 'direct' } } }
 const m = createTestVela({
   cwd: process.cwd(),
@@ -145,15 +148,59 @@ const m = createTestVela({
 })
 try {
   await m.run('echo')
-  assert(JSON.stringify(m.model.calls[1]?.prompt).includes('stdio works'))
+  const echoResult = (m.model.calls[1]?.toolResults ?? []).find((r) => r.toolName === 'mcp__local__echo')
+  const outputText = JSON.stringify(echoResult?.output ?? '')
+  if (!echoResult || outputText.includes('AI_NoSuchToolError') || !outputText.includes('stdio works'))
+    throw new Error(\`mcp tool result missing or failed: \${JSON.stringify(m.model.calls[1]?.toolResults)}\`)
   console.log('mcp stdio sdk ok')
 } finally {
   await m.cleanup()
 }
 
-// Type-level check for Lark options
-const _larkCheck: LarkOptions = { appId: 'offline' }
-void _larkCheck
+// Lark fake transport round trip (incoming message -> reply)
+let larkReceive: ((event: LarkMessageEvent) => void) | undefined
+const larkSent: string[] = []
+const receipt = () => ({ messageId: 'reply', createTime: String(Date.now()) })
+const transport: LarkTransport = {
+  async start(next) { larkReceive = next },
+  stop() {},
+  async getBotId() { return 'ou_bot' },
+  async getSenderName() { return 'Alice' },
+  async send(_chat, text) { larkSent.push(text); return receipt() },
+  async reply(_message, text) { larkSent.push(text); return receipt() },
+  async startTopic() { return { ...receipt(), rootId: 'root', threadId: 'thread' } },
+  async forward() { return receipt() },
+  async sendCard() { return 'card' },
+  async patchCard() {},
+  async addReaction() { return 'reaction' },
+  async removeReaction() {},
+  async getResource() { return Readable.from([Buffer.from('ok')]) },
+  async listTopicMessages() { return { items: [] } },
+  async searchMessages() { return { items: [] } },
+  async listMessages() { return [] },
+}
+const larkOptions: LarkOptions = { appId: 'offline', owners: ['ou_alice'], transport }
+const larkVela = createVela({
+  contextFiles: false,
+  model: createFauxModel({ responses: [fauxText('lark received')] }),
+  extensions: [lark(larkOptions)],
+})
+try {
+  await larkVela.startChannels()
+  let done!: () => void
+  const replied = new Promise<void>((r) => { done = r })
+  const off = larkVela.subscribe((e) => { if (e.type === 'channel_reply' && e.text.includes('lark received')) done() })
+  larkReceive!({
+    sender: { sender_type: 'user', sender_id: { open_id: 'ou_alice' } },
+    message: { chat_id: 'direct', chat_type: 'p2p', message_id: 'm1', message_type: 'text', content: JSON.stringify({ text: 'hello' }), create_time: String(Date.now()) },
+  })
+  await replied
+  off()
+  assert(larkSent.some((text) => text.includes('lark received')))
+  console.log('lark fake transport round trip ok')
+} finally {
+  await larkVela.dispose()
+}
 
 if (typeof vela.publishEvent !== 'function')
   throw new Error('publishEvent missing')

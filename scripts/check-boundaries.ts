@@ -143,6 +143,27 @@ function layerOf(pkgDir: string, file: string): string | undefined {
   return rel.split('/')[0]
 }
 
+function isDeferredImport(node: ts.Node): boolean {
+  let cur = node.parent
+  while (cur) {
+    if (
+      ts.isFunctionDeclaration(cur) ||
+      ts.isFunctionExpression(cur) ||
+      ts.isArrowFunction(cur) ||
+      ts.isMethodDeclaration(cur) ||
+      ts.isGetAccessorDeclaration(cur) ||
+      ts.isSetAccessorDeclaration(cur) ||
+      ts.isConstructorDeclaration(cur) ||
+      ts.isIfStatement(cur) ||
+      ts.isConditionalExpression(cur) ||
+      ts.isSwitchStatement(cur)
+    )
+      return true
+    cur = cur.parent
+  }
+  return false
+}
+
 function edges(source: ts.SourceFile): Edge[] {
   const out: Edge[] = []
   const literal = (n: ts.Node | undefined) =>
@@ -186,7 +207,7 @@ function edges(source: ts.SourceFile): Edge[] {
         const spec = literal(node.arguments[0])
         out.push({
           spec: spec ?? '<nonliteral>',
-          lazy: dynamic,
+          lazy: dynamic && isDeferredImport(node),
           typeOnly: false,
           at: node,
         })
@@ -207,9 +228,14 @@ export async function checkBoundaries(root: string): Promise<string[]> {
   })) {
     if (!entry.isDirectory()) continue
     const dir = join(root, 'packages', entry.name)
-    const manifest = JSON.parse(
-      await readFile(join(dir, 'package.json'), 'utf8'),
-    )
+    let raw: string
+    try {
+      raw = await readFile(join(dir, 'package.json'), 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
+    }
+    const manifest = JSON.parse(raw)
     packages.push({
       name: manifest.name,
       dir,

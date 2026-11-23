@@ -1,9 +1,9 @@
 import { isAbsolute, relative, sep } from 'node:path'
 
-// Lightweight CSI/OSC/ESC sequence stripper so print mode never pulls in @earendil-works/pi-tui.
+// Lightweight CSI/OSC/APC/DCS/PM/SOS/ESC sequence stripper so print mode never pulls in @earendil-works/pi-tui.
 const ANSI_ESCAPE =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional terminal escape stripping
-  /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g
+  /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|[_PX^][\s\S]*?(?:\x1b\\|\x07|$)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g
 
 function isUnder(path: string, root: string): boolean {
   if (!root) return false
