@@ -181,15 +181,16 @@ export type AssistantModelMessage = VelaAssistantMessage
 export type ToolModelMessage = VelaToolMessage
 
 /**
- * Normalize a message loaded from legacy JSONL transcripts (where AI SDK part tags
- * `'reasoning'`, `'tool-call'`, `'tool-result'` may appear) into canonical `VelaMessage`.
+ * Normalize content array items loaded from legacy JSONL transcripts (where AI SDK part tags
+ * `'reasoning'`, `'tool-call'`, `'tool-result'` and legacy `{ type: 'image', image, mediaType }`
+ * may appear) into canonical `VelaPart` shapes.
  */
-export function normalizeVelaMessage(message: unknown): VelaMessage {
-  if (!message || typeof message !== 'object') return message as VelaMessage
-  const raw = message as Record<string, unknown>
-  if (!Array.isArray(raw.content)) return raw as unknown as VelaMessage
+export function normalizeVelaContent(content: unknown[]): {
+  content: unknown[]
+  changed: boolean
+} {
   let changed = false
-  const content = raw.content.map((item) => {
+  const normalized = content.map((item) => {
     if (!item || typeof item !== 'object') return item
     const part = item as Record<string, unknown>
     if (part.type === 'reasoning') {
@@ -204,8 +205,43 @@ export function normalizeVelaMessage(message: unknown): VelaMessage {
       changed = true
       return { ...part, type: 'tool_result' }
     }
+    if (
+      part.type === 'image' &&
+      part.data === undefined &&
+      part.image !== undefined
+    ) {
+      changed = true
+      const rawImage = part.image
+      const data =
+        typeof rawImage === 'string'
+          ? rawImage
+          : rawImage instanceof Uint8Array
+            ? Buffer.from(rawImage).toString('base64')
+            : String(rawImage)
+      const mimeType =
+        typeof part.mimeType === 'string'
+          ? part.mimeType
+          : typeof part.mediaType === 'string'
+            ? part.mediaType
+            : 'image/png'
+      const { image: _img, mediaType: _mt, ...rest } = part
+      return { ...rest, type: 'image', data, mimeType }
+    }
     return item
   })
+  return { content: normalized, changed }
+}
+
+/**
+ * Normalize a message loaded from legacy JSONL transcripts (where AI SDK part tags
+ * `'reasoning'`, `'tool-call'`, `'tool-result'` and legacy `{ type: 'image', image, mediaType }`
+ * may appear) into canonical `VelaMessage`.
+ */
+export function normalizeVelaMessage(message: unknown): VelaMessage {
+  if (!message || typeof message !== 'object') return message as VelaMessage
+  const raw = message as Record<string, unknown>
+  if (!Array.isArray(raw.content)) return raw as unknown as VelaMessage
+  const { content, changed } = normalizeVelaContent(raw.content)
   return changed
     ? ({ ...raw, content } as unknown as VelaMessage)
     : (raw as unknown as VelaMessage)

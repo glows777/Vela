@@ -641,7 +641,7 @@
   interface ModelHandle
     readonly modelId: string
     readonly provider: string
-    readonly specificationVersion?: string | undefined
+    readonly specificationVersion: string
   interface ModelInfo
     compat?: ModelCompat | undefined
     contextWindow?: number | undefined

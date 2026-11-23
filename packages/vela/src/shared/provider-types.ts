@@ -8,7 +8,7 @@ import type { ProviderOptions } from './messages.ts'
 
 /** Opaque handle to a resolved language model; concrete AI SDK instances stay inside `src/providers/`. */
 export interface ModelHandle {
-  readonly specificationVersion?: string
+  readonly specificationVersion: string
   readonly provider: string
   readonly modelId: string
 }

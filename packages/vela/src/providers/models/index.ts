@@ -267,9 +267,23 @@ export class ModelRegistry {
   }
 }
 
+/** Validate that a `ModelHandle` passed to the SDK is a runnable model instance. */
+function assertRunnableModelHandle(model: ModelHandle): void {
+  if (
+    !model ||
+    typeof model !== 'object' ||
+    typeof (model as { doStream?: unknown }).doStream !== 'function'
+  ) {
+    throw new Error(
+      'Invalid ModelHandle: pass a "provider/model" string, a handle returned by resolveModel()/loadModels(), or createFauxModel()',
+    )
+  }
+}
+
 /** Metadata for a model passed in directly (e.g. the test faux); no ref. */
 export function describeModel(model: ModelInput): ModelInfo {
   if (typeof model === 'string') return { provider: '', id: model, ref: model }
+  assertRunnableModelHandle(model)
   // AI SDK providers name themselves `anthropic.messages`, `openai.responses`, …: look the id up in the catalog
   const { api: _, ...known } = catalogLookup(
     model.provider.split('.')[0] as string,
@@ -355,5 +369,7 @@ export function resolveModel(
     throw new Error(
       'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock.',
     )
-  return typeof choice === 'string' ? registry.resolve(choice).model : choice
+  if (typeof choice === 'string') return registry.resolve(choice).model
+  assertRunnableModelHandle(choice)
+  return choice
 }

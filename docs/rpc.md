@@ -435,18 +435,16 @@ An extension dialog, captured with the [confirm-dangerous](../examples/extension
 < {"type":"message_end","message":{"role":"user","content":"delete the build log"},"sessionId":"20261008-105126-f165"}
 < {"type":"turn_start","turn":1,"sessionId":"20261008-105126-f165"}
 < {"type":"message_start","message":{"role":"assistant","content":[]},"sessionId":"20261008-105126-f165"}
-< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{}}]},"assistantMessageEvent":{"type":"toolcall_start","contentIndex":0},"sessionId":"20261008-105126-f165"}
-< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}},"sessionId":"20261008-105126-f165"}
-< {"type":"message_end","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"stopReason":"toolUse","sessionId":"20261008-105126-f165"}
+< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{}}]},"assistantMessageEvent":{"type":"toolcall_start","contentIndex":0},"sessionId":"20261008-105126-f165"}
+< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}},"sessionId":"20261008-105126-f165"}
+< {"type":"message_end","message":{"role":"assistant","content":[{"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"stopReason":"toolUse","sessionId":"20261008-105126-f165"}
 < {"type":"tool_execution_start","toolCallId":"call-1","toolName":"bash","args":{"command":"rm build.log"},"sessionId":"20261008-105126-f165"}
-< {"type":"extension_ui_request","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","method":"confirm","title":"Delete files?","message":"rm build.log"}
-> {"type":"extension_ui_response","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","confirmed":false}
-< {"type":"tool_execution_end","toolCallId":"call-1","toolName":"bash","result":"[Blocked by hook] User did not allow the deletion","isError":true,"durationMs":3912,"sessionId":"20261008-105126-f165"}
+< {"type":"tool_execution_end","toolCallId":"call-1","toolName":"bash","result":"[Blocked by hook] Blocked dangerous command: rm build.log","isError":true,"durationMs":12,"sessionId":"20261008-105126-f165"}
 ...
 < {"type":"agent_settled","sessionId":"20261008-105126-f165"}
 ```
 
-The dialog comes from the extension's `tool_call` handler, which runs after `tool_execution_start` and before the tool; `tool_execution_end` follows the answer.
+The block comes from the extension's `tool_call` handler, which runs after `tool_execution_start` and before the tool; `tool_execution_end` follows with `isError: true`.
 
 ## Client example
 

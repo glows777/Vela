@@ -97,6 +97,46 @@ export function createJsonSchema<T = unknown>(
   }
 }
 
+/** Best-effort JSON Schema extraction for Zod v3 schemas (preserves property names & descriptions for BM25). */
+function zodV3ToJsonSchema(schema: unknown): JsonSchemaObject {
+  let current = schema as { _def?: Record<string, unknown> } | undefined
+  let description: string | undefined
+  while (current && typeof current === 'object' && current._def) {
+    const def = current._def
+    if (typeof def.description === 'string' && !description) {
+      description = def.description
+    }
+    if (def.innerType && typeof def.innerType === 'object') {
+      current = def.innerType as { _def?: Record<string, unknown> }
+      continue
+    }
+    if (def.schema && typeof def.schema === 'object') {
+      current = def.schema as { _def?: Record<string, unknown> }
+      continue
+    }
+    break
+  }
+  const def = current?._def
+  const rawShape =
+    typeof def?.shape === 'function'
+      ? (def.shape as () => Record<string, unknown>)()
+      : def?.shape && typeof def.shape === 'object'
+        ? (def.shape as Record<string, unknown>)
+        : undefined
+  if (rawShape) {
+    const properties: Record<string, JsonSchemaObject> = {}
+    for (const [key, field] of Object.entries(rawShape)) {
+      properties[key] = zodV3ToJsonSchema(field)
+    }
+    return {
+      type: 'object',
+      properties,
+      ...(description ? { description } : {}),
+    }
+  }
+  return description ? { description } : {}
+}
+
 /** Convert a `ToolInputSchema` (Zod or `VelaJsonSchema`) to a plain JSON Schema object. */
 export async function toJsonSchema(
   inputSchema: ToolInputSchema,
@@ -112,8 +152,7 @@ export async function toJsonSchema(
     }) as JsonSchemaObject
   }
   if (isZodSchema(inputSchema)) {
-    // Zod v3 schemas are converted with full fidelity by `providers/runtime.ts` via AI SDK `asSchema()`.
-    return { type: 'object' }
+    return zodV3ToJsonSchema(inputSchema)
   }
   // Support any foreign schema carrying a `jsonSchema` property (e.g. legacy test fixtures).
   if (
@@ -146,7 +185,7 @@ export function toJsonSchemaSync(
     }) as JsonSchemaObject
   }
   if (isZodSchema(inputSchema)) {
-    return { type: 'object' }
+    return zodV3ToJsonSchema(inputSchema)
   }
   return undefined
 }

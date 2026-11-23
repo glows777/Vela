@@ -122,13 +122,26 @@ export function toAiModelMessages(
               text: '(image omitted: model does not support images)',
             }
           }
-          return part.type === 'image'
-            ? {
-                type: 'file' as const,
-                data: part.data,
-                mediaType: part.mimeType,
-              }
-            : part
+          if (part.type === 'image') {
+            const legacy = part as unknown as {
+              data?: string
+              mimeType?: string
+              image?: string | Uint8Array
+              mediaType?: string
+            }
+            const rawData = legacy.data ?? legacy.image
+            const data =
+              rawData instanceof Uint8Array
+                ? Buffer.from(rawData).toString('base64')
+                : (rawData ?? '')
+            const mediaType = legacy.mimeType ?? legacy.mediaType ?? 'image/png'
+            return {
+              type: 'file' as const,
+              data,
+              mediaType,
+            }
+          }
+          return part
         }) as Exclude<AIUserContent, string>,
       }
     }
