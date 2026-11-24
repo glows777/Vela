@@ -1,7 +1,7 @@
 /**
  * MCP server configuration (like pi's `extensions/mcp/config.ts`): the `mcpServers` format of
- * Claude Desktop / Claude Code, read from `~/.vela/mcp.json` and the trusted project's
- * `.vela/mcp.json`. Invalid entries are reported and skipped; they don't stop other servers.
+ * Claude Desktop / Claude Code, read from `~/.vela/config.json` and the trusted project's
+ * `.vela/config.json`. Invalid entries are reported and skipped; they don't stop other servers.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -255,7 +255,7 @@ function interpolateServer(
 }
 
 /**
- * Reads `<agentDir>/mcp.json`, then `<cwd>/.vela/mcp.json` when the project is trusted (like pi). A
+ * Reads `mcpServers` from `<agentDir>/config.json`, then `<cwd>/.vela/config.json` when the project is trusted (like pi). A
  * project entry replaces the user entry of the same name; one without `command`, `url` or `type`
  * only overrides its `enabled`, `exposure` and `toolExposure`. Variables are resolved from `env`.
  */
@@ -266,8 +266,8 @@ export function loadMcpServers(options: {
   env: Env
 }): McpServersFile {
   const result: McpServersFile = { servers: {}, sources: {}, errors: [] }
-  const files = [join(options.agentDir, 'mcp.json')]
-  if (options.trusted) files.push(join(options.projectDir, 'mcp.json'))
+  const files = [join(options.agentDir, 'config.json')]
+  if (options.trusted) files.push(join(options.projectDir, 'config.json'))
   for (const file of files) {
     if (!existsSync(file)) continue
     let servers: unknown
@@ -327,7 +327,6 @@ export function loadMcpServers(options: {
 
 export const mcpConfig: ExtensionConfigDefinition = {
   name: 'mcp',
-  projectResources: ['mcp.json'],
   resolve(section, context) {
     const files = loadMcpServers(context)
     const settings = isPlainObject(section.mcpServers) ? section.mcpServers : {}

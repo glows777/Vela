@@ -20,7 +20,7 @@ test('the real Responses request exports an object-root routine schema and can c
   const dir = tempDir('vela-routine-schema-')
   dirs.push(dir)
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         compat: {

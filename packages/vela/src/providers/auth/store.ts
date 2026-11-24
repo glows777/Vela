@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
@@ -9,6 +10,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs'
 import { dirname } from 'node:path'
 import { isPlainObject } from '../../shared/interpolate.ts'
@@ -95,20 +97,33 @@ export function fileCredentialStore(path: string): CredentialStore {
   }
 
   const write = (data: Record<string, Credential>) => {
-    const temp = `${path}.${process.pid}.tmp`
-    writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 })
-    chmodSync(temp, 0o600)
-    renameSync(temp, path)
-    cache = undefined
+    const temp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+    try {
+      writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, {
+        mode: 0o600,
+        flag: 'wx',
+      })
+      chmodSync(temp, 0o600)
+      renameSync(temp, path)
+      cache = undefined
+    } finally {
+      rmSync(temp, { force: true })
+    }
   }
 
   const withFileLock = async <T>(task: () => Promise<T>): Promise<T> => {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     const lock = `${path}.lock`
+    const token = `${process.pid}:${randomUUID()}`
     const started = Date.now()
     for (;;) {
       try {
-        closeSync(openSync(lock, 'wx', 0o600))
+        const fd = openSync(lock, 'wx', 0o600)
+        try {
+          writeSync(fd, token)
+        } finally {
+          closeSync(fd)
+        }
         break
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
@@ -126,7 +141,9 @@ export function fileCredentialStore(path: string): CredentialStore {
     try {
       return await task()
     } finally {
-      rmSync(lock, { force: true })
+      try {
+        if (readFileSync(lock, 'utf8') === token) rmSync(lock, { force: true })
+      } catch {}
     }
   }
 

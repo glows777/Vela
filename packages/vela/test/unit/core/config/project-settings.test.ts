@@ -2,9 +2,9 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
+import { mergeConfig } from '../../../../src/config/index.ts'
 import { loadProjectSettings } from '../../../../src/driver/config/project-settings.ts'
 import { loadConfig } from '../../../../src/driver/config/settings.ts'
-import { mergeSettings } from '../../../../src/driver/config/settings-values.ts'
 import type {
   ExecutionEnv,
   FileError,
@@ -53,8 +53,8 @@ function remote(files: Record<string, string>) {
 
 test('project settings use the selected environment, config-relative resources and explicit interpolation', async () => {
   const { environment, reads, signals } = remote({
-    '/workspace/B/.vela/settings.json': JSON.stringify({
-      defaultModel: 'test/b',
+    '/workspace/B/.vela/config.json': JSON.stringify({
+      model: 'test/b',
       skills: ['../skills', '~/shared-skills'],
       prompts: ['./templates'],
       extensions: ['+builtin:memory', './extension.ts'],
@@ -68,7 +68,7 @@ test('project settings use the selected environment, config-relative resources a
     env: { TOKEN: 'explicit' },
     signal,
   })
-  expect(reads).toEqual(['/workspace/B/.vela/settings.json'])
+  expect(reads).toEqual(['/workspace/B/.vela/config.json'])
   expect(signals.every((entry) => entry === signal)).toBe(true)
   expect(result.skillDirs).toEqual([
     '/workspace/B/skills',
@@ -82,7 +82,7 @@ test('project settings use the selected environment, config-relative resources a
   expect(result.settings.extensionConfig).toEqual({
     plugin: { value: 'explicit', literal: '$TOKEN' },
   })
-  expect(result.settings.defaultModel).toBe('test/b')
+  expect(result.settings.model).toBe('test/b')
 })
 
 test('untrusted projects read nothing, missing config stays empty, local user directory is not loaded twice', async () => {
@@ -118,11 +118,11 @@ test('untrusted projects read nothing, missing config stays empty, local user di
     agentDir: '/home/.vela',
     trusted: true,
   })
-  expect(fake.reads).toEqual(['/home/.vela/settings.json'])
+  expect(fake.reads).toEqual(['/home/.vela/config.json'])
 })
 
 test('malformed settings and adapter errors fail visibly; cancellation is propagated', async () => {
-  const fake = remote({ '/workspace/B/.vela/settings.json': '{' })
+  const fake = remote({ '/workspace/B/.vela/config.json': '{' })
   await expect(
     loadProjectSettings(fake.environment, {
       cwd: '/workspace/B',
@@ -159,23 +159,23 @@ test('startup view stays merged while runtime provenance contains only user sett
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, JSON.stringify(data))
   }
-  write(join(agentDir, 'settings.json'), {
-    defaultModel: 'test/user',
+  write(join(agentDir, 'config.json'), {
+    model: 'test/user',
     skills: ['user-skills'],
     prompts: ['user-prompts'],
-    defaultTools: ['read'],
+    tools: ['read'],
     limits: { maxRetries: 10 },
   })
-  write(join(cwd, '.vela/settings.json'), {
-    defaultModel: 'test/a',
+  write(join(cwd, '.vela/config.json'), {
+    model: 'test/a',
     skills: ['a-skills'],
     prompts: ['a-prompts'],
-    defaultTools: ['+bash'],
+    tools: ['+bash'],
   })
   const config = loadConfig({ cwd, agentDir, trusted: true, homeDir: root })
-  expect(config.settings.defaultModel).toBe('test/a')
-  expect(config.settings.defaultTools).toEqual(['read', '+bash'])
-  expect(config.sessionResources?.userSettings?.defaultModel).toBe('test/user')
+  expect(config.settings.model).toBe('test/a')
+  expect(config.settings.tools).toEqual(['read', '+bash'])
+  expect(config.sessionResources?.userSettings?.model).toBe('test/user')
   expect(config.sessionResources?.hostSkillDirs).not.toContain(
     join(cwd, '.vela/a-skills'),
   )
@@ -192,14 +192,14 @@ test('startup view stays merged while runtime provenance contains only user sett
     join(agentDir, 'prompts'),
   ])
   expect(
-    mergeSettings(config.sessionResources!.userSettings!, {
-      defaultModel: 'test/b',
-      defaultTools: ['-read'],
+    mergeConfig(config.sessionResources!.userSettings!, {
+      model: 'test/b',
+      tools: ['-read'],
       limits: { maxRetries: 3 },
     }),
   ).toMatchObject({
-    defaultModel: 'test/b',
-    defaultTools: ['read', '-read'],
+    model: 'test/b',
+    tools: ['read', '-read'],
     limits: { maxRetries: 3 },
   })
 })

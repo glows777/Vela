@@ -1,4 +1,3 @@
-import type { VelaSettings } from '../config/settings-values.ts'
 import type { ToolRegistry } from './registry.ts'
 
 /** Seconds a foreground `bash` command may wait before it moves to the background. */
@@ -6,7 +5,7 @@ const DEFAULT_FOREGROUND_TIMEOUT_SECONDS = 120
 /** Ceiling for a `timeout` the model asks for, in seconds. */
 const DEFAULT_FOREGROUND_TIMEOUT_MAX_SECONDS = 600
 
-/** A session's foreground `bash` budget (settings `bashForegroundTimeoutSeconds` / `…MaxSeconds`). */
+/** A session's foreground `bash` budget (deleted in S2a; test-only overrides stay internal). */
 export interface ForegroundBudget {
   /** Seconds before an unfinished foreground command moves to the background; 0 turns that off. */
   seconds: number
@@ -43,17 +42,13 @@ export function foregroundBudgetOf(context: {
   )
 }
 
-/** The budget a session's settings ask for; the defaults when they say nothing. */
+/** Resolve foreground bash budget with internal test-only overrides. */
 export function resolveForegroundBudget(
-  settings: VelaSettings,
+  override?: Partial<ForegroundBudget>,
 ): ForegroundBudget {
   return {
-    seconds:
-      settings.bashForegroundTimeoutSeconds ??
-      DEFAULT_FOREGROUND_TIMEOUT_SECONDS,
-    maxSeconds:
-      settings.bashForegroundTimeoutMaxSeconds ??
-      DEFAULT_FOREGROUND_TIMEOUT_MAX_SECONDS,
+    seconds: override?.seconds ?? DEFAULT_FOREGROUND_TIMEOUT_SECONDS,
+    maxSeconds: override?.maxSeconds ?? DEFAULT_FOREGROUND_TIMEOUT_MAX_SECONDS,
   }
 }
 

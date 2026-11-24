@@ -22,9 +22,9 @@ function setup(user?: unknown, project?: unknown) {
   mkdirSync(agentDir, { recursive: true })
   mkdirSync(projectDir, { recursive: true })
   if (user !== undefined)
-    writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify(user))
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify(user))
   if (project !== undefined)
-    writeFileSync(join(projectDir, 'mcp.json'), JSON.stringify(project))
+    writeFileSync(join(projectDir, 'config.json'), JSON.stringify(project))
   return { agentDir, projectDir }
 }
 
@@ -117,12 +117,12 @@ test('project mcp.json is read only when trusted; an entry without command/url/t
     api: { url: 'https://api/mcp' },
     local: { command: 'local' },
   })
-  expect(trusted.sources.docs).toBe(join(projectDir, 'mcp.json'))
-  expect(trusted.sources.local).toBe(join(projectDir, 'mcp.json'))
-  expect(trusted.sources.api).toBe(join(agentDir, 'mcp.json'))
+  expect(trusted.sources.docs).toBe(join(projectDir, 'config.json'))
+  expect(trusted.sources.local).toBe(join(projectDir, 'config.json'))
+  expect(trusted.sources.api).toBe(join(agentDir, 'config.json'))
   // A project can't add credentials to the user's server
   expect(trusted.errors).toEqual([
-    `${join(projectDir, 'mcp.json')}: MCP server "api": an override can only set enabled, exposure, toolExposure (found headers)`,
+    `${join(projectDir, 'config.json')}: MCP server "api": an override can only set enabled, exposure, toolExposure (found headers)`,
   ])
 })
 
@@ -140,7 +140,7 @@ test('an unset variable or a broken file is an error, not an empty value', () =>
     },
     'not json',
   )
-  writeFileSync(join(projectDir, 'mcp.json'), '{ broken')
+  writeFileSync(join(projectDir, 'config.json'), '{ broken')
   const result = loadMcpServers({
     agentDir,
     projectDir,
@@ -154,5 +154,5 @@ test('an unset variable or a broken file is an error, not an empty value', () =>
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the expected message quotes the ${TOKEN} placeholder
     'MCP server "docs" headers "Authorization" uses ${TOKEN}, which is not set',
   )
-  expect(result.errors[1]).toStartWith(`${join(projectDir, 'mcp.json')}: `)
+  expect(result.errors[1]).toStartWith(`${join(projectDir, 'config.json')}: `)
 })

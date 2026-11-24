@@ -86,6 +86,7 @@ async function requestToken(
 function credentialFrom(
   token: TokenResponse,
   clientId: string,
+  previous?: OAuthCredential,
 ): OAuthCredential {
   const text = (value: unknown, field: string) => {
     if (typeof value !== 'string' || !value.trim())
@@ -93,8 +94,23 @@ function credentialFrom(
     return value
   }
   const access = text(token.access_token, 'access_token')
-  const refresh = text(token.refresh_token, 'refresh_token')
-  const scopes = text(token.scope, 'scope').trim().split(/\s+/)
+  // RFC 6749 §6: refresh responses may omit refresh_token or scope when unchanged.
+  const refresh =
+    token.refresh_token !== undefined
+      ? text(token.refresh_token, 'refresh_token')
+      : previous
+        ? text(previous.refresh, 'refresh_token')
+        : text(token.refresh_token, 'refresh_token')
+  const scopes =
+    token.scope !== undefined
+      ? text(token.scope, 'scope').trim().split(/\s+/)
+      : Array.isArray(previous?.scopes)
+        ? (previous.scopes as unknown[]).filter(
+            (item): item is string => typeof item === 'string' && !!item.trim(),
+          )
+        : previous
+          ? undefined
+          : text(token.scope, 'scope').trim().split(/\s+/)
   if (
     typeof token.expires_in !== 'number' ||
     !Number.isFinite(token.expires_in) ||
@@ -102,7 +118,7 @@ function credentialFrom(
   )
     throw new Error('OpenAI token response has no valid expires_in')
   // A valid ID token alone does not authorize plan usage: the grant must include the direct-token scope
-  if (!scopes.includes(DIRECT_TOKEN_SCOPE))
+  if (scopes && !scopes.includes(DIRECT_TOKEN_SCOPE))
     throw new Error(
       `The ChatGPT sign-in did not grant ${DIRECT_TOKEN_SCOPE}; allow plan usage when signing in`,
     )
@@ -112,7 +128,7 @@ function credentialFrom(
     refresh,
     expires: Date.now() + token.expires_in * 1000 - EXPIRY_MARGIN_MS,
     clientId,
-    scopes,
+    ...(scopes ? { scopes } : {}),
   }
 }
 
@@ -192,7 +208,7 @@ function wrapFetch(base: FetchFunction): FetchFunction {
     // The token is the user's ChatGPT plan: never send it anywhere but OpenAI (OPENAI_API_BASE_URL may point elsewhere)
     if (new URL(url).origin !== new URL(RESOURCE).origin)
       throw new Error(
-        `Sign in with ChatGPT only works with ${RESOURCE}, but the openai provider's base URL is ${new URL(url).origin}; unset OPENAI_API_BASE_URL (or the openai baseUrl in models.json), or use an API key`,
+        `Sign in with ChatGPT only works with ${RESOURCE}, but the openai provider's base URL is ${new URL(url).origin}; unset OPENAI_API_BASE_URL (or the openai baseUrl in config.json), or use an API key`,
       )
     if (
       !url.endsWith('/responses') ||
@@ -244,6 +260,7 @@ function wrapFetch(base: FetchFunction): FetchFunction {
 
 export const openaiChatGPTLogin: OAuthLogin = {
   name: 'Sign in with ChatGPT (Plus/Pro)',
+  localOnly: true,
   async login(interaction, options) {
     const deviceId = options.getDeviceId?.()
     if (!deviceId || !UUID.test(deviceId))
@@ -334,7 +351,7 @@ export const openaiChatGPTLogin: OAuthLogin = {
       }),
       signal,
     )
-    return credentialFrom(token, clientId)
+    return credentialFrom(token, clientId, credential)
   },
 }
 

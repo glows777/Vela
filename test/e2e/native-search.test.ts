@@ -149,7 +149,7 @@ test('Responses model reasoning map to minimal keeps independent search', async 
   const { join } = await import('node:path')
   const dir = tempDir('vela-gpt5-map-')
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         openai: {
@@ -1160,7 +1160,7 @@ test('custom Responses provider opts in to hosted search and stateless requests'
   const { join } = await import('node:path')
   const dir = tempDir('vela-custom-native-')
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         gateway: {
@@ -1218,7 +1218,7 @@ test('a model-level empty hostedTools list disables provider opt-in', async () =
   const { join } = await import('node:path')
   const dir = tempDir('vela-model-native-')
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         gateway: {
@@ -1265,7 +1265,7 @@ test('custom Anthropic Messages provider sends opt-in hosted search and configur
   const { join } = await import('node:path')
   const dir = tempDir('vela-custom-anthropic-')
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         gateway: {
@@ -1370,7 +1370,7 @@ test('hosted-search opt-in rejects a Chat Completions provider', async () => {
   const { join } = await import('node:path')
   const dir = tempDir('vela-native-invalid-')
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         gateway: {
@@ -1404,7 +1404,7 @@ test('malformed hosted-tools configuration is rejected instead of enabling searc
   const { join } = await import('node:path')
   const dir = tempDir('vela-native-invalid-compat-')
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         gateway: {
@@ -1433,7 +1433,7 @@ test('model-level hosted search opt-in works when its provider has none', async 
   const { join } = await import('node:path')
   const dir = tempDir('vela-model-native-optin-')
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         gateway: {

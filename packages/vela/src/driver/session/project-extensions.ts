@@ -1,3 +1,4 @@
+import { toExtensionConfigView } from '../../config/index.ts'
 import type { ModelRegistry } from '../../providers/models/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
 import { importExtension } from '../config/extensions.ts'
@@ -84,9 +85,9 @@ export class ProjectExtensions {
     const { split, config, host, registry, models, dataDir, logger } = this.deps
     const trusted = env.id === 'node:local' && config.mode(env.cwd) === 'all'
     const settings = await config.get(id, env)
-    // The session's own settings decide its shell and its foreground `bash` budget, so both travel
-    // with the registry a call runs in.
-    const budget = resolveForegroundBudget(settings)
+    // The session's own settings decide its shell and any internal test foreground `bash` budget,
+    // so both travel with the registry a call runs in.
+    const budget = resolveForegroundBudget(split!.foregroundBudget)
     const projectSettings = await config.project(id, env)
     const discovered = await loadProjectExtensionEntries(env, {
       trusted,
@@ -103,7 +104,7 @@ export class ProjectExtensions {
       entries: discovered.entries,
     })
     const extensionConfig =
-      selected?.extensionConfig ?? settings.extensionConfig ?? {}
+      selected?.extensionConfig ?? toExtensionConfigView(settings)
     const key = JSON.stringify([
       env.id,
       env.cwd,

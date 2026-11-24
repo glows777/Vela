@@ -16,7 +16,6 @@ import {
   loadCliExtensions,
   parseArgs,
 } from '../../packages/vela/src/cli/setup.ts'
-import { loadConfig as loadCliConfig } from '../../packages/vela/src/config/index.ts'
 import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
 import {
   createLocalExecutionEnv,
@@ -24,6 +23,7 @@ import {
   memorySessionStorage,
   type VelaOptions,
 } from '../../packages/vela/src/driver/index.ts'
+import { loadConfig as loadCliConfig } from '../../packages/vela/src/load-config.ts'
 
 interface Record {
   kind: string
@@ -44,7 +44,7 @@ function setup(
   mkdirSync(agentDir)
   const settings = (cwd: string, version: number) =>
     writeFileSync(
-      join(cwd, '.vela/settings.json'),
+      join(cwd, '.vela/config.json'),
       JSON.stringify({
         extensions: ['./projectProbe.ts'],
         extensionConfig: { projectProbe: { version } },
@@ -495,17 +495,17 @@ test('CLI memory and RAG stay host-owned across two projects and project idle cl
   const agentDir = join(dir.path, 'user')
   mkdirSync(agentDir)
   writeFileSync(
-    join(agentDir, 'settings.json'),
+    join(agentDir, 'config.json'),
     JSON.stringify({
-      extensionConfig: { memory: { dream: false } },
+      memory: { dream: false },
     }),
   )
   for (const cwd of [aDir, bDir]) {
     mkdirSync(join(cwd, '.vela'), { recursive: true })
     writeFileSync(
-      join(cwd, '.vela/settings.json'),
+      join(cwd, '.vela/config.json'),
       JSON.stringify({
-        extensionConfig: { memory: { dream: true } },
+        memory: { dream: true },
       }),
     )
   }

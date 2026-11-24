@@ -10,7 +10,7 @@ This page describes what Vela protects and what it does not. To report a vulnera
 |---|---|---|
 | The user running `vela` | Yes | Everything the operating-system user can do, through the model's tool calls |
 | Extensions | Yes, fully | Run arbitrary code in the Vela process |
-| Project config (`.vela/settings.json`, `.vela/extensions/`, project skills and prompt templates, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md`) | Only after you trust the project | Same as extensions once loaded |
+| Project config (`.vela/config.json`, `.vela/extensions/`, project skills and prompt templates, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md`) | Only after you trust the project | Same as extensions once loaded |
 | `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Always (`--no-context-files` turns them off), like pi | Instructions in the system prompt |
 | Members of an enabled Lark chat | Yes, all members | Full access: bash, files, memory and extension tools |
 | Model output, tool results, file contents, web pages | No | Can steer the model (prompt injection) |
@@ -27,7 +27,7 @@ The built-in tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `g
 - Vela does not filter `bash` commands: a command the model writes runs unless a user extension blocks the call. A pattern-based confirmation extension can catch mistakes, but is not a security control and is easy to get around.
 - Vela does not block risky tool calls by default unless you load a user extension with a `tool_call` hook (see [Block dangerous calls](#block-dangerous-calls)).
 
-Anyone in an enabled chat can make Vela run `bash`. That shell runs as the Vela user with Vela's environment and working folder, so it can read `~/.vela/auth.json` (provider keys and OAuth tokens) and `~/.vela/settings.json`: group members can read Vela's keys. Run Vela as a dedicated user with its own home, or inside a container or virtual machine, holding only the files, credentials and network access the bot needs; the [`vela serve` deploy recipe](deploy.md) sets up such a user.
+Anyone in an enabled chat can make Vela run `bash`. That shell runs as the Vela user with Vela's environment and working folder, so it can read `~/.vela/auth.json` (provider keys and OAuth tokens) and `~/.vela/config.json`: group members can read Vela's keys. Run Vela as a dedicated user with its own home, or inside a container or virtual machine, holding only the files, credentials and network access the bot needs; the [`vela serve` deploy recipe](deploy.md) sets up such a user.
 
 ## Extensions are trusted code
 
@@ -39,7 +39,7 @@ Review an extension before you load it, and load only extensions from sources yo
 
 ## Project trust
 
-A project directory can contain `.vela/settings.json`, `.vela/mcp.json` (MCP servers, which Vela starts as processes or connects to), `.vela/extensions/`, prompt templates, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills, prompts and prompt files put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
+A project directory can contain `.vela/config.json`, `.vela/extensions/`, prompt templates, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills, prompts and prompt files put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
 
 Interactive mode asks once per project and saves the answer in `~/.vela/trust.json`; `--approve` and `--no-approve` decide for one run; print, JSON and RPC modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
 
@@ -51,7 +51,7 @@ There are no roles (like pi). A channel's enabled-chat list controls who can inv
 
 ### Channel senders
 
-Lark accepts only chats listed in `extensionConfig.lark.chats`, plus direct chats from the open_ids in `owners` (or `LARK_OWNERS`). Unlisted groups and DMs are ignored, even when an owner speaks in an unlisted group. Empty `chats` means owners' DMs only.
+Lark accepts only chats listed in `lark.chats`, plus direct chats from the open_ids in `owners` (or `LARK_OWNERS`). Unlisted groups and DMs are ignored, even when an owner speaks in an unlisted group. Empty `chats` means owners' DMs only.
 
 **Everyone in an enabled chat shares one session and its full access.** They share its history, and can ask the agent to read/write files, run bash, access memory and use extension/MCP tools. Group members added later inherit this access. Enable only chats whose entire membership you trust, and restrict what the operating-system account can reach. Group @-mention gating controls when the bot runs; it is not a tool-permission boundary. Earlier group messages are sent to the model as context when someone mentions the bot.
 
@@ -99,7 +99,7 @@ Vela writes conversations to disk, and they can contain anything the model saw: 
 | Credentials | `~/.vela/auth.json` | API keys and OAuth tokens stored by `/login`, mode `0600` in a `0700` directory. Never share or commit it; `/logout <provider>` removes an entry |
 | Debug log | `~/.vela/debug.log` with `VELA_DEBUG=1` | Diagnostic messages |
 
-Review sessions and recordings before you share them. Keep API keys out of config files: `apiKey` in `~/.vela/models.json` and strings in `extensionConfig` accept `"$VAR"` references that Vela reads from the environment (see [Models](models.md) and [Settings](settings.md)).
+Review sessions and recordings before you share them. Keep API keys out of config files: `apiKey` under `providers` in `~/.vela/config.json` and strings in built-in or `extensionConfig` sections accept `"$VAR"` references that Vela reads from the environment (see [Models](models.md) and [Settings](settings.md)).
 
 ## Reduce the impact
 

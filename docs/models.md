@@ -1,10 +1,10 @@
 # Models
 
-Vela talks to models through the [AI SDK](https://ai-sdk.dev). A model is named `provider/id`, for example `openai/gpt-5.5` or `anthropic/claude-opus-4-8`. Four providers are built in (`anthropic`, `openai`, `openrouter`, `deepseek`); others are added in `~/.vela/models.json` or by extensions. A built-in model catalog, generated from pi's, gives the built-in providers their model lists and every known model its context window, output limit, price and thinking levels.
+Vela talks to models through the [AI SDK](https://ai-sdk.dev). A model is named `provider/id`, for example `openai/gpt-5.5` or `anthropic/claude-opus-4-8`. Four providers are built in (`anthropic`, `openai`, `openrouter`, `deepseek`); others are added under `providers` in `~/.vela/config.json` or by extensions. A built-in model catalog, generated from pi's, gives the built-in providers their model lists and every known model its context window, output limit, price and thinking levels.
 
 ## Setup wizard
 
-Run `vela` interactively without a usable model to start setup, or run `vela setup` to revisit configuration. The wizard verifies the selected model with a minimal request, which may incur a small charge, before saving user-level credentials and settings. DeepSeek uses the built-in provider and defaults to `deepseek/deepseek-flash`; choose **Custom provider** for OpenAI Chat Completions (`openai-completions`), OpenAI Responses (`openai-responses`) or Anthropic Messages (`anthropic-messages`). Enter a provider name, base URL, API key and model ID. Optional JSON headers, context window, image input and reasoning support are saved in `models.json`; the key is saved in `auth.json`. Press Enter on an empty headers or context-window input to preserve its existing value, or use the default for a new provider/model. Image input and reasoning each offer Keep, Yes and No. Escape cancels setup at any optional input without saving. Headers and API keys are masked during entry. Verification uses the selected protocol and headers before anything is saved. Cancel leaves existing configuration unchanged; a failed verification can be retried. Existing environment variables and the manual configuration below remain supported.
+Run `vela` interactively without a usable model to start setup, or run `vela setup` to revisit configuration. The wizard verifies the selected model with a minimal request, which may incur a small charge, before saving user-level credentials and settings. DeepSeek uses the built-in provider and defaults to `deepseek/deepseek-flash`; choose **Custom provider** for OpenAI Chat Completions (`openai-completions`), OpenAI Responses (`openai-responses`) or Anthropic Messages (`anthropic-messages`). Enter a provider name, base URL, API key and model ID. Optional JSON headers, context window, image input and reasoning support, along with `model` and `thinkingLevel`, are saved in `config.json`; the key is saved in `auth.json`. Press Enter on an empty headers or context-window input to preserve its existing value, or use the default for a new provider/model. Image input and reasoning each offer Keep, Yes and No. Escape cancels setup at any optional input without saving. Headers and API keys are masked during entry. Verification uses the selected protocol and headers before anything is saved. Cancel leaves existing configuration unchanged; a failed verification can be retried. Existing environment variables and the manual configuration below remain supported.
 
 ## Selecting a model
 
@@ -13,7 +13,7 @@ The CLI uses the first of these that is set:
 1. `--model provider/id` on the command line.
 2. `VELA_MODEL=mock` or `VELA_MODEL=faux:<file>` (see [Offline models](#offline-models)).
 3. The model saved with a resumed session (`-c`, `-r`, `--session`, `/resume`).
-4. `defaultModel` in [settings](settings.md).
+4. `model` in [settings](settings.md).
 5. `openai/$OPENAI_API_MODEL_NAME`, when that variable is set.
 6. The default model of the first built-in provider that has a credential, in the order `anthropic` (`claude-opus-4-8`), `openai` (`gpt-5.5`), `openrouter` (`moonshotai/kimi-k2.6`), `deepseek` (`deepseek-flash`); else the first available model. The first three retain pi's preference order.
 
@@ -24,7 +24,7 @@ Inside a session:
 - `/model` (or Ctrl+L) opens a searchable picker of the available models: those of providers that have a credential (like pi). Type to filter.
 - `/model provider/id` switches directly, listed or not.
 - Ctrl+P and Shift+Ctrl+P cycle forward and back through the models in `enabledModels` (see [Settings](settings.md#enabled-models)), or through all available models when it is not set.
-- The choice applies to the current session from the next prompt and is saved with it. It does not change `defaultModel`.
+- The choice applies to the current session from the next prompt and is saved with it. It does not change `model` in `config.json`.
 
 `vela --list-models` prints the available models.
 
@@ -39,7 +39,7 @@ The part after the first `/` is the model id, so ids that contain `/` work: `ope
 | `openrouter` | `openai-completions` | `OPENROUTER_API_KEY` | OpenRouter sign-in (creates a key), or API key |
 | `deepseek` | `openai-responses` | `DEEPSEEK_API_KEY` | API key |
 
-Their models come from the built-in catalog. A provider without a credential fails when its model is used, with a message naming `/login`, the variable and `models.json`. For an OpenAI-compatible service that only speaks Chat Completions, set `"api": "openai-completions"` on `openai` in `models.json`, or add it as its own provider.
+Their models come from the built-in catalog. A provider without a credential fails when its model is used, with a message naming `/login`, the variable and `config.json`. For an OpenAI-compatible service that only speaks Chat Completions, set `"api": "openai-completions"` on `openai` in `config.json`, or add it as its own provider.
 
 With the `web` extension enabled, built-in OpenAI Responses and Anthropic Messages models and DeepSeek `deepseek-v4-pro` can use provider-hosted web search with an API key. DeepSeek `deepseek-flash` does not declare it. OAuth, other custom providers and other protocols do not declare hosted search by default. A `deepseek` provider URL override retains its declared capabilities; disable `compat.hostedTools` at model level if the gateway does not support search. For OpenAI Responses with effective minimal reasoning, Vela conservatively keeps an independent search provider if configured; OpenAI documents that GPT-5 native web search requires higher reasoning. This policy also applies to opted-in custom Responses endpoints. Search calls may have separate provider charges which are not included in Vela's token cost estimate. See [web search availability and fallback](built-in-extensions.md#web).
 
@@ -50,10 +50,10 @@ Built-in DeepSeek uses Responses rather than pi's Chat Completions so `deepseek-
 A provider's key is looked up per request, in this order (pi's):
 
 1. The credential stored by `/login` in `~/.vela/auth.json`.
-2. `apiKey` in `models.json`.
+2. `apiKey` under `providers` in `config.json`.
 3. The provider's environment variable.
 
-`/login` lists the providers you can sign in to and how; `/login <provider>` picks one directly. It stores either an API key you type or an OAuth credential. `/logout <provider>` removes the stored credential; environment variables and `models.json` are left alone.
+`/login` lists the providers you can sign in to and how; `/login <provider>` picks one directly. It stores either an API key you type or an OAuth credential. `/logout <provider>` removes the stored credential; environment variables and `config.json` are left alone.
 
 `auth.json` uses pi's format (`{ "<provider>": { "type": "api_key", "key": "…" } }` or `{ "type": "oauth", "access", "refresh", "expires", … }`). It is created with mode 0600 in a 0700 directory. Treat it like a password file.
 
@@ -67,7 +67,7 @@ Vela opens the browser and waits for the redirect on `http://127.0.0.1:1455/auth
 
 OpenAI documents this sign-in for local agents that the signed-in person runs. Use it only in the terminal on your own machine: not for a Lark bot, a server or any agent that other people talk to. Vela enforces part of this: channel sessions (Lark) that would use the ChatGPT sign-in fail with an error, so give `openai` an API key or pick another model for them.
 
-The token is only sent to `https://api.openai.com`: with `OPENAI_API_BASE_URL` (or an `openai` `baseUrl` in models.json) pointing elsewhere, requests fail instead of sending your ChatGPT token to that server.
+The token is only sent to `https://api.openai.com`: with `OPENAI_API_BASE_URL` (or an `openai` `baseUrl` in config.json) pointing elsewhere, requests fail instead of sending your ChatGPT token to that server.
 
 The plan route accepts fewer request options than the API: Vela sends requests without stored responses or a system role and drops options such as the output token limit and temperature.
 
@@ -75,9 +75,9 @@ The plan route accepts fewer request options than the API: Vela sends requests w
 
 `/login openrouter` → **OpenRouter** opens OpenRouter in the browser and stores the API key it creates for Vela. Like an API key you type, it does not expire; revoke it in your OpenRouter settings.
 
-## models.json
+## providers
 
-`~/.vela/models.json` adds providers or changes the built-in ones. It is read once at startup, from the user directory only; projects cannot add providers.
+The top-level `providers` section in `~/.vela/config.json` adds providers or changes the built-in ones. It is read once at startup, from the user directory only; projects cannot add providers.
 
 ```json
 {
@@ -135,7 +135,7 @@ An entry named `anthropic`, `openai`, `openrouter` or `deepseek` overrides the b
 | `input` | `["text"]` or `["text", "image"]`. |
 | `cost` | Prices in dollars per million tokens: `input`, `output`, `cacheRead`, `cacheWrite`. Used for the cost in `/usage` and the footer. |
 
-A model id that is not listed in `models.json` takes its metadata from the catalog when the catalog knows that id, first under the same provider and then under any provider (so `deepseek/deepseek-flash` above gets DeepSeek's context window and price). A model the catalog doesn't know has no cost: `/usage` and the footer show its tokens without a dollar amount.
+A model id that is not listed in `providers` takes its metadata from the catalog when the catalog knows that id, first under the same provider and then under any provider (so `deepseek/deepseek-flash` above gets DeepSeek's context window and price). A model the catalog doesn't know has no cost: `/usage` and the footer show its tokens without a dollar amount.
 
 ### Compatibility flags
 
@@ -153,7 +153,7 @@ Compatibility is explicit, not inferred from a hostname or model ID. Provider de
 
 ### Migrating existing DeepSeek configurations
 
-An existing provider named `deepseek` retains its explicit `api`, `baseUrl`, key, headers and listed models. Responses entries inherit the built-in compatibility defaults. An explicit Chat Completions override remains Chat Completions, without inherited v4-pro hosted search; remove that `api` override to use the new default Responses path. Vela does not rewrite `models.json` or change saved model references. Existing model IDs are not renamed; their availability remains up to the provider.
+An existing provider named `deepseek` retains its explicit `api`, `baseUrl`, key, headers and listed models. Responses entries inherit the built-in compatibility defaults. An explicit Chat Completions override remains Chat Completions, without inherited v4-pro hosted search; remove that `api` override to use the new default Responses path. Vela does not rewrite existing `providers` entries or change saved model references. Existing model IDs are not renamed; their availability remains up to the provider.
 
 **Providers with another name must opt in.** The former exact-`api.deepseek.com` behavior is removed. If a provider such as `openai` or `my-deepseek` relied on that hostname to get DeepSeek compatibility, add the following flags before upgrading. Keep its name, key and URL so saved sessions continue to resolve the same model. The same configuration works behind a different gateway hostname:
 
@@ -228,7 +228,7 @@ The thinking level controls how much the model reasons before answering:
 The default is `medium`. Set it with:
 
 - `--thinking <level>` for this run,
-- `defaultThinkingLevel` in [settings](settings.md) for new sessions,
+- `thinkingLevel` in [settings](settings.md) for new sessions,
 - `/thinking [level]` or Shift+Tab (cycles through the levels the model supports) in the terminal UI.
 
 A change applies from the next model request, including while the agent is running.
@@ -251,7 +251,7 @@ This does not establish complete DeepSeek Responses compatibility. With the inst
 
 ## Extension providers
 
-An extension can register a provider with `vela.registerProvider(name, { models, createModel })`, where `createModel(id, ctx)` returns any AI SDK model. Afterwards `name/<id>` works with `--model`, `defaultModel`, `/model` and `session.setModel()`. A provider can also offer `/login`: `oauth` (an `OAuthLogin` with `login` and `refresh`) or `apiKeyLogin: true`, and reads the stored credential per request with `await ctx.credential()`, which refreshes an expiring OAuth token first. Use this for protocols or authentication that `models.json` cannot express. Provider names are not prefixed with the extension name, and registering a name that already exists is an error. See [Extensions](extensions.md#registerprovider) and `examples/extensions/local-provider.ts`.
+An extension can register a provider with `vela.registerProvider(name, { models, createModel })`, where `createModel(id, ctx)` returns any AI SDK model. Afterwards `name/<id>` works with `--model`, `model`, `/model` and `session.setModel()`. A provider can also offer `/login`: `oauth` (an `OAuthLogin` with `login` and `refresh`) or `apiKeyLogin: true`, and reads the stored credential per request with `await ctx.credential()`, which refreshes an expiring OAuth token first. Use this for protocols or authentication that `providers` cannot express. Provider names are not prefixed with the extension name, and registering a name that already exists is an error. See [Extensions](extensions.md#registerprovider) and `examples/extensions/local-provider.ts`.
 
 ## Offline models
 
@@ -259,7 +259,7 @@ An extension can register a provider with `vela.registerProvider(name, { models,
 |---|---|
 | `VELA_MODEL=mock` | `mock/mock-model`, a keyword-driven demo model. It needs no key, calls real tools for some requests (`list files`, `read <file>`, `test bash`, `test edit`) and simulates prompt caching; `/cache on` and `/cache off` toggle the simulation. |
 | `VELA_MODEL=faux:<file.json>` | Replays the model responses of a scenario file in order. |
-| `VELA_RECORD=<file.json>` | Records the responses of the current model (and your input) into a scenario file for later replay. Works only with models resolved from `models.json` or the built-in providers, not extension providers. |
+| `VELA_RECORD=<file.json>` | Records the responses of the current model (and your input) into a scenario file for later replay. Works only with models resolved from `config.json` `providers` or the built-in providers, not extension providers. |
 
 ```bash
 VELA_RECORD=bug.json vela -p "reproduce the bug"

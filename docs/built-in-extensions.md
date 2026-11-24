@@ -15,7 +15,7 @@ Vela ships six selectable built-in extensions in `@glows777/vela`: `background`,
 
 Vela also ships `local` in `@glows777/vela`. It is an explicitly enabled transport, not another `builtin:*` selector or a default CLI extension. It provides authenticated loopback HTTP/SSE for project hubs, task sessions, visible history and run-bound Stop. Lark and Local share the channel gateway and topic tools.
 
-In the CLI, enable it only through user-level `extensionConfig.local: { "enabled": true, "token": "$VELA_LOCAL_TOKEN", "port": 8788 }` and run `vela serve`. Project settings cannot enable or override it; non-serve modes and `--no-extensions` do not start it. In the SDK, add `local({ token, port: 8788 })` explicitly, then call `await vela.ready()` and `await vela.startChannels()`. Unlike the factories below, Local requires its token as a factory option and does not read it implicitly from extension configuration.
+In the CLI, enable it only through user-level `"local": { "enabled": true, "token": "$VELA_LOCAL_TOKEN", "port": 8788 }` in `config.json` and run `vela serve`. Project config cannot enable or override it; non-serve modes and `--no-extensions` do not start it. In the SDK, add `local({ token, port: 8788 })` explicitly, then call `await vela.ready()` and `await vela.startChannels()`. Unlike the factories below, Local requires its token as a factory option and does not read it implicitly from extension configuration.
 
 Local binds only `127.0.0.1`, with Bearer authentication and no CORS/cookie support. Its token grants the daemon's tool authority. Do not tunnel it or share the webhook listener's port (8787). See [Local](channels.md#local) for setup, security, the HTTP/SSE protocol and runnable client examples.
 
@@ -23,7 +23,7 @@ Local binds only `127.0.0.1`, with Bearer authentication and no CORS/cookie supp
 
 **CLI.** All six load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
-To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
+To turn one off, add `-builtin:<name>` to `extensions` in `config.json`, for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
 **SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
 
@@ -248,4 +248,4 @@ It registers no tools or commands. Setup and behavior are described in [Channels
 
 ## mcp
 
-Connects to [MCP](https://modelcontextprotocol.io) servers configured in `~/.vela/mcp.json` and the trusted project's `.vela/mcp.json`, in the `mcpServers` format of Claude Desktop and Claude Code, and registers their tools as `mcp__<server>__<tool>`. Tools are deferred by default: the system prompt names each server and the model loads its tools with `tool_search`. `/mcp` shows each server's state and `/mcp reconnect <server>` reconnects one. In the SDK, pass the servers: `mcp({ servers: { docs: { url: 'https://example.com/mcp' } } })`. See [MCP servers](mcp.md).
+Connects to [MCP](https://modelcontextprotocol.io) servers configured under `mcpServers` in `~/.vela/config.json` and the trusted project's `.vela/config.json`, in the `mcpServers` format of Claude Desktop and Claude Code, and registers their tools as `mcp__<server>__<tool>`. Tools are deferred by default: the system prompt names each server and the model loads its tools with `tool_search`. `/mcp` shows each server's state and `/mcp reconnect <server>` reconnects one. In the SDK, pass the servers: `mcp({ servers: { docs: { url: 'https://example.com/mcp' } } })`. See [MCP servers](mcp.md).

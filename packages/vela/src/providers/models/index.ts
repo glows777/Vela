@@ -258,8 +258,11 @@ export class ModelRegistry {
     return {
       model: def.createModel(id, {
         provider,
-        credential: () =>
-          resolveCredential(this.credentials, provider, def.oauth),
+        credential: async () => {
+          if (def.oauth?.localOnly && options.channel?.())
+            return this.credentials.get(provider)
+          return resolveCredential(this.credentials, provider, def.oauth)
+        },
         channel: () => options.channel?.(),
       }),
       info: { ...spec, provider, ref: `${provider}/${id}` },
@@ -367,7 +370,7 @@ export function resolveModel(
   const choice = ref ?? registry.defaultRef()
   if (choice === undefined)
     throw new Error(
-      'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock.',
+      'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set model in ~/.vela/config.json. For an offline demo use VELA_MODEL=mock.',
     )
   if (typeof choice === 'string') return registry.resolve(choice).model
   assertRunnableModelHandle(choice)

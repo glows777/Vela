@@ -1,62 +1,59 @@
 # Settings
 
-Vela reads its configuration from JSON files in the user directory (`~/.vela`, or `VELA_DIR`) and, for trusted projects, from the project's `.vela` directory. This page covers `settings.json`, the data directory, project trust, context files (`AGENTS.md`), skills and prompt templates. Model providers live in `models.json`, described in [Models](models.md).
+Vela reads its configuration from `~/.vela/config.json` (or `$VELA_DIR/config.json`) and, for trusted projects, from `<project>/.vela/config.json`. This page covers `config.json`, the data directory, project trust, context files (`AGENTS.md`), skills and prompt templates. Model provider fields inside `providers` are described in [Models](models.md).
 
 ## Files
 
 | File | Scope |
 |---|---|
-| `~/.vela/settings.json` | User settings, used in every project. |
-| `<project>/.vela/settings.json` | Project settings. Read only when the project is [trusted](#project-trust). |
-| `~/.vela/models.json` | Model providers. User level only. See [Models](models.md). |
+| `~/.vela/config.json` | User configuration (model, tools, providers, channels, MCP servers, limits, resources). |
+| `<project>/.vela/config.json` | Project configuration. Read only when the project is [trusted](#project-trust). Host-owned keys (`environments`, `location`, `providers`, `lark`, `local`, `webhooks`, `eventDefaultTarget`) are ignored in project config. |
 | `~/.vela/trust.json` | Saved project trust decisions. |
 | `~/.vela/extensions/` | User extensions, loaded in every project. |
 | `<project>/.vela/extensions/` | Project extensions. Loaded only when the project is trusted. |
-| `~/.vela/mcp.json`, `<project>/.vela/mcp.json` | MCP servers. The project file is read only when the project is trusted. See [MCP servers](mcp.md). |
 | `~/.vela/skills/`, `~/.agents/skills/`, `<project>/.vela/skills/`, `<project>/.agents/skills/`, `<project>/.skills/` | Skills. Project skills load only when the project is trusted. See [Skills](#skills). |
 | `~/.vela/prompts/`, `<project>/.vela/prompts/` | Prompt templates. Project templates load only when the project is trusted. See [Prompt templates](#prompt-templates). |
 | `~/.vela/AGENTS.md`, `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Instructions put into the system prompt. Not gated by trust. See [Context files](#context-files). |
 | `~/.vela/SYSTEM.md`, `<project>/.vela/SYSTEM.md` | Replaces the default system prompt. The project file needs trust. See [The system prompt](#the-system-prompt). |
 | `~/.vela/APPEND_SYSTEM.md`, `<project>/.vela/APPEND_SYSTEM.md` | Text appended to the system prompt. The project file needs trust. See [The system prompt](#the-system-prompt). |
 
-All files are optional. A file that is not valid JSON, or a recognized key below with the wrong type, stops the CLI with a `[config]` error and exit code 2. Other top-level keys are ignored; unknown keys under `limits` are an error.
+All files are optional. A file that is not valid JSON, an unrecognized top-level key, a built-in extension section nested under `extensionConfig`, or a key with the wrong type stops the CLI with a `[config]` error and exit code 2. Legacy `settings.json`, `models.json`, or `mcp.json` files without `config.json` fail fast with a migration notice.
 
 When you start Vela from your home directory, `<project>/.vela` is `~/.vela` itself; it is read once, as user configuration, and no trust question is asked.
 
 ## Settings follow the session location
 
-For sessions opened or resumed in another project, declared `skills` and `prompts`, `defaultModel`, `defaultThinkingLevel`, `limits`, `autoCompaction`, `shellPath` and the `bashForegroundTimeout*` budget come from that session's trusted `.vela/settings.json`, not the directory where Vela started. A channel session runs in its own workspace, so its budget comes from the user settings unless that workspace declares one. Relative declared resource paths resolve beside that settings file. A denied project contributes none of these values or resources; it does not fall back to the startup project's configuration. User settings remain the shared base, and explicit CLI/SDK overrides retain priority. Saved model/thinking selections and later manual selections are not replaced by project defaults.
+For sessions opened or resumed in another project, declared `skills` and `prompts`, `model`, `thinkingLevel`, `limits`, `autoCompaction`, and `shellPath` come from that session's trusted `.vela/config.json`, not the directory where Vela started. Relative declared resource paths resolve beside that config file. A denied project contributes none of these values or resources; it does not fall back to the startup project's configuration. User settings remain the shared base, and explicit CLI/SDK overrides retain priority. Saved model/thinking selections and later manual selections are not replaced by project defaults.
 
 Resources and defaults are prepared once for the session's location. Opening B between two turns in A does not rebuild A's prompt or tools. Editing A's settings leaves an already-prepared A session unchanged; a new A session reads the updated settings. This keeps normal wakes stable rather than inserting changing configuration into the system prompt.
 
-`dataDir` is a bootstrap exception: the host resolves its storage directory at startup, before it can locate saved sessions. It does not move when a session resumes elsewhere. `serve` continues to ignore project `defaultTools`; channel tool selection retains its existing rules.
+`dataDir` is a bootstrap exception: the host resolves its storage directory at startup, before it can locate saved sessions. It does not move when a session resumes elsewhere. `serve` continues to ignore project `tools`; channel tool selection retains its existing rules.
 
-Project extension registrations and configuration-driven MCP connections also follow the prepared session location and configuration snapshot. Sessions at the same location and snapshot share an instance until the last session closes; new sessions see changed settings without mutating existing ones. User custom extensions remain host singletons with user configuration, and explicit SDK/CLI extension factories remain host-owned. Providers, credentials, listeners and `dataDir` remain host-level configuration. CLI `defaultTools` and the model-cycling list (`enabledModels`) come from the prepared session’s user/project settings, including after resume or RPC session switches. Explicit CLI tool flags still apply on top, and the unscoped model picker and `--list-models` still list the host’s available models. If a session switch finds an invalid project tool list, the CLI reports the problem and keeps the current session.
+Project extension registrations and configuration-driven MCP connections also follow the prepared session location and configuration snapshot. Sessions at the same location and snapshot share an instance until the last session closes; new sessions see changed settings without mutating existing ones. User custom extensions remain host singletons with user configuration, and explicit SDK/CLI extension factories remain host-owned. Providers, credentials, `environments`, `location`, listeners (`lark`, `local`, `webhooks`, `eventDefaultTarget`) and `dataDir` remain host-level configuration. CLI `tools` and the model-cycling list (`enabledModels`) come from the prepared session’s user/project config, including after resume or RPC session switches. Explicit CLI tool flags still apply on top, and the unscoped model picker and `--list-models` still list the host’s available models. If a session switch finds an invalid project tool list, the CLI reports the problem and keeps the current session.
 
 ## Merge rules
 
 Project settings are applied on top of user settings:
 
-- Objects (`limits`, `extensionConfig`, `eventDefaultTarget`) are merged key by key, recursively.
+- Objects (`limits`, `web`, `memory`, `mcpServers`, `extensionConfig`) are merged key by key, recursively (`$VAR` interpolation runs once per layer before merging).
 - `extensions`, `skills` and `prompts` lists are concatenated: user entries first, then project entries.
-- `defaultTools` with plain names replaces the user list; a list of only `+name` / `-name` entries is appended, and an empty list replaces it with no tools (see [defaultTools](#defaulttools)).
+- `tools` with plain names replaces the user list; a list of only `+name` / `-name` entries is appended, and an empty list replaces it with no tools (see [tools](#tools)).
+- Host-owned keys (`environments`, `location`, `providers`, `lark`, `local`, `webhooks`, `eventDefaultTarget`) are stripped from `<project>/.vela/config.json` before merging.
 - Every other value is replaced by the project's value.
 
-Relative paths in `extensions`, `skills` and `prompts` resolve from the directory of the settings file that lists them. `~` expands to the home directory.
+Relative paths in `extensions`, `skills` and `prompts` resolve from the directory of the config file that lists them. `~` expands to the home directory.
 
 ## Local listener settings
 
-Local is opt-in through **user-level** `extensionConfig.local` in `~/.vela/settings.json` (or `$VELA_DIR/settings.json`). Unlike ordinary extension configuration merging, project settings cannot enable, disable or override this listener. It starts only in real `vela serve`, never interactive, print, JSON, RPC or `--list-models` mode; `--no-extensions` disables it.
+Local is opt-in through **user-level** `local` in `~/.vela/config.json` (or `$VELA_DIR/config.json`). Project config cannot enable, disable or override this listener. It starts only in real `vela serve`, never interactive, print, JSON, RPC or `--list-models` mode; `--no-extensions` disables it.
 
 ```json
 {
-  "extensionConfig": {
-    "local": {
-      "enabled": true,
-      "token": "$VELA_LOCAL_TOKEN",
-      "port": 8788,
-      "timezone": "UTC"
-    }
+  "local": {
+    "enabled": true,
+    "token": "$VELA_LOCAL_TOKEN",
+    "port": 8788,
+    "timezone": "UTC"
   }
 }
 ```
@@ -74,45 +71,50 @@ An opened Local project's canonical cwd selects its tool directory and trusted p
 
 ```json
 {
-  "defaultModel": "anthropic/<model-id>",
-  "defaultThinkingLevel": "medium",
-  "defaultTools": ["+grep", "+find"],
+  "model": "anthropic/<model-id>",
+  "thinkingLevel": "medium",
+  "tools": ["+grep", "+find"],
   "dataDir": ".vela-data",
   "shellPath": "/bin/zsh",
   "limits": { "maxRetries": 5 },
   "extensions": ["-builtin:lark", "./extensions/todo.ts"],
   "skills": ["~/shared-skills"],
   "prompts": ["~/shared-prompts"],
-  "extensionConfig": {
-    "web": { "tavilyKey": "$TAVILY_API_KEY" }
-  }
+  "web": { "tavilyKey": "$TAVILY_API_KEY" }
 }
 ```
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `defaultModel` | `"provider/id"` | none | Model for new sessions. A trusted project's `.vela/settings.json` sets it for sessions started in that project. See [Models](models.md#selecting-a-model). |
+| `model` | `"provider/id"` | none | Model for new sessions. A trusted project's `.vela/config.json` sets it for sessions started in that project. See [Models](models.md#selecting-a-model). |
 | `enabledModels` | string[] | none | Models Ctrl+P (and RPC `cycle_model`) cycles through, like pi's `enabledModels`. See [Enabled models](#enabled-models). |
-| `defaultThinkingLevel` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` | `medium` | Thinking level for new sessions. A trusted project's `.vela/settings.json` sets it for sessions started in that project. |
-| `defaultTools` | string[] | `read_file`, `write_file`, `edit_file`, `bash` | Tools a new CLI session starts with. Plain names (or `*` patterns) select exactly those; `+name` / `-name` entries turn default tools on or off. See [defaultTools](#defaulttools). |
+| `thinkingLevel` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` | `medium` | Thinking level for new sessions. A trusted project's `.vela/config.json` sets it for sessions started in that project. |
+| `tools` | string[] | `read_file`, `write_file`, `edit_file`, `bash` | Tools a new CLI session starts with. Plain names (or `*` patterns) select exactly those; `+name` / `-name` entries turn default tools on or off. See [tools](#tools). |
+| `providers` | object | `{}` | Host-only custom model providers and overrides (see [Models](models.md#providers)). |
+| `mcpServers` | object | `{}` | MCP server definitions (see [MCP servers](mcp.md)). |
+| `environments`, `location` | object | none | Host-only execution environments (such as Docker containers) and default location. |
+| `lark` | object | `{}` | Host-only built-in Lark channel settings (`appId`, `appSecret`, `owners`, `chats`, `timezone`). |
+| `web` | object | `{}` | Built-in web search configuration (`tavilyKey`, `serperKey`). |
+| `memory` | object | `{}` | Built-in memory extension settings (`dream`). |
+| `webhooks` | object | none | Transitional host-only HTTP webhook receiver settings. |
+| `local` | object | none | Transitional host-only Local listener settings. |
 | `dataDir` | string | under `~/.vela/projects/` | The project's data directory (see [Data directory](#data-directory)). A relative path resolves from the working folder. |
-| `eventDefaultTarget` | `{ channel: string, chatId: string }` | none (drop) | Optional fallback for external events with no matching subscription. The top-level conversation must already exist and be enabled; it is never created implicitly. Both fields must be nonempty and surrounding whitespace is trimmed (also for the direct channel-aware SDK option). Matching disabled/unavailable subscriptions never fall through here. See [external events](channels-reference.md#external-event-subscriptions). |
+| `eventDefaultTarget` | `{ channel: string, chatId: string }` | none (drop) | Host-only optional fallback for external events with no matching subscription. The top-level conversation must already exist and be enabled; it is never created implicitly. Both fields must be nonempty and surrounding whitespace is trimmed (also for the direct channel-aware SDK option). Matching disabled/unavailable subscriptions never fall through here. See [external events](channels-reference.md#external-event-subscriptions). |
 | `shellPath` | string | `bash` on `PATH`; Git for Windows Bash on Windows | Shell the `bash` tool runs commands with (`<shellPath> -lc <command>`), like pi's `shellPath`. On Windows, Vela looks for Git for Windows at its standard install paths and on `PATH`, preferring `bin\\bash.exe` so a `bash.cmd` shim cannot shadow it. If the shell cannot start, that session disables `bash`; default sessions also turn on `list_directory`, `grep` and `find` unless a tool was explicitly disabled. An explicit tool allowlist stays in force. |
-| `bashForegroundTimeoutSeconds` | number | `120` | Seconds a foreground `bash` call may run before it is moved to the background instead of being killed, so a long build or test run does not lose its work. `0` means no foreground budget: a command without `timeout` waits as long as it needs. The command's exit then arrives as the job's result. A command that starts with `sleep` has no work to lose and is still killed at its deadline. Needs the `background` extension and its `background_stop` tool: without either, `timeout` kills as before and this key does nothing. See [bash](tools.md#bash). |
-| `bashForegroundTimeoutMaxSeconds` | number | `600` | Ceiling for the `timeout` a foreground `bash` call asks for, in seconds; a larger request is held to it and the result names both values, whether it was moved or killed. The configured budget raises the ceiling when it is longer, so `bashForegroundTimeoutSeconds` is never cut by it. A `timeout` given with `run_in_background` is the job's own limit and is not clamped. Also needs the `background` extension and its `background_stop` tool. |
 | `limits` | object | see below | Overrides runtime limits. |
 | `autoCompaction` | boolean | `true` | Compact the context automatically (pi's `compaction.enabled`). `false` turns off microcompaction, threshold summaries and compact-and-retry on overflow; to turn off only microcompaction, use `limits.microcompact`. `/compact` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
 | `extensions` | string[] | `[]` | Extension files or directories, and `builtin:` switches. |
 | `skills` | string[] | `[]` | Extra skill directories or files. |
 | `prompts` | string[] | `[]` | Extra prompt template directories or files. |
-| `extensionConfig` | object | `{}` | Per-extension configuration, keyed by extension name. |
+| `extensionConfig` | object | `{}` | Custom third-party extension configuration, keyed by extension name (built-in sections live at top level). |
 
-### defaultTools
+<a id="defaulttools"></a>
+### tools
 
-`defaultTools` sets the tools a session starts with, using the same `+name` / `-name` syntax as `--tools` (like pi). A list of only modifiers changes the default set and leaves tools from extensions alone:
+`tools` sets the tools a session starts with, using the same `+name` / `-name` syntax as `--tools` (like pi). A list of only modifiers changes the default set and leaves tools from extensions alone:
 
 ```json
-{ "defaultTools": ["+grep", "+find"] }
+{ "tools": ["+grep", "+find"] }
 ```
 
 The default set is `read_file`, `write_file`, `edit_file` and `bash`; `grep`, `find` and `list_directory` are registered but off. A list with plain names (or `*` patterns) replaces the default set and is an allowlist: tools from extensions are off unless the list names them.
@@ -150,7 +152,7 @@ The SDK takes the same keys as `createVela({ limits })`; unknown keys are an err
 
 Folding a tool result changes that message, so the prompt cache can be reused only up to the first folded result; keeping the original results costs input tokens but leaves the earlier prefix unchanged. Whether that tradeoff helps depends on your provider's prompt-cache pricing.
 
-When the model entry has a `contextWindow` `W` (in `models.json` or an extension provider's model list), the four token thresholds are derived from it instead of using the defaults above, which correspond to a 200k window:
+When the model entry has a `contextWindow` `W` (in `providers` or an extension provider's model list), the four token thresholds are derived from it instead of using the defaults above, which correspond to a 200k window:
 
 | Limit | Derived value |
 |---|---|
@@ -165,22 +167,23 @@ When the model entry has a `contextWindow` `W` (in `models.json` or an extension
 
 A list of extension files and directories to load, and `builtin:` switches that turn the built-in extensions off and on (`"-builtin:web"`, `"+builtin:web"`). Load order, entry formats and `--no-extensions` are described in [Extensions](extensions.md#where-extensions-load-from).
 
-### extensionConfig
+### Built-in and custom extension sections
 
-Each extension reads its own section, `extensionConfig.<name>`, as `vela.config`. String values can reference environment variables with `$NAME` or `${NAME}` (an unset variable becomes an empty string; `$$` is a literal `$`). Interpolation applies to `extensionConfig` only, not to other settings.
+Built-in extensions read top-level sections (`lark`, `web`, `memory`, `mcpServers`, `webhooks`, `local`), while custom third-party extensions read `extensionConfig.<name>` as `vela.config`. String values in these sections support `$NAME` or `${NAME}` once per config layer (an unset variable becomes an empty string; `$$` is a literal `$`). Placing a built-in extension name (`lark`, `web`, `mcp`, `memory`, `channel`, `local`) under `extensionConfig` is rejected.
 
 ```json
 {
+  "web": { "tavilyKey": "${TAVILY_API_KEY}" },
+  "lark": { "owners": "ou_xxx,ou_yyy", "timezone": "Asia/Shanghai" },
   "extensionConfig": {
-    "web": { "tavilyKey": "${TAVILY_API_KEY}" },
-    "lark": { "owners": "ou_xxx,ou_yyy", "timezone": "Asia/Shanghai" }
+    "my-plugin": { "endpoint": "${MY_PLUGIN_URL}" }
   }
 }
 ```
 
-The CLI fills the built-in extensions' sections from environment variables first (`TAVILY_API_KEY`, `LARK_APP_ID` and the others listed in [CLI](cli.md#environment-variables)); values in `extensionConfig` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
+The CLI fills built-in sections from environment variables first (`TAVILY_API_KEY`, `LARK_APP_ID` and the others listed in [CLI](cli.md#environment-variables)); values in `config.json` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
 
-`extensionConfig.lark.timezone` is the single IANA timezone for scheduled wake-ups (for example `Asia/Shanghai`); omitted, it uses the process timezone. Startup rejects invalid names. Reminder creation accepts local dates/times in this zone, and both tool confirmations and `!routines` show it explicitly. Recurring schedules follow the configured wall time; changing the zone shifts their UTC occurrences. Saved one-off instants do not change. See [scheduled wake-ups](channels.md#scheduled-wake-ups-m4) for weekday, DST and cancellation behavior.
+`lark.timezone` is the single IANA timezone for scheduled wake-ups (for example `Asia/Shanghai`); omitted, it uses the process timezone. Startup rejects invalid names. Reminder creation accepts local dates/times in this zone, and both tool confirmations and `!routines` show it explicitly. Recurring schedules follow the configured wall time; changing the zone shifts their UTC occurrences. Saved one-off instants do not change. See [scheduled wake-ups](channels.md#scheduled-wake-ups-m4) for weekday, DST and cancellation behavior.
 
 ## Data directory
 
@@ -188,8 +191,7 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
 
 ```text
 ~/.vela/
-├── settings.json
-├── models.json
+├── config.json
 ├── trust.json
 ├── debug.log                         VELA_DEBUG=1 in interactive mode
 ├── bin/                              rg / fd downloaded by the CLI
@@ -213,7 +215,7 @@ The hash keeps two folders whose readable names collide (`/a-b/c` and `/a/b-c`) 
 
 ## Project trust
 
-A project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.skills/`, and `.agents/skills/` in the working folder or a parent up to the git root) can change Vela's behavior, run code on your machine or put instructions in front of the model, so Vela loads them only for trusted projects (like pi's project resources). Projects with none of these are not asked about. `AGENTS.md` and `CLAUDE.md` don't count: they load either way (see [Context files](#context-files)).
+A project's `.vela/config.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.skills/`, and `.agents/skills/` in the working folder or a parent up to the git root) can change Vela's behavior, run code on your machine or put instructions in front of the model, so Vela loads them only for trusted projects (like pi's project resources). Projects with none of these are not asked about. `AGENTS.md` and `CLAUDE.md` don't count: they load either way (see [Context files](#context-files)).
 
 | Situation | Result |
 |---|---|

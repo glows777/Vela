@@ -76,7 +76,7 @@ for (const [keyName, key] of [
         expect(result.code).toBe(0)
         expect(readFileSync(f.settingsPath, 'utf8')).toBe(before)
         expect(f.state().calls).toEqual([])
-        expect(readdirSync(f.agentDir)).toEqual(['settings.json'])
+        expect(readdirSync(f.agentDir)).toEqual(['config.json'])
       },
       20_000,
     )
@@ -97,7 +97,7 @@ test.skipIf(!hasScript)(
     expect(result.code).toBe(0)
     expect(f.state().hooks['acme/one']).toHaveLength(1)
     expect(f.state().hooks['acme/two']).toHaveLength(1)
-    expect(readdirSync(f.agentDir)).toEqual(['settings.json'])
+    expect(readdirSync(f.agentDir)).toEqual(['config.json'])
     expect(result.output).not.toContain('Choose a provider')
     expect(result.output).toContain('vela serve')
   },

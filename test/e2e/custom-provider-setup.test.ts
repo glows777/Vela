@@ -101,7 +101,7 @@ for (const api of [
   ] as const) {
     test(`custom ${api} setup: ${outcome} verifies before saving and survives restart`, async () => {
       const dir = mkdtempSync(join(tmpdir(), 'vela-custom-setup-'))
-      const files = ['models.json', 'settings.json', 'auth.json']
+      const files = ['config.json', 'auth.json']
       const priorModel = {
         id: 'custom-model',
         name: 'Preserved name',
@@ -115,6 +115,9 @@ for (const api of [
           join(dir, files[0]!),
           JSON.stringify({
             note: 'keep',
+            model: 'custom/custom-model',
+            thinkingLevel: 'high',
+            theme: 'dark',
             providers: {
               custom: {
                 api: 'openai-completions',
@@ -128,14 +131,6 @@ for (const api of [
         )
         writeFileSync(
           join(dir, files[1]!),
-          JSON.stringify({
-            defaultModel: 'custom/custom-model',
-            defaultThinkingLevel: 'high',
-            theme: 'dark',
-          }),
-        )
-        writeFileSync(
-          join(dir, files[2]!),
           JSON.stringify({
             custom: { type: 'api_key', key: 'old-key' },
             unrelated: { type: 'api_key', key: 'keep' },
@@ -281,7 +276,7 @@ for (const api of [
         }
         expect(saved).toBe(true)
         const config = JSON.parse(
-          readFileSync(join(dir, 'models.json'), 'utf8'),
+          readFileSync(join(dir, 'config.json'), 'utf8'),
         )
         expect(config.providers.custom).toMatchObject({
           api,
@@ -309,9 +304,7 @@ for (const api of [
             id: 'other-model',
           })
           expect(config.providers.unrelated.models).toEqual([{ id: 'other' }])
-          expect(
-            JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).theme,
-          ).toBe('dark')
+          expect(config.theme).toBe('dark')
         }
         expect(session.modelInfo.ref).toBe('custom/custom-model')
         expect(session.thinkingLevel).toBe('off')

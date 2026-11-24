@@ -36,12 +36,11 @@ const object = (value: unknown): Record<string, unknown> =>
     : {}
 
 export async function larkSetup(host: Host): Promise<boolean> {
-  const path = join(host.agentDir, 'settings.json')
+  const path = join(host.agentDir, 'config.json')
   const settings = existsSync(path)
     ? object(JSON.parse(readFileSync(path, 'utf8')))
     : {}
-  const extensionConfig = object(settings.extensionConfig)
-  const lark = object(extensionConfig.lark)
+  const lark = object(settings.lark)
   const checklist =
     'Create and publish a Lark app, enable its bot, select long connection, subscribe to im.message.receive_v1 and card.action.trigger, grant permissions, and add the bot to the group. Card callback and scopes are not checked by setup. Console: https://open.feishu.cn/app'
   if (
@@ -147,7 +146,7 @@ export async function larkSetup(host: Host): Promise<boolean> {
         JSON.parse(readFileSync(host.projectSettingsPath, 'utf8')),
       )
       updateEnabled(project.extensions)
-      const projectLark = object(object(project.extensionConfig).lark)
+      const projectLark = object(project.lark)
       const keys = ['appId', 'appSecret', 'chats'].filter(
         (key) => key in projectLark,
       )

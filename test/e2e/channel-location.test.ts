@@ -12,10 +12,10 @@ import {
   BUILTIN_EXTENSIONS,
   parseArgs,
 } from '../../packages/vela/src/cli/setup.ts'
-import { loadConfig } from '../../packages/vela/src/config/index.ts'
 import { createLocalExecutionEnv } from '../../packages/vela/src/driver/index.ts'
 import { lark } from '../../packages/vela/src/lark/index.ts'
 import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
+import { loadConfig } from '../../packages/vela/src/load-config.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 
 test('project settings cannot redirect an owner environment, group or Docker data directory', () => {
@@ -36,14 +36,14 @@ test('project settings cannot redirect an owner environment, group or Docker dat
       ],
     ] as const)
       writeFileSync(
-        join(path, 'settings.json'),
+        join(path, 'config.json'),
         JSON.stringify({
           dataDir,
           ...(path === project
             ? { location: { environment: 'red', cwd: '/workspace' } }
             : {}),
           environments: { blue: { image: path } },
-          extensionConfig: { lark: { chats } },
+          lark: { chats },
         }),
       )
     const config = loadConfig({
@@ -52,8 +52,7 @@ test('project settings cannot redirect an owner environment, group or Docker dat
       trusted: true,
     })
     expect(cliHostExtensionConfig(config, parseArgs([])).lark?.chats).toEqual([
-      { id: 'group', environment: 'blue', readUntagged: false },
-      { id: 'other' },
+      { id: 'group', environment: 'blue' },
     ])
     expect(config.settings).toHaveProperty('environments.blue.image', owner)
     expect(config.settings).not.toHaveProperty('location')
@@ -68,7 +67,7 @@ test('owner Docker credential settings are refused before engine access with saf
   const key = 'INVALID_VELA_OWNER_CREDENTIAL_TEST'
   const before = process.env[key]
   try {
-    const path = join(dir.path, 'settings.json')
+    const path = join(dir.path, 'config.json')
     const origins = ['https://github.com']
     const literal = 'synthetic-do-not-print'
     process.env[key] = `${literal}\nother-line`

@@ -26,18 +26,14 @@ const args = [
   'https://hooks.example.com',
 ]
 const receiver = (secret: unknown = 'saved-secret', port: unknown = 8787) => ({
-  extensionConfig: {
-    channel: {
-      eventReceiver: { port, github: { secret, repositories: ['acme/old'] } },
-    },
-  },
+  webhooks: { port, github: { secret, repositories: ['acme/old'] } },
 })
 
 test.concurrent('fresh model-free CLI saves privately, creates once and updates once with the same secret', async () => {
   const f = githubFixture()
   mkdirSync(join(f.cwd, '.vela', 'extensions'), { recursive: true })
   const project = '{ malformed project must not load'
-  writeFileSync(join(f.cwd, '.vela', 'settings.json'), project)
+  writeFileSync(join(f.cwd, '.vela', 'config.json'), project)
   writeFileSync(
     join(f.cwd, '.vela', 'extensions', 'trap.ts'),
     'throw new Error("PROJECT_EXTENSION_RAN")',
@@ -50,13 +46,13 @@ test.concurrent('fresh model-free CLI saves privately, creates once and updates 
   ])
   expect(first.code).toBe(0)
   const settings = f.settings()
-  const config = settings.extensionConfig.channel.eventReceiver
+  const config = settings.webhooks
   expect(config.port).toBe(8787)
   expect(config.github.repositories).toEqual(['acme/widgets'])
   expect(config.github.secret).toMatch(/^[a-f0-9]{64}$/)
   expect(statSync(f.agentDir).mode & 0o777).toBe(0o700)
   expect(statSync(f.settingsPath).mode & 0o777).toBe(0o600)
-  expect(readdirSync(f.agentDir)).toEqual(['settings.json'])
+  expect(readdirSync(f.agentDir)).toEqual(['config.json'])
   const second = await f.cli(args)
   expect(second.code).toBe(0)
   expect(f.settings()).toEqual(settings)
@@ -98,7 +94,7 @@ test.concurrent('fresh model-free CLI saves privately, creates once and updates 
     'project',
   ])
     expect(first.output.toLowerCase()).toContain(text.toLowerCase())
-  expect(readFileSync(join(f.cwd, '.vela', 'settings.json'), 'utf8')).toBe(
+  expect(readFileSync(join(f.cwd, '.vela', 'config.json'), 'utf8')).toBe(
     project,
   )
 })
@@ -123,8 +119,7 @@ for (const operation of ['created', 'updated'])
           : {},
     })
     const result = await f.cli(args)
-    const secret =
-      f.settings().extensionConfig.channel.eventReceiver.github.secret
+    const secret = f.settings().webhooks.github.secret
     expect({
       code: result.code,
       automated: result.output.includes(`acme/widgets: ${operation} webhook`),
@@ -257,25 +252,21 @@ for (const repo of [
 test.concurrent('merge preserves model, Lark, adapters, apps, existing repositories and fixed port', async () => {
   const f = githubFixture()
   const prior = {
-    ...receiver(),
-    defaultModel: 'custom/saved',
+    model: 'custom/saved',
     extensions: ['-builtin:lark'],
+    lark: { appSecret: '$LARK_SECRET' },
     extensionConfig: {
-      lark: { appSecret: '$LARK_SECRET' },
       other: { value: 7 },
-      channel: {
-        extra: true,
-        eventReceiver: {
-          port: 9443,
-          host: '127.0.0.1',
-          adapters: ['unchanged'],
-          apps: { app: 'untouched' },
-          github: {
-            secret: 'saved-secret',
-            repositories: ['acme/old'],
-            note: 'keep',
-          },
-        },
+    },
+    webhooks: {
+      port: 9443,
+      host: '127.0.0.1',
+      adapters: ['unchanged'],
+      apps: { app: 'untouched' },
+      github: {
+        secret: 'saved-secret',
+        repositories: ['acme/old'],
+        note: 'keep',
       },
     },
   }
@@ -285,17 +276,11 @@ test.concurrent('merge preserves model, Lark, adapters, apps, existing repositor
   expect((await f.cli(args)).code).toBe(0)
   expect(f.settings()).toEqual({
     ...prior,
-    extensionConfig: {
-      ...prior.extensionConfig,
-      channel: {
-        ...prior.extensionConfig.channel,
-        eventReceiver: {
-          ...prior.extensionConfig.channel.eventReceiver,
-          github: {
-            ...prior.extensionConfig.channel.eventReceiver.github,
-            repositories: ['acme/old', 'acme/widgets'],
-          },
-        },
+    webhooks: {
+      ...prior.webhooks,
+      github: {
+        ...prior.webhooks.github,
+        repositories: ['acme/old', 'acme/widgets'],
       },
     },
   })
@@ -313,9 +298,7 @@ for (const [stored, expanded, env] of [
     f.seed(receiver(stored))
     const result = await f.cli(args, env)
     expect(result.code).toBe(0)
-    expect(
-      f.settings().extensionConfig.channel.eventReceiver.github.secret,
-    ).toBe(stored)
+    expect(f.settings().webhooks.github.secret).toBe(stored)
     expect(f.state().hooks['acme/widgets']![0]!.config.secret).toBe(expanded)
     expect(result.output).not.toContain(expanded)
   })
@@ -328,11 +311,9 @@ for (const invalid of [
   receiver('saved', 0),
   receiver('saved', 65536),
   receiver('saved', 1.5),
-  { extensionConfig: [] },
+  { webhooks: [] },
   {
-    extensionConfig: {
-      channel: { eventReceiver: { github: { repositories: 'acme/old' } } },
-    },
+    webhooks: { github: { repositories: 'acme/old' } },
   },
   [],
 ])
@@ -372,8 +353,7 @@ for (const mode of ['absent', 'not-authenticated'])
     const result = await f.cli(args)
     expect(result.code).toBe(1)
     expect(f.saved()).toBe(true)
-    const secret =
-      f.settings().extensionConfig.channel.eventReceiver.github.secret
+    const secret = f.settings().webhooks.github.secret
     for (const text of [
       'https://github.com/acme/widgets/settings/hooks',
       'https://hooks.example.com/events/github',
@@ -401,9 +381,11 @@ test.concurrent('partial permissions failure preserves good hooks, saves all rep
   expect(result.code).toBe(1)
   expect(f.state().hooks['acme/ok']).toHaveLength(1)
   expect(f.state().hooks['acme/later']).toHaveLength(1)
-  expect(
-    f.settings().extensionConfig.channel.eventReceiver.github.repositories,
-  ).toEqual(['acme/ok', 'acme/denied', 'acme/later'])
+  expect(f.settings().webhooks.github.repositories).toEqual([
+    'acme/ok',
+    'acme/denied',
+    'acme/later',
+  ])
   expect(
     f
       .state()
@@ -465,17 +447,14 @@ test.concurrent('a lost POST response is not retried and a rerun finds the exist
   const f = githubFixture()
   f.setState({ lost: true })
   expect((await f.cli(args)).code).toBe(1)
-  const secret =
-    f.settings().extensionConfig.channel.eventReceiver.github.secret
+  const secret = f.settings().webhooks.github.secret
   expect(f.state().hooks['acme/widgets']).toHaveLength(1)
   expect(
     f.state().calls.filter((call) => call.args.includes('POST')),
   ).toHaveLength(1)
   expect((await f.cli(args)).code).toBe(0)
   expect(f.state().hooks['acme/widgets']).toHaveLength(1)
-  expect(f.settings().extensionConfig.channel.eventReceiver.github.secret).toBe(
-    secret,
-  )
+  expect(f.settings().webhooks.github.secret).toBe(secret)
 })
 test.concurrent('child errors redact both raw and JSON-escaped secrets without removing useful errors', async () => {
   const f = githubFixture()

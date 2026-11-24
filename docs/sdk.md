@@ -23,7 +23,7 @@ try {
 
 `createVela()` assembles one Vela: core tools (files, search, bash), hooks, the system prompt, skills, extensions and channels. Conversations are sessions, opened with `vela.session(id)`. One Vela can have many sessions open at once; they share tools and extensions, and each has its own history, compaction state, usage and run lock.
 
-Unlike the CLI, the SDK reads no config files and no environment variables by itself: no `settings.json`, no `models.json`, no API keys, no built-in extensions. The only files it reads on its own are skills, prompt templates and context files: without `skillDirs` it loads `<cwd>/.vela/skills` and `<cwd>/.skills`, without `promptTemplateDirs` `<cwd>/.vela/prompts`, and without `contextFiles` the `AGENTS.md` / `CLAUDE.md` files from `cwd` up to the filesystem root (there is no project trust check in the SDK; pass these options to choose). You pass what you need, or call [`loadConfig()`](#sharing-the-cli-config) to get the CLI's configuration.
+Unlike the CLI, the SDK reads no config files and no environment variables by itself: no `config.json`, no API keys, no built-in extensions. The only files it reads on its own are skills, prompt templates and context files: without `skillDirs` it loads `<cwd>/.vela/skills` and `<cwd>/.skills`, without `promptTemplateDirs` `<cwd>/.vela/prompts`, and without `contextFiles` the `AGENTS.md` / `CLAUDE.md` files from `cwd` up to the filesystem root (there is no project trust check in the SDK; pass these options to choose). You pass what you need, or call [`loadConfig()`](#sharing-the-cli-config) to get the CLI's configuration.
 
 All [SDK examples](../examples/sdk/) run offline with the faux model from `@glows777/vela/testing` and are typechecked with the repository.
 
@@ -46,7 +46,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | Option | Default | Description |
 |---|---|---|
 | `model` | none | Default model: `provider/id` (looked up in `providers` and providers registered by extensions) or an AI SDK `LanguageModel`. Without it, the default model of the first built-in provider with a credential is used (see [Models](models.md#selecting-a-model)); with none, a session must call `setModel()`, or resume a session with a saved model, before it can prompt. |
-| `providers` | `{}` | Model providers by name, `Record<string, ProviderDefinition>`. `loadConfig().providers` gives the built-in `anthropic`, `openai`, `openrouter` and `deepseek` providers plus those in `models.json`. See [Models](models.md). |
+| `providers` | `{}` | Model providers by name, `Record<string, ProviderDefinition>`. Build them with `loadModels({ env })` or load `config.json` with `loadConfig()`. See [Models](models.md). |
 | `credentials` | `memoryCredentialStore()` | `CredentialStore` with the keys and OAuth tokens that `/login` and `vela.login()` store and providers read per request. `loadConfig().credentials` is the CLI's `~/.vela/auth.json` (`fileCredentialStore(path)`). |
 | `thinkingLevel` | `medium` | Thinking level for new sessions: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `autoCompaction` | `true` | Automatic compaction for new sessions (pi's `compaction.enabled`). `false`: no microcompaction, threshold summary or compact-and-retry on overflow; `compact()` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
@@ -368,7 +368,7 @@ Long tool output and the tool call history are always written to files under `<d
 
 ## Sharing the CLI config
 
-`loadConfig()` reads the same files the CLI reads (`~/.vela/settings.json`, `~/.vela/models.json`, `AGENTS.md` / `CLAUDE.md`, and with `trusted: true` the project's `.vela/settings.json`, extensions, skill and prompt directories, `SYSTEM.md` and `APPEND_SYSTEM.md`) and returns values ready for `createVela()`. It only reads files; it never loads extension code.
+`loadConfig()` reads `~/.vela/config.json`, `AGENTS.md` / `CLAUDE.md`, and with `trusted: true` the project's `.vela/config.json`, extensions, skill and prompt directories, `SYSTEM.md` and `APPEND_SYSTEM.md`, and returns values ready for `createVela()`. It only reads files; it never loads extension code.
 
 ```typescript
 import {
@@ -387,10 +387,10 @@ for (const entry of config.extensions)
   extensions.push('builtin' in entry ? builtins[entry.name]!() : await importExtension(entry.path, entry.name))
 
 const vela = createVela({
-  model: config.settings.defaultModel,
+  model: config.settings.model,
   providers: config.providers,
   credentials: config.credentials,
-  thinkingLevel: config.settings.defaultThinkingLevel,
+  thinkingLevel: config.settings.thinkingLevel,
   cwd: config.cwd,
   dataDir: config.dataDir,
   skillDirs: config.skillDirs,
@@ -411,12 +411,10 @@ const vela = createVela({
 | `cwd` | `process.cwd()` | Project directory |
 | `agentDir` | `env.VELA_DIR` or `~/.vela` | User-level directory |
 | `env` | `{}` | Environment for `$VAR` / `${VAR}` interpolation, `VELA_DIR` and provider API keys. Core never reads `process.env` itself: pass it explicitly. |
-| `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/mcp.json`, `.vela/extensions/`, skills (`.vela/skills/`, `.agents/skills/`, `.skills/`, returned in `skillDirs`), `.vela/prompts/`, `.vela/SYSTEM.md` and `.vela/APPEND_SYSTEM.md` |
+| `trusted` | `false` | Also load the project's `.vela/config.json`, `.vela/extensions/`, skills (`.vela/skills/`, `.agents/skills/`, `.skills/`, returned in `skillDirs`), `.vela/prompts/`, `.vela/SYSTEM.md` and `.vela/APPEND_SYSTEM.md` |
 | `homeDir` | `os.homedir()` | Home directory for `~/.agents/skills` |
 | `builtins` | `[]` | Names of built-in extensions to list in `extensions`; `-builtin:<name>` in settings removes one |
 | `defaultOffBuiltins` | `[]` | Names in `builtins` that stay off until settings enable them with `+builtin:<name>` |
-
-The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `systemPrompt` (when a `SYSTEM.md` exists), `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers`, `credentials` (the `~/.vela/auth.json` store), `extensionConfig` and `mcp` (`{ servers, sources, errors }`: the MCP servers from `mcp.json` with variables resolved, the file each came from, and the problems found reading them; see [MCP servers](mcp.md)). `loadModels({ agentDir, env, overrides? })` returns only the providers and can preview a preset without saving it. `verifyProviderModel(ref, providers, credentials, signal?)` sends one minimal model request and may incur a charge; an optional abort signal cancels it. `writeProviderPreset(agentDir, name, preset)` merges a provider into user-level `models.json` and returns its path. See [Settings](settings.md) and [Models](models.md).
 
 The local `skillDirs` and `contextFiles` views are materialized on first access. The CLI and desktop prepare workspace instructions, skills and templates in the session environment. They combine those with the host’s user instructions. Local sessions also include host skills from configured directories. When the CLI resumes a session in another working directory, that project's saved trust decision controls its skills and templates. Ordinary wakes reuse the prepared resources so the system prompt prefix stays stable. `inspectVela()` describes the host resources. Use `await inspectSession(vela, session)` to inspect the complete system prompt for one session.
 
@@ -487,7 +485,7 @@ The public surface is:
 
 - the exports of `@glows777/vela` and `@glows777/vela/testing` (snapshots in `packages/*/api/public-api.txt`; regenerate it with `bun run api:update`, and a unit test fails when the exports change without it),
 - CLI flags,
-- `settings.json` and `models.json` keys,
+- `config.json` keys,
 - the `--mode json` event stream and the RPC protocol,
 - event types,
 - the session file format.

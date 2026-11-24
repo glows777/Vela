@@ -25,7 +25,7 @@ function fixture() {
   const dir = tempDir('vela-sdk-warnings-')
   dirs.push(dir)
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         compat: {

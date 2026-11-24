@@ -547,12 +547,12 @@ test('rpc: a failed project tool selection leaves the active session and can be 
   const home = tempDir('vela-rpc-home-')
   dirs.push(b)
   mkdirSync(join(b.path, '.vela'))
-  const settings = join(b.path, '.vela', 'settings.json')
+  const settings = join(b.path, '.vela', 'config.json')
   const files = {
-    'settings.json': JSON.stringify({ dataDir: join(home.path, 'data') }),
+    'config.json': JSON.stringify({ dataDir: join(home.path, 'data') }),
     'trust.json': JSON.stringify({ [a.path]: true, [b.path]: true }),
   }
-  writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+  writeFileSync(settings, JSON.stringify({ tools: ['read_file'] }))
   const model = `faux:${scenario('hello')}`
   const seed = startRpc(model, ['--session', 'saved-b'], files, {
     cwd: b,
@@ -566,10 +566,7 @@ test('rpc: a failed project tool selection leaves the active session and can be 
   } finally {
     await seed.close()
   }
-  writeFileSync(
-    settings,
-    JSON.stringify({ defaultTools: ['stale_project_tool'] }),
-  )
+  writeFileSync(settings, JSON.stringify({ tools: ['stale_project_tool'] }))
   const rpc = startRpc(model, ['--session', 'active-a'], files, {
     cwd: a,
     home,
@@ -584,7 +581,7 @@ test('rpc: a failed project tool selection leaves the active session and can be 
     expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
       sessionId: 'active-a',
     })
-    writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+    writeFileSync(settings, JSON.stringify({ tools: ['read_file'] }))
     expect(
       await rpc.call({ type: 'switch_session', sessionId: 'saved-b' }),
     ).toMatchObject({

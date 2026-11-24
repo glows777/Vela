@@ -14,7 +14,7 @@ type Setup = {
 }
 
 const reloadDiagnostic =
-  'The app could not reload Lark settings. Check the data directory and settings.json, then try again.'
+  'The app could not reload Lark settings. Check the data directory and config.json, then try again.'
 
 /** Only writing settings and replacing the host require exclusive access. */
 export async function startHost() {
@@ -37,7 +37,7 @@ export async function startHost() {
     openHost(workingConfig, false, reloadDiagnostic).catch(() => {
       host = undefined
       throw new Error(
-        'Could not restore Local. Check the data directory and settings.json, then try again.',
+        'Could not restore Local. Check the data directory and config.json, then try again.',
       )
     })
   const current = () => (host ??= restoreLocal())
@@ -59,7 +59,7 @@ export async function startHost() {
       )
     } catch {
       throw new Error(
-        'Could not read Lark settings. Check settings.json and try again.',
+        'Could not read Lark settings. Check config.json and try again.',
       )
     }
   }

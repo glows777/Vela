@@ -47,7 +47,7 @@ export class EventReceiver {
     const parsed = optionsSchema.safeParse(config)
     if (!parsed.success)
       throw new Error(
-        `Invalid extensionConfig.channel.eventReceiver: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
+        `Invalid webhooks: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
       )
     this.options = parsed.data
   }

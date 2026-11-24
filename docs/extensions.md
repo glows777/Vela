@@ -54,7 +54,7 @@ Project preparation happens at start, resume and relocation, not every wake. An 
 
 In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension (`*.d.ts` is skipped), and each subdirectory with an `index.ts`, `index.js` or `index.mjs` is one extension. A directory that itself has an index file is a single extension. Repeated discovered/listed file paths are deduplicated within their source scope; explicitly loaded CLI extension names take precedence over configurable discovery. The auto-discovered directories may be missing.
 
-`settings.json` entries are resolved relative to the settings file, and `~` expands to the home directory. A missing path is a config error. The same array turns built-ins on and off:
+`config.json` entries are resolved relative to the config file, and `~` expands to the home directory. A missing path is a config error. The same array turns built-ins on and off:
 
 ```json
 {
@@ -206,7 +206,7 @@ vela.registerProvider('local', {
 })
 ```
 
-After this, `local/qwen3:8b` works with `--model`, `/model`, `defaultModel` in settings, `createVela({ model })` and `session.setModel()`. `createModel(id, ctx)` returns an AI SDK `LanguageModel`; listed models carry metadata such as the context window (an unlisted field falls back to the built-in catalog when it knows the id), and unlisted ids still work. Provider names are not prefixed. Registering a name that already exists (including the built-in `anthropic`, `openai`, `openrouter` and `deepseek`, and providers from `models.json`) throws.
+After this, `local/qwen3:8b` works with `--model`, `/model`, `model` in `config.json`, `createVela({ model })` and `session.setModel()`. `createModel(id, ctx)` returns an AI SDK `LanguageModel`; listed models carry metadata such as the context window (an unlisted field falls back to the built-in catalog when it knows the id), and unlisted ids still work. Provider names are not prefixed. Registering a name that already exists (including the built-in `anthropic`, `openai`, `openrouter` and `deepseek`, and providers from `config.json`) throws.
 
 A provider can take part in `/login`:
 
@@ -242,7 +242,7 @@ A provider model may declare `hostedTools: async () => ToolSet` on the model ret
 
 `ctx.channel()` names the channel the requesting session answers on (for example `lark`), or returns undefined for local sessions. Read it per request too; a sign-in meant only for the person at the terminal can refuse channel sessions with it, as Sign in with ChatGPT does.
 
-If you only need a different base URL or key for an OpenAI- or Anthropic-compatible service, edit `~/.vela/models.json` instead. See [Models](models.md).
+If you only need a different base URL or key for an OpenAI- or Anthropic-compatible service, edit `providers` in `~/.vela/config.json` instead. See [Models](models.md).
 
 ### registerChannel
 
@@ -352,7 +352,7 @@ Handlers and command handlers receive a context as their second argument:
 
 ## Configuration
 
-`vela.config` is the extension's section of `extensionConfig` in `settings.json`, keyed by extension name. Strings support `$VAR` and `${VAR}` environment variable references:
+`vela.config` for custom extensions is `extensionConfig.<name>` in `config.json`, keyed by extension name (built-in extensions read top-level keys such as `lark`, `web`, and `memory`). Strings support `$VAR` and `${VAR}` environment variable references:
 
 ```json
 {

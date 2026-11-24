@@ -506,7 +506,7 @@
     homeDir?: string | undefined
     trusted?: boolean | undefined
   function loadContextFiles: (options: { cwd: string; agentDir?: string; }) => ContextFile[]
-  function loadModels: (options: { agentDir: string; env?: Env; overrides?: Record<string, ProviderConfig>; }) => Record<string, ProviderDefinition>
+  function loadModels: (options: { agentDir: string; env?: Env; providers?: Record<string, ProviderConfig>; overrides?: Record<string, ProviderConfig>; }) => Record<string, ProviderDefinition>
   function local: (options: LocalOptions) => ChannelExtension
   class LocalError
     cause?: unknown
@@ -692,6 +692,7 @@
     refresh: string
     type: "oauth"
   interface OAuthLogin
+    localOnly?: boolean | undefined
     login: (interaction: AuthInteraction, options: LoginOptions & { previous?: Credential; }) => Promise<Credential>
     name: string
     refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
@@ -1465,20 +1466,27 @@
       ) => void
   interface VelaSettings
     autoCompaction?: boolean | undefined
-    bashForegroundTimeoutMaxSeconds?: number | undefined
-    bashForegroundTimeoutSeconds?: number | undefined
     dataDir?: string | undefined
-    defaultModel?: string | undefined
-    defaultThinkingLevel?: ThinkingLevel | undefined
-    defaultTools?: string[] | undefined
     enabledModels?: string[] | undefined
+    environments?: Record<string, unknown> | undefined
     eventDefaultTarget?: { channel: string; chatId: string; } | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: string[] | undefined
+    lark?: Record<string, unknown> | undefined
     limits?: Partial<VelaLimits> | undefined
+    local?: Record<string, unknown> | undefined
+    location?: { environment: string; cwd?: string; } | undefined
+    mcpServers?: Record<string, unknown> | undefined
+    memory?: Record<string, unknown> | undefined
+    model?: string | undefined
     prompts?: string[] | undefined
+    providers?: Record<string, ProviderConfig> | undefined
     shellPath?: string | undefined
     skills?: string[] | undefined
+    thinkingLevel?: ThinkingLevel | undefined
+    tools?: string[] | undefined
+    web?: Record<string, unknown> | undefined
+    webhooks?: Record<string, unknown> | undefined
   interface VelaSystemMessage
     content: string
     providerOptions?: ProviderOptions | undefined

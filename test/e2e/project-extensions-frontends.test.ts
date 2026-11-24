@@ -17,7 +17,7 @@ function setup() {
   for (const [name, cwd] of Object.entries(projects)) {
     mkdirSync(join(cwd, '.vela'), { recursive: true })
     writeFileSync(
-      join(cwd, '.vela/settings.json'),
+      join(cwd, '.vela/config.json'),
       JSON.stringify({ extensions: [`./${name}.ts`] }),
     )
     writeFileSync(

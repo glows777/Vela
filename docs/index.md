@@ -13,8 +13,8 @@ Vela is a self-hosted AI coworker for your team's group chats. You run it on you
 New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a model and run your first task.
 
 - [CLI](cli.md): options, run modes, keybindings and slash commands.
-- [Models](models.md): built-in providers, `models.json`, thinking levels and the offline demo model.
-- [Settings](settings.md): `settings.json`, the data directory, project trust, `AGENTS.md`, skills and prompt templates.
+- [Models](models.md): built-in providers, `providers` config, thinking levels and the offline demo model.
+- [Settings](settings.md): `config.json`, the data directory, project trust, `AGENTS.md`, skills and prompt templates.
 - [Tools](tools.md): the built-in tools the model can call.
 - [Sessions and context](sessions.md): continuing sessions, queued messages and compaction.
 

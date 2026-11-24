@@ -5,6 +5,88 @@
  */
 
 import type { ProviderOptions } from './messages.ts'
+import type { ModelPricing } from './pricing.ts'
+
+/** Thinking level (like pi). Maps to the AI SDK `reasoning` call option. */
+export type ThinkingLevel =
+  | 'off'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max'
+
+/** @experimental Shared thinking-level choices for frontends. */
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]
+
+/** Default thinking level (like pi). */
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium'
+
+/** Explicit provider compatibility settings; model fields override provider fields. */
+export interface ModelCompat {
+  hostedTools?: 'web_search'[]
+  store?: boolean
+  /** Whether Responses accepts the developer role (pi's supportsDeveloperRole); false keeps system. */
+  supportsDeveloperRole?: boolean
+  /** Recover DeepSeek Responses plaintext reasoning deltas dropped by the OpenAI SDK. */
+  deepseekReasoningStream?: boolean
+  includeWebSearchSources?: boolean
+}
+
+/** Model metadata (a `config.json` provider model entry or a catalog entry, same field names as pi). */
+export interface ModelSpec {
+  id: string
+  compat?: ModelCompat
+  /** Display name */
+  name?: string
+  /** Context window in tokens; when set, compaction thresholds and the input cap derive from it */
+  contextWindow?: number
+  /** Maximum output tokens */
+  maxTokens?: number
+  /** Whether thinking is supported; false limits the thinking level to `off` */
+  reasoning?: boolean
+  /**
+   * Provider value per thinking level (pi's thinkingLevelMap); `null` marks a level the model doesn't support.
+   * `xhigh` and `max` are only offered when listed here.
+   */
+  thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>
+  /** Input types (`text`, `image`) */
+  input?: string[]
+  /** Price in $ / 1M tokens; used for usage stats when set */
+  cost?: ModelPricing
+}
+
+/** Wire protocol of a `config.json` provider (pi's `api` field; only these are supported). */
+export type ProviderApi =
+  | 'openai-completions'
+  | 'openai-responses'
+  | 'anthropic-messages'
+
+export const PROVIDER_APIS: readonly ProviderApi[] = [
+  'openai-completions',
+  'openai-responses',
+  'anthropic-messages',
+]
+
+/** One provider in `~/.vela/config.json` (same shape as pi's `models.json`). */
+export interface ProviderConfig {
+  api?: ProviderApi
+  baseUrl?: string
+  /** `$VAR` / `${VAR}` reads an environment variable */
+  apiKey?: string
+  headers?: Record<string, string>
+  models?: ModelSpec[]
+  compat?: ModelCompat
+}
 
 /** Opaque handle to a resolved language model; concrete AI SDK instances stay inside `src/providers/`. */
 export interface ModelHandle {

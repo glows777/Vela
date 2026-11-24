@@ -27,12 +27,9 @@ export async function verifyLarkDiscovery(
   const transport = join(dir, 'transport')
   const discovery = join(transport, 'discovery')
   await mkdir(discovery, { recursive: true })
-  const settings = join(dir, 'settings.json')
+  const settings = join(dir, 'config.json')
   const oldChat = 'oc_enabled'
-  await Bun.write(
-    settings,
-    JSON.stringify({ extensionConfig: { lark: { chats: [] } } }),
-  )
+  await Bun.write(settings, JSON.stringify({ lark: { chats: [] } }))
   await Bun.write(
     join(transport, 'seed.json'),
     JSON.stringify({
@@ -107,7 +104,7 @@ export async function verifyLarkDiscovery(
     await toggle.click()
     await page.getByText('Off in this app', { exact: true }).waitFor()
     const offSettings = await readFile(settings, 'utf8')
-    assert.equal(JSON.parse(offSettings).extensionConfig.lark.runInApp, false)
+    assert.equal(JSON.parse(offSettings).lark.runInApp, false)
     await sidebar.getByRole('button', { name: 'New project' }).click()
     await dialog.getByLabel('Folder path').fill(dir)
     await dialog.getByRole('button', { name: 'Create project' }).click()
@@ -165,7 +162,7 @@ export async function verifyLarkDiscovery(
     await dialog.getByRole('button', { name: 'Enable group' }).click()
     await sidebar.getByRole('button', { name: 'Enabled group Lark' }).waitFor()
     const original = await readFile(settings, 'utf8')
-    assert.deepEqual(JSON.parse(original).extensionConfig.lark.chats, [oldChat])
+    assert.deepEqual(JSON.parse(original).lark.chats, [oldChat])
     await Bun.write(join(discovery, 'control.jsonl'), '')
     await open()
     await dialog.getByRole('button', { name: 'Enabled group' }).waitFor()
@@ -358,7 +355,7 @@ export async function verifyLarkDiscovery(
     // The shared helper refuses to rewrite an environment expression. The original
     // group remains active when the host comes back, and the dialog can retry.
     const expression = JSON.stringify({
-      extensionConfig: { lark: { chats: '$GROUP_SETUP_CHAT' } },
+      lark: { chats: '$GROUP_SETUP_CHAT' },
     })
     await Bun.write(settings, expression)
     await add.click()
@@ -386,10 +383,10 @@ export async function verifyLarkDiscovery(
     await page
       .getByRole('heading', { name: 'New group', exact: true })
       .waitFor()
-    assert.deepEqual(
-      JSON.parse(await readFile(settings, 'utf8')).extensionConfig.lark.chats,
-      [oldChat, 'oc_new'],
-    )
+    assert.deepEqual(JSON.parse(await readFile(settings, 'utf8')).lark.chats, [
+      oldChat,
+      'oc_new',
+    ])
     await themes(page, 'lark-new-project-added')
   } finally {
     await app.close()

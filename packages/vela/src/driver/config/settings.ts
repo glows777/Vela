@@ -1,11 +1,19 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import {
+  detectLegacyConfigFiles,
+  interpolateConfigLayer,
+  mergeConfig,
+  parseConfig,
+  stripProjectPrivilegedKeys,
+  toExtensionConfigView,
+  type VelaSettings,
+} from '../../config/index.ts'
 import { fileCredentialStore } from '../../providers/auth/store.ts'
 import type { CredentialStore } from '../../providers/auth/types.ts'
 import type { ProviderDefinition } from '../../providers/models/index.ts'
 import { loadModels } from '../../providers/models-config.ts'
-import { interpolateDeep } from '../../shared/interpolate.ts'
 import {
   type ContextFile,
   loadAgentContextFile,
@@ -23,16 +31,8 @@ import {
   readLocalSystemFile,
 } from './runtime-resources.ts'
 
-import {
-  mergeSettings,
-  omitProjectLocation,
-  parseSettings,
-  type VelaSettings,
-} from './settings-values.ts'
-
 export type { ExtensionEntry } from './extension-discovery.ts'
 export { extensionName } from './extension-discovery.ts'
-export type { VelaSettings } from './settings-values.ts'
 
 export interface LoadConfigOptions {
   /** @internal Vela frontends select these files when preparing each session. */
@@ -66,7 +66,7 @@ export interface VelaConfig {
   settings: VelaSettings
   /** User-only extension sections, interpolated before any project overrides. */
   userExtensionConfig: Record<string, Record<string, unknown>>
-  /** Settings files that were read */
+  /** Config files that were read */
   files: string[]
   /** Extensions to load, in order: built-in → ~/.vela/extensions → .vela/extensions → listed in settings */
   extensions: ExtensionEntry[]
@@ -80,16 +80,16 @@ export interface VelaConfig {
   appendSystemPrompt?: string
   /** Contents of `.vela/SYSTEM.md` (trusted) or `<agentDir>/SYSTEM.md`: replaces the default system prompt, like pi */
   systemPrompt?: string
-  /** Built-in providers (anthropic / openai / openrouter / deepseek) plus those in `<agentDir>/models.json`, for createVela's `providers` */
+  /** Built-in providers (anthropic / openai / openrouter / deepseek) plus those in `<agentDir>/config.json`, for createVela's `providers` */
   providers: Record<string, ProviderDefinition>
   /** Credentials stored by `/login` in `<agentDir>/auth.json` (mode 0600), for createVela's `credentials` */
   credentials: CredentialStore
-  /** Per-extension config sections (`$VAR` already interpolated) */
+  /** Per-extension config sections (`$VAR` already interpolated once per layer) */
   extensionConfig: Record<string, Record<string, unknown>>
 }
 
 const TRUSTED_PROJECT_RESOURCES = [
-  'settings.json',
+  'config.json',
   'extensions',
   'skills',
   'prompts',
@@ -98,7 +98,7 @@ const TRUSTED_PROJECT_RESOURCES = [
 ]
 
 /**
- * The project has executable or behavior-changing config (`.vela/settings.json`, `.vela/extensions/`,
+ * The project has executable or behavior-changing config (`.vela/config.json`, `.vela/extensions/`,
  * skills in `.vela/skills/`, `.skills/` or `.agents/skills/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md`,
  * `.vela/SYSTEM.md`) that
  * needs the user's trust before loading (like pi's trust-requiring project resources). Not counted when the
@@ -129,7 +129,7 @@ export function projectTrustRequired(
 }
 
 /**
- * Reads user and project settings.json and discovers extensions and skill directories
+ * Reads user and project `config.json` and discovers extensions and skill directories
  * (like pi: project overrides user, objects deep-merge, extensions / skills concatenate).
  * Only reads files; never loads extension code. Untrusted projects use user config only.
  */
@@ -141,23 +141,32 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const projectDir = join(cwd, '.vela')
   const trusted = options.trusted === true && projectDir !== agentDir
 
+  const userFile = join(agentDir, 'config.json')
+  const legacy = detectLegacyConfigFiles(agentDir)
+  if (legacy.length > 0) {
+    throw new Error(
+      `${agentDir}: found legacy config file(s) (${legacy.join(', ')}) without config.json; v0.9 uses unified config.json`,
+    )
+  }
+
   const files: string[] = []
   const layers: VelaSettings[] = []
-  const userFile = join(agentDir, 'settings.json')
-  const projectFile = join(projectDir, 'settings.json')
+  const projectFile = join(projectDir, 'config.json')
   let userSettings: VelaSettings = {}
   let userExtensionConfig: Record<string, Record<string, unknown>> = {}
   for (const file of trusted ? [userFile, projectFile] : [userFile]) {
-    const settings = readSettings(file)
-    if (!settings) continue
+    const raw = readLayer(file)
+    if (!raw) continue
+    if (file === projectFile) stripProjectPrivilegedKeys(raw)
+    const layer = interpolateConfigLayer(raw, env)
     if (file === userFile) {
-      userSettings = settings
-      userExtensionConfig = interpolateDeep(settings.extensionConfig ?? {}, env)
-    } else omitProjectLocation(settings)
+      userSettings = layer
+      userExtensionConfig = toExtensionConfigView(layer)
+    }
     files.push(file)
-    layers.push(settings)
+    layers.push(layer)
   }
-  const settings = layers.reduce<VelaSettings>(mergeSettings, {})
+  const settings = layers.reduce<VelaSettings>(mergeConfig, {})
 
   const extensions = resolveExtensionEntries(
     settings.extensions ?? [],
@@ -185,7 +194,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const userContext = loadAgentContextFile(agentDir)
   let skillDirs: string[] | undefined
   let contextFiles: ContextFile[] | undefined
-  const extensionConfig = interpolateDeep(settings.extensionConfig ?? {}, env)
+  const extensionConfig = toExtensionConfigView(settings)
   for (const definition of options.extensionConfigs ?? [])
     extensionConfig[definition.name] = definition.resolve(
       extensionConfig[definition.name] ?? {},
@@ -273,7 +282,11 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     },
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(appendSystemPrompt !== undefined ? { appendSystemPrompt } : {}),
-    providers: loadModels({ agentDir, env }),
+    providers: loadModels({
+      agentDir,
+      env,
+      providers: userSettings.providers ?? {},
+    }),
     credentials: fileCredentialStore(join(agentDir, 'auth.json')),
     extensionConfig,
   }
@@ -304,10 +317,10 @@ function findGitRoot(start: string): string | undefined {
   }
 }
 
-/** Reads one settings file: undefined if missing, throws if malformed. Resource paths become absolute. */
-function readSettings(file: string): VelaSettings | undefined {
+/** Reads one config file: undefined if missing, throws if malformed. Resource paths become absolute. */
+function readLayer(file: string): VelaSettings | undefined {
   if (!existsSync(file)) return
-  return parseSettings(readFileSync(file, 'utf-8'), file, (item) =>
+  return parseConfig(readFileSync(file, 'utf-8'), file, (item) =>
     resolveConfigPath(dirname(file), item),
   )
 }

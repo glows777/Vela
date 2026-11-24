@@ -1,7 +1,7 @@
 /**
  * registerProvider: add a model provider. Afterwards `local/<model>` works with `--model`, `/model`
  * and `session.setModel()`. This example connects a local Ollama (OpenAI-compatible API).
- * If you only need a different URL and key, edit ~/.vela/models.json instead; no extension needed.
+ * If you only need a different URL and key, edit `providers` in ~/.vela/config.json instead; no extension needed.
  */
 import { createOpenAI } from '@ai-sdk/openai'
 import type { VelaExtension } from '@glows777/vela'

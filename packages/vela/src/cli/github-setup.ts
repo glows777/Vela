@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
+import { writeRawConfigFile } from '../config/index.ts'
 import {
   githubOrigin,
   githubRepositories,
   prepareGithubSettings,
 } from './github-setup-config.ts'
-import { saveUserSettings } from './user-settings.ts'
 
 const EVENTS = [
   'check_suite',
@@ -115,7 +115,7 @@ export async function githubSetup(
     const payloadUrl = `${githubOrigin(url)}/events/github`
     const prepared = prepareGithubSettings(options.agentDir, repositories, env)
     secret = prepared.secret
-    saveUserSettings(options.agentDir, prepared.settings)
+    writeRawConfigFile(options.agentDir, prepared.settings)
     write(
       `Saved GitHub receiver settings to ${prepared.path}. Project settings may override user settings; check the effective configuration before serving.`,
     )

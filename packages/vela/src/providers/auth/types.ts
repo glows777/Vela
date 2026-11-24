@@ -79,6 +79,8 @@ export interface LoginOptions {
 export interface OAuthLogin {
   /** Shown in `/login`, e.g. `OpenAI (ChatGPT Plus/Pro)` */
   name: string
+  /** True when the OAuth token is restricted to local interactive terminals, never channel sessions. */
+  localOnly?: boolean
   login(
     interaction: AuthInteraction,
     options: LoginOptions & { previous?: Credential },

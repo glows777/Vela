@@ -1,13 +1,13 @@
-export {
-  loadModels,
-  type ProviderApi,
-  type ProviderConfig,
-} from '../../providers/models-config.ts'
+export type { VelaSettings } from '../../config/index.ts'
+export { loadModels } from '../../providers/models-config.ts'
+export type {
+  ProviderApi,
+  ProviderConfig,
+} from '../../shared/provider-types.ts'
 export { importExtension } from './extensions.ts'
 export {
   type ExtensionEntry,
   type LoadConfigOptions,
   loadConfig,
   type VelaConfig,
-  type VelaSettings,
 } from './settings.ts'

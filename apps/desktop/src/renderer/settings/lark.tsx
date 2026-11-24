@@ -84,7 +84,7 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
         />
         <p className={styles.note}>
           Turn this off before using the same Lark app with{' '}
-          <code>vela serve</code>. This switch is saved in settings.json.
+          <code>vela serve</code>. This switch is saved in config.json.
         </p>
       </div>
       <form
@@ -94,7 +94,7 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
           void save({ appId: id, ...(secret ? { appSecret: secret } : {}) })
         }}
       >
-        <Field htmlFor="lark-app-id" label="App ID" note="settings.json">
+        <Field htmlFor="lark-app-id" label="App ID" note="config.json">
           <Input
             id="lark-app-id"
             required
@@ -108,8 +108,8 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
           label="App secret"
           note={
             settings.appSecretSaved
-              ? 'Leave blank to keep the current secret. Changes are saved in settings.json.'
-              : 'Saved to settings.json after verification.'
+              ? 'Leave blank to keep the current secret. Changes are saved in config.json.'
+              : 'Saved to config.json after verification.'
           }
         >
           <Input
@@ -137,8 +137,8 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
         <h3 className={styles.title2}>Enabled chats</h3>
         <p className={styles.note}>
           {settings.envExpression
-            ? 'These chats use an environment expression. Edit it in settings.json.'
-            : 'Removing a chat updates settings.json.'}
+            ? 'These chats use an environment expression. Edit it in config.json.'
+            : 'Removing a chat updates config.json.'}
         </p>
       </div>
       {settings.chats.length ? (

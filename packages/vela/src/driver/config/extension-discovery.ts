@@ -11,7 +11,7 @@ const EXTENSION_FILE = /\.(ts|js|mjs)$/
 /**
  * Expands an extension path into entry files: a file is itself; a directory with
  * index.ts / index.js is one extension; in any other directory, each `*.ts` and each
- * subdirectory with an index is one extension. With `explicit`, a missing path throws.
+ * subdirectory with an index is one extension (following symlinks). With `explicit`, a missing path throws.
  */
 export function discoverExtensions(path: string, explicit = false): string[] {
   if (!existsSync(path)) {
@@ -26,13 +26,25 @@ export function discoverExtensions(path: string, explicit = false): string[] {
     a.name.localeCompare(b.name),
   )) {
     const full = join(path, entry.name)
+    let isFile = entry.isFile()
+    let isDirectory = entry.isDirectory()
+    if (entry.isSymbolicLink()) {
+      try {
+        const target = statSync(full)
+        isFile = target.isFile()
+        isDirectory = target.isDirectory()
+      } catch {
+        // Broken symlink: skip during directory discovery.
+        continue
+      }
+    }
     if (
-      entry.isFile() &&
+      isFile &&
       EXTENSION_FILE.test(entry.name) &&
       !entry.name.endsWith('.d.ts')
     )
       found.push(full)
-    else if (entry.isDirectory()) {
+    else if (isDirectory) {
       const nested = indexFile(full)
       if (nested) found.push(nested)
     }
@@ -43,7 +55,9 @@ export function discoverExtensions(path: string, explicit = false): string[] {
 function indexFile(dir: string): string | undefined {
   for (const name of ['index.ts', 'index.js', 'index.mjs']) {
     const file = join(dir, name)
-    if (existsSync(file)) return file
+    try {
+      if (existsSync(file) && statSync(file).isFile()) return file
+    } catch {}
   }
 }
 

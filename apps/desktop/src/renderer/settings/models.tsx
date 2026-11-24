@@ -32,13 +32,13 @@ export function Models({ settings }: { settings: SettingsState }) {
         <Row
           label="Model"
           value={settings.model ?? 'Not set'}
-          file="settings.json"
+          file="config.json"
         />
         {settings.thinkingLevel ? (
           <Row
             label="Thinking level"
             value={settings.thinkingLevel}
-            file="settings.json"
+            file="config.json"
           />
         ) : null}
         <Row
@@ -51,7 +51,7 @@ export function Models({ settings }: { settings: SettingsState }) {
           <Row
             label="Custom provider"
             value={`${provider.name} · ${provider.models.map((item) => item.id).join(', ')}`}
-            file="models.json"
+            file="config.json"
           />
         ) : null}
       </dl>

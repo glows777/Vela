@@ -60,9 +60,10 @@ test('missing arguments collect repositories and origin through setup inputs wit
   })
   expect(code).toBe(0)
   expect(prompts).toHaveLength(2)
-  expect(
-    f.settings().extensionConfig.channel.eventReceiver.github.repositories,
-  ).toEqual(['acme/one', 'acme/two'])
+  expect(f.settings().webhooks.github.repositories).toEqual([
+    'acme/one',
+    'acme/two',
+  ])
   expect(f.state().hooks['acme/one']).toHaveLength(1)
   expect(existsSync(`${f.agentDir}/models.json`)).toBe(false)
 })

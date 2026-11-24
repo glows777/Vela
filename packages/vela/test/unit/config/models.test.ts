@@ -3,9 +3,9 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import { tempDir } from '../../../../../test/support/vela.ts'
-import { loadModels } from '../../../src/config/index.ts'
 import type { Credential } from '../../../src/driver/index.ts'
 import { memoryCredentialStore } from '../../../src/driver/index.ts'
+import { loadModels } from '../../../src/load-config.ts'
 import { ModelRegistry } from '../../../src/providers/models/index.ts'
 
 const dirs: { cleanup(): void }[] = []
@@ -19,7 +19,7 @@ function agentDir(models?: unknown) {
   const dir = tempDir('vela-models-')
   dirs.push(dir)
   if (models !== undefined)
-    writeFileSync(join(dir.path, 'models.json'), JSON.stringify(models))
+    writeFileSync(join(dir.path, 'config.json'), JSON.stringify(models))
   return dir.path
 }
 
@@ -282,7 +282,7 @@ test('a provider becomes available with a key, and the first one in pi order sup
   expect(registry.authSource('anthropic')).toBeUndefined()
 })
 
-test('requests use auth.json first, then models.json, then the environment variable (like pi)', async () => {
+test('requests use auth.json first, then config.json providers, then the environment variable (like pi)', async () => {
   const requests = captureRequests()
   const dir = agentDir({
     providers: { anthropic: { apiKey: 'from-models-json' } },
@@ -383,7 +383,7 @@ test('an OAuth credential for a provider without an OAuth sign-in is an error, n
   expect(String(error)).toContain('run /logout anthropic')
 })
 
-test('models.json adds providers and merges into built-in ones', () => {
+test('config.json providers adds providers and merges into built-in ones', () => {
   const dir = agentDir({
     providers: {
       // Only models given: adds a model; api / key still come from the built-in provider
@@ -420,9 +420,9 @@ test('models.json adds providers and merges into built-in ones', () => {
   expect(registry.authSource('local')).toBe('LOCAL_KEY')
 })
 
-test('mistakes in models.json are reported with the file name', () => {
+test('mistakes in config.json providers are reported with the file name', () => {
   const notJson = agentDir()
-  writeFileSync(join(notJson, 'models.json'), '{')
+  writeFileSync(join(notJson, 'config.json'), '{')
   expect(() => loadModels({ agentDir: notJson })).toThrow('is not valid JSON')
   expect(() =>
     loadModels({ agentDir: agentDir({ providers: { x: { api: 'grpc' } } }) }),

@@ -27,23 +27,19 @@ test('real serve admits project chat, starts a file task and delivers HTTP/SSE w
   dirs.push(cwd, home, projectDir)
   const port = await freeLocalPort()
   await Bun.write(
-    join(home.path, 'settings.json'),
+    join(home.path, 'config.json'),
     JSON.stringify({
-      extensionConfig: {
-        local: { enabled: true, token: '$VELA_LOCAL_TOKEN', port },
-      },
+      local: { enabled: true, token: '$VELA_LOCAL_TOKEN', port },
     }),
   )
   // Opening this directory must not load executable configuration or change the
   // daemon's model/listener. Only its working directory and context are selected.
   const marker = join(projectDir.path, 'extension-executed')
   await Bun.write(
-    join(projectDir.path, '.vela/settings.json'),
+    join(projectDir.path, '.vela/config.json'),
     JSON.stringify({
-      defaultModel: 'unknown-project-provider/invalid-model',
-      extensionConfig: {
-        local: { enabled: false, token: 'project-must-not-override', port: 1 },
-      },
+      model: 'unknown-project-provider/invalid-model',
+      local: { enabled: false, token: 'project-must-not-override', port: 1 },
     }),
   )
   await Bun.write(

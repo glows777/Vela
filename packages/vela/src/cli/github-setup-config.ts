@@ -83,7 +83,7 @@ export function prepareGithubSettings(
   repositories: string[],
   env: NodeJS.ProcessEnv,
 ) {
-  const path = join(agentDir, 'settings.json')
+  const path = join(agentDir, 'config.json')
   let raw: unknown = {}
   if (existsSync(path)) {
     const content = readFileSync(path, 'utf8')
@@ -94,12 +94,10 @@ export function prepareGithubSettings(
       throw new Error(`Invalid JSON in ${path}; correct the file before setup`)
     }
   }
-  const settings = object(raw, 'settings.json')
-  const extensionConfig = object(settings.extensionConfig, 'extensionConfig')
-  const channel = object(extensionConfig.channel, 'extensionConfig.channel')
-  const eventReceiver = object(channel.eventReceiver, 'eventReceiver')
-  const github = object(eventReceiver.github, 'eventReceiver.github')
-  const port = eventReceiver.port === undefined ? 8787 : eventReceiver.port
+  const settings = object(raw, 'config.json')
+  const webhooks = object(settings.webhooks, 'webhooks')
+  const github = object(webhooks.github, 'webhooks.github')
+  const port = webhooks.port === undefined ? 8787 : webhooks.port
   if (
     typeof port !== 'number' ||
     !Number.isInteger(port) ||
@@ -107,7 +105,7 @@ export function prepareGithubSettings(
     port > 65535
   )
     throw new Error(
-      'eventReceiver.port must be a fixed integer from 1 to 65535 (not 0)',
+      'webhooks.port must be a fixed integer from 1 to 65535 (not 0)',
     )
   const prior = github.repositories
   if (
@@ -115,29 +113,23 @@ export function prepareGithubSettings(
     (!Array.isArray(prior) || prior.some((repo) => typeof repo !== 'string'))
   )
     throw new Error(
-      'eventReceiver.github.repositories must be an array of owner/repo names',
+      'webhooks.github.repositories must be an array of owner/repo names',
     )
   const merged = githubRepositories([
     ...((prior as string[] | undefined) ?? []),
     ...repositories,
   ])
   if (github.secret !== undefined && typeof github.secret !== 'string')
-    throw new Error('eventReceiver.github.secret must be a string')
+    throw new Error('webhooks.github.secret must be a string')
   const stored =
     (github.secret as string | undefined) ?? randomBytes(32).toString('hex')
   const secret = secretValue(stored, env)
   const updated = {
     ...settings,
-    extensionConfig: {
-      ...extensionConfig,
-      channel: {
-        ...channel,
-        eventReceiver: {
-          ...eventReceiver,
-          port,
-          github: { ...github, secret: stored, repositories: merged },
-        },
-      },
+    webhooks: {
+      ...webhooks,
+      port,
+      github: { ...github, secret: stored, repositories: merged },
     },
   }
   return { path, secret, settings: updated }

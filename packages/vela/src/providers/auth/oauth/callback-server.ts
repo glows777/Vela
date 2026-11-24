@@ -178,13 +178,13 @@ export async function waitForCallbackOrPaste<T>(
       return input
     })
     .catch((error: unknown) => {
-      manualError = error instanceof Error ? error : new Error(String(error))
+      if (!manualAbort.signal.aborted)
+        manualError = error instanceof Error ? error : new Error(String(error))
       callback.cancel()
       return undefined
     })
   try {
     const value = await callback.wait()
-    if (manualError) throw manualError
     if (value !== undefined) return { type: 'callback', value }
     const input = await manual
     if (manualError) throw manualError

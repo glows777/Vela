@@ -112,7 +112,7 @@ await Bun.write(
   '#!/bin/sh\nprintf used > "$VELA_DESKTOP_SHELL_MARKER"\nexec /bin/bash "$@"\n',
 )
 await chmod(shell, 0o755)
-const settingsPath = resolve(data, 'settings.json')
+const settingsPath = resolve(data, 'config.json')
 if (await Bun.file(settingsPath).exists())
   throw new Error(`Refusing to overwrite existing settings: ${settingsPath}`)
 await Bun.write(
@@ -124,7 +124,7 @@ await Bun.write(
         ...(disabledConfig
           ? { extensions: ['-builtin:web', '-builtin:lark'] }
           : {}),
-        ...(staleModel ? { defaultModel: 'removed-provider/some-model' } : {}),
+        ...(staleModel ? { model: 'removed-provider/some-model' } : {}),
       }),
 )
 if (brokenAuth) await Bun.write(resolve(data, 'auth.json'), '{ not json')
@@ -1864,14 +1864,14 @@ async function firstRunJourney() {
       await inViewport(submit),
       'The retry action stays visible at 1280×800',
     )
-    for (const name of ['settings.json', 'models.json', 'auth.json'])
+    for (const name of ['config.json', 'auth.json'])
       assert.equal(
         await Bun.file(resolve(dir, name)).exists(),
         false,
         `A rejected key writes no ${name}`,
       )
     checks.push(
-      'A wrong key is refused with the provider’s reason and writes none of the three files.',
+      'A wrong key is refused with the provider’s reason and writes none of the config files.',
     )
     await themes(page, 'journey-6-setup-error')
 
@@ -1884,7 +1884,7 @@ async function firstRunJourney() {
     const state = await page.evaluate(() => window.vela.settings())
     assert.equal(state.setup.required, false)
     assert.equal(state.model, `faux/${reasoningModel}`)
-    assert.equal(state.files.settings, resolve(dir, 'settings.json'))
+    assert.equal(state.files.config, resolve(dir, 'config.json'))
     assert(
       !JSON.stringify(state).includes(GOOD_KEY),
       'The settings the page reads carry no key',
@@ -1893,26 +1893,23 @@ async function firstRunJourney() {
       'A good key saves the model and opens Home, with the state the bridge reports and no key in it.',
     )
 
-    const settings = JSON.parse(
-      await readFile(resolve(dir, 'settings.json'), 'utf8'),
+    const config = JSON.parse(
+      await readFile(resolve(dir, 'config.json'), 'utf8'),
     )
-    assert.equal(settings.defaultModel, `faux/${reasoningModel}`)
+    assert.equal(config.model, `faux/${reasoningModel}`)
     const auth = JSON.parse(await readFile(resolve(dir, 'auth.json'), 'utf8'))
     assert.deepEqual(auth.faux, { type: 'api_key', key: GOOD_KEY })
-    const models = JSON.parse(
-      await readFile(resolve(dir, 'models.json'), 'utf8'),
-    )
-    assert.equal(models.providers.faux.api, 'openai-completions')
-    assert.equal(models.providers.faux.baseUrl, provider.baseUrl)
-    assert.deepEqual(models.providers.faux.models, [{ id: reasoningModel }])
-    for (const name of ['settings.json', 'auth.json'])
+    assert.equal(config.providers.faux.api, 'openai-completions')
+    assert.equal(config.providers.faux.baseUrl, provider.baseUrl)
+    assert.deepEqual(config.providers.faux.models, [{ id: reasoningModel }])
+    for (const name of ['config.json', 'auth.json'])
       assert.equal(
         (await stat(resolve(dir, name))).mode & 0o777,
         0o600,
         `${name} is private`,
       )
     checks.push(
-      'The window writes settings.json, auth.json (0600) and the custom provider to models.json.',
+      'The window writes config.json and auth.json (0600), including the custom provider.',
     )
 
     await page.reload()
@@ -1932,21 +1929,19 @@ async function firstRunJourney() {
     await settingsTitle.waitFor()
     const sections = page.getByLabel('Settings sections')
     await sections.getByRole('button', { name: 'General' }).waitFor()
-    await page
-      .getByText(resolve(dir, 'settings.json'), { exact: true })
-      .waitFor()
+    await page.getByText(resolve(dir, 'config.json'), { exact: true }).waitFor()
     await page.getByText(dir, { exact: true }).waitFor()
     checks.push(
-      'Settings opens from the sidebar foot on General, naming the Vela folder and settings.json.',
+      'Settings opens from the sidebar foot on General, naming the Vela folder and config.json.',
     )
 
     await sections.getByRole('button', { name: 'Models' }).click()
     await page.getByRole('heading', { name: 'Models', exact: true }).waitFor()
     await page.getByText(`faux/${reasoningModel}`, { exact: true }).waitFor()
     assert.equal(
-      await page.getByText('settings.json', { exact: true }).count(),
-      1,
-      'The model names settings.json',
+      await page.getByText('config.json', { exact: true }).count(),
+      2,
+      'The model and custom provider name config.json',
     )
     // No thinking level is recorded on a fresh install, so no row claims one.
     assert.equal(
@@ -1956,7 +1951,6 @@ async function firstRunJourney() {
     )
     await page.getByText('Saved', { exact: true }).waitFor()
     await page.getByText('auth.json', { exact: true }).waitFor()
-    await page.getByText('models.json', { exact: true }).waitFor()
     checks.push(
       'Settings › Models shows the saved model and key source, without a thinking level nothing recorded, and the file each row writes.',
     )
@@ -1989,11 +1983,13 @@ async function firstRunJourney() {
       'Change model opens the same form on the saved provider and model, with an empty key field.',
     )
     await Bun.write(
-      resolve(dir, 'models.json'),
+      resolve(dir, 'config.json'),
       JSON.stringify({
+        ...config,
         providers: {
+          ...config.providers,
           faux: {
-            ...models.providers.faux,
+            ...config.providers.faux,
             models: [{ id: reasoningModel, reasoning: true }],
           },
         },
@@ -2007,8 +2003,7 @@ async function firstRunJourney() {
     await dialog.getByRole('button', { name: 'Verify and save' }).click()
     await dialog.waitFor({ state: 'hidden' })
     const savedLevel = async () =>
-      (await Bun.file(resolve(dir, 'settings.json')).json())
-        .defaultThinkingLevel
+      (await Bun.file(resolve(dir, 'config.json')).json()).thinkingLevel
     assert.equal(await savedLevel(), 'high')
     await page.getByText('high', { exact: true }).waitFor()
 
@@ -2197,21 +2192,19 @@ async function larkJourneys() {
   const dir = await mkdtemp(resolve(dataParent, 'vela-lark-'))
   larkData = dir
   await Bun.write(
-    resolve(dir, 'settings.json'),
+    resolve(dir, 'config.json'),
     JSON.stringify({
       shellPath: shell,
-      extensionConfig: {
-        lark: {
-          chats: [
-            larkProject,
-            gapProject,
-            liveProject,
-            jumpProject,
-            emptyProject,
-            denyProject,
-            raceProject,
-          ],
-        },
+      lark: {
+        chats: [
+          larkProject,
+          gapProject,
+          liveProject,
+          jumpProject,
+          emptyProject,
+          denyProject,
+          raceProject,
+        ],
       },
     }),
   )
@@ -3243,10 +3236,10 @@ async function larkOffJourney() {
   const dir = await mkdtemp(resolve(dataParent, 'vela-lark-off-'))
   larkOffData = dir
   await Bun.write(
-    resolve(dir, 'settings.json'),
+    resolve(dir, 'config.json'),
     JSON.stringify({
       shellPath: shell,
-      extensionConfig: { lark: { chats: [larkProject] } },
+      lark: { chats: [larkProject] },
     }),
   )
   await Bun.write(
@@ -3419,8 +3412,8 @@ async function packagedLarkProject(executablePath: string) {
   const chatId = 'oc_packaged'
   await mkdir(agentDir)
   await Bun.write(
-    resolve(agentDir, 'settings.json'),
-    JSON.stringify({ extensionConfig: { lark: { chats: [chatId] } } }),
+    resolve(agentDir, 'config.json'),
+    JSON.stringify({ lark: { chats: [chatId] } }),
   )
   const app = await _electron.launch({
     executablePath,

@@ -50,14 +50,14 @@ test('owner environments warn on stderr when the previously effective project da
   ]
   const options = { cwd, agentDir, model: 'mock' }
   await Bun.write(
-    join(cwd, '.vela/settings.json'),
+    join(cwd, '.vela/config.json'),
     JSON.stringify({ dataDir: 'previous-store' }),
   )
   const seed = await cli(args, options)
   expect(seed.code).toBe(0)
   expect(sessionFiles(legacy)).toHaveLength(1)
   const active = projectDataDir(agentDir, cwd)
-  const settings = join(agentDir, 'settings.json')
+  const settings = join(agentDir, 'config.json')
   await Bun.write(settings, JSON.stringify({ environments: {} }))
   const changed = await cli(args, options)
   expect(changed.code).toBe(0)
@@ -89,7 +89,7 @@ test('owner environments warn on stderr when the previously effective project da
   expect(ignored.stdout).not.toContain(explicit)
   const ownerOnly = await cli(checkConfig, {
     ...options,
-    files: { '.vela/settings.json': '{}' },
+    files: { '.vela/config.json': '{}' },
   })
   expect(ownerOnly.code).toBe(0)
   expect(ownerOnly.stderr).not.toContain('[data]')
@@ -106,7 +106,7 @@ test.concurrent.if(hasScript)(
     const atSetup = beforeSetup(result.stdout)
     expect(atSetup).not.toContain('/model provider/id')
     expect(atSetup).not.toContain('No model available')
-    for (const name of ['auth.json', 'models.json', 'settings.json'])
+    for (const name of ['auth.json', 'config.json'])
       expect(existsSync(join(result.agentDir, name))).toBe(false)
     const afterKey = await cli(['setup'], {
       model: '',
@@ -129,7 +129,7 @@ test.concurrent.if(hasScript)(
     const atSetupOnly = beforeSetup(afterKey.stdout)
     expect(atSetupOnly).not.toContain('/model provider/id')
     expect(atSetupOnly).not.toContain('No model available')
-    for (const name of ['auth.json', 'models.json', 'settings.json'])
+    for (const name of ['auth.json', 'config.json'])
       expect(existsSync(join(afterKey.agentDir, name))).toBe(false)
   },
 )
@@ -160,7 +160,7 @@ for (const cancelAt of [
       expect(result.code).toBe(0)
       expect(result.stdout).toContain(cancelAt)
       expect(result.stdout).not.toContain('may incur')
-      for (const name of ['auth.json', 'models.json', 'settings.json'])
+      for (const name of ['auth.json', 'config.json'])
         expect(existsSync(join(result.agentDir, name))).toBe(false)
     },
   )
@@ -199,9 +199,9 @@ test.concurrent.if(hasScript)(
       )
     expect(result.code).toBe(0)
     const settings = JSON.parse(
-      readFileSync(join(result.agentDir, 'settings.json'), 'utf8'),
+      readFileSync(join(result.agentDir, 'config.json'), 'utf8'),
     )
-    expect(settings.extensionConfig.lark.chats).toEqual(['oc_fake'])
+    expect(settings.lark.chats).toEqual(['oc_fake'])
     expect(
       JSON.parse(readFileSync(join(result.agentDir, 'sent.json'), 'utf8'))
         .chatId,
@@ -247,7 +247,7 @@ test.concurrent.if(hasScript)(
       const home = tempDir('vela-setup-home-')
       dirs.push(home)
       await Bun.write(
-        join(home.path, 'settings.json'),
+        join(home.path, 'config.json'),
         JSON.stringify({ hideThinking: true }),
       )
       const result = await cli(['setup'], {
@@ -274,19 +274,21 @@ test.concurrent.if(hasScript)(
         console.log(result.stdout.slice(-5000), result.stderr)
       expect(result.code).toBe(0)
       expect(
-        JSON.parse(readFileSync(join(home.path, 'settings.json'), 'utf8')),
-      ).toMatchObject({ hideThinking: true, defaultModel: 'local/test-model' })
-      expect(
-        JSON.parse(readFileSync(join(home.path, 'models.json'), 'utf8'))
-          .providers.local.baseUrl,
-      ).toBe(`http://127.0.0.1:${server.port}/v1`)
+        JSON.parse(readFileSync(join(home.path, 'config.json'), 'utf8')),
+      ).toMatchObject({
+        hideThinking: true,
+        model: 'local/test-model',
+        providers: {
+          local: { baseUrl: `http://127.0.0.1:${server.port}/v1` },
+        },
+      })
       expect(
         JSON.parse(readFileSync(join(home.path, 'auth.json'), 'utf8')).local
           .key,
       ).toBe('test-key')
-      for (const name of ['settings.json', 'models.json', 'auth.json'])
+      for (const name of ['config.json', 'auth.json'])
         expect(result.stdout).toContain(name)
-      const files = ['settings.json', 'models.json', 'auth.json']
+      const files = ['config.json', 'auth.json']
       const before = files.map((name) =>
         readFileSync(join(home.path, name), 'utf8'),
       )
@@ -322,19 +324,19 @@ test.concurrent.if(hasScript)(
       })
       expect(changed.code).toBe(0)
       const changedSettings = JSON.parse(
-        readFileSync(join(home.path, 'settings.json'), 'utf8'),
+        readFileSync(join(home.path, 'config.json'), 'utf8'),
       )
       expect(changedSettings).toMatchObject({
         hideThinking: true,
-        defaultModel: 'local/test-model',
-        defaultThinkingLevel: 'high',
+        model: 'local/test-model',
+        thinkingLevel: 'high',
       })
       expect(readFileSync(join(home.path, 'auth.json'), 'utf8')).toBe(
-        before[2]!,
+        before[1]!,
       )
-      expect(
-        JSON.parse(readFileSync(join(home.path, 'models.json'), 'utf8')),
-      ).toEqual(JSON.parse(before[1]!))
+      expect(changedSettings.providers).toEqual(
+        JSON.parse(before[0]!).providers,
+      )
     } finally {
       server.stop(true)
     }
@@ -371,7 +373,7 @@ test.concurrent.if(hasScript)(
         ],
       })
       expect(result.stdout).toContain('invalid test key')
-      for (const name of ['auth.json', 'models.json', 'settings.json'])
+      for (const name of ['auth.json', 'config.json'])
         expect(existsSync(join(result.agentDir, name))).toBe(false)
     } finally {
       server.stop(true)
@@ -411,7 +413,7 @@ test.concurrent.if(hasScript)(
         ],
       })
       expect(result.code).toBe(0)
-      for (const name of ['auth.json', 'models.json', 'settings.json'])
+      for (const name of ['auth.json', 'config.json'])
         expect(existsSync(join(result.agentDir, name))).toBe(false)
     } finally {
       server.stop(true)
@@ -457,12 +459,12 @@ test.concurrent.if(hasScript)(
     expect(result.stdout).toContain('faux first answer')
     expect(existsSync(join(result.agentDir, 'models.json'))).toBe(false)
     const settings = JSON.parse(
-      readFileSync(join(result.agentDir, 'settings.json'), 'utf8'),
+      readFileSync(join(result.agentDir, 'config.json'), 'utf8'),
     )
     const auth = JSON.parse(
       readFileSync(join(result.agentDir, 'auth.json'), 'utf8'),
     )
-    expect(settings.defaultModel).toBe('deepseek/deepseek-flash')
+    expect(settings.model).toBe('deepseek/deepseek-flash')
     expect(auth.deepseek.key).toBe('fake-key')
     const requests = readFileSync(join(result.cwd, 'requests.jsonl'), 'utf8')
       .trim()
@@ -471,7 +473,7 @@ test.concurrent.if(hasScript)(
     expect(requests.at(-1).model).toBe('deepseek-flash')
     expect(requests[0].stream).not.toBe(true)
     expect(requests.some((request) => request.stream === true)).toBe(true)
-    for (const name of ['auth.json', 'settings.json'])
+    for (const name of ['auth.json', 'config.json'])
       expect(result.stdout).toContain(join(result.agentDir, name))
   },
 )
@@ -1377,8 +1379,8 @@ test.concurrent('+name / -name change the default tools, from --tools or default
   const home = tempDir('vela-home-')
   dirs.push(home)
   await Bun.write(
-    join(home.path, 'settings.json'),
-    JSON.stringify({ defaultTools: ['+grep'] }),
+    join(home.path, 'config.json'),
+    JSON.stringify({ tools: ['+grep'] }),
   )
   const fromSettings = await run([], home.path)
   expect(fromSettings.code).toBe(0)
@@ -1395,7 +1397,7 @@ test.concurrent('--list-models lists the models of providers with a credential a
   const home = tempDir('vela-home-')
   dirs.push(home)
   await Bun.write(
-    join(home.path, 'models.json'),
+    join(home.path, 'config.json'),
     JSON.stringify({
       providers: {
         local: {
@@ -1532,8 +1534,8 @@ test.concurrent('-p without a prompt prints usage and exits 2', async () => {
 })
 
 test.concurrent('--help and --version print to stdout and exit 0 before any setup', async () => {
-  // A broken settings.json and no model must not matter: these exit before config and model are read
-  const files = { '.vela/settings.json': '{ broken' }
+  // A broken config.json and no model must not matter: these exit before config and model are read
+  const files = { '.vela/config.json': '{ broken' }
   for (const flag of ['--help', '-h']) {
     const { stdout, stderr, code } = await cli([flag], { model: '', files })
     expect(code).toBe(0)
@@ -1554,12 +1556,12 @@ test.concurrent('--help and --version print to stdout and exit 0 before any setu
 const GREET = (label: string) =>
   `export default function (vela) { vela.logger.info(\`[${label}] loaded \${JSON.stringify(vela.config)}\`) }`
 
-test.concurrent('extensions are discovered in ~/.vela/extensions and configured from settings.json with $VAR', async () => {
+test.concurrent('extensions are discovered in ~/.vela/extensions and configured from config.json with $VAR', async () => {
   const home = tempDir('vela-home-')
   dirs.push(home)
   await Bun.write(join(home.path, 'extensions/greet.ts'), GREET('greet'))
   await Bun.write(
-    join(home.path, 'settings.json'),
+    join(home.path, 'config.json'),
     JSON.stringify({ extensionConfig: { greet: { token: '$GREET_TOKEN' } } }),
   )
   const { stderr, code } = await cli(['-p', 'hello'], {
@@ -1577,7 +1579,7 @@ test.concurrent('a resumed CLI session uses the saved trust of its own workspace
   const b = tempDir('vela-cli-b-')
   dirs.push(home, a, b)
   await Bun.write(
-    join(home.path, 'settings.json'),
+    join(home.path, 'config.json'),
     JSON.stringify({ dataDir: join(home.path, 'shared-data') }),
   )
   await Bun.write(join(home.path, 'SYSTEM.md'), 'USER_SYSTEM')
@@ -1777,7 +1779,7 @@ test.concurrent('removed permission-gate settings report the normal unknown buil
   const home = tempDir('vela-home-')
   dirs.push(home)
   await Bun.write(
-    join(home.path, 'settings.json'),
+    join(home.path, 'config.json'),
     JSON.stringify({ extensions: ['+builtin:permission-gate'] }),
   )
   const result = await cli(['-p', 'hello'], {
@@ -1833,17 +1835,17 @@ test.concurrent('--no-session keeps the session in memory', async () => {
   expect(sessionFiles(dataDir)).toEqual([])
 })
 
-test.concurrent('a broken settings.json stops the CLI with the file name', async () => {
+test.concurrent('a broken config.json stops the CLI with the file name', async () => {
   const home = tempDir('vela-home-')
   dirs.push(home)
-  await Bun.write(join(home.path, 'settings.json'), '{ nope')
+  await Bun.write(join(home.path, 'config.json'), '{ nope')
   const { code, stderr } = await cli(['-p', 'hello'], {
     model: `faux:${scenario('hello')}`,
     agentDir: home.path,
   })
   expect(code).toBe(2)
   expect(stderr).toContain(
-    `[config] ${join(home.path, 'settings.json')} is not valid JSON`,
+    `[config] ${join(home.path, 'config.json')} is not valid JSON`,
   )
 })
 
@@ -1854,7 +1856,7 @@ test.concurrent('a broken trust.json stops the CLI instead of being ignored', as
   const { code, stderr } = await cli(['-p', 'hello'], {
     model: `faux:${scenario('hello')}`,
     agentDir: home.path,
-    files: { '.vela/settings.json': '{}' },
+    files: { '.vela/config.json': '{}' },
   })
   expect(code).toBe(2)
   expect(stderr).toContain(

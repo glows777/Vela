@@ -999,7 +999,7 @@ test.each([
           model: createFauxModel({ responses: [] }),
           extensionConfig: { channel: { eventReceiver } },
         })
-      }).toThrow(/eventReceiver/)
+      }).toThrow(/webhooks/)
     } finally {
       await vela?.dispose()
     }
@@ -1225,7 +1225,7 @@ test.each([
           model: createFauxModel({ responses: [] }),
           extensionConfig: { channel: { eventReceiver: { generic } } },
         })
-      }).toThrow(/eventReceiver/)
+      }).toThrow(/webhooks/)
     } finally {
       await vela?.dispose()
     }
@@ -1245,7 +1245,7 @@ test('the two adapters require separate configured secrets', async () => {
         },
       },
     }),
-  ).toThrow(/eventReceiver/)
+  ).toThrow(/webhooks/)
 })
 
 test('GitHub topic guidance leads from opening a PR to an exact persisted subscription', async () => {

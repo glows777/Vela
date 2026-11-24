@@ -21,7 +21,7 @@ function fixture(models?: ModelSpec[], reasoning?: 'text' | 'summary') {
   const dir = tempDir('vela-thinking-')
   dirs.push(dir)
   writeFileSync(
-    join(dir.path, 'models.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({
       providers: {
         compat: {

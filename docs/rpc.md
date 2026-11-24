@@ -88,7 +88,7 @@ A prompt can also fail after it was answered with `started`, before the agent lo
 
 ```json
 {"id":"req-2","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
-{"id":"req-2","type":"response","command":"prompt","success":false,"error":"No model available. Run vela setup; Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock."}
+{"id":"req-2","type":"response","command":"prompt","success":false,"error":"No model available. Run vela setup; Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set model in ~/.vela/config.json. For an offline demo use VELA_MODEL=mock."}
 ```
 
 Failures inside the loop (provider errors, aborts) are reported in `agent_end` only.

@@ -15,9 +15,9 @@ export function General({ settings }: { settings: SettingsState }) {
       <dl className={styles.rows}>
         <Row label="Vela folder" value={settings.folder} file="VELA_DIR" />
         <Row
-          label="Settings file"
-          value={settings.files.settings}
-          file="settings.json"
+          label="Config file"
+          value={settings.files.config}
+          file="config.json"
         />
       </dl>
     </>

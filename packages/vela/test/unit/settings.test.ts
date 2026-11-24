@@ -31,7 +31,7 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
 })
 
-test('a saved model writes the credential, the custom provider and the settings', async () => {
+test('a saved model writes the credential, the custom provider and the config', async () => {
   const dir = tempDir()
   const preset = {
     api: 'openai-completions' as const,
@@ -53,41 +53,39 @@ test('a saved model writes the credential, the custom provider and the settings'
   })
   expect(saved.written).toEqual([
     join(dir, 'auth.json'),
-    join(dir, 'models.json'),
-    join(dir, 'settings.json'),
+    join(dir, 'config.json'),
   ])
   expect(saved.definition).toBe(providers.custom!)
   expect(fileCredentialStore(join(dir, 'auth.json')).get('custom')).toEqual({
     type: 'api_key',
     key: 'secret-key',
   })
-  expect(JSON.parse(readFileSync(join(dir, 'models.json'), 'utf8'))).toEqual({
+  expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))).toEqual({
     providers: { custom: preset },
-  })
-  expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toEqual({
-    defaultModel: 'custom/custom-model',
-    defaultThinkingLevel: 'high',
+    model: 'custom/custom-model',
+    thinkingLevel: 'high',
   })
   expect(statSync(join(dir, 'auth.json')).mode & 0o777).toBe(0o600)
-  expect(statSync(join(dir, 'settings.json')).mode & 0o777).toBe(0o600)
+  expect(statSync(join(dir, 'config.json')).mode & 0o777).toBe(0o600)
+  expect(existsSync(join(dir, 'models.json'))).toBe(false)
 })
 
 test('a saved model keeps the files and the thinking level it was not given', async () => {
   const dir = tempDir()
   writeFileSync(
-    join(dir, 'settings.json'),
-    JSON.stringify({ defaultThinkingLevel: 'low', shellPath: '/bin/bash' }),
+    join(dir, 'config.json'),
+    JSON.stringify({ thinkingLevel: 'low', shellPath: '/bin/bash' }),
   )
   const saved = await saveModelSetup({
     agentDir: dir,
     ref: 'anthropic/claude-opus-4-8',
     providers: loadModels({ agentDir: dir, env: {} }),
   })
-  expect(saved.written).toEqual([join(dir, 'settings.json')])
-  expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toEqual({
-    defaultThinkingLevel: 'low',
+  expect(saved.written).toEqual([join(dir, 'config.json')])
+  expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))).toEqual({
+    thinkingLevel: 'low',
     shellPath: '/bin/bash',
-    defaultModel: 'anthropic/claude-opus-4-8',
+    model: 'anthropic/claude-opus-4-8',
   })
   expect(existsSync(join(dir, 'auth.json'))).toBe(false)
   expect(existsSync(join(dir, 'models.json'))).toBe(false)
@@ -96,20 +94,17 @@ test('a saved model keeps the files and the thinking level it was not given', as
 test('the Lark section adds, removes and escapes without losing the other keys', async () => {
   const dir = tempDir()
   writeFileSync(
-    join(dir, 'settings.json'),
+    join(dir, 'config.json'),
     JSON.stringify({
-      extensionConfig: {
-        lark: {
-          owners: ['owner'],
-          chats: [{ id: 'old', tools: ['read_file'] }, '$LARK_SETUP_CHAT'],
-        },
+      lark: {
+        owners: ['owner'],
+        chats: [{ id: 'old', tools: ['read_file'] }, '$LARK_SETUP_CHAT'],
       },
     }),
   )
   const env = { LARK_SETUP_CHAT: 'from-env' }
   const lark = () =>
-    JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).extensionConfig
-      .lark
+    JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).lark
   await saveLarkSection({
     agentDir: dir,
     appId: 'app-id',
@@ -148,21 +143,21 @@ test('the Lark section adds, removes and escapes without losing the other keys',
 test('an enabled chat saved as an environment expression is not rewritten', async () => {
   const dir = tempDir()
   writeFileSync(
-    join(dir, 'settings.json'),
-    JSON.stringify({ extensionConfig: { lark: { chats: '$LARK_CHATS' } } }),
+    join(dir, 'config.json'),
+    JSON.stringify({ lark: { chats: '$LARK_CHATS' } }),
   )
   await expect(
     saveLarkSection({ agentDir: dir, addChat: 'new' }),
   ).rejects.toThrow('environment expression')
-  expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toEqual({
-    extensionConfig: { lark: { chats: '$LARK_CHATS' } },
+  expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))).toEqual({
+    lark: { chats: '$LARK_CHATS' },
   })
 })
 
 test('a failed save names the files it already wrote', async () => {
   const dir = tempDir()
-  // Not an object: the settings write fails after auth.json and models.json are on disk.
-  writeFileSync(join(dir, 'settings.json'), '[]')
+  // Not an object: the config write fails after auth.json is on disk.
+  writeFileSync(join(dir, 'config.json'), '[]')
   const preset = {
     api: 'openai-completions' as const,
     baseUrl: 'https://example.invalid/v1',
@@ -180,18 +175,18 @@ test('a failed save names the files it already wrote', async () => {
       credential: { type: 'api_key', key: 'secret-key' },
       preset,
     }),
-  ).rejects.toThrow(`${join(dir, 'auth.json')}, ${join(dir, 'models.json')}`)
+  ).rejects.toThrow(`${join(dir, 'auth.json')}`)
   expect(
     fileCredentialStore(join(dir, 'auth.json')).get('custom'),
   ).toBeDefined()
 })
 
-test('a settings file that is not an object is named', async () => {
+test('a config file that is not an object is named', async () => {
   const dir = tempDir()
-  writeFileSync(join(dir, 'settings.json'), 'null')
+  writeFileSync(join(dir, 'config.json'), 'null')
   await expect(
     saveLarkSection({ agentDir: dir, appId: 'app-id' }),
-  ).rejects.toThrow(`${join(dir, 'settings.json')} must contain a JSON object`)
+  ).rejects.toThrow(`${join(dir, 'config.json')} must contain a JSON object`)
 })
 
 test('adding and removing a chat in one call is refused', async () => {

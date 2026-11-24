@@ -13,7 +13,7 @@ export async function verifyLarkSettings(
   hold: () => () => void,
   secret: string,
 ) {
-  const path = join(dir, 'settings.json')
+  const path = join(dir, 'config.json')
   const disk = async () => JSON.parse(await readFile(path, 'utf8'))
   const sidebar = page.getByLabel('Sidebar')
   const open = async () => {
@@ -46,7 +46,7 @@ export async function verifyLarkSettings(
   await page.getByText('oc_settings', { exact: true }).waitFor()
   const startup = page
     .getByRole('alert')
-    .filter({ hasText: /duplicate chat IDs.*settings.json/i })
+    .filter({ hasText: /duplicate chat IDs.*config.json/i })
   await startup.waitFor({ timeout: 7000 })
   assert(
     await toggle.isChecked(),
@@ -124,7 +124,7 @@ export async function verifyLarkSettings(
     ),
     ['local'],
   )
-  assert.equal((await disk()).extensionConfig.lark.runInApp, false)
+  assert.equal((await disk()).lark.runInApp, false)
   assert.equal((await disk()).extensions, undefined)
   await themes(page, 'lark-settings-off')
   await submit('Does Local still work?')
@@ -144,7 +144,7 @@ export async function verifyLarkSettings(
       .filter({ hasText: 'A session is still running' })
       .waitFor()
     assert.equal(await toggle.isChecked(), true)
-    assert.equal((await disk()).extensionConfig.lark.runInApp, true)
+    assert.equal((await disk()).lark.runInApp, true)
   } finally {
     release()
   }
@@ -168,7 +168,7 @@ export async function verifyLarkSettings(
     .getByRole('button', { name: 'Remove chat', exact: true })
     .click()
   await page.getByText('No enabled chats.', { exact: true }).waitFor()
-  const saved = (await disk()).extensionConfig.lark
+  const saved = (await disk()).lark
   assert.deepEqual(saved.chats, [])
   assert(
     saved.appId === 'verify-app' &&
@@ -177,7 +177,7 @@ export async function verifyLarkSettings(
   )
   await pendingCredentialJourney(page, dir, `${secret}-rotation`, submit)
   assert(
-    (await disk()).extensionConfig.lark.appSecret === `${secret}-rotation`,
+    (await disk()).lark.appSecret === `${secret}-rotation`,
     'The later credential edit remains saved',
   )
   await open()
@@ -312,18 +312,16 @@ async function pendingCredentialJourney(
 }
 
 export async function seedLarkChat(dir: string, secret: string) {
-  const path = join(dir, 'settings.json')
+  const path = join(dir, 'config.json')
   const settings = JSON.parse(await readFile(path, 'utf8'))
-  settings.extensionConfig = {
-    lark: {
-      appId: 'not-configured',
-      appSecret: secret,
-      chats: [
-        'oc_duplicate',
-        'oc_duplicate',
-        { id: 'oc_settings', readUntagged: false },
-      ],
-    },
+  settings.lark = {
+    appId: 'not-configured',
+    appSecret: secret,
+    chats: [
+      'oc_duplicate',
+      'oc_duplicate',
+      { id: 'oc_settings', readUntagged: false },
+    ],
   }
   await writeFile(path, JSON.stringify(settings))
 }

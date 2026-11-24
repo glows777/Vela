@@ -26,7 +26,7 @@ export function FirstRun({ settings }: { settings: SettingsState }) {
         </div>
         <ModelForm settings={settings} submitLabel="Verify and save" />
         <p className={styles.files}>
-          The model goes in <code>settings.json</code> and the key in{' '}
+          The model goes in <code>config.json</code> and the key in{' '}
           <code>auth.json</code>. Settings › General shows the folder.
         </p>
       </div>

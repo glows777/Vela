@@ -120,7 +120,7 @@ async function authPrompt(
   return answer
 }
 
-/** `/logout [provider]`: removes the stored credential (environment variables and models.json keys stay) */
+/** `/logout [provider]`: removes the stored credential (environment variables and config.json keys stay) */
 export async function logoutCommand(
   host: AuthHost,
   args: string,

@@ -4,12 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import {
-  defaultAgentDir,
-  loadConfig,
-  savedTrust,
-  type VelaConfig,
-} from '../config/index.ts'
+import { savedTrust } from '../config/index.ts'
 import {
   buildSessionPath,
   isSessionV1,
@@ -26,6 +21,7 @@ import {
   setDefaultToolModifiers,
 } from '../driver/index.ts'
 import { type LocalOptions, local } from '../legacy-channels/index.ts'
+import { defaultAgentDir, loadConfig, type VelaConfig } from '../load-config.ts'
 import { usableModel } from '../settings.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import {
@@ -166,7 +162,7 @@ if ((mode === 'print' || mode === 'json') && !args.listModels && !args.export) {
 }
 if (attachments.text || attachments.images.length)
   messages[0] = [attachments.text, messages[0]].filter(Boolean).join('\n\n')
-// Config: ~/.vela/settings.json + <cwd>/.vela/settings.json once trusted (step 4, see 04-plan.md)
+// Config: ~/.vela/config.json + <cwd>/.vela/config.json once trusted (step 4, see 04-plan.md)
 const agentDir = defaultAgentDir(env)
 let config: VelaConfig
 let localOptions: LocalOptions | undefined
@@ -206,8 +202,8 @@ const legacyHint = legacyDataHint(cwd, config.dataDir)
 if (legacyHint) console.error(legacyHint)
 
 /**
- * Default model: VELA_MODEL=mock / faux:<scenario> wins (offline demo, replay), then `--model` → settings
- * defaultModel → `openai/$OPENAI_API_MODEL_NAME` (the legacy env var form).
+ * Default model: VELA_MODEL=mock / faux:<scenario> wins (offline demo, replay), then `--model` → config
+ * model → `openai/$OPENAI_API_MODEL_NAME` (the legacy env var form).
  */
 /** Error text for the user: the core's "No model selected" names SDK calls (createVela / setModel); the CLI says how to pick a model. */
 function cliErrorMessage(error: unknown): string {
@@ -242,7 +238,7 @@ async function chooseModel(): Promise<ModelInput | undefined> {
   if (env.VELA_MODEL?.startsWith('faux:'))
     return loadFauxScenario(env.VELA_MODEL.slice('faux:'.length))
   return (
-    config.settings.defaultModel ??
+    config.settings.model ??
     (env.OPENAI_API_MODEL_NAME
       ? `openai/${env.OPENAI_API_MODEL_NAME}`
       : undefined)
@@ -252,7 +248,7 @@ async function chooseModel(): Promise<ModelInput | undefined> {
 let chosenModel = args.listModels ? undefined : await chooseModel()
 
 // VELA_RECORD=<file.json>: record this run's model responses and user input as a faux scenario; replay with VELA_MODEL=faux:<file>
-// (records the default model only; a model chosen by name is resolved here via models.json / built-in providers, so extension providers can't be recorded)
+// (records the default model only; a model chosen by name is resolved here via config.json / built-in providers, so extension providers can't be recorded)
 let recorder: ReturnType<typeof recordModel> | undefined
 if (env.VELA_RECORD && !args.listModels && !args.setup) {
   try {
@@ -604,8 +600,8 @@ try {
       setupTarget: args.setupTarget,
       projectSettingsPath: config.files.find(
         (file) =>
-          file === join(config.cwd, '.vela', 'settings.json') &&
-          file !== join(agentDir, 'settings.json'),
+          file === join(config.cwd, '.vela', 'config.json') &&
+          file !== join(agentDir, 'config.json'),
       ),
       onConfigured: () => {
         args.model = undefined

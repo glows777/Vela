@@ -30,7 +30,7 @@ function fixture(providers?: Record<string, unknown>) {
   const dir = tempDir('vela-deepseek-compat-')
   dirs.push(dir)
   if (providers)
-    writeFileSync(join(dir.path, 'models.json'), JSON.stringify({ providers }))
+    writeFileSync(join(dir.path, 'config.json'), JSON.stringify({ providers }))
   const requests: RequestBody[] = []
   const urls: string[] = []
   const keys: (string | null)[] = []
@@ -246,7 +246,7 @@ test('partial DeepSeek overrides retain defaults and model-level false/empty val
       ],
     },
   })
-  const before = readFileSync(join(f.cwd, 'models.json'), 'utf8')
+  const before = readFileSync(join(f.cwd, 'config.json'), 'utf8')
   const t = createTestVela({
     ...f,
     model: 'deepseek/deepseek-flash',
@@ -267,11 +267,11 @@ test('partial DeepSeek overrides retain defaults and model-level false/empty val
     ),
   ).toBe(false)
   expect(f.keys).toEqual(['Bearer fake-config', 'Bearer fake-config'])
-  expect(readFileSync(join(f.cwd, 'models.json'), 'utf8')).toBe(before)
+  expect(readFileSync(join(f.cwd, 'config.json'), 'utf8')).toBe(before)
 })
 
 test.each(['supportsDeveloperRole', 'deepseekReasoningStream'])(
-  'invalid %s flags fail with the models.json field path',
+  'invalid %s flags fail with the config.json field path',
   (key) => {
     expect(() => {
       fixture({
