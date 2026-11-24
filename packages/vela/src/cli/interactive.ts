@@ -329,7 +329,6 @@ export class InteractiveMode {
 
   private renderHeader(modelOk: boolean): void {
     this.header.clear()
-    const extensions = this.vela.extensions(this.session.id).map((e) => e.name)
     const lines = [
       `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', headerSessionLabel(this.session.id))}`,
       theme.fg(
@@ -337,8 +336,7 @@ export class InteractiveMode {
         `${keyLabel('interrupt')} interrupt · ${keyLabel('clear')} clear · ${keyLabel('exit')} exit · / commands · ${keyLabel('followUp')} follow-up · /hotkeys for more`,
       ),
     ]
-    if (extensions.length)
-      lines.push(theme.fg('dim', `Extensions: ${extensions.join(', ')}`))
+    // Loaded extensions are not listed here (#558): /extensions names each one with what it registered.
     if (!modelOk)
       lines.push(
         theme.fg(

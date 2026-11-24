@@ -27,6 +27,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **The built-in model catalog is refreshed from pi-ai 1.1.0 to 1.6.0** (514 models instead of 491): `--list-models` and `/model` show Claude Fable 5.2, GPT-6.1/GPT-6.2, Gemini 4, Kimi K3.1 Pro and the other current ids, retired ones are gone, and prices follow the providers' current ones. Anthropic's `claude-sonnet-4-5` reports a 200k window (1.1.0 said 1M), so its compaction thresholds and footer percentage follow 200k again. Default models are unchanged (`claude-opus-4-8`, `gpt-5.5`, `moonshotai/kimi-k2.6`, `deepseek-flash`), and `bun scripts/update-models.ts` runs again on Bun 1.4.0.
 
+- **The TUI's startup header no longer lists the loaded extensions.** The version/session line and the key hints stay, and `/extensions` still names every extension with the tools, commands and channels it registered, so a long extension list no longer wraps another line over the first screen ([#558](https://github.com/glows777/Vela/issues/558)).
+
 ### Fixed
 
 - Single-pass per-layer `$VAR` interpolation prevents nested expansion across user and project layers and preserves literal `$VAR` credentials in `environments` ([#535](https://github.com/glows777/Vela/issues/535)).
