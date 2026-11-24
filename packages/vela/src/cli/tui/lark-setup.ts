@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { formatJsonParseError } from '../../config/index.ts'
 import { connectLarkSetup } from '../../lark/index.ts'
 import { saveLarkSection } from '../../settings.ts'
 
@@ -37,9 +38,15 @@ const object = (value: unknown): Record<string, unknown> =>
 
 export async function larkSetup(host: Host): Promise<boolean> {
   const path = join(host.agentDir, 'config.json')
-  const settings = existsSync(path)
-    ? object(JSON.parse(readFileSync(path, 'utf8')))
-    : {}
+  let settings: Record<string, unknown> = {}
+  if (existsSync(path)) {
+    const rawText = readFileSync(path, 'utf8')
+    try {
+      settings = object(JSON.parse(rawText))
+    } catch (error) {
+      throw new Error(formatJsonParseError(path, rawText, error))
+    }
+  }
   const lark = object(settings.lark)
   const checklist =
     'Create and publish a Lark app, enable its bot, select long connection, subscribe to im.message.receive_v1 and card.action.trigger, grant permissions, and add the bot to the group. Card callback and scopes are not checked by setup. Console: https://open.feishu.cn/app'
@@ -140,16 +147,20 @@ export async function larkSetup(host: Host): Promise<boolean> {
       }
     }
     updateEnabled(settings.extensions)
+    let projectNote = ''
     if (host.projectSettingsPath && existsSync(host.projectSettingsPath)) {
-      const project = object(
-        JSON.parse(readFileSync(host.projectSettingsPath, 'utf8')),
-      )
-      updateEnabled(project.extensions)
+      const projectText = readFileSync(host.projectSettingsPath, 'utf8')
+      try {
+        const project = object(JSON.parse(projectText))
+        updateEnabled(project.extensions)
+      } catch (error) {
+        projectNote = ` Could not check project extension settings (${formatJsonParseError(host.projectSettingsPath, projectText, error)}).`
+      }
     }
     const disabled = enabled
       ? ''
       : ' Lark is disabled by extensions settings; remove -builtin:lark or add +builtin:lark before starting.'
-    const summary = `Lark configured in ${path}. Connection message sent. Run vela serve, then mention the bot in the group. Card callback and other scopes were not checked.${disabled}`
+    const summary = `Lark configured in ${path}. Connection message sent. Run vela serve, then mention the bot in the group. Card callback and other scopes were not checked.${disabled}${projectNote}`
     host.addNotice(summary)
     host.setSummary(summary)
     return true

@@ -14,7 +14,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { isPlainObject } from '../shared/interpolate.ts'
-import { formatJsonParseError } from './schema.ts'
+import { formatJsonParseError, parseConfig } from './schema.ts'
 
 export const LEGACY_CONFIG_FILES = [
   'settings.json',
@@ -103,6 +103,7 @@ function readRawConfigUnlocked(agentDir: string): Record<string, unknown> {
   }
   if (!isPlainObject(parsed))
     throw new Error(`${path} must contain a JSON object`)
+  parseConfig(text, path)
   return parsed
 }
 
@@ -111,15 +112,17 @@ function writeRawConfigUnlocked(
   data: Record<string, unknown>,
   assertOwned: () => void,
 ): string {
+  const serialized = `${JSON.stringify(data, null, 2)}\n`
+  const path = join(agentDir, 'config.json')
+  parseConfig(serialized, path)
   mkdirSync(agentDir, { recursive: true, mode: 0o700 })
   chmodSync(agentDir, 0o700)
-  const path = join(agentDir, 'config.json')
   const temporary = join(
     agentDir,
     `.config-${randomBytes(12).toString('hex')}.tmp`,
   )
   try {
-    writeFileSync(temporary, `${JSON.stringify(data, null, 2)}\n`, {
+    writeFileSync(temporary, serialized, {
       mode: 0o600,
       flag: 'wx',
     })

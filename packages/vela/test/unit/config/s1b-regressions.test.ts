@@ -715,3 +715,224 @@ test('R1 #12, #13, #14: strict limits/models validation, strip-before-validate o
     Object.getOwnPropertyDescriptor(ctor.extensionConfig, 'constructor')?.value,
   ).toEqual({ custom: true })
 })
+
+test('R2 #1: schema-invalid config blocks saveModelSetup, saveLarkSection, writeProviderPreset, and githubSetup without side effects', async () => {
+  const { agentDir } = setupProject({ oldFlag: true })
+  const initialConfig = readFileSync(join(agentDir, 'config.json'), 'utf8')
+  const providers = {
+    openai: {
+      createModel: () => {
+        throw new Error('unused')
+      },
+    },
+  }
+  await expect(
+    saveModelSetup({
+      agentDir,
+      ref: 'openai/gpt-5.5',
+      providers,
+      credential: { type: 'api_key', key: 'secret-key' },
+    }),
+  ).rejects.toThrow('unknown key "oldFlag"')
+  expect(existsSync(join(agentDir, 'auth.json'))).toBe(false)
+  expect(readFileSync(join(agentDir, 'config.json'), 'utf8')).toBe(
+    initialConfig,
+  )
+
+  await expect(saveLarkSection({ agentDir, runInApp: true })).rejects.toThrow(
+    'unknown key "oldFlag"',
+  )
+  expect(() =>
+    writeProviderPreset(agentDir, 'custom', { api: 'openai-completions' }),
+  ).toThrow('unknown key "oldFlag"')
+
+  const outputs: string[] = []
+  const ghCode = await githubSetup({
+    agentDir,
+    repositories: ['glows777/Vela'],
+    url: 'https://hooks.example.com',
+    interactive: false,
+    write: (line) => outputs.push(line),
+  })
+  expect(ghCode).toBe(1)
+  expect(outputs.join('\n')).toContain('unknown key "oldFlag"')
+  expect(readFileSync(join(agentDir, 'config.json'), 'utf8')).toBe(
+    initialConfig,
+  )
+})
+
+test('R2 #2: loadConfig.settings.mcpServers and loadConfig.mcp.servers share transport replacement and exposure override rules', () => {
+  const { agentDir, cwd } = setupProject(
+    {
+      mcpServers: {
+        docs: {
+          url: 'https://owner.invalid/mcp',
+          headers: { 'X-Owner': 'owner-only' },
+        },
+        exposed: {
+          url: 'https://shared.invalid/mcp',
+          headers: { Authorization: 'Bearer ok' },
+          enabled: true,
+        },
+      },
+    },
+    {
+      mcpServers: {
+        docs: { url: 'https://project.invalid/mcp' },
+        exposed: { enabled: false, exposure: 'direct' },
+      },
+    },
+  )
+  const loaded = loadConfig({ cwd, agentDir, trusted: true, env: {} })
+  expect(loaded.settings.mcpServers?.docs).toEqual({
+    url: 'https://project.invalid/mcp',
+  })
+  expect(loaded.mcp.servers.docs).toEqual({
+    url: 'https://project.invalid/mcp',
+  })
+  expect(loaded.settings.mcpServers?.exposed).toEqual({
+    url: 'https://shared.invalid/mcp',
+    headers: { Authorization: 'Bearer ok' },
+    enabled: false,
+    exposure: 'direct',
+  })
+  expect(loaded.mcp.servers.exposed).toEqual({
+    url: 'https://shared.invalid/mcp',
+    headers: { Authorization: 'Bearer ok' },
+    enabled: false,
+    exposure: 'direct',
+  })
+})
+
+test('R2 #3 & #4: Bun fallback preserves sibling import.meta.url assets and Node honors extension-local zod', async () => {
+  const root = tempDir('vela-r2-ext-')
+  dirs.push(root)
+  const extDir = join(root.path, 'ext')
+  mkdirSync(extDir, { recursive: true })
+  writeFileSync(join(extDir, 'asset.txt'), 'ASSET_OK')
+  const assetExt = join(extDir, 'with-asset.ts')
+  writeFileSync(
+    assetExt,
+    `import { readFileSync } from 'node:fs'
+import { silentLogger, type ExtensionAPI } from '@glows777/vela/extension-api'
+export default function (api: ExtensionAPI) {
+  silentLogger.debug('asset')
+  const content = readFileSync(new URL('./asset.txt', import.meta.url), 'utf8')
+  api.registerTool({ name: content, description: 'asset', execute: async () => content } as never)
+}
+`,
+  )
+  const loaded = await importExtension(assetExt, 'withAsset')
+  const registered: string[] = []
+  await loaded({
+    registerTool(tool) {
+      registered.push(tool.name)
+    },
+  } as Parameters<typeof loaded>[0])
+  expect(registered).toEqual(['ASSET_OK'])
+
+  const distExtensions = join(
+    import.meta.dir,
+    '../../../dist/driver/config/extensions.js',
+  )
+  if (existsSync(distExtensions)) {
+    const localPkgDir = join(root.path, 'local-zod-ext')
+    mkdirSync(join(localPkgDir, 'node_modules/zod'), { recursive: true })
+    writeFileSync(
+      join(localPkgDir, 'node_modules/zod/package.json'),
+      JSON.stringify({ name: 'zod', main: 'index.cjs' }),
+    )
+    writeFileSync(
+      join(localPkgDir, 'node_modules/zod/index.cjs'),
+      'exports.z = { sentinel: () => "LOCAL_ZOD_OK" }\n',
+    )
+    const localExt = join(localPkgDir, 'local.ts')
+    writeFileSync(
+      localExt,
+      `import { z } from 'zod'
+import { silentLogger } from '@glows777/vela/extension-api'
+export default function (api: { registerTool(t: { name: string }): void }) {
+  silentLogger.debug('node')
+  api.registerTool({ name: (z as unknown as { sentinel(): string }).sentinel() })
+}
+`,
+    )
+    const proc = Bun.spawn(
+      [
+        'node',
+        '--input-type=module',
+        '-e',
+        `import { importExtension } from ${JSON.stringify(new URL(`file://${distExtensions}`).href)};
+const fn = await importExtension(${JSON.stringify(localExt)}, 'local');
+const seen = [];
+await fn({ registerTool(t) { seen.push(t.name); } });
+if (seen[0] !== 'LOCAL_ZOD_OK') throw new Error('Expected local zod, got ' + seen[0]);`,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    expect(await proc.exited).toBe(0)
+  }
+})
+
+test('R2 #7: localOnly provider checks store once per ctx.credential() call without TOCTOU OAuth leak', async () => {
+  let getCalls = 0
+  let currentCred:
+    | { type: 'api_key'; key: string }
+    | { type: 'oauth'; access: string; refresh: string; expires: number } = {
+    type: 'api_key',
+    key: 'api-k',
+  }
+  const store = {
+    get: () => {
+      getCalls++
+      const value = currentCred
+      // Flip to an OAuth token after the first read to verify no second store read occurs.
+      currentCred = {
+        type: 'oauth',
+        access: 'leaked-oauth',
+        refresh: 'r',
+        expires: Date.now() + 600_000,
+      }
+      return value
+    },
+    list: () => ['custom'],
+    modify: async () => undefined,
+    delete: async () => {},
+  }
+  const seen: unknown[] = []
+  const registry = new ModelRegistry(
+    {
+      custom: {
+        oauth: {
+          name: 'Local OAuth',
+          localOnly: true,
+          login: async () => {
+            throw new Error('unused')
+          },
+        },
+        createModel: (id, ctx) => ({
+          specificationVersion: 'v4',
+          provider: 'custom',
+          modelId: id,
+          async doGenerate() {
+            seen.push(await ctx.credential())
+            seen.push(await ctx.credential())
+            return {}
+          },
+          async doStream() {
+            return {}
+          },
+        }),
+      },
+    },
+    store,
+  )
+  await (
+    registry.resolve('custom/m1', { channel: () => 'lark' })
+      .model as unknown as {
+      doGenerate(options?: unknown): Promise<unknown>
+    }
+  ).doGenerate({})
+  expect(getCalls).toBe(2)
+  expect(seen).toEqual([{ type: 'api_key', key: 'api-k' }, undefined])
+})

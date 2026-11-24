@@ -2383,9 +2383,11 @@ test.concurrent('bundled CLI loads external TS extensions with runtime host impo
   const extDir = tempDir('vela-external-ext-')
   dirs.push(extDir)
   const extPath = join(extDir.path, 'runtime-host.ts')
+  await Bun.write(join(extDir.path, 'asset.txt'), 'sibling-asset-ok')
   await Bun.write(
     extPath,
-    `import { z } from 'zod'
+    `import { readFileSync } from 'node:fs'
+import { z } from 'zod'
 import { createJsonSchema } from '@glows777/vela'
 import { silentLogger, type ExtensionAPI } from '@glows777/vela/extension-api'
 export default function runtimeHost(vela: ExtensionAPI) {
@@ -2395,9 +2397,10 @@ export default function runtimeHost(vela: ExtensionAPI) {
     name: 'bundle_probe',
     description: 'bundle host import probe',
     inputSchema: z.object({ label: z.string() }),
-    execute: async ({ label }) => ({
-      content: [{ type: 'text', text: \`EXT_OK:\${label}\` }],
-    }),
+    execute: async ({ label }) => {
+      const asset = readFileSync(new URL('./asset.txt', import.meta.url), 'utf8')
+      return { content: [{ type: 'text', text: \`EXT_OK:\${label}:\${asset}\` }] }
+    },
   })
 }
 `,
@@ -2423,5 +2426,5 @@ export default function runtimeHost(vela: ExtensionAPI) {
   expect(result.code).toBe(0)
   expect(result.stderr).not.toContain('Failed to load')
   expect(result.stderr).not.toContain('Cannot find module')
-  expect(result.stdout).toContain('EXT_OK:s1b')
+  expect(result.stdout).toContain('EXT_OK:s1b:sibling-asset-ok')
 })

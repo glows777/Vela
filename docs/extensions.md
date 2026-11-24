@@ -92,12 +92,11 @@ Every extension has a name. It sets the prefix of its tool names and selects its
 
 ### TypeScript on Node
 
-On Bun any TypeScript works. On Node (>= 22.18) the CLI imports the file and Node strips the types natively, which has limits:
+Vela loads `.ts` extensions on Node (`>= 22.18`) through `jiti`, so TypeScript extensions work without a build step:
 
-- For an ES-module `.ts` extension, set `"type": "module"` in its nearest parent `package.json` (for example, `~/.vela/extensions/package.json`). This avoids Node's `MODULE_TYPELESS_PACKAGE_JSON` warning when that package has no `type` field. See [Node's module-system rules](https://nodejs.org/docs/latest-v22.x/api/typescript.html#determining-module-system).
-- Only erasable syntax works. `enum`, `namespace` with values, constructor parameter properties (`constructor(private x: T)`) and other syntax that generates code fail with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. Use plain objects, union types and explicit fields.
-- Node does not strip types in files under `node_modules`. Ship compiled `.js` in a package.
-- Imports must resolve from the extension's own location. Import Vela's types with `import type { ... } from '@glows777/vela/extension-api'` (for tool/hook extensions) or `import type { ... } from '@glows777/vela'` (required for channel extensions that call `api.registerChannel`); type-only imports are erased and work anywhere. A value import (`import { createVela } from '@glows777/vela'`) or a third-party import such as `zod` needs that package installed where the extension can resolve it, for example a `package.json` and `node_modules` next to the extension. This applies on Bun too.
+- Set `"type": "module"` in a nearest parent `package.json` (for example, `~/.vela/extensions/package.json`) for clean ESM resolution if desired.
+- You can use standard TypeScript syntax; node_modules packages ship compiled `.js`.
+- Import Vela types with `import type { ... } from '@glows777/vela/extension-api'` (tools/hooks) or `import type { ... } from '@glows777/vela'` (channels). Runtime imports from `@glows777/vela`, `@glows777/vela/extension-api`, and `zod` resolve to the extension's own `node_modules` first when present, and otherwise fall back automatically to Vela's host modules on both Node and Bun (including standalone CLI distributions). Other third-party packages should be installed alongside the extension (`package.json` + `node_modules`).
 
 ## The extension API
 

@@ -482,12 +482,35 @@ export function interpolateConfigLayer(
   return next
 }
 
-/** Project overrides user: objects deep-merge, extensions / skills concatenate, other values are replaced. */
+const MCP_OVERRIDE_KEYS = new Set(['enabled', 'exposure', 'toolExposure'])
+
+/** Project overrides user: objects deep-merge, mcpServers follow transport replacement/exposure rules, resource lists concatenate. */
 export function mergeConfig(
   base: VelaSettings,
   override: VelaSettings,
 ): VelaSettings {
   const merged = deepMerge(base, override) as VelaSettings
+  if (base.mcpServers !== undefined || override.mcpServers !== undefined) {
+    const nextMcp: Record<string, unknown> = { ...(base.mcpServers ?? {}) }
+    if (override.mcpServers) {
+      for (const [name, raw] of Object.entries(override.mcpServers)) {
+        const existing = nextMcp[name]
+        if (
+          isPlainObject(raw) &&
+          isPlainObject(existing) &&
+          raw.command === undefined &&
+          raw.url === undefined &&
+          raw.type === undefined &&
+          Object.keys(raw).every((k) => MCP_OVERRIDE_KEYS.has(k))
+        ) {
+          nextMcp[name] = { ...existing, ...raw }
+        } else {
+          nextMcp[name] = raw
+        }
+      }
+    }
+    merged.mcpServers = nextMcp
+  }
   for (const key of RESOURCE_KEYS) {
     const list = [...(base[key] ?? []), ...(override[key] ?? [])]
     if (list.length) merged[key] = list

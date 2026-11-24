@@ -262,21 +262,24 @@ export class ModelRegistry {
       )
     const { api: _, ...catalog } = catalogLookup(provider, id) ?? { id }
     const spec = def.models?.find((m) => m.id === id) ?? catalog
-    const blockedLocalOAuth = () =>
-      Boolean(
-        def.oauth?.localOnly &&
-          options.channel?.() &&
-          this.credentials.get(provider)?.type === 'oauth',
-      )
     const ctx: ProviderContext = {
       provider,
       credential: async () => {
-        if (blockedLocalOAuth()) return undefined
+        if (def.oauth?.localOnly && options.channel?.()) {
+          const stored = this.credentials.get(provider)
+          if (stored?.type === 'api_key') return stored
+          return undefined
+        }
         return resolveCredential(this.credentials, provider, def.oauth)
       },
       channel: () => options.channel?.(),
     }
-    localOnlyOAuthChecks.set(ctx, blockedLocalOAuth)
+    localOnlyOAuthChecks.set(
+      ctx,
+      () =>
+        Boolean(def.oauth?.localOnly && options.channel?.()) &&
+        this.credentials.get(provider)?.type === 'oauth',
+    )
     return {
       model: def.createModel(id, ctx),
       info: { ...spec, provider, ref: `${provider}/${id}` },

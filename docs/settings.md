@@ -35,7 +35,8 @@ Project extension registrations and configuration-driven MCP connections also fo
 
 Project settings are applied on top of user settings:
 
-- Objects (`limits`, `web`, `memory`, `mcpServers`, `extensionConfig`) are merged key by key, recursively (`$VAR` interpolation runs once per layer before merging).
+- Objects (`limits`, `web`, `memory`, `extensionConfig`) are merged key by key, recursively (`$VAR` interpolation runs once per layer before merging).
+- `mcpServers` entries follow replacement/override semantics: a project entry with `command`, `url`, or `type` replaces the owner entry of that name outright; an entry without those keys overrides only `enabled`, `exposure`, and `toolExposure` (missing `${VAR}` references in `mcpServers` fail strict validation rather than expanding to empty strings; see [MCP servers](mcp.md)).
 - `extensions`, `skills` and `prompts` lists are concatenated: user entries first, then project entries.
 - `tools` with plain names replaces the user list; a list of only `+name` / `-name` entries is appended, and an empty list replaces it with no tools (see [tools](#tools)).
 - Host-owned keys (`environments`, `location`, `providers`, `lark`, `local`, `webhooks`, `eventDefaultTarget`) are stripped from `<project>/.vela/config.json` before merging.
@@ -169,7 +170,7 @@ A list of extension files and directories to load, and `builtin:` switches that 
 
 ### Built-in and custom extension sections
 
-Built-in extensions read top-level sections (`lark`, `web`, `memory`, `mcpServers`, `webhooks`, `local`), while custom third-party extensions read `extensionConfig.<name>` as `vela.config`. String values in these sections support `$NAME` or `${NAME}` once per config layer (an unset variable becomes an empty string; `$$` is a literal `$`). Placing a built-in extension name (`lark`, `web`, `mcp`, `memory`, `channel`, `local`) under `extensionConfig` is rejected.
+Built-in extensions read top-level sections (`lark`, `web`, `memory`, `webhooks`, `local`, and strict-variable `mcpServers` — see [MCP servers](mcp.md)), while custom third-party extensions read `extensionConfig.<name>` as `vela.config`. String values in `lark`, `web`, `memory`, `webhooks`, `local`, and `extensionConfig` support `$NAME` or `${NAME}` once per config layer (an unset variable becomes an empty string; `$$` is a literal `$`). Placing any built-in extension name (`lark`, `web`, `mcp`, `memory`, `channel`, `local`, `background`, `todo`) under `extensionConfig` is rejected.
 
 ```json
 {

@@ -51,13 +51,11 @@ For the selectable built-ins below, factory options take precedence. An option y
 
 ## Configuration
 
-In the CLI, each built-in reads `extensionConfig.<name>` from [settings](settings.md). String values support `$VAR` and `${VAR}`. When a key is not set in settings, the CLI falls back to an environment variable such as `TAVILY_API_KEY`; [CLI](cli.md#environment-variables) lists each variable and the key it fills. An empty string counts as unset. `memory` has no configuration.
+In the CLI, each built-in reads its top-level section (`web`, `memory`, `lark`, `mcpServers`, `webhooks`, `local`) from [settings](settings.md) (`config.json`). String values support `$VAR` and `${VAR}`. When a key is not set in settings, the CLI falls back to an environment variable such as `TAVILY_API_KEY`; [CLI](cli.md#environment-variables) lists each variable and the key it fills. An empty string counts as unset. `memory` supports `dream` (`true` by default).
 
 ```json
 {
-  "extensionConfig": {
-    "web": { "tavilyKey": "$TAVILY_API_KEY" }
-  }
+  "web": { "tavilyKey": "$TAVILY_API_KEY" }
 }
 ```
 

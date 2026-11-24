@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SelectItem } from '@earendil-works/pi-tui'
+import { formatJsonParseError } from '../../config/index.ts'
 import { THINKING_LEVELS } from '../../driver/diagnostics.ts'
 import {
   type AuthInteraction,
@@ -46,7 +47,13 @@ interface Host {
 }
 
 function readObject(path: string): Record<string, unknown> {
-  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+  if (!existsSync(path)) return {}
+  const text = readFileSync(path, 'utf8')
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(formatJsonParseError(path, text, error))
+  }
 }
 
 /** One setup flow for first run and explicit `vela setup`. No credentials are persisted before verification. */

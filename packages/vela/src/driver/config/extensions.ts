@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import {
   chmodSync,
   existsSync,
@@ -9,7 +8,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { VelaExtension } from '../extensions/types.ts'
 
@@ -19,7 +18,7 @@ const hostLoaders: Record<string, () => Promise<unknown>> = {
   zod: () => import('zod'),
 }
 let shimDir: string | undefined
-const bunBuiltPaths = new Map<string, Promise<string>>()
+const bunBuiltUrls = new Map<string, Promise<string>>()
 
 /** @internal Registers lazy host module loaders for bundled single-file builds lacking sibling files. */
 export function registerExtensionHostModules(
@@ -104,9 +103,7 @@ interface BunBuildPlugin {
     ): void
     onLoad(
       opts: { filter: RegExp; namespace: string },
-      cb: (args: {
-        path: string
-      }) => Promise<{ contents: string; loader: 'js' }>,
+      cb: (args: { path: string }) => { contents: string; loader: 'js' },
     ): void
   }): void
 }
@@ -117,6 +114,7 @@ interface BunLike {
     target: 'bun'
     format: 'esm'
     plugins: BunBuildPlugin[]
+    define?: Record<string, string>
   }): Promise<{
     success: boolean
     logs: unknown[]
@@ -134,58 +132,74 @@ function buildExtensionWithBun(
   } catch {
     key = sourcePath
   }
-  const cached = bunBuiltPaths.get(key)
+  const cached = bunBuiltUrls.get(key)
   if (cached) return cached
   const pending = (async () => {
     const diskAliases = resolveDiskAliases()
     const hostSpecifiers = new Set([
       '@glows777/vela',
       '@glows777/vela/extension-api',
-      'zod',
+      ...(hasLocalPackage(key, 'zod') ? [] : ['zod']),
     ])
-    const result = await bun.build({
-      entrypoints: [key],
-      target: 'bun',
-      format: 'esm',
-      plugins: [
-        {
-          name: 'vela-extension-host',
-          setup(build) {
-            build.onResolve({ filter: /.*/ }, (args) => {
-              if (!hostSpecifiers.has(args.path)) return undefined
-              if (hostLoaders[args.path] || diskAliases.has(args.path))
-                return { path: args.path, namespace: 'vela-host' }
-              return undefined
-            })
-            build.onLoad(
-              { filter: /.*/, namespace: 'vela-host' },
-              async (args) => {
-                await loadHostModule(args.path, diskAliases.get(args.path))
-                return {
+    const needed = new Set<string>()
+    let result: Awaited<ReturnType<BunLike['build']>>
+    try {
+      result = await bun.build({
+        entrypoints: [key],
+        target: 'bun',
+        format: 'esm',
+        define: {
+          'import.meta.url': JSON.stringify(pathToFileURL(key).href),
+          'import.meta.dir': JSON.stringify(dirname(key)),
+          'import.meta.path': JSON.stringify(key),
+        },
+        plugins: [
+          {
+            name: 'vela-extension-host',
+            setup(build) {
+              build.onResolve({ filter: /.*/ }, (args) => {
+                if (!hostSpecifiers.has(args.path)) return undefined
+                if (hostLoaders[args.path] || diskAliases.has(args.path)) {
+                  needed.add(args.path)
+                  return { path: args.path, namespace: 'vela-host' }
+                }
+                return undefined
+              })
+              build.onLoad(
+                { filter: /.*/, namespace: 'vela-host' },
+                (args) => ({
                   contents: `module.exports = globalThis[Symbol.for('vela.jiti.hostModules')][${JSON.stringify(args.path)}];\n`,
                   loader: 'js',
-                }
-              },
-            )
+                }),
+              )
+            },
           },
-        },
-      ],
-    })
+        ],
+      })
+    } catch (error) {
+      const detail =
+        error instanceof AggregateError
+          ? error.errors.map(String).join('; ')
+          : error instanceof Error
+            ? error.message
+            : String(error)
+      throw new Error(`Failed to bundle extension ${sourcePath}: ${detail}`)
+    }
     if (!result.success || result.outputs.length === 0) {
       throw new Error(
         `Failed to bundle extension ${sourcePath}: ${result.logs.map((l) => String(l)).join('; ')}`,
       )
     }
-    const dir = ensureShimDir()
-    const hash = createHash('sha256').update(key).digest('hex').slice(0, 16)
-    const outPath = join(dir, `ext-${hash}.mjs`)
-    writeFileSync(outPath, await result.outputs[0]!.text(), { mode: 0o600 })
-    return outPath
+    await Promise.all(
+      [...needed].map((spec) => loadHostModule(spec, diskAliases.get(spec))),
+    )
+    const code = `${await result.outputs[0]!.text()}\n//# sourceURL=${pathToFileURL(key).href}\n`
+    return `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`
   })().catch((error) => {
-    bunBuiltPaths.delete(key)
+    bunBuiltUrls.delete(key)
     throw error
   })
-  bunBuiltPaths.set(key, pending)
+  bunBuiltUrls.set(key, pending)
   return pending
 }
 
@@ -205,13 +219,31 @@ async function resolveAliasWithShim(
   return target
 }
 
+function hasLocalPackage(fromPath: string, specifier: string): boolean {
+  let target = fromPath
+  try {
+    target = realpathSync(fromPath)
+  } catch {
+    // Fall back to the provided path if realpath fails.
+  }
+  let dir = dirname(target)
+  while (true) {
+    if (existsSync(join(dir, 'node_modules', specifier, 'package.json')))
+      return true
+    const parent = dirname(dir)
+    if (parent === dir) return false
+    dir = parent
+  }
+}
+
 type JitiInstance = ReturnType<typeof import('jiti').createJiti>
 
-let jitiPromise: Promise<JitiInstance> | undefined
+const jitiPromises = new Map<boolean, Promise<JitiInstance>>()
 
-function getJiti(): Promise<JitiInstance> {
-  if (jitiPromise) return jitiPromise
-  jitiPromise = (async () => {
+function getJiti(aliasZod: boolean): Promise<JitiInstance> {
+  const existing = jitiPromises.get(aliasZod)
+  if (existing) return existing
+  const pending = (async () => {
     const { createJiti } = await import('jiti')
     const disk = resolveDiskAliases()
     const alias: Record<string, string> = {}
@@ -225,11 +257,13 @@ function getJiti(): Promise<JitiInstance> {
       disk.get('@glows777/vela'),
       'vela.cjs',
     )
-    const zod = await resolveAliasWithShim('zod', disk.get('zod'), 'zod.cjs')
     if (extensionApi) alias['@glows777/vela/extension-api'] = extensionApi
     if (velaRoot) alias['@glows777/vela'] = velaRoot
-    if (zod) alias.zod = zod
-    // Reuse one instance with moduleCache enabled to match native ESM singleton semantics.
+    if (aliasZod) {
+      const zod = await resolveAliasWithShim('zod', disk.get('zod'), 'zod.cjs')
+      if (zod) alias.zod = zod
+    }
+    // Reuse one instance per zod-resolution mode with moduleCache enabled for ESM singleton semantics.
     return createJiti(import.meta.url, {
       interopDefault: true,
       moduleCache: true,
@@ -237,10 +271,11 @@ function getJiti(): Promise<JitiInstance> {
       alias,
     })
   })().catch((err) => {
-    jitiPromise = undefined
+    jitiPromises.delete(aliasZod)
     throw err
   })
-  return jitiPromise
+  jitiPromises.set(aliasZod, pending)
+  return pending
 }
 
 /**
@@ -265,14 +300,14 @@ export async function importExtension(
       const message = error instanceof Error ? error.message : String(error)
       if (!/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND/.test(message))
         throw error
-      const builtPath = await buildExtensionWithBun(bun, path)
-      const mod = (await import(pathToFileURL(builtPath).href)) as {
+      const builtUrl = await buildExtensionWithBun(bun, path)
+      const mod = (await import(builtUrl)) as {
         default?: unknown
       }
       factory = mod.default
     }
   } else {
-    const jiti = await getJiti()
+    const jiti = await getJiti(!hasLocalPackage(path, 'zod'))
     factory = await jiti.import(path, { default: true })
   }
   if (typeof factory !== 'function')
