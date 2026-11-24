@@ -3,8 +3,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { savedTrust } from '../config/index.ts'
+import { basename, join, resolve } from 'node:path'
+import { migrateLegacyConfigFiles, savedTrust } from '../config/index.ts'
 import { registerExtensionHostModules } from '../driver/config/extensions.ts'
 import {
   buildSessionPath,
@@ -79,6 +79,13 @@ if (args.help || args.version) {
   process.exit(0)
 }
 if (args.setupTarget === 'github') {
+  const setupAgentDir = defaultAgentDir(process.env)
+  try {
+    migrateLegacyConfigFiles(setupAgentDir)
+  } catch (error) {
+    console.error(`[config] ${error instanceof Error ? error.message : error}`)
+    process.exit(1)
+  }
   const { githubSetup } = await import('./github-setup.ts')
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
   const input = interactive
@@ -86,7 +93,7 @@ if (args.setupTarget === 'github') {
     : undefined
   process.exit(
     await githubSetup({
-      agentDir: defaultAgentDir(process.env),
+      agentDir: setupAgentDir,
       repositories: args.setupRepositories ?? [],
       url: args.setupUrl,
       interactive,
@@ -183,6 +190,12 @@ const agentDir = defaultAgentDir(env)
 let config: VelaConfig
 let localOptions: LocalOptions | undefined
 try {
+  const migratedConfig = migrateLegacyConfigFiles(agentDir)
+  if (migratedConfig.createdConfig) {
+    console.error(
+      `[config] Migrated ${migratedConfig.sources.map((file) => basename(file)).join(', ')} to ${migratedConfig.path} (legacy files kept read-only)`,
+    )
+  }
   const trust = await resolveTrust({
     cwd,
     agentDir,

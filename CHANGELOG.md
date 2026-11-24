@@ -13,7 +13,11 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **Unified `config.json` with flat top-level keys replaces `settings.json`, `models.json`, and `mcp.json`, and retires foreground timeout settings.** ([#535](https://github.com/glows777/Vela/issues/535))
   - Configuration now lives in `<agentDir>/config.json` (and `<cwd>/.vela/config.json` when trusted), validated strictly at top level: `defaultModel` -> `model`, `defaultThinkingLevel` -> `thinkingLevel`, `defaultTools` -> `tools`, and built-in extension sections (`lark`, `web`, `memory`, `mcpServers`, transitional `webhooks` replacing `extensionConfig.channel.eventReceiver`, and transitional `local`) move to top-level keys. Host-owned keys (`environments`, `location`, `providers`, `lark`, `local`, `webhooks`, `eventDefaultTarget`) are stripped from project `.vela/config.json`, and built-in section names inside `extensionConfig` are rejected.
   - `bashForegroundTimeoutSeconds` and `bashForegroundTimeoutMaxSeconds` are removed from `config.json` (the hardcoded 120s/600s foreground budget remains until S2a).
-  - Direct cutover: legacy `settings.json`, `models.json`, or `mcp.json` without `config.json` fail fast with an explicit error (automatic `flattenLegacyConfig()` migration arrives in S1c).
+  - CLI and Desktop startup automatically flatten legacy `<agentDir>/{settings,models,mcp}.json` into `config.json` in read-only mode (keeping original files untouched); direct `loadConfig()` / `loadModels()` calls still fail fast when legacy-only files exist without `config.json`.
+
+### Added
+
+- **Native SQLite WAL foundation (`vela.db`), full v0.9 schema, and read-only legacy migrator (`src/db/`).** Backed by built-in `node:sqlite` (zero native/shared-library dependencies across Node.js, Bun, and Electron), `openDatabase()` initializes WAL mode, `foreign_keys = ON`, `0600` file permissions, nested `SAVEPOINT` transactions, and forward schema migrations covering all 18 v0.9 platform and `VelaDriver` tables (`projects`, `sessions`, `channel_bindings`, `inbox_events`, `runs`, `events`, `approvals`, `outbox`, `timers`, `subscriptions`, `background_jobs`, `blobs`, `usage_records`, `trusted_paths`, `kv_meta`, `vela_messages`, `vela_tool_calls`). `migrateLegacyVelaDir()` performs an idempotent, single-transaction, read-only import of legacy `~/.vela/` data without modifying original files ([#535](https://github.com/glows777/Vela/issues/535)).
 
 ### Changed
 
