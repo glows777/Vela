@@ -250,6 +250,14 @@ export function stripOpaqueFields<T>(
   return cleaned as T
 }
 
+function withoutProviderOptions<T extends object>(value: T): T {
+  if (!('providerOptions' in value)) return value
+  const { providerOptions: _, ...rest } = value as T & {
+    providerOptions?: unknown
+  }
+  return rest as T
+}
+
 function sanitizeMessagesForEstimation(messages: VelaMessage[]): {
   cleaned: unknown[]
   imageCount: number
@@ -260,16 +268,13 @@ function sanitizeMessagesForEstimation(messages: VelaMessage[]): {
     return null
   }
   const cleaned = messages.map((message) => {
-    if (typeof message.content === 'string') return message
+    const baseMessage = stripOpaqueFields(withoutProviderOptions(message))
+    if (typeof baseMessage.content === 'string') return baseMessage
     return {
-      ...message,
-      content: message.content.map((part) => {
+      ...baseMessage,
+      content: baseMessage.content.map((part) => {
         if (isImageContentPart(part)) return image()
-        const rest =
-          'providerOptions' in part
-            ? (({ providerOptions: _, ...kept }) => kept)(part)
-            : part
-        const stripped = stripOpaqueFields(rest) as typeof rest
+        const stripped = stripOpaqueFields(withoutProviderOptions(part))
         if (
           stripped.type !== 'tool_result' ||
           stripped.output.type !== 'content'
@@ -280,7 +285,9 @@ function sanitizeMessagesForEstimation(messages: VelaMessage[]): {
           output: {
             ...stripped.output,
             value: stripped.output.value.map((item) =>
-              isImageContentPart(item) ? image() : item,
+              isImageContentPart(item)
+                ? image()
+                : stripOpaqueFields(withoutProviderOptions(item)),
             ),
           },
         }

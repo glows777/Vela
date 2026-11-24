@@ -70,37 +70,46 @@ export async function prepareCallResult({
           : typeof value === 'string'
             ? value
             : (JSON.stringify(value, null, 2) ?? String(value))
-      const env =
-        environment ??
-        (await resolveEnvironment?.()) ??
-        createSessionLocalExecutionEnv({
-          cwd: process.cwd(),
-          tempRoot: results.dir,
-        })
-      const temp = await env.createTempFile(
-        { prefix: 'vela-result-', suffix: '.txt' },
-        signal,
-      )
-      if (!temp.ok) spillFailed = true
-      else {
-        const written = await env.writeFile(temp.value, full, signal)
-        if (!written.ok) {
+      let spillEnv = environment
+      if (!spillEnv && resolveEnvironment) {
+        try {
+          spillEnv = await resolveEnvironment()
+        } catch {
           spillFailed = true
-          // Cleanup is best effort; an incomplete file is never published.
-          const removed = await env.remove(temp.value, { force: true }).then(
-            (result) => result.ok,
-            () => false,
-          )
-          if (!removed)
-            warning += ' The incomplete output file could not be removed.'
-        } else {
-          const cut = truncateByLines(text, maxChars)
-          stored = new StoredToolResult(
-            temp.value,
-            results.indexPath,
-            Buffer.byteLength(full),
-            cut.preview,
-          )
+        }
+      }
+      if (!spillFailed) {
+        const env =
+          spillEnv ??
+          createSessionLocalExecutionEnv({
+            cwd: process.cwd(),
+            tempRoot: results.dir,
+          })
+        const temp = await env.createTempFile(
+          { prefix: 'vela-result-', suffix: '.txt' },
+          signal,
+        )
+        if (!temp.ok) spillFailed = true
+        else {
+          const written = await env.writeFile(temp.value, full, signal)
+          if (!written.ok) {
+            spillFailed = true
+            // Cleanup is best effort; an incomplete file is never published.
+            const removed = await env.remove(temp.value, { force: true }).then(
+              (result) => result.ok,
+              () => false,
+            )
+            if (!removed)
+              warning += ' The incomplete output file could not be removed.'
+          } else {
+            const cut = truncateByLines(text, maxChars)
+            stored = new StoredToolResult(
+              temp.value,
+              results.indexPath,
+              Buffer.byteLength(full),
+              cut.preview,
+            )
+          }
         }
       }
     }

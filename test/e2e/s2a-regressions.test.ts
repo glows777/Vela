@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
 import z from 'zod'
+import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
 import {
   createLocalExecutionEnv,
   createVela,
@@ -12,6 +13,7 @@ import {
 } from '../../packages/vela/src/driver/index.ts'
 import {
   createFauxModel,
+  fauxSummary,
   fauxText,
   fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
@@ -218,4 +220,329 @@ test('ctx.requireEnv() resolves ExecutionEnv lazily once and only when requested
     await vela.dispose()
     dir.cleanup()
   }
+})
+
+test('SDK rejects retired core tool names in session tools and setActiveTools', async () => {
+  const t = createTestVela({ responses: [fauxText('ok')] })
+  expect(() => t.vela.session('bad', { tools: ['-write_file'] })).toThrow(
+    'docs/upgrading.md',
+  )
+  expect(() => t.vela.session('bad2', { tools: ['read_file'] })).toThrow(
+    'renamed to "read"',
+  )
+  expect(() => t.session.setActiveTools(['edit_file'])).toThrow(
+    'renamed to "edit"',
+  )
+  await t.run('unused check')
+})
+
+test('HTTP 200 model_context_window_exceeded compacts once within the same turn and stops on repeat overflow', async () => {
+  const wrapOverflow200 = (
+    faux: ReturnType<typeof createFauxModel>,
+    count: number,
+  ) => {
+    const original = faux.doStream.bind(faux)
+    let seen = 0
+    faux.doStream = async (options) => {
+      const result = await original(options)
+      const isOverflow = ++seen <= count
+      return {
+        ...result,
+        stream: result.stream.pipeThrough(
+          new TransformStream<
+            LanguageModelV4StreamPart,
+            LanguageModelV4StreamPart
+          >({
+            transform(part, controller) {
+              if (isOverflow && part.type === 'finish') {
+                controller.enqueue({
+                  ...part,
+                  finishReason: {
+                    unified: 'length',
+                    raw: 'model_context_window_exceeded',
+                  },
+                })
+                return
+              }
+              controller.enqueue(part)
+            },
+          }),
+        ),
+      }
+    }
+  }
+
+  // Case A: one HTTP-200 overflow compacts and recovers in the SAME turn (1 turn_start, 2 usages)
+  const fauxOk = createFauxModel({
+    responses: [
+      ...Array.from({ length: 5 }, (_, i) => fauxText(`seed ${i}`)),
+      fauxText('first overflowing attempt'),
+      fauxText('recovered inside same turn'),
+    ],
+    generate: [fauxSummary()],
+  })
+  const tOk = createTestVela({ model: fauxOk })
+  for (let i = 0; i < 5; i++) await tOk.run(`seed ${i}`)
+  const startsBefore = tOk.eventsOf('turn_start').length
+  const usagesBefore = tOk.eventsOf('usage').length
+  wrapOverflow200(fauxOk, 1)
+  await tOk.run('trigger overflow recovery')
+  expect(tOk.lastAssistantText()).toBe('recovered inside same turn')
+  expect(tOk.eventsOf('turn_start').length - startsBefore).toBe(1)
+  expect(tOk.eventsOf('compaction_start')).toEqual([
+    { type: 'compaction_start', reason: 'overflow' },
+  ])
+  expect(tOk.eventsOf('usage').length - usagesBefore).toBe(2)
+
+  // Case B: two consecutive HTTP-200 overflows compact once and fail cleanly
+  const fauxRepeat = createFauxModel({
+    responses: [
+      ...Array.from({ length: 5 }, (_, i) => fauxText(`seed ${i}`)),
+      fauxText('overflow 1'),
+      fauxText('overflow 2'),
+    ],
+    generate: [fauxSummary()],
+  })
+  const tRepeat = createTestVela({ model: fauxRepeat })
+  for (let i = 0; i < 5; i++) await tRepeat.run(`seed ${i}`)
+  wrapOverflow200(fauxRepeat, 2)
+  await expect(tRepeat.run('trigger double overflow')).rejects.toThrow(
+    'Context overflow: model_context_window_exceeded',
+  )
+  expect(tRepeat.eventsOf('compaction_start')).toHaveLength(1)
+})
+
+test('tool_search succeeds while container is offline and offline spill failure does not poison future tools', async () => {
+  const dir = tempDir('vela-s2a-offline-spill-')
+  let offline = false
+  const ext: VelaExtension = function ext(vela) {
+    vela.registerTool({
+      name: 'deferred_calc',
+      description: 'deferred helper',
+      exposure: 'deferred',
+      inputSchema: z.object({}),
+      execute: async () => 'calc-ok',
+    })
+    vela.registerTool({
+      name: 'big_pure',
+      description: 'oversized output without env',
+      maxResultChars: 50,
+      inputSchema: z.object({}),
+      execute: async () => 'L'.repeat(500),
+    })
+    vela.registerTool({
+      name: 'tiny_pure',
+      description: 'small output after failed spill',
+      inputSchema: z.object({}),
+      execute: async () => 'still-healthy',
+    })
+  }
+  const model = createFauxModel({
+    responses: [
+      fauxText('prepared'),
+      () => {
+        offline = true
+        return fauxToolCall('tool_search', { query: 'deferred_calc' })
+      },
+      fauxToolCall('ext_big_pure', {}),
+      fauxToolCall('ext_tiny_pure', {}),
+      fauxText('all-done'),
+    ],
+  })
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    extensions: [ext],
+    env: ({ location }) => {
+      if (offline) throw new Error('adapter offline')
+      return createLocalExecutionEnv({ cwd: location.cwd })
+    },
+  })
+  try {
+    const session = vela.session('offline-control')
+    await session.prompt('warm up')
+    await session.prompt('use control tools')
+    expect(String(model.calls[2]!.toolResults[0]!.output)).toContain(
+      'deferred_calc',
+    )
+    expect(String(model.calls[3]!.toolResults[0]!.output)).toContain(
+      'could not be saved',
+    )
+    expect(String(model.calls[4]!.toolResults[0]!.output)).toBe('still-healthy')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('scoped hooks match extension-local tool names and structured error hook results persist identically', async () => {
+  const seenCalls: string[] = []
+  const mailer: VelaExtension = function mailer(vela) {
+    vela.registerTool({
+      name: 'send',
+      description: 'send or throw',
+      inputSchema: z.object({ fail: z.boolean().optional() }),
+      execute: async ({ fail }) => {
+        if (fail) throw new Error('raw-fail')
+        return 'sent'
+      },
+    })
+    // Register scoped hooks with unprefixed local name 'send'
+    vela.on('tool_call', 'send', (event) => {
+      seenCalls.push(`call:${event.toolName}`)
+    })
+    vela.on('tool_result', (event) => {
+      seenCalls.push(`result:${event.toolName}`)
+      if (event.isError)
+        return { content: [{ type: 'text', text: 'structured-hook-error' }] }
+    })
+  }
+  const t = createTestVela({
+    extensions: [mailer],
+    responses: [
+      fauxToolCall('mailer_send', { fail: false }),
+      fauxToolCall('mailer_send', { fail: true }),
+      fauxText('finished'),
+    ],
+  })
+  await t.run('test scoped hooks')
+  expect(seenCalls).toEqual([
+    'call:mailer_send',
+    'result:mailer_send',
+    'call:mailer_send',
+    'result:mailer_send',
+  ])
+  const historyLines = readFileSync(
+    t.session.store.results.history.path,
+    'utf8',
+  )
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  const failedRecord = historyLines.find(
+    (entry) => entry.type === 'tool_result' && entry.status === 'failed',
+  )
+  expect(failedRecord?.modelOutput).toEqual({
+    type: 'content',
+    value: [{ type: 'text', text: 'structured-hook-error' }],
+    isError: true,
+  })
+})
+
+test('context hook growth is included in compaction threshold and mid-run setModel preserves serving maxOutputTokens', async () => {
+  const dir = tempDir('vela-s2a-context-and-max-')
+  const originalFetch = globalThis.fetch
+  const maxOutputSent: Array<number | undefined> = []
+  try {
+    writeFileSync(
+      join(dir.path, 'config.json'),
+      JSON.stringify({
+        providers: {
+          openai: {
+            api: 'openai-responses',
+            baseUrl: 'https://example.test/v1',
+            apiKey: 'test',
+            models: [
+              { id: 'small-out', maxTokens: 512 },
+              { id: 'big-out', maxTokens: 4096 },
+            ],
+          },
+        },
+      }),
+    )
+    let calls = 0
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      maxOutputSent.push(body.max_output_tokens)
+      calls++
+      if (calls === 1) {
+        return new Response(
+          responsesReply(body, undefined, {
+            name: 'switcher_switch_model',
+            arguments: '{}',
+          }).body,
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      }
+      return responsesReply(body)
+    }) as typeof fetch
+
+    let sessionRef!: ReturnType<ReturnType<typeof createVela>['session']>
+    const switcher: VelaExtension = function switcher(vela) {
+      vela.registerTool({
+        name: 'switch_model',
+        description: 'switches session model mid-run',
+        inputSchema: z.object({}),
+        execute: async () => {
+          sessionRef.setModel('openai/big-out')
+          return 'switched'
+        },
+      })
+    }
+    const vela = createVela({
+      cwd: dir.path,
+      model: 'openai/small-out',
+      providers: loadModels({ agentDir: dir.path }),
+      extensions: [switcher],
+    })
+    sessionRef = vela.session('midrun-switch')
+    await sessionRef.prompt('run')
+    await vela.dispose()
+    expect(maxOutputSent).toEqual([512, 512])
+  } finally {
+    globalThis.fetch = originalFetch
+    dir.cleanup()
+  }
+
+  // Context hook injection triggers threshold compaction before request
+  const tCompact = createTestVela({
+    limits: { summaryThreshold: 15_000, maxInputTokens: 200_000 },
+    generate: [fauxSummary()],
+    responses: [
+      ...Array.from({ length: 5 }, (_, i) => fauxText(`seed ${i}`)),
+      fauxText('compacted after hook'),
+    ],
+    extensions: [
+      (vela) => {
+        vela.on('context', ({ messages }) => {
+          if (messages.at(-1)?.content === 'trigger-hook-compact')
+            messages.push({ role: 'user', content: 'H'.repeat(80_000) })
+        })
+      },
+    ],
+  })
+  for (let i = 0; i < 5; i++) await tCompact.run(`seed ${i}`)
+  await tCompact.run('trigger-hook-compact')
+  expect(tCompact.eventsOf('compaction_start')).toEqual([
+    { type: 'compaction_start', reason: 'threshold' },
+  ])
+})
+
+test('moving foreground bash to background cancels the foreground timeout deadline', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: 'echo FG_START; sleep 0.7; echo FG_DETACHED_FINISHED',
+        timeout: 0.4,
+      }),
+      fauxText('moved'),
+      (req) => fauxText(`done:${req.lastUserText}`),
+    ],
+    extensions: [background()],
+  })
+  const running = t.run('start bash then detach')
+  const deadline = Date.now() + 5000
+  while (t.eventsOf('tool_execution_update').length === 0) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting for update')
+    await Bun.sleep(5)
+  }
+  expect(await t.session.backgroundTasks('faux-call-1-1')).toEqual(['bg-1'])
+  await running
+  while (t.model.calls.length < 3) {
+    if (Date.now() > deadline)
+      throw new Error('Timed out waiting for detached background exit')
+    await Bun.sleep(10)
+  }
+  expect(t.lastAssistantText()).toContain('FG_DETACHED_FINISHED')
+  expect(t.lastAssistantText()).not.toContain('Command timed out')
 })

@@ -125,7 +125,7 @@ function createToolIdNormalizer() {
     let candidate = ANTHROPIC_TOOL_ID.test(raw)
       ? raw
       : raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'tool_call'
-    if (candidate !== raw && used.has(candidate)) {
+    if (used.has(candidate)) {
       let n = 1
       let suffixed = `${candidate.slice(0, 56)}_${n}`
       while (used.has(suffixed)) suffixed = `${candidate.slice(0, 56)}_${++n}`

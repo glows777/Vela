@@ -42,6 +42,7 @@ import {
   toAiToolOutput,
 } from './messages.ts'
 import type { HostedToolModel } from './models/index.ts'
+import { isAnthropicMessagesModel } from './models-config.ts'
 
 export { aiParsePartialJson as parsePartialJson }
 
@@ -397,9 +398,70 @@ export interface StreamProviderStepOptions {
   }) => Promise<void>
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+function deepMergeProviderOptions(
+  base: ProviderOptions | undefined,
+  patch: ProviderOptions | undefined,
+): ProviderOptions | undefined {
+  if (!patch) return base
+  if (!base) return patch
+  const merge = (
+    target: Record<string, unknown>,
+    src: Record<string, unknown>,
+  ): Record<string, unknown> => {
+    const out: Record<string, unknown> = { ...target }
+    for (const [k, v] of Object.entries(src)) {
+      const prev = out[k]
+      out[k] = isPlainRecord(prev) && isPlainRecord(v) ? merge(prev, v) : v
+    }
+    return out
+  }
+  return merge(
+    base as Record<string, unknown>,
+    patch as Record<string, unknown>,
+  ) as ProviderOptions
+}
+
+interface StreamedPartMetadata {
+  text: ProviderOptions[]
+  reasoning: ProviderOptions[]
+  tools: Map<string, ProviderOptions>
+}
+
+function applyStreamedMetadata(
+  message: VelaAssistantMessage,
+  streamed: StreamedPartMetadata,
+): VelaAssistantMessage {
+  if (typeof message.content === 'string') return message
+  let textIdx = 0
+  let reasoningIdx = 0
+  let changed = false
+  const content = message.content.map((part) => {
+    let extra: ProviderOptions | undefined
+    if (part.type === 'text') extra = streamed.text[textIdx++]
+    else if (part.type === 'thinking')
+      extra = streamed.reasoning[reasoningIdx++]
+    else if (part.type === 'tool_call')
+      extra = streamed.tools.get(part.toolCallId)
+    if (!extra) return part
+    const merged = deepMergeProviderOptions(extra, part.providerOptions)
+    if (merged === part.providerOptions) return part
+    changed = true
+    return { ...part, providerOptions: merged }
+  })
+  return changed ? { ...message, content } : message
+}
+
 function isAnthropicModel(model: LanguageModel): boolean {
   if (typeof model === 'string') return model.startsWith('anthropic/')
-  return model.provider.startsWith('anthropic')
+  return (
+    isAnthropicMessagesModel(model) || model.provider.startsWith('anthropic')
+  )
 }
 
 export function streamProviderStep(options: StreamProviderStepOptions): {
@@ -416,6 +478,39 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
     toolImagesAsUser,
     { normalizeToolCallIds: isAnthropicModel(aiModel) },
   )
+  const streamedMeta: StreamedPartMetadata = {
+    text: [],
+    reasoning: [],
+    tools: new Map(),
+  }
+  const textIndices = new Map<string, number>()
+  const reasoningIndices = new Map<string, number>()
+  const recordSlotMeta = (
+    indices: Map<string, number>,
+    list: ProviderOptions[],
+    id: string,
+    meta: unknown,
+    isStart: boolean,
+  ) => {
+    let idx = indices.get(id)
+    if (idx === undefined && isStart) {
+      idx = list.length
+      indices.set(id, idx)
+      list.push({})
+    }
+    if (idx !== undefined && meta)
+      list[idx] = deepMergeProviderOptions(list[idx], meta as ProviderOptions)!
+  }
+  const recordToolMeta = (id: string, meta: unknown) => {
+    if (!meta) return
+    streamedMeta.tools.set(
+      id,
+      deepMergeProviderOptions(
+        streamedMeta.tools.get(id),
+        meta as ProviderOptions,
+      )!,
+    )
+  }
 
   const result = streamText({
     model: aiModel,
@@ -446,8 +541,11 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             finishReason: event.finishReason as FinishReason,
             toolCallIds,
             hasClientToolCalls,
-            buildCheckpoint: () =>
-              checkpointMessage(event, options.tools.sdkTools),
+            buildCheckpoint: async () =>
+              applyStreamedMetadata(
+                await checkpointMessage(event, options.tools.sdkTools),
+                streamedMeta,
+              ),
           })
         }
       : undefined,
@@ -458,6 +556,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
       for await (const part of result.stream) {
         switch (part.type) {
           case 'text-start':
+            recordSlotMeta(
+              textIndices,
+              streamedMeta.text,
+              part.id,
+              part.providerMetadata,
+              true,
+            )
             yield {
               type: 'text-start',
               id: part.id,
@@ -467,6 +572,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'text-delta':
+            recordSlotMeta(
+              textIndices,
+              streamedMeta.text,
+              part.id,
+              part.providerMetadata,
+              false,
+            )
             yield {
               type: 'text-delta',
               id: part.id,
@@ -477,6 +589,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'text-end':
+            recordSlotMeta(
+              textIndices,
+              streamedMeta.text,
+              part.id,
+              part.providerMetadata,
+              false,
+            )
             yield {
               type: 'text-end',
               id: part.id,
@@ -486,6 +605,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'reasoning-start':
+            recordSlotMeta(
+              reasoningIndices,
+              streamedMeta.reasoning,
+              part.id,
+              part.providerMetadata,
+              true,
+            )
             yield {
               type: 'reasoning-start',
               id: part.id,
@@ -495,6 +621,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'reasoning-delta':
+            recordSlotMeta(
+              reasoningIndices,
+              streamedMeta.reasoning,
+              part.id,
+              part.providerMetadata,
+              false,
+            )
             yield {
               type: 'reasoning-delta',
               id: part.id,
@@ -505,6 +638,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'reasoning-end':
+            recordSlotMeta(
+              reasoningIndices,
+              streamedMeta.reasoning,
+              part.id,
+              part.providerMetadata,
+              false,
+            )
             yield {
               type: 'reasoning-end',
               id: part.id,
@@ -524,6 +664,7 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'tool-input-start':
+            recordToolMeta(part.id, part.providerMetadata)
             yield {
               type: 'tool-input-start',
               id: part.id,
@@ -542,6 +683,7 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'tool-call':
+            recordToolMeta(part.toolCallId, part.providerMetadata)
             yield {
               type: 'tool-call',
               toolCallId: part.toolCallId,
@@ -590,9 +732,12 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
       finishReason: step.finishReason as FinishReason,
       rawFinishReason: step.rawFinishReason,
       usage: step.usage as ProviderUsage,
-      messages: step.response.messages.map((message) =>
-        fromAiResponseMessage(message),
-      ),
+      messages: step.response.messages.map((message) => {
+        const converted = fromAiResponseMessage(message)
+        return converted.role === 'assistant'
+          ? applyStreamedMetadata(converted, streamedMeta)
+          : converted
+      }),
     }
   }
 

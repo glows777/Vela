@@ -56,31 +56,51 @@ export async function environmentBash(
   let updateTimer: ReturnType<typeof setTimeout> | undefined
   const onUpdate = context?.onUpdate
   const effectiveTimeout = timeout ?? 120
-  const start = (signal: AbortSignal | undefined) =>
-    env.exec(
-      command,
-      {
-        timeout: effectiveTimeout,
-        spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
-        onOutput: (text) => {
-          tail.append(text)
-          if (onUpdate && !updateTimer) {
-            // Publish the latest tail even if the command goes quiet after a burst.
-            updateTimer = setTimeout(() => {
-              updateTimer = undefined
-              try {
-                onUpdate({
-                  content: [{ type: 'text', text: tail.read().text }],
-                })
-              } catch {
-                // A failed progress notification does not interrupt the command.
-              }
-            }, 100)
-          }
-        },
-      },
-      signal,
-    )
+  const spill = { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES }
+  const onOutput = (text: string) => {
+    tail.append(text)
+    if (onUpdate && !updateTimer) {
+      // Publish the latest tail even if the command goes quiet after a burst.
+      updateTimer = setTimeout(() => {
+        updateTimer = undefined
+        try {
+          onUpdate({
+            content: [{ type: 'text', text: tail.read().text }],
+          })
+        } catch {
+          // A failed progress notification does not interrupt the command.
+        }
+      }, 100)
+    }
+  }
+  const fgController = context?.background ? new AbortController() : undefined
+  let fgTimedOut = false
+  let fgTimer: ReturnType<typeof setTimeout> | undefined
+  const start = (signal: AbortSignal | undefined) => {
+    if (!fgController)
+      return env.exec(
+        command,
+        { timeout: effectiveTimeout, spill, onOutput },
+        signal,
+      )
+    const forward = () => fgController.abort(signal?.reason)
+    if (signal?.aborted) forward()
+    else signal?.addEventListener('abort', forward, { once: true })
+    fgTimer = setTimeout(() => {
+      fgTimedOut = true
+      fgController.abort()
+    }, effectiveTimeout * 1000)
+    return env
+      .exec(
+        command,
+        { timeout: undefined, spill, onOutput },
+        fgController.signal,
+      )
+      .finally(() => {
+        clearTimeout(fgTimer)
+        signal?.removeEventListener('abort', forward)
+      })
+  }
   const foreground = context?.background?.watch({
     command,
     ...(context?.toolCallId === undefined
@@ -108,8 +128,10 @@ export async function environmentBash(
           admission,
         })),
       ])
-      if (outcome.type === 'detached')
+      if (outcome.type === 'detached') {
+        clearTimeout(fgTimer)
         return movedToBackground(outcome.admission)
+      }
       result = outcome.value
     }
   } finally {
@@ -117,6 +139,7 @@ export async function environmentBash(
   }
   if (!result.ok) {
     const output = tail.read().text || '(no output)'
+    const stopCode = fgTimedOut ? 'timeout' : result.error.code
     const message =
       result.error.code === 'unknown' &&
       result.error.message.startsWith(
@@ -125,14 +148,14 @@ export async function environmentBash(
         ? 'The command started and was stopped because its full output could not be saved; it may have had partial effects. Do not automatically rerun it.'
         : result.error.code === 'shell_unavailable'
           ? 'Shell not found in the execution environment. The command did not run.'
-          : result.error.code === 'timeout'
+          : stopCode === 'timeout'
             ? `Command timed out after ${effectiveTimeout} seconds. Pass a larger timeout (up to 1800s) or run_in_background: true for long-running commands.`
-            : result.error.code === 'aborted'
+            : stopCode === 'aborted'
               ? 'Command aborted'
               : result.error.message
     const execution = {
       isError: true,
-      timedOut: result.error.code === 'timeout' || undefined,
+      timedOut: stopCode === 'timeout' || undefined,
       error: message,
     }
     if (result.error.spillPath && result.error.code !== 'unknown') {

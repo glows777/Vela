@@ -59,6 +59,7 @@ type RegisteredHandler = {
   extension: string
   fn: AnyHandler
   toolName?: string
+  matchesTool?: (targetToolName: string) => boolean
   core: boolean
 }
 
@@ -140,6 +141,7 @@ export class ExtensionRunner {
     this.loadedList.push(loaded)
     const { deps } = this
     const prefix = name.replace(/[^A-Za-z0-9_-]/g, '_')
+    const localTools = new Map<string, string>()
     return {
       cwd: deps.cwd,
       dataDir: deps.dataDir,
@@ -175,6 +177,7 @@ export class ExtensionRunner {
             ? tool.name
             : `${prefix}_${tool.name}`
         deps.registry.register({ ...tool, name: toolName })
+        localTools.set(tool.name, toolName)
         loaded.tools.push(toolName)
         return toolName
       },
@@ -182,6 +185,8 @@ export class ExtensionRunner {
         const index = loaded.tools.indexOf(toolName)
         if (index === -1) return false
         loaded.tools.splice(index, 1)
+        for (const [local, canonical] of localTools)
+          if (canonical === toolName) localTools.delete(local)
         return deps.registry.unregister(toolName)
       },
       onShutdown: (handler) => {
@@ -208,11 +213,17 @@ export class ExtensionRunner {
           typeof handlerOrName === 'string' ? handlerOrName : undefined
         const handler =
           typeof handlerOrName === 'string' ? scopedHandler! : handlerOrName
-        const entry = {
+        const entry: RegisteredHandler = {
           extension: name,
           core,
           fn: handler,
-          ...(toolName === undefined ? {} : { toolName }),
+          ...(toolName === undefined
+            ? {}
+            : {
+                toolName,
+                matchesTool: (target) =>
+                  target === toolName || localTools.get(toolName) === target,
+              }),
         }
         list.push(entry)
         this.handlers.set(event, list)
@@ -422,7 +433,9 @@ export class ExtensionRunner {
       (handler) =>
         toolName === undefined ||
         (!options?.scopedOnly && handler.toolName === undefined) ||
-        handler.toolName === toolName,
+        (handler.matchesTool
+          ? handler.matchesTool(toolName)
+          : handler.toolName === toolName),
     )
   }
 
@@ -600,7 +613,10 @@ export class ExtensionRunner {
   ): Promise<ToolCallEventResult & { input: unknown }> {
     const handlers = this.list('tool_call').filter(
       (handler) =>
-        handler.toolName === undefined || handler.toolName === toolName,
+        handler.toolName === undefined ||
+        (handler.matchesTool
+          ? handler.matchesTool(toolName)
+          : handler.toolName === toolName),
     )
     if (!handlers.length) return { input }
     const before = JSON.stringify(input)
@@ -652,8 +668,16 @@ export class ExtensionRunner {
       output: typeof output === 'string' ? output : toolContentText(output),
       ...(typeof output === 'string' ? {} : { content: output }),
     }
+    const handlers = this.list('tool_result').filter(
+      (handler) =>
+        handler.toolName === undefined ||
+        (handler.matchesTool
+          ? handler.matchesTool(toolName)
+          : handler.toolName === toolName),
+    )
+    if (!handlers.length) return output
     const ctx = this.context(session)
-    for (const { extension, fn } of this.list('tool_result')) {
+    for (const { extension, fn } of handlers) {
       try {
         const result = (await fn(event, ctx)) as
           | ToolResultEventResult

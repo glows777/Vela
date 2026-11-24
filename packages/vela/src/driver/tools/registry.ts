@@ -1,6 +1,7 @@
 import type { ProviderToolSpec } from '../../providers/index.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
 import { type ToolInputSchema, toJsonSchema } from '../../shared/tool-schema.ts'
+import { getRetiredToolError } from '../../shared/tool-selection.ts'
 import type { VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import {
@@ -18,6 +19,7 @@ import { validateToolDefinition } from './definition-validation.ts'
 import { ActiveCalls, ExecutionGate } from './execution-gate.ts'
 import {
   type CallOptions,
+  createLazyEnvResolver,
   errorOutput,
   persistResponse,
   recordToolRejection,
@@ -26,7 +28,11 @@ import {
   ToolRejection,
 } from './recovery.ts'
 import { countToolTokens, toProviderTools } from './sdk-tools.ts'
-import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
+import {
+  createToolSearchDocument,
+  formatDeferredToolSummary,
+  rankTools,
+} from './tool-ranker.ts'
 import {
   type InterceptionContext,
   type ToolAnnotations,
@@ -205,11 +211,18 @@ export class ToolRegistry {
   private channel?: string
   /** Only these tools are visible / callable by the model; undefined removes the limit */
   setSelection(names: Iterable<string> | undefined): void {
-    this.selection = names ? new Set(names) : undefined
+    const list = names ? [...names] : undefined
+    if (list) {
+      const retired = getRetiredToolError(list)
+      if (retired) throw new Error(`Invalid tools selection: ${retired}`)
+    }
+    this.selection = list ? new Set(list) : undefined
   }
 
   /** `+name` / `-name` changes to the default tool set for this session (like pi); a later entry wins */
   setDefaultToolModifiers(entries: readonly string[]): void {
+    const retired = getRetiredToolError(entries)
+    if (retired) throw new Error(`Invalid tools selection: ${retired}`)
     this.defaultToolStates = new Map(
       entries.map((entry) => [entry.slice(1), entry.startsWith('+')]),
     )
@@ -341,19 +354,22 @@ export class ToolRegistry {
       this.assertHealthy()
       const history = this.results.history
       const requireEnv = interception?.resolveEnv
-        ? async (envSignal?: AbortSignal): Promise<ExecutionEnv> => {
-            if (context.execution) return context.execution
-            const targetSignal = envSignal ?? signal
-            targetSignal?.throwIfAborted()
-            context.execution = await interception.resolveEnv!(
-              this.sessionId,
-              targetSignal,
-            )
-            return context.execution
-          }
+        ? createLazyEnvResolver(
+            (envSignal) => interception.resolveEnv!(this.sessionId, envSignal),
+            signal,
+            (resolved) => {
+              context.execution = resolved
+            },
+            () => context.execution,
+          )
         : undefined
       if (
-        (tool.replay === 'safe' || options.recovery?.location) &&
+        (options.recovery?.location ||
+          (tool.replay === 'safe' &&
+            (name === 'read' ||
+              name === 'ls' ||
+              name === 'grep' ||
+              name === 'find'))) &&
         !context.execution &&
         requireEnv
       )
@@ -365,9 +381,10 @@ export class ToolRegistry {
       // Recovery never silently moves a call to a different environment or replays changed input.
       if (
         options.recovery &&
-        (!location ||
-          JSON.stringify(location) !==
-            JSON.stringify(options.recovery.location) ||
+        ((options.recovery.location &&
+          (!location ||
+            JSON.stringify(location) !==
+              JSON.stringify(options.recovery.location))) ||
           JSON.stringify(input) !== JSON.stringify(options.recovery.input))
       )
         return new ToolRejection(
@@ -436,7 +453,11 @@ export class ToolRegistry {
           status: signal?.aborted ? 'cancelled' : 'failed',
           durationMs: performance.now() - started,
           error: errorText,
-          modelOutput: errorOutput(errorText),
+          modelOutput: errorOutput(
+            isToolContent(afterOutput)
+              ? new ToolResultError(errorText, afterOutput)
+              : errorText,
+          ),
         })
         if (isToolContent(afterOutput))
           throw new ToolResultError(errorText, afterOutput)
@@ -544,29 +565,7 @@ export class ToolRegistry {
 
   /** The `<deferred_tools>` lines. Like pi, a namespace (an MCP server) gets one line, not its tools. */
   getDeferredToolSummary(): string {
-    const deferred = this.searchableTools()
-    if (deferred.length === 0) return ''
-
-    const lines: string[] = []
-    const namespaces = new Map<string, ToolDefinition[]>()
-    for (const tool of deferred) {
-      if (!tool.namespace) {
-        lines.push(
-          `- ${tool.name}${tool.searchHint ? ` — ${tool.searchHint}` : ''}`,
-        )
-        continue
-      }
-      const key = tool.namespace.name
-      namespaces.set(key, [...(namespaces.get(key) ?? []), tool])
-    }
-    for (const [key, tools] of namespaces) {
-      const description = tools.find((t) => t.namespace?.description)?.namespace
-        ?.description
-      lines.push(
-        `- ${key} (${tools.length} tool${tools.length === 1 ? '' : 's'})${description ? ` — ${description}` : ''}`,
-      )
-    }
-    return lines.join('\n')
+    return formatDeferredToolSummary(this.searchableTools())
   }
 
   /** Loads deferred tools (comma-separated exact names, or top `limit` BM25 matches). */

@@ -160,6 +160,11 @@ export class TokenTracker {
     this.contextHookDeltaTokens = deltaTokens
   }
 
+  /** Net token delta from extension context hooks. */
+  get contextDelta(): number {
+    return this.contextHookDeltaTokens
+  }
+
   /** Builds a local context estimate (e.g. from loaded history); the request estimate is used until a provider reports usage. */
   setEstimatedTokens(tokens: number): void {
     this.reportedPromptTokens = undefined

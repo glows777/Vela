@@ -10,6 +10,29 @@ export function isToolModifier(entry: string): boolean {
   return entry.startsWith('+') || entry.startsWith('-')
 }
 
+const RETIRED_CORE_TOOLS: Record<string, string> = {
+  read_file: 'read',
+  write_file: 'write',
+  edit_file: 'edit',
+  list_directory: 'ls',
+}
+
+/**
+ * Error message if an explicit tool list or selection contains a retired v0.8 core tool name,
+ * or undefined when clean.
+ */
+export function getRetiredToolError(
+  entries: readonly string[],
+): string | undefined {
+  for (const entry of entries) {
+    const bare = isToolModifier(entry) ? entry.slice(1) : entry
+    const replacement = RETIRED_CORE_TOOLS[bare]
+    if (replacement)
+      return `tool "${bare}" was renamed to "${replacement}" (see docs/upgrading.md)`
+  }
+  return undefined
+}
+
 /**
  * Why a `--tools` / `tools` list is invalid, or undefined when it is. Like pi, a list of
  * `+name` / `-name` entries takes exact names and cannot be mixed with plain names.
@@ -18,6 +41,8 @@ export function isToolModifier(entry: string): boolean {
 export function getToolListError(
   entries: readonly string[],
 ): string | undefined {
+  const retired = getRetiredToolError(entries)
+  if (retired) return retired
   const modifiers = entries.filter(isToolModifier)
   if (modifiers.length === 0) return undefined
   if (modifiers.length < entries.length)

@@ -2,7 +2,11 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { anthropic, createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI, openai } from '@ai-sdk/openai'
-import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
+import type {
+  LanguageModelV4CallOptions,
+  LanguageModelV4Middleware,
+  LanguageModelV4StreamPart,
+} from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
 import { assertNoLegacyConfigFiles, parseConfig } from '../config/index.ts'
 import { interpolate } from '../shared/interpolate.ts'
@@ -23,6 +27,17 @@ import {
 } from './models/index.ts'
 
 export type { ProviderConfig } from '../shared/provider-types.ts'
+
+const anthropicProtocolModels = new WeakSet<object>()
+
+/** Whether a resolved LanguageModel was created for an `anthropic-messages` provider regardless of provider name. */
+export function isAnthropicMessagesModel(model: unknown): boolean {
+  return (
+    typeof model === 'object' &&
+    model !== null &&
+    anthropicProtocolModels.has(model)
+  )
+}
 
 type Env = Record<string, string | undefined>
 
@@ -373,6 +388,11 @@ function createProvider(
           model = createAnthropic(settings)(id)
           break
       }
+      const registerProtocol = <T extends LanguageModel>(resolved: T): T => {
+        if (api === 'anthropic-messages' && typeof resolved !== 'string')
+          anthropicProtocolModels.add(resolved)
+        return resolved
+      }
       const transform = oauthRequests?.transformParams
       if (
         (api !== 'openai-responses' &&
@@ -380,14 +400,51 @@ function createProvider(
           !transform) ||
         typeof model === 'string'
       ) {
-        return typeof model === 'string' ? model : declareHosted(model)
+        return typeof model === 'string'
+          ? model
+          : registerProtocol(declareHosted(model))
       }
+      const stripStatelessWrapStream: LanguageModelV4Middleware['wrapStream'] =
+        api === 'openai-responses'
+          ? async (options) => {
+              const streamResult =
+                compat.deepseekReasoningStream && deepseekReasoningStream
+                  ? await deepseekReasoningStream(options)
+                  : await options.doStream()
+              if (options.params.providerOptions?.openai?.store !== false)
+                return streamResult
+              return {
+                ...streamResult,
+                stream: streamResult.stream.pipeThrough(
+                  new TransformStream<
+                    LanguageModelV4StreamPart,
+                    LanguageModelV4StreamPart
+                  >({
+                    transform(part, controller) {
+                      controller.enqueue(stripStatelessStreamPartItemId(part))
+                    },
+                  }),
+                ),
+              }
+            }
+          : undefined
       const wrapped = wrapLanguageModel({
         model,
         middleware: {
           specificationVersion: 'v4',
-          ...(api === 'openai-responses' && compat.deepseekReasoningStream
-            ? { wrapStream: deepseekReasoningStream }
+          ...(stripStatelessWrapStream
+            ? {
+                wrapGenerate: async ({ doGenerate, params }) => {
+                  const res = await doGenerate()
+                  if (params.providerOptions?.openai?.store !== false)
+                    return res
+                  return {
+                    ...res,
+                    content: res.content.map(stripStatelessContentItemId),
+                  }
+                },
+                wrapStream: stripStatelessWrapStream,
+              }
             : {}),
           transformParams: async ({ params }) => {
             if (api === 'openai-responses' || api === 'openai-completions') {
@@ -450,9 +507,57 @@ function createProvider(
           },
         },
       })
-      return declareHosted(wrapped)
+      return registerProtocol(declareHosted(wrapped))
     },
   }
+}
+
+function withoutOpenAIItemId<T extends Record<string, unknown> | undefined>(
+  opts: T,
+  condition: (openai: Record<string, unknown>) => boolean,
+): T {
+  const openai = opts?.openai as Record<string, unknown> | undefined
+  if (!openai || !condition(openai)) return opts
+  const { itemId: _, ...restOpenai } = openai
+  const restOpts: Record<string, unknown> = { ...opts }
+  if (Object.keys(restOpenai).length > 0) restOpts.openai = restOpenai
+  else delete restOpts.openai
+  return (Object.keys(restOpts).length > 0 ? restOpts : undefined) as T
+}
+
+function stripStatelessContentItemId<
+  T extends { providerMetadata?: Record<string, unknown> },
+>(part: T): T {
+  if (!part.providerMetadata) return part
+  const next = withoutOpenAIItemId(
+    part.providerMetadata,
+    (openai) => typeof openai.itemId === 'string',
+  )
+  if (next === part.providerMetadata) return part
+  if (next !== undefined) return { ...part, providerMetadata: next }
+  const { providerMetadata: _, ...plain } = part
+  return plain as T
+}
+
+function stripStatelessStreamPartItemId(
+  part: LanguageModelV4StreamPart,
+): LanguageModelV4StreamPart {
+  if (!('providerMetadata' in part) || !part.providerMetadata) return part
+  const next = withoutOpenAIItemId(
+    part.providerMetadata as Record<string, unknown>,
+    (openai) => typeof openai.itemId === 'string',
+  )
+  if (next === part.providerMetadata) return part
+  if (next !== undefined)
+    return {
+      ...part,
+      providerMetadata: next,
+    } as LanguageModelV4StreamPart
+  const { providerMetadata: _, ...plain } =
+    part as LanguageModelV4StreamPart & {
+      providerMetadata?: unknown
+    }
+  return plain as LanguageModelV4StreamPart
 }
 
 /**
@@ -469,27 +574,21 @@ function stripUnencryptedResponsesItemIds(
       return message
     let partChanged = false
     const content = message.content.map((part) => {
-      const openai = part.providerOptions?.openai as
-        | Record<string, unknown>
-        | undefined
-      if (
-        !openai ||
-        typeof openai.itemId !== 'string' ||
-        !openai.itemId.startsWith('rs_') ||
-        openai.reasoningEncryptedContent !== undefined
+      const next = withoutOpenAIItemId(
+        part.providerOptions as Record<string, unknown> | undefined,
+        (openai) =>
+          typeof openai.itemId === 'string' &&
+          openai.itemId.startsWith('rs_') &&
+          openai.reasoningEncryptedContent === undefined,
       )
-        return part
+      if (next === part.providerOptions) return part
       partChanged = true
       changed = true
-      const { itemId: _, ...restOpenai } = openai
-      const restOpts: Record<string, unknown> = { ...part.providerOptions }
-      if (Object.keys(restOpenai).length > 0) restOpts.openai = restOpenai
-      else delete restOpts.openai
-      if (Object.keys(restOpts).length > 0)
+      if (next !== undefined)
         return {
           ...part,
           providerOptions:
-            restOpts as LanguageModelV4CallOptions['providerOptions'],
+            next as LanguageModelV4CallOptions['providerOptions'],
         }
       const { providerOptions: __, ...plain } = part
       return plain

@@ -37,7 +37,7 @@ const MAX_CYCLES = 0
 const LINE_CEILINGS = new Map<string, number>([
   ['packages/vela/src/driver/vela-session.ts', 1476],
   ['packages/vela/src/cli/interactive.ts', 1186],
-  ['packages/vela/src/driver/tools/registry.ts', 615],
+  ['packages/vela/src/driver/tools/registry.ts', 614],
 ])
 
 const failures: string[] = []

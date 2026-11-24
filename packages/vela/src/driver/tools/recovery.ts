@@ -1,3 +1,4 @@
+import type { ExecutionEnv } from '../execution/types.ts'
 import {
   isToolContent,
   type ToolResultOutput,
@@ -45,7 +46,6 @@ export async function recoverToolCall<T extends { replay?: 'safe' | 'unsafe' }>(
     last?.call.replay !== 'safe' ||
     tool?.replay !== 'safe' ||
     last.call.toolName !== name ||
-    !last.call.location ||
     JSON.stringify(last.call.input) !== JSON.stringify(input)
   )
     return unknown()
@@ -107,6 +107,50 @@ export async function persistResponse(
         )
       : normalOutput(output),
   })
+}
+
+/** Caches in-flight and settled ExecutionEnv resolution per tool call invocation. */
+export function createLazyEnvResolver(
+  resolve: (signal?: AbortSignal) => Promise<ExecutionEnv>,
+  callSignal: AbortSignal | undefined,
+  onResolved: (env: ExecutionEnv) => void,
+  getResolved: () => ExecutionEnv | undefined,
+): (envSignal?: AbortSignal) => Promise<ExecutionEnv> {
+  let pending: Promise<ExecutionEnv> | undefined
+  return (envSignal) => {
+    const target = envSignal ?? callSignal
+    target?.throwIfAborted()
+    const resolved = getResolved()
+    if (resolved) return Promise.resolve(resolved)
+    if (!pending) {
+      pending = resolve(callSignal).then(
+        (env) => {
+          onResolved(env)
+          return env
+        },
+        (err) => {
+          pending = undefined
+          throw err
+        },
+      )
+    }
+    if (!envSignal || envSignal === callSignal) return pending
+    return new Promise<ExecutionEnv>((resolveEnv, rejectEnv) => {
+      const onAbort = () => rejectEnv(envSignal.reason)
+      if (envSignal.aborted) return onAbort()
+      envSignal.addEventListener('abort', onAbort, { once: true })
+      pending!.then(
+        (env) => {
+          envSignal.removeEventListener('abort', onAbort)
+          resolveEnv(env)
+        },
+        (err) => {
+          envSignal.removeEventListener('abort', onAbort)
+          rejectEnv(err)
+        },
+      )
+    })
+  }
 }
 
 /** Per call: how the call was issued */

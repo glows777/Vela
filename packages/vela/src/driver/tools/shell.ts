@@ -18,7 +18,7 @@ const bashToolParamSchema = z.object({
     .number()
     .optional()
     .describe(
-      `Optional timeout in seconds. Foreground commands default to ${DEFAULT_FOREGROUND_TIMEOUT_SECONDS}s (max ${MAX_FOREGROUND_TIMEOUT_SECONDS}s) and are stopped if exceeded; background commands also accept an optional timeout.`,
+      `Optional timeout in seconds. Foreground commands default to ${DEFAULT_FOREGROUND_TIMEOUT_SECONDS}s (max ${MAX_FOREGROUND_TIMEOUT_SECONDS}s) and are stopped if exceeded; background commands honor an explicit timeout (clamped at 7200s / 2 hours).`,
     ),
   run_in_background: z
     .boolean()

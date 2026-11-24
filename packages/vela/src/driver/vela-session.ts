@@ -1334,7 +1334,7 @@ export class VelaSession {
     await agentLoop({
       model: this.requestModel(),
       sessionId: this.id,
-      maxOutputTokens: () => this.modelInfo.maxTokens,
+      maxOutputTokens: info.maxTokens,
       supportsImages: info.input?.includes('image') ?? true,
       // Like pi, read per request: a level changed during the run applies to the next step. It is
       // clamped to `info`, the model that serves this loop, like `setModel` waits for the next prompt.

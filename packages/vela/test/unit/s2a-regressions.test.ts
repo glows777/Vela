@@ -609,3 +609,437 @@ test('ToolRegistry resolves ExecutionEnv lazily via ctx.requireEnv() only when r
   expect(resolves).toBe(1)
   expect(sameEnv).toBe(true)
 })
+
+test('streamProviderStep preserves split reasoning/text metadata in both checkpoints and finalStep', async () => {
+  const { streamProviderStep } = await import('../../src/providers/runtime.ts')
+  const { createFauxModel } = await import('../../src/testing/core/index.ts')
+  const faux = createFauxModel({
+    responses: [
+      {
+        reasoning: 'plan',
+        toolCalls: [{ name: 'ping', input: {} }],
+      },
+    ],
+  })
+  const orig = faux.doStream.bind(faux)
+  faux.doStream = async (opts) => {
+    const res = await orig(opts)
+    return {
+      ...res,
+      stream: res.stream.pipeThrough(
+        new TransformStream({
+          transform(part, controller) {
+            if (part.type === 'reasoning-start') {
+              controller.enqueue({
+                ...part,
+                providerMetadata: {
+                  openai: { reasoningEncryptedContent: 'enc-secret' },
+                },
+              })
+              return
+            }
+            if (part.type === 'reasoning-end') {
+              controller.enqueue({
+                ...part,
+                providerMetadata: { openai: { itemId: 'rs_split' } },
+              })
+              return
+            }
+            controller.enqueue(part)
+          },
+        }),
+      ),
+    }
+  }
+  let checkpointContent: unknown[] = []
+  const { stream, getFinalStep } = streamProviderStep({
+    model: faux,
+    system: 's',
+    messages: [{ role: 'user', content: 'hi' }],
+    tools: {
+      sdkTools: {
+        ping: tool({ inputSchema: jsonSchema({ type: 'object' }) }),
+      },
+      toolDefinitions: [],
+      hasHostedTools: false,
+    },
+    onModelCallEnd: async ({ buildCheckpoint }) => {
+      checkpointContent = (await buildCheckpoint()).content as unknown[]
+    },
+  })
+  for await (const _ of stream) {
+  }
+  const finalStep = await getFinalStep()
+  const finalAssistant = finalStep.messages[0]
+  expect(finalAssistant?.role).toBe('assistant')
+  if (!finalAssistant) throw new Error('expected finalAssistant')
+  const finalThinking = (
+    finalAssistant.content as Array<{
+      type: string
+      providerOptions?: unknown
+    }>
+  ).find((p) => p.type === 'thinking')
+  expect(finalThinking?.providerOptions).toEqual({
+    openai: { reasoningEncryptedContent: 'enc-secret', itemId: 'rs_split' },
+  })
+  const ckptThinking = (
+    checkpointContent as Array<{ type: string; providerOptions?: unknown }>
+  ).find((p) => p.type === 'thinking')
+  expect(ckptThinking?.providerOptions).toEqual({
+    openai: { reasoningEncryptedContent: 'enc-secret', itemId: 'rs_split' },
+  })
+})
+
+test('store:false Responses output strips itemIds so later API-key store:true replay emits no item_reference', async () => {
+  const { streamProviderStep } = await import('../../src/providers/runtime.ts')
+  const cfgDir = join(dir, 'stateless-to-stored')
+  mkdirSync(cfgDir, { recursive: true })
+  writeFileSync(
+    join(cfgDir, 'config.json'),
+    JSON.stringify({
+      providers: {
+        oauthStateless: {
+          api: 'openai-responses',
+          baseUrl: 'https://example.test/v1',
+          apiKey: 'test',
+          compat: { store: false },
+          models: [{ id: 'r1', reasoning: true }],
+        },
+        apiStored: {
+          api: 'openai-responses',
+          baseUrl: 'https://example.test/v1',
+          apiKey: 'test',
+          compat: { store: true },
+          models: [{ id: 'r1', reasoning: true }],
+        },
+      },
+    }),
+  )
+  const requests: Record<string, unknown>[] = []
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body))
+    requests.push(body)
+    if (requests.length === 1) {
+      const reasoningItem = {
+        id: 'rs_stateless',
+        type: 'reasoning',
+        encrypted_content: 'enc-stateless',
+        summary: [{ type: 'summary_text', text: 'thought' }],
+      }
+      const messageItem = {
+        id: 'msg_stateless',
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        content: [{ type: 'output_text', text: 'answer', annotations: [] }],
+      }
+      const response = {
+        id: 'resp_1',
+        created_at: 1,
+        model: body.model,
+        status: 'completed',
+        output: [reasoningItem, messageItem],
+        usage: { input_tokens: 5, output_tokens: 5 },
+      }
+      const events = [
+        { type: 'response.created', response },
+        {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: { ...reasoningItem, summary: [] },
+        },
+        {
+          type: 'response.reasoning_summary_text.delta',
+          output_index: 0,
+          item_id: 'rs_stateless',
+          summary_index: 0,
+          delta: 'thought',
+        },
+        {
+          type: 'response.output_item.done',
+          output_index: 0,
+          item: reasoningItem,
+        },
+        {
+          type: 'response.output_item.added',
+          output_index: 1,
+          item: messageItem,
+        },
+        {
+          type: 'response.output_text.delta',
+          output_index: 1,
+          item_id: 'msg_stateless',
+          delta: 'answer',
+        },
+        {
+          type: 'response.output_item.done',
+          output_index: 1,
+          item: messageItem,
+        },
+        { type: 'response.completed', response },
+      ]
+      return new Response(
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )
+    }
+    const doneMsg = {
+      id: 'msg_2',
+      type: 'message',
+      role: 'assistant',
+      phase: 'final_answer',
+      content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+    }
+    const doneResponse = {
+      id: 'resp_2',
+      created_at: 2,
+      model: body.model,
+      status: 'completed',
+      output: [doneMsg],
+      usage: { input_tokens: 5, output_tokens: 2 },
+    }
+    return new Response(
+      [
+        { type: 'response.created', response: doneResponse },
+        { type: 'response.output_item.added', output_index: 0, item: doneMsg },
+        {
+          type: 'response.output_text.delta',
+          output_index: 0,
+          item_id: 'msg_2',
+          delta: 'ok',
+        },
+        { type: 'response.output_item.done', output_index: 0, item: doneMsg },
+        { type: 'response.completed', response: doneResponse },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(''),
+      { headers: { 'content-type': 'text/event-stream' } },
+    )
+  }) as typeof fetch
+
+  const registry = new ModelRegistry(
+    loadModels({ agentDir: cfgDir }),
+    memoryCredentialStore({}),
+  )
+  const stateless = registry.resolve('oauthStateless/r1').model
+  const { stream, getFinalStep } = streamProviderStep({
+    model: stateless,
+    system: 's',
+    messages: [{ role: 'user', content: 'q1' }],
+    tools: { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
+  })
+  for await (const _ of stream) {
+  }
+  const saved = (await getFinalStep()).messages
+  const stored = registry.resolve('apiStored/r1').model
+  const next = streamProviderStep({
+    model: stored,
+    system: 's',
+    messages: [
+      { role: 'user', content: 'q1' },
+      ...saved,
+      { role: 'user', content: 'q2' },
+    ],
+    tools: { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
+  })
+  for await (const _ of next.stream) {
+  }
+  await next.getFinalStep()
+  const serialized = JSON.stringify(requests[1]?.input ?? [])
+  expect(serialized).not.toContain('item_reference')
+  expect(serialized).not.toContain('rs_stateless')
+  expect(serialized).not.toContain('msg_stateless')
+  expect(serialized).toContain('enc-stateless')
+})
+
+test('custom-named anthropic-messages provider normalizes tool IDs and deduplicates a:b vs a_b in any order', async () => {
+  const { streamProviderStep } = await import('../../src/providers/runtime.ts')
+  for (const pair of [
+    ['a:b', 'a_b'],
+    ['a_b', 'a:b'],
+  ] as const) {
+    const converted = toAiModelMessages(
+      [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_call',
+              toolCallId: pair[0],
+              toolName: 'read',
+              input: {},
+            },
+            {
+              type: 'tool_call',
+              toolCallId: pair[1],
+              toolName: 'ls',
+              input: {},
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool_result',
+              toolCallId: pair[0],
+              toolName: 'read',
+              output: { type: 'text', value: '1' },
+            },
+            {
+              type: 'tool_result',
+              toolCallId: pair[1],
+              toolName: 'ls',
+              output: { type: 'text', value: '2' },
+            },
+          ],
+        },
+      ],
+      true,
+      false,
+      { normalizeToolCallIds: true },
+    )
+    const [first, second] = converted
+    if (!first || !second) throw new Error('expected two converted messages')
+    const callIds = (first.content as Array<{ toolCallId: string }>).map(
+      (p) => p.toolCallId,
+    )
+    expect(new Set(callIds).size).toBe(2)
+    expect(
+      (second.content as Array<{ toolCallId: string }>).map(
+        (p) => p.toolCallId,
+      ),
+    ).toEqual(callIds)
+  }
+
+  const cfgDir = join(dir, 'custom-anthropic')
+  mkdirSync(cfgDir, { recursive: true })
+  writeFileSync(
+    join(cfgDir, 'config.json'),
+    JSON.stringify({
+      providers: {
+        company: {
+          api: 'anthropic-messages',
+          baseUrl: 'https://example.test/v1',
+          apiKey: 'test',
+          models: [{ id: 'claude-custom' }],
+        },
+      },
+    }),
+  )
+  let capturedBody: Record<string, unknown> | undefined
+  globalThis.fetch = (async (_url, init) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response(JSON.stringify({ error: { message: 'stop' } }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+  const reg = new ModelRegistry(
+    loadModels({ agentDir: cfgDir }),
+    memoryCredentialStore({}),
+  )
+  const { stream } = streamProviderStep({
+    model: reg.resolve('company/claude-custom').model,
+    system: 's',
+    messages: [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_call', toolCallId: 'a:b', toolName: 'read', input: {} },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool_result',
+            toolCallId: 'a:b',
+            toolName: 'read',
+            output: { type: 'text', value: 'ok' },
+          },
+        ],
+      },
+    ],
+    tools: { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
+  })
+  for await (const _ of stream) {
+  }
+  const wire = JSON.stringify(capturedBody?.messages ?? [])
+  expect(wire).not.toContain('"a:b"')
+  expect(wire).toContain('"a_b"')
+})
+
+test('concurrent requireEnv() calls share one resolver promise and estimateMessagesTokens strips message/nested providerOptions', async () => {
+  const regDir = join(dir, 'concurrent-env')
+  mkdirSync(regDir, { recursive: true })
+  let resolves = 0
+  let bothSame = false
+  const { createLocalExecutionEnv } = await import(
+    '../../src/driver/execution/local.ts'
+  )
+  const sharedEnv = createLocalExecutionEnv({ cwd: regDir })
+  const registry = new ToolRegistry(
+    new ToolResultStore(join(regDir, 'results')),
+    {
+      tools: new Map(),
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      interception: {
+        resolveEnv: async () => {
+          resolves++
+          await Bun.sleep(10)
+          return sharedEnv
+        },
+      },
+    },
+  )
+  registry.register({
+    name: 'concurrent',
+    description: 'parallel requireEnv',
+    inputSchema: z.object({}),
+    execute: async (_input, ctx) => {
+      const [e1, e2] = await Promise.all([
+        ctx?.requireEnv?.(),
+        ctx?.requireEnv?.(),
+      ])
+      bothSame = Boolean(e1 && e1 === e2)
+      return 'ok'
+    },
+  })
+  const tools = Object.fromEntries(
+    registry.toProviderTools().map((t) => [t.name, t]),
+  )
+  await tools.concurrent!.execute!({}, { toolCallId: 'c1' })
+  expect(resolves).toBe(1)
+  expect(bothSame).toBe(true)
+
+  const bloated: ModelMessage[] = [
+    {
+      role: 'user',
+      content: 'x',
+      providerOptions: { custom: { big: 'O'.repeat(20_000) } },
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool_result',
+          toolCallId: 'c1',
+          toolName: 't',
+          output: {
+            type: 'content',
+            value: [
+              {
+                type: 'text',
+                text: 'y',
+                providerOptions: { custom: { big2: 'P'.repeat(20_000) } },
+              } as never,
+            ],
+          },
+        },
+      ],
+    },
+  ]
+  expect(estimateMessagesTokens(bloated)).toBeLessThan(100)
+})

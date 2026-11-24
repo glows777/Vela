@@ -170,7 +170,10 @@ export class ContextManager {
     options: { allowSummary?: boolean } = {},
   ): Promise<void> {
     request.abortSignal?.throwIfAborted()
-    const estimate = estimateRequestTokens(request)
+    const estimate = Math.max(
+      0,
+      estimateRequestTokens(request) + this.tracker.contextDelta,
+    )
     const before = contextRequestTokens(
       request,
       this.tracker.reportedContextTokens,

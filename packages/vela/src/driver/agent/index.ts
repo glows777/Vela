@@ -215,9 +215,6 @@ export const agentLoop = async ({
         resolvedTools.toolDefinitions,
       )
       tokenTracker.syncToolTokens(requestToolTokens)
-      await prepareContext?.(request)
-      abortSignal?.throwIfAborted()
-      const inferenceSystem = currentSystem()
       const messagesForRequest = async () =>
         transformContext ? transformContext(messages, producer) : messages
       let requestMessages = await messagesForRequest()
@@ -227,6 +224,22 @@ export const agentLoop = async ({
             estimateMessagesTokens(messages),
         )
       }
+      const rawCountBeforePrepare = messages.length
+      const rawFirstBeforePrepare = messages[0]
+      await prepareContext?.(request)
+      abortSignal?.throwIfAborted()
+      if (
+        transformContext &&
+        (messages.length !== rawCountBeforePrepare ||
+          messages[0] !== rawFirstBeforePrepare)
+      ) {
+        requestMessages = await messagesForRequest()
+        tokenTracker.setContextDelta(
+          estimateMessagesTokens(requestMessages) -
+            estimateMessagesTokens(messages),
+        )
+      }
+      const inferenceSystem = currentSystem()
 
       const sources = new Map<string, string>()
       let finalStep: ProviderStepFinal | undefined
@@ -413,6 +426,44 @@ export const agentLoop = async ({
           finalStep = await result.getFinalStep()
           if (checkpointFailure) throw checkpointFailure.error
           abortSignal?.throwIfAborted()
+          if (
+            finalStep.rawFinishReason === 'model_context_window_exceeded' &&
+            !step.toolsStarted &&
+            !checkpoints.has(step)
+          ) {
+            const norm = normalizeUsage(finalStep.usage)
+            const modelId = typeof model === 'string' ? model : model.modelId
+            const stepRecord = tokenTracker.record(
+              modelId || 'mock-model',
+              norm,
+              {
+                kind: 'main',
+                usage: finalStep.usage,
+                durationMs: performance.now() - started,
+              },
+            )
+            emit({
+              type: 'usage',
+              modelId: modelId || 'mock-model',
+              usage: norm,
+              record: stepRecord ?? undefined,
+            })
+            if (!compactedForOverflow && compactOnOverflow) {
+              step.endInterrupted('error', 'model_context_window_exceeded')
+              try {
+                await recoverOverflow(abortSignal)
+              } catch (compactError) {
+                endTurnEmpty()
+                abortSignal?.throwIfAborted()
+                throw new Error(
+                  `model_context_window_exceeded (compacting the context to recover failed: ${errorMessageOf(compactError)})`,
+                )
+              }
+              continue
+            }
+            step.endInterrupted('error', 'model_context_window_exceeded')
+            throw new Error('Context overflow: model_context_window_exceeded')
+          }
           if (retried)
             emit({ type: 'auto_retry_end', success: true, attempt: retried })
           break
@@ -517,28 +568,6 @@ export const agentLoop = async ({
 
       if (!finalStep) {
         throw new Error('Agent loop did not receive a final response.')
-      }
-
-      if (
-        finalStep.rawFinishReason === 'model_context_window_exceeded' &&
-        !step.toolsStarted &&
-        !checkpoints.has(step)
-      ) {
-        if (!compactedForOverflow && compactOnOverflow) {
-          step.endInterrupted('error', 'model_context_window_exceeded')
-          try {
-            await recoverOverflow(abortSignal)
-          } catch (compactError) {
-            endTurnEmpty()
-            abortSignal?.throwIfAborted()
-            throw new Error(
-              `model_context_window_exceeded (compacting the context to recover failed: ${errorMessageOf(compactError)})`,
-            )
-          }
-          continue
-        }
-        step.endInterrupted('error', 'model_context_window_exceeded')
-        throw new Error('Context overflow: model_context_window_exceeded')
       }
 
       const inputToken = finalStep.usage.inputTokens ?? 0
