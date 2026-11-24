@@ -108,12 +108,6 @@ export async function saveModel(options: {
         models: [{ id: model }],
       }
     : undefined
-  const authPath = join(agentDir, 'auth.json')
-  const stored = fileCredentialStore(authPath).get(provider)
-  const storedOrNew = key ? { type: 'api_key' as const, key } : stored
-  const memory = memoryCredentialStore(
-    storedOrNew ? { [provider]: storedOrNew } : {},
-  )
   const providers = loadModels({
     agentDir,
     env: options.env,
@@ -121,13 +115,28 @@ export async function saveModel(options: {
   })
   const definition = providers[provider]
   if (!definition) throw new Error(`No provider named ${provider}`)
+  const authPath = join(agentDir, 'auth.json')
+  const stored = fileCredentialStore(authPath).get(provider)
+  const blockedLocalOnly =
+    !key && stored?.type === 'oauth' && Boolean(definition.oauth?.localOnly)
+  const effectiveStored = blockedLocalOnly ? undefined : stored
+  const storedOrNew = key ? { type: 'api_key' as const, key } : effectiveStored
+  const memory = memoryCredentialStore(
+    storedOrNew ? { [provider]: storedOrNew } : {},
+  )
   const source = definition.authSource
     ? definition.authSource(memory.get(provider))
     : 'configured'
-  if (!source)
+  if (!source) {
+    if (blockedLocalOnly) {
+      throw new Error(
+        `${definition.oauth!.name} sign-in is only for the local terminal, not for local. Enter an API key for ${provider}; it is saved in ${authPath}.`,
+      )
+    }
     throw new Error(
       `No API key for ${provider}. Enter one; it is saved in ${authPath}.`,
     )
+  }
   const ref = `${provider}/${model}`
   // The check a session makes when it opens: a provider name or model id nothing can load is refused
   // here, before auth.json and config.json are written for it.
@@ -149,7 +158,9 @@ export async function saveModel(options: {
     // nothing to sign in with. A typed key is never saved here: it has not been verified, and the
     // saved model stays as it was.
     const kept =
-      key === undefined ? rotated(stored, memory.get(provider)) : undefined
+      key === undefined
+        ? rotated(effectiveStored, memory.get(provider))
+        : undefined
     if (kept)
       await fileCredentialStore(authPath).modify(provider, async () => kept)
     if (
@@ -172,7 +183,7 @@ export async function saveModel(options: {
   // write that back too, or auth.json keeps the expired one the next run cannot use.
   const toSave = key
     ? { type: 'api_key' as const, key }
-    : rotated(stored, memory.get(provider))
+    : rotated(effectiveStored, memory.get(provider))
   const saved = await saveModelSetup({
     agentDir,
     ref,

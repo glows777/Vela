@@ -8,7 +8,7 @@ import type { ToolDefinition } from './registry.ts'
 const jsonTools = new WeakSet<ToolDefinition>()
 
 /**
- * Explicitly constructs a JSON Schema tool; ordinary `registerTool` still requires Zod.
+ * Constructs a JSON Schema tool and ensures a `@cfworker/json-schema` validator is attached.
  *
  * MCP servers publish JSON Schema only. `createJsonSchema` attaches a `@cfworker/json-schema`
  * validator so constraints dropped by providers — such as `propertyNames` — stay enforced on

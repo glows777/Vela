@@ -9,6 +9,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveModel } from '../src/main/model-setup.ts'
+import { readSettings } from '../src/main/settings.ts'
 
 const dirs: string[] = []
 const tempDir = () => {
@@ -17,56 +18,58 @@ const tempDir = () => {
   return dir
 }
 const originals: (typeof globalThis.fetch)[] = []
-const stubFetch = (handler: (url: string) => Response | undefined) => {
+const stubFetch = (
+  handler: (url: string, init?: RequestInit) => Response | undefined,
+) => {
   originals.push(globalThis.fetch)
-  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) =>
-    handler(String(input)) ??
+  globalThis.fetch = (async (
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ) =>
+    handler(String(input), init) ??
     new Response('no stub', { status: 500 })) as typeof fetch
 }
 const restore = () => {
   globalThis.fetch = originals.pop() ?? globalThis.fetch
 }
 
-/**
- * Using a saved sign-in refreshes it when it is about to expire, and OpenAI rotates the refresh
- * token on every refresh. A model the provider then refuses must not throw that rotation away:
- * the next run would have no sign-in left. A key typed in that same request is not saved, and the
- * saved model is not changed.
- */
-test('a sign-in refreshed during a refused check is still saved', async () => {
+test('saveModel refuses a localOnly ChatGPT OAuth sign-in without a fallback API key and falls back to OPENAI_API_KEY when present', async () => {
   const dir = tempDir()
-  // A model is already saved, and it is not the one being checked: with the same ref on both
-  // sides, writing the refused model back would produce the same bytes and the comparison below
-  // could not tell "kept" from "switched".
-  const saved = `${JSON.stringify({ model: 'openai/gpt-5', thinkingLevel: 'low' }, null, 2)}\n`
-  writeFileSync(join(dir, 'config.json'), saved)
-  writeFileSync(
-    join(dir, 'auth.json'),
-    JSON.stringify({
-      openai: {
-        type: 'oauth',
-        access: 'old-access',
-        refresh: 'old-refresh',
-        expires: Date.now() + 30_000,
-        clientId: 'client-id',
-        scopes: ['chatgpt.tokens.use.direct'],
-      },
-    }),
-  )
-  stubFetch((url) => {
-    if (url === 'https://auth.openai.com/api/accounts/oauth/token')
+  const savedConfig = `${JSON.stringify({ model: 'anthropic/claude-opus-4-8', thinkingLevel: 'low' }, null, 2)}\n`
+  const savedAuth = JSON.stringify({
+    openai: {
+      type: 'oauth',
+      access: 'oauth-access',
+      refresh: 'oauth-refresh',
+      expires: Date.now() + 3600_000,
+      clientId: 'client-id',
+      scopes: ['chatgpt.tokens.use.direct'],
+    },
+  })
+  writeFileSync(join(dir, 'config.json'), savedConfig)
+  writeFileSync(join(dir, 'auth.json'), savedAuth)
+
+  let requestCount = 0
+  let authHeader: string | null = null
+  stubFetch((url, init) => {
+    requestCount += 1
+    if (url.startsWith('https://api.openai.com/v1/responses')) {
+      authHeader = new Headers(init?.headers).get('authorization')
       return Response.json({
-        access_token: 'new-access',
-        refresh_token: 'new-refresh',
-        expires_in: 3600,
-        scope: 'chatgpt.tokens.use.direct openid',
+        id: 'resp_1',
+        created_at: 0,
+        model: 'gpt-5-mini',
+        output: [
+          {
+            type: 'message',
+            id: 'msg_1',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'OK', annotations: [] }],
+          },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1 },
       })
-    // The signed-in ChatGPT path only talks to OpenAI's own endpoint, so the probe is stubbed there.
-    if (url.startsWith('https://api.openai.com/v1/responses'))
-      return Response.json(
-        { error: { message: 'invalid model', type: 'invalid_request_error' } },
-        { status: 400 },
-      )
+    }
   })
   try {
     await expect(
@@ -75,14 +78,79 @@ test('a sign-in refreshed during a refused check is still saved', async () => {
         input: { provider: 'openai', model: 'gpt-5-mini' },
         env: {},
       }),
-    ).rejects.toThrow('invalid model')
-    const auth = JSON.parse(readFileSync(join(dir, 'auth.json'), 'utf8'))
-    expect(auth.openai.refresh).toBe('new-refresh')
-    expect(auth.openai.access).toBe('new-access')
-    // The refused model is not saved, and the saved choice is untouched.
-    expect(readFileSync(join(dir, 'config.json'), 'utf8')).toBe(saved)
+    ).rejects.toThrow(/only for the local terminal, not for local/)
+    expect(requestCount).toBe(0)
+    expect(readFileSync(join(dir, 'config.json'), 'utf8')).toBe(savedConfig)
+    expect(readFileSync(join(dir, 'auth.json'), 'utf8')).toBe(savedAuth)
+
+    await saveModel({
+      agentDir: dir,
+      input: { provider: 'openai', model: 'gpt-5-mini' },
+      env: { OPENAI_API_KEY: 'sk-fallback' },
+    })
+    expect(requestCount).toBe(1)
+    expect(authHeader).toBe('Bearer sk-fallback')
+    expect(
+      JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).model,
+    ).toBe('openai/gpt-5-mini')
+    expect(readFileSync(join(dir, 'auth.json'), 'utf8')).toBe(savedAuth)
   } finally {
     restore()
+  }
+})
+
+test('readSettings ignores localOnly OAuth for setup and credential status unless a fallback API key exists', () => {
+  const dir = tempDir()
+  writeFileSync(
+    join(dir, 'config.json'),
+    JSON.stringify({ model: 'openai/gpt-5' }),
+  )
+  writeFileSync(
+    join(dir, 'auth.json'),
+    JSON.stringify({
+      openai: {
+        type: 'oauth',
+        access: 'oauth-access',
+        refresh: 'oauth-refresh',
+        expires: Date.now() + 3600_000,
+        clientId: 'client-id',
+      },
+    }),
+  )
+  const prevKey = process.env.OPENAI_API_KEY
+  delete process.env.OPENAI_API_KEY
+  try {
+    const blocked = readSettings({
+      agentDir: dir,
+      cwd: dir,
+      larkLoaded: false,
+      directModel: false,
+      hasAvailableModel: false,
+    })
+    expect(blocked.setup).toEqual({
+      required: true,
+      reason: 'missing-credential',
+      provider: 'openai',
+    })
+    expect(
+      blocked.providers.find((p) => p.name === 'openai')?.credential,
+    ).toBeUndefined()
+
+    process.env.OPENAI_API_KEY = 'sk-fallback'
+    const fallback = readSettings({
+      agentDir: dir,
+      cwd: dir,
+      larkLoaded: false,
+      directModel: false,
+      hasAvailableModel: false,
+    })
+    expect(fallback.setup).toEqual({ required: false })
+    expect(
+      fallback.providers.find((p) => p.name === 'openai')?.credential,
+    ).toBe('OPENAI_API_KEY')
+  } finally {
+    if (prevKey === undefined) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = prevKey
   }
 })
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { generateText } from 'ai'
 import { z as z3 } from 'zod/v3'
+import { ExtensionRunner } from '../../src/driver/extensions/runner.ts'
 import {
   messageEnvelopeChars,
   normalizeUserMessage,
@@ -16,13 +17,16 @@ import {
 import { renderSessionHtml } from '../../src/driver/session/export-html.ts'
 import { SessionStore } from '../../src/driver/session/index.ts'
 import { fileSessionStorage } from '../../src/driver/session/storage.ts'
+import { ToolRegistry } from '../../src/driver/tools/registry.ts'
 import {
   fromAiResponseMessage,
   fromAiToolOutput,
   toAiModelMessages,
   toAiToolOutput,
 } from '../../src/providers/messages.ts'
+import { ModelRegistry } from '../../src/providers/models/index.ts'
 import { resolveProviderTools } from '../../src/providers/runtime.ts'
+import { silentLogger } from '../../src/shared/logger.ts'
 import {
   normalizeUserContent,
   normalizeVelaContent,
@@ -514,4 +518,61 @@ test('buildSessionContext normalizes legacy reasoning arrays in context_edit tar
     messages: toAiModelMessages(ctx.messages, true, true),
   })
   expect(res.text).toBeDefined()
+})
+
+test('ExtensionRunner.registerTool accepts createJsonSchema directly and rejects plain JSON objects', async () => {
+  const registry = new ToolRegistry()
+  let registeredName = ''
+  const runner = new ExtensionRunner(
+    {
+      cwd: '/tmp',
+      dataDir: '/tmp',
+      extensionConfig: {},
+      logger: silentLogger,
+      registry,
+      models: new ModelRegistry(),
+    },
+    [
+      (api) => {
+        registeredName = api.registerTool({
+          name: 'direct_json',
+          description: 'accepts createJsonSchema directly',
+          inputSchema: createJsonSchema({
+            $schema: 'https://json-schema.org/draft/2020-12/schema',
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          }),
+          execute: async (input) => input,
+        })
+      },
+    ],
+  )
+  await runner.ready
+  expect(registeredName).toBe('extension-1_direct_json')
+  expect(registry.get(registeredName)).toBeDefined()
+
+  expect(
+    () =>
+      new ExtensionRunner(
+        {
+          cwd: '/tmp',
+          dataDir: '/tmp',
+          extensionConfig: {},
+          logger: silentLogger,
+          registry: new ToolRegistry(),
+          models: new ModelRegistry(),
+        },
+        [
+          (api) => {
+            api.registerTool({
+              name: 'plain_obj',
+              description: 'plain json object should throw',
+              inputSchema: { type: 'object' } as never,
+              execute: async (input) => input,
+            })
+          },
+        ],
+      ),
+  ).toThrow(/inputSchema must be a Zod schema or createJsonSchema\(\)/)
 })
