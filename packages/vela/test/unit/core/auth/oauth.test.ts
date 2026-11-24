@@ -9,6 +9,7 @@ import { resetIdTokenCache } from '../../../../src/providers/auth/oauth/id-token
 import {
   chatGPTRequests,
   openaiChatGPTLogin,
+  revocationTiming,
 } from '../../../../src/providers/auth/oauth/openai-chatgpt.ts'
 import { openRouterLogin } from '../../../../src/providers/auth/oauth/openrouter.ts'
 import { memoryCredentialStore } from '../../../../src/providers/auth/store.ts'
@@ -18,8 +19,18 @@ const realFetch = globalThis.fetch
 afterEach(() => {
   globalThis.fetch = realFetch
 })
-// The ID token cache is module state; each test serves its own keys
-beforeEach(() => resetIdTokenCache())
+// The ID token cache and the sign-out budget are module state; each test gets its own keys, and the budget is short
+// enough that a timeout case does not cost ten seconds
+const REAL_TIMING = { ...revocationTiming }
+beforeEach(() => {
+  resetIdTokenCache()
+  revocationTiming.backoffMs = [10, 10, 10, 10]
+  revocationTiming.budgetMs = 300
+})
+afterEach(() => {
+  revocationTiming.backoffMs = REAL_TIMING.backoffMs
+  revocationTiming.budgetMs = REAL_TIMING.budgetMs
+})
 
 const DEVICE = '0b9d6f3e-8c1a-4f2e-9d7b-5a6c4e3f2a10'
 
@@ -574,6 +585,56 @@ test('a stalled discovery still ends the sign-out within the revocation budget',
   expect(seen?.aborted).toBe(true)
   expect(Date.now() - started).toBeLessThan(15_000)
 }, 20_000)
+
+test('a 5xx revocation is retried, and the sign-out succeeds when a later attempt does', async () => {
+  const statuses = [503, 503, 200]
+  const calls = fakeProvider(
+    openAIRespond(() => new Response('', { status: statuses.shift() ?? 200 })),
+  )
+  await chatGPTLogout()({ ...storedCredential }, new AbortController().signal)
+  // Discovery once, then one revocation POST per attempt
+  const posts = calls.filter((call) => call.url === OPENAI_REVOKE)
+  expect(posts).toHaveLength(3)
+  // Every attempt carries the same documented body
+  const body = new URLSearchParams(posts[1]?.body)
+  expect(body.get('token')).toBe('rt-1')
+  expect(body.get('client_id')).toBe('oaiapp_1')
+})
+
+test('a 4xx revocation is final: no retry, and the sign-out reports it', async () => {
+  const calls = fakeProvider(
+    openAIRespond(() => new Response('invalid_grant', { status: 400 })),
+  )
+  await expect(
+    chatGPTLogout()({ ...storedCredential }, new AbortController().signal),
+  ).rejects.toThrow('400')
+  expect(calls.filter((call) => call.url === OPENAI_REVOKE)).toHaveLength(1)
+})
+
+test('an unreachable provider is retried until the budget runs out, then the local credential still goes', async () => {
+  // Discovery answers; every revocation attempt fails like a host that cannot be reached
+  const calls = fakeProvider(
+    openAIRespond(() => {
+      throw new Error('fetch failed: ECONNREFUSED')
+    }),
+  )
+  const credentials = memoryCredentialStore({ openai: storedCredential })
+  const registry = new ModelRegistry(
+    { openai: { oauth: openaiChatGPTLogin, createModel: () => 'test-model' } },
+    credentials,
+  )
+  const notices: string[] = []
+  expect(
+    await registry.logout('openai', { onNotice: (text) => notices.push(text) }),
+  ).toBe(true)
+  // One attempt per backoff step fits the test budget; a single POST would mean no retry at all
+  expect(
+    calls.filter((call) => call.url === OPENAI_REVOKE).length,
+  ).toBeGreaterThan(1)
+  expect(registry.credentials.list()).toEqual([])
+  expect(notices).toHaveLength(1)
+  expect(notices[0]).toContain('Could not confirm that openai revoked')
+})
 
 test('a credential without an issued client id cannot be revoked', async () => {
   const calls = fakeProvider(openAIRespond(() => new Response('')))
