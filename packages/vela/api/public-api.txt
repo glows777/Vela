@@ -650,6 +650,7 @@
     input?: string[] | undefined
     maxTokens?: number | undefined
     name?: string | undefined
+    planLabel?: string | undefined
     provider: string
     reasoning?: boolean | undefined
     ref: string

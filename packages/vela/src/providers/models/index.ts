@@ -44,6 +44,8 @@ export function catalogLookup(
 export interface ModelInfo extends ModelSpec {
   provider: string
   ref: string
+  /** The plan paying for this model, e.g. `ChatGPT plan`, when a subscription sign-in funds the provider */
+  planLabel?: string
 }
 
 /** What createModel() gets besides the id. */
@@ -309,9 +311,15 @@ export class ModelRegistry {
         Boolean(def.oauth?.localOnly && options.channel?.()) &&
         this.credentials.get(provider)?.type === 'oauth',
     )
+    const planLabel = this.planLabel(provider)
     return {
       model: def.createModel(id, ctx),
-      info: { ...spec, provider, ref: `${provider}/${id}` },
+      info: {
+        ...spec,
+        provider,
+        ref: `${provider}/${id}`,
+        ...(planLabel ? { planLabel } : {}),
+      },
     }
   }
 }

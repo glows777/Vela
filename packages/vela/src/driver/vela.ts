@@ -393,7 +393,6 @@ export function createVela(options: VelaOptions = {}): Vela {
         model,
         prepareCommands: resourceSplit !== undefined,
         resolveModel,
-        planLabel: (provider) => models.planLabel(provider),
         thinkingLevel: defaultThinkingLevel,
         autoCompaction: options.autoCompaction ?? true,
         openSession: (newId, newOptions) => {
