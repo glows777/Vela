@@ -1,5 +1,15 @@
-import { randomUUID } from 'node:crypto'
-import { normalizeVelaMessage, type VelaMessage } from '../shared/messages.ts'
+import { isAbsolute } from 'node:path'
+import { isPlainObject } from '../shared/interpolate.ts'
+import {
+  normalizeVelaContent,
+  normalizeVelaMessage,
+  type VelaMessage,
+} from '../shared/messages.ts'
+import {
+  convertV1ToEntries,
+  isV1Transcript,
+  type RawTranscriptEntry as RawEntry,
+} from './migrate-legacy-v1.ts'
 
 type MigratedMessageKind =
   | 'message'
@@ -8,6 +18,7 @@ type MigratedMessageKind =
   | 'bash_execution'
   | 'custom_message'
   | 'custom'
+  | 'context_edit'
 
 interface ParsedLegacyMessageRow {
   id: string
@@ -39,17 +50,10 @@ export interface ParsedLegacyTranscript {
   model?: string
   thinkingLevel?: string
   discoveredTools?: string[]
+  consumedInputMessageIds: string[]
   leafMessageId: string | null
   messages: ParsedLegacyMessageRow[]
   warnings: string[]
-}
-
-interface RawEntry {
-  type: string
-  id: string
-  parentId: string | null
-  timestamp: string
-  [key: string]: unknown
 }
 
 const KEPT_ENTRY_TYPES = new Set<MigratedMessageKind>([
@@ -59,13 +63,10 @@ const KEPT_ENTRY_TYPES = new Set<MigratedMessageKind>([
   'bash_execution',
   'custom_message',
   'custom',
+  'context_edit',
 ])
 
 const LOCATION_MARKER_TYPE = 'vela.session.location'
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 function isValidExecutionLocation(
   value: unknown,
@@ -75,7 +76,17 @@ function isValidExecutionLocation(
     typeof value.environment === 'string' &&
     value.environment.length > 0 &&
     typeof value.cwd === 'string' &&
-    value.cwd.length > 0
+    (value.environment === 'local'
+      ? isAbsolute(value.cwd)
+      : value.cwd.startsWith('/'))
+  )
+}
+
+function isLocationMarker(entry: RawEntry): boolean {
+  return (
+    entry.type === 'custom' &&
+    entry.customType === LOCATION_MARKER_TYPE &&
+    entry.id.startsWith('location:')
   )
 }
 
@@ -117,155 +128,6 @@ function extractDiscoveredToolsFromMessage(message: VelaMessage): string[] {
   return names
 }
 
-function createSyntheticId(taken: Set<string>): string {
-  for (let i = 0; i < 100; i++) {
-    const candidate = randomUUID().slice(0, 8)
-    if (!taken.has(candidate)) {
-      taken.add(candidate)
-      return candidate
-    }
-  }
-  const fallback = randomUUID()
-  taken.add(fallback)
-  return fallback
-}
-
-function isV1Transcript(lines: unknown[]): boolean {
-  const first = lines[0] as { type?: unknown; id?: unknown } | undefined
-  return (
-    first?.type === 'checkpoint' ||
-    (first?.type === 'message' && first.id === undefined)
-  )
-}
-
-function convertV1ToEntries(
-  sessionId: string,
-  lines: unknown[],
-): { header: Record<string, unknown>; entries: RawEntry[] } {
-  let checkpoint: {
-    timestamp?: string
-    messages: { timestamp?: string; message: VelaMessage }[]
-    model?: string
-    thinkingLevel?: string
-    name?: string
-    summary?: string
-  } = { messages: [] }
-
-  for (const rawLine of lines) {
-    if (!isPlainObject(rawLine)) continue
-    if (rawLine.type === 'checkpoint' && Array.isArray(rawLine.messages)) {
-      checkpoint = {
-        timestamp:
-          typeof rawLine.timestamp === 'string' ? rawLine.timestamp : undefined,
-        messages: [
-          ...(rawLine.messages as {
-            timestamp?: string
-            message: VelaMessage
-          }[]),
-        ],
-        model: typeof rawLine.model === 'string' ? rawLine.model : undefined,
-        thinkingLevel:
-          typeof rawLine.thinkingLevel === 'string'
-            ? rawLine.thinkingLevel
-            : undefined,
-        name: typeof rawLine.name === 'string' ? rawLine.name : undefined,
-        summary:
-          typeof rawLine.summary === 'string' ? rawLine.summary : undefined,
-      }
-    } else if (rawLine.type === 'message' && isPlainObject(rawLine.message)) {
-      checkpoint.messages.push({
-        timestamp:
-          typeof rawLine.timestamp === 'string'
-            ? rawLine.timestamp
-            : new Date().toISOString(),
-        message: rawLine.message as unknown as VelaMessage,
-      })
-    }
-  }
-
-  const fallbackTime =
-    checkpoint.timestamp ??
-    checkpoint.messages[0]?.timestamp ??
-    new Date().toISOString()
-  const header: Record<string, unknown> = {
-    type: 'session',
-    version: 2,
-    id: sessionId,
-    timestamp: checkpoint.messages[0]?.timestamp ?? fallbackTime,
-  }
-
-  const entries: RawEntry[] = []
-  const taken = new Set<string>()
-  const push = (entry: {
-    type: string
-    timestamp: string
-    [key: string]: unknown
-  }) => {
-    const id = createSyntheticId(taken)
-    entries.push({
-      ...entry,
-      id,
-      parentId: entries.at(-1)?.id ?? null,
-    })
-  }
-
-  const firstTime = checkpoint.messages[0]?.timestamp ?? fallbackTime
-  if (checkpoint.model) {
-    push({
-      type: 'model_change',
-      timestamp: firstTime,
-      model: checkpoint.model,
-    })
-  }
-  if (checkpoint.thinkingLevel) {
-    push({
-      type: 'thinking_level_change',
-      timestamp: firstTime,
-      thinkingLevel: checkpoint.thinkingLevel,
-    })
-  }
-
-  const summary = checkpoint.summary
-  const expectedSummaryText = summary
-    ? `[Summary of the earlier conversation]\n${summary}`
-    : undefined
-  const firstContent = checkpoint.messages[0]?.message?.content
-  const compacted = Boolean(summary && firstContent === expectedSummaryText)
-
-  for (const item of checkpoint.messages.slice(compacted ? 1 : 0)) {
-    push({
-      type: 'message',
-      timestamp: item.timestamp ?? fallbackTime,
-      message: item.message,
-    })
-  }
-
-  if (compacted && summary) {
-    const firstKept = entries.find((entry) => entry.type === 'message')
-    push({
-      type: 'compaction',
-      timestamp: checkpoint.messages[0]?.timestamp ?? fallbackTime,
-      summary,
-      firstKeptEntryId: firstKept?.id ?? '',
-      tokensBefore: 0,
-    })
-    const compaction = entries.at(-1)!
-    if (!compaction.firstKeptEntryId) {
-      compaction.firstKeptEntryId = compaction.id
-    }
-  }
-
-  if (checkpoint.name) {
-    push({
-      type: 'session_info',
-      timestamp: fallbackTime,
-      name: checkpoint.name,
-    })
-  }
-
-  return { header, entries }
-}
-
 /**
  * Pure read-only parser for legacy JSONL session transcripts (supports V2 tree logs,
  * V1 checkpoints, and 0.5.0 flat files while skipping damaged lines with redacted warnings).
@@ -301,6 +163,8 @@ export function parseLegacyTranscript(
     const converted = convertV1ToEntries(
       sessionId,
       parsedLines.map((item) => item.value),
+      filePath,
+      warnings,
     )
     header = converted.header
     entries.push(...converted.entries)
@@ -356,15 +220,50 @@ export function parseLegacyTranscript(
     }
   }
 
-  const rawById = new Map(entries.map((entry) => [entry.id, entry]))
-  const isKeptEntry = (entry: RawEntry): boolean => {
-    if (!KEPT_ENTRY_TYPES.has(entry.type as MigratedMessageKind)) return false
-    if (entry.type === 'custom' && entry.customType === LOCATION_MARKER_TYPE) {
-      return false
+  let location: unknown = isValidExecutionLocation(header?.location)
+    ? header.location
+    : undefined
+  const markerParents = new Map<string, string | null>()
+  const activeEntries: RawEntry[] = []
+  const channelInputMessageIds: string[] = []
+
+  for (const raw of entries) {
+    const reparentedParentId =
+      raw.parentId && markerParents.has(raw.parentId)
+        ? markerParents.get(raw.parentId)!
+        : raw.parentId
+    if (isLocationMarker(raw)) {
+      markerParents.set(raw.id, reparentedParentId)
+      if (isValidExecutionLocation(raw.data)) {
+        location = raw.data
+      } else {
+        warnings.push(
+          `Ignored invalid location marker "${raw.id}" in ${filePath}`,
+        )
+      }
+      continue
     }
-    return true
+    if (
+      raw.type === 'custom' &&
+      raw.customType === 'channel.input' &&
+      isPlainObject(raw.data) &&
+      typeof raw.data.messageId === 'string'
+    ) {
+      channelInputMessageIds.push(raw.data.messageId)
+    }
+    activeEntries.push(
+      reparentedParentId === raw.parentId
+        ? raw
+        : { ...raw, parentId: reparentedParentId },
+    )
   }
-  const keptIds = new Set(entries.filter(isKeptEntry).map((entry) => entry.id))
+
+  const rawById = new Map(activeEntries.map((entry) => [entry.id, entry]))
+  const isKeptEntry = (entry: RawEntry): boolean =>
+    KEPT_ENTRY_TYPES.has(entry.type as MigratedMessageKind)
+  const keptIds = new Set(
+    activeEntries.filter(isKeptEntry).map((entry) => entry.id),
+  )
 
   const resolveKeptAncestor = (
     startId: string | null,
@@ -401,21 +300,17 @@ export function parseLegacyTranscript(
     return path.reverse()
   }
 
-  const activeBranch = branchEntries(entries.at(-1)?.id ?? null)
+  const activeBranch = branchEntries(activeEntries.at(-1)?.id ?? null)
 
   let name: string | undefined
   let archived: boolean | undefined
   let channel = typeof header?.channel === 'string' ? header.channel : undefined
-  let location: unknown = isValidExecutionLocation(header?.location)
-    ? header.location
-    : header?.location
   let model: string | undefined
   let thinkingLevel: string | undefined
 
   const labels = new Map<string, string | undefined>()
-  const activeEdits = new Map<string, { content: unknown } | null>()
 
-  for (const entry of entries) {
+  for (const entry of activeEntries) {
     if (entry.type === 'session_info') {
       name =
         typeof entry.name === 'string' && entry.name.trim()
@@ -438,12 +333,6 @@ export function parseLegacyTranscript(
           ? entry.label
           : undefined,
       )
-    } else if (
-      entry.type === 'custom' &&
-      entry.customType === LOCATION_MARKER_TYPE &&
-      isValidExecutionLocation(entry.data)
-    ) {
-      location = entry.data
     }
   }
 
@@ -455,15 +344,6 @@ export function parseLegacyTranscript(
       typeof entry.thinkingLevel === 'string'
     ) {
       thinkingLevel = entry.thinkingLevel
-    } else if (
-      entry.type === 'context_edit' &&
-      typeof entry.targetId === 'string'
-    ) {
-      if (entry.replacement === null) {
-        activeEdits.set(entry.targetId, null)
-      } else if (isPlainObject(entry.replacement)) {
-        activeEdits.set(entry.targetId, { content: entry.replacement.content })
-      }
     }
   }
 
@@ -495,6 +375,7 @@ export function parseLegacyTranscript(
   const seenTools = new Set<string>()
   const activeBranchIds = new Set(activeBranch.map((entry) => entry.id))
   const resolvedParentByKeptId = new Map<string, string | null>()
+  const verifiedAcyclic = new Set<string>()
   let seq = 0
 
   const resolveAcyclicParentId = (
@@ -504,32 +385,43 @@ export function parseLegacyTranscript(
     const candidate = resolveKeptAncestor(rawParentId, selfId)
     if (!candidate) {
       resolvedParentByKeptId.set(selfId, null)
+      verifiedAcyclic.add(selfId)
       return null
     }
+    const pathNodes: string[] = [selfId]
     const seen = new Set<string>([selfId])
     let cur: string | null = candidate
-    while (cur) {
+    let reachedUnresolved = false
+    while (cur && !verifiedAcyclic.has(cur)) {
       if (seen.has(cur)) {
         warnings.push(
           `Broke cyclic parent reference near entry "${selfId}" in ${filePath}`,
         )
         resolvedParentByKeptId.set(selfId, null)
+        verifiedAcyclic.add(selfId)
         return null
       }
+      if (!resolvedParentByKeptId.has(cur)) {
+        reachedUnresolved = true
+        break
+      }
       seen.add(cur)
+      pathNodes.push(cur)
       cur = resolvedParentByKeptId.get(cur) ?? null
     }
     resolvedParentByKeptId.set(selfId, candidate)
+    if (!reachedUnresolved) {
+      for (const node of pathNodes) verifiedAcyclic.add(node)
+    }
     return candidate
   }
 
-  for (const entry of entries) {
+  for (const entry of activeEntries) {
     if (!keptIds.has(entry.id)) continue
     const kind = entry.type as MigratedMessageKind
     seq += 1
     const parentId = resolveAcyclicParentId(entry.parentId, entry.id)
     const label = labels.get(entry.id) ?? null
-    const edit = activeEdits.get(entry.id)
 
     if (kind === 'message') {
       const normalized = normalizeVelaMessage(entry.message)
@@ -541,10 +433,6 @@ export function parseLegacyTranscript(
           }
         }
       }
-      const editedMessage =
-        edit && edit !== null
-          ? normalizeVelaMessage({ ...normalized, content: edit.content })
-          : normalized
       const stopReason =
         typeof entry.stopReason === 'string' ? entry.stopReason : null
       const producedBy =
@@ -559,11 +447,11 @@ export function parseLegacyTranscript(
         seq,
         kind,
         role:
-          typeof (editedMessage as { role?: unknown }).role === 'string'
-            ? (editedMessage as { role: string }).role
+          typeof (normalized as { role?: unknown }).role === 'string'
+            ? (normalized as { role: string }).role
             : null,
-        contentJson: JSON.stringify(editedMessage),
-        includeInContext: stopReason === null && edit !== null,
+        contentJson: JSON.stringify(normalized),
+        includeInContext: stopReason === null,
         stopReason,
         producedBy,
         firstKeptId: null,
@@ -573,6 +461,36 @@ export function parseLegacyTranscript(
           Object.keys(detailsPayload).length > 0
             ? JSON.stringify(detailsPayload)
             : null,
+        createdAt: entry.timestamp,
+      })
+      continue
+    }
+
+    if (kind === 'context_edit') {
+      let replacement: { content: unknown } | null = null
+      if (isPlainObject(entry.replacement)) {
+        const content = Array.isArray(entry.replacement.content)
+          ? normalizeVelaContent(entry.replacement.content).content
+          : entry.replacement.content
+        replacement = { content }
+      }
+      messages.push({
+        id: entry.id,
+        parentId,
+        seq,
+        kind,
+        role: null,
+        contentJson: JSON.stringify({
+          targetId: typeof entry.targetId === 'string' ? entry.targetId : '',
+          replacement,
+        }),
+        includeInContext: false,
+        stopReason: null,
+        producedBy: null,
+        firstKeptId: null,
+        tokensBefore: null,
+        label,
+        detailsJson: null,
         createdAt: entry.timestamp,
       })
       continue
@@ -646,7 +564,7 @@ export function parseLegacyTranscript(
             ? { backgroundTaskId: entry.backgroundTaskId }
             : {}),
         }),
-        includeInContext: !excluded && edit !== null,
+        includeInContext: !excluded,
         stopReason: null,
         producedBy: null,
         firstKeptId: null,
@@ -659,7 +577,6 @@ export function parseLegacyTranscript(
     }
 
     if (kind === 'custom_message') {
-      const content = edit && edit !== null ? edit.content : entry.content
       messages.push({
         id: entry.id,
         parentId,
@@ -668,10 +585,10 @@ export function parseLegacyTranscript(
         role: 'user',
         contentJson: JSON.stringify({
           customType: entry.customType,
-          content,
+          content: entry.content,
           display: entry.display === true,
         }),
-        includeInContext: edit !== null,
+        includeInContext: true,
         stopReason: null,
         producedBy: null,
         firstKeptId: null,
@@ -730,8 +647,9 @@ export function parseLegacyTranscript(
     ...(model !== undefined ? { model } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
     ...(discoveredTools.length > 0 ? { discoveredTools } : {}),
-    leafMessageId: entries.length
-      ? resolveKeptAncestor(entries.at(-1)!.id)
+    consumedInputMessageIds: channelInputMessageIds,
+    leafMessageId: activeEntries.length
+      ? resolveKeptAncestor(activeEntries.at(-1)!.id)
       : null,
     messages,
     warnings,

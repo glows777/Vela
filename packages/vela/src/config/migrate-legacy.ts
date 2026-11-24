@@ -19,6 +19,7 @@ interface LegacyConfigInputs {
 export interface LegacyConfigMigrationResult {
   migrated: boolean
   createdConfig: boolean
+  createdSha256?: string
   path: string
   sources: string[]
   warnings: string[]
@@ -150,8 +151,10 @@ function flattenLegacyConfig(inputs: LegacyConfigInputs): {
             config.eventDefaultTarget = target
           }
         }
-        if (Object.keys(rest).length > 0) {
-          nextExtensionConfig.channel = rest
+        for (const unsupportedKey of Object.keys(rest)) {
+          warnings.push(
+            `${settingsFile}: dropped unsupported extensionConfig.channel.${unsupportedKey} during migration`,
+          )
         }
         continue
       }
@@ -172,8 +175,10 @@ function flattenLegacyConfig(inputs: LegacyConfigInputs): {
             )
           }
         }
-        if (Object.keys(rest).length > 0) {
-          nextExtensionConfig.mcp = rest
+        for (const unsupportedKey of Object.keys(rest)) {
+          warnings.push(
+            `${settingsFile}: dropped unsupported extensionConfig.mcp.${unsupportedKey} during migration`,
+          )
         }
         continue
       }
@@ -264,6 +269,7 @@ export function migrateLegacyConfigFiles(
   return {
     migrated: writeResult.written,
     createdConfig: writeResult.written,
+    createdSha256: writeResult.sha256,
     path: writeResult.path,
     sources,
     warnings,

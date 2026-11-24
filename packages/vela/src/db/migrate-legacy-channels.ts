@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { interpolate, isPlainObject } from '../shared/interpolate.ts'
 import {
+  latestOccurrence,
   nextOccurrence,
   type RoutineSchedule,
   routineTimezone,
@@ -10,6 +11,7 @@ import {
 import {
   isSafeSegment,
   isStrictlyInside,
+  type LarkChatMigrationConfig,
   legacyChannelSessionId,
   type MigrationOps,
   readJsonStrict,
@@ -24,6 +26,7 @@ interface LegacyChannelRecord {
   chatKind: 'group' | 'direct'
   rootId?: string
   threadId?: string
+  requester?: { id?: string; name?: string }
   task?: string
   activeSessionId: string
   previousSessionIds?: string[]
@@ -42,22 +45,30 @@ function mapChannelState(
   return 'idle'
 }
 
-function resolveConfiguredChatId(
-  rawId: string,
+function interpolateIfEnv(
+  value: string,
   env: Record<string, string | undefined> | undefined,
-  warnings: string[],
+): string {
+  return env ? interpolate(value, env) : value
+}
+
+function resolveConfiguredToken(
+  rawValue: string,
+  label: string,
+  ops: MigrationOps,
 ): string | undefined {
-  if (!rawId.includes('$')) return rawId.trim() || undefined
-  if (!env) {
-    warnings.push(
-      `Skipped env-expression lark.chats entry "${rawId}" during offline database migration`,
+  if (!rawValue.includes('$')) return rawValue.trim() || undefined
+  if (!ops.env) {
+    ops.incompleteRef.incomplete = true
+    ops.warnings.push(
+      `Skipped env-expression ${label} entry "${rawValue}" during offline database migration`,
     )
     return undefined
   }
-  const expanded = interpolate(rawId, env).trim()
+  const expanded = interpolate(rawValue, ops.env).trim()
   if (!expanded) {
-    warnings.push(
-      `Skipped empty expanded lark.chats entry "${rawId}" during database migration`,
+    ops.warnings.push(
+      `Skipped empty expanded ${label} entry "${rawValue}" during database migration`,
     )
     return undefined
   }
@@ -90,24 +101,38 @@ function readChannelSection(
   return undefined
 }
 
-function readLarkChatsConfig(ops: MigrationOps): Record<string, unknown>[] {
-  for (const name of ['lark', 'local'] as const) {
-    const sec = readChannelSection(ops.agentDir, name)
-    if (sec && typeof sec.timezone === 'string' && sec.timezone.trim()) {
-      try {
-        ops.channelTimezones.set(name, routineTimezone(sec.timezone))
-      } catch {
-        ops.warnings.push(`Ignored invalid ${name}.timezone "${sec.timezone}"`)
-      }
+function parseLarkOwners(
+  larkSection: Record<string, unknown> | undefined,
+  ops: MigrationOps,
+): void {
+  const rawOwners = larkSection?.owners ?? ops.env?.LARK_OWNERS
+  if (rawOwners === undefined) return
+  if (typeof rawOwners === 'string') {
+    const resolved = resolveConfiguredToken(rawOwners, 'lark.owners', ops)
+    if (!resolved) return
+    for (const part of resolved.split(',')) {
+      const id = part.trim()
+      if (id) ops.configuredLarkOwners.add(id)
     }
+    return
   }
+  if (!Array.isArray(rawOwners)) return
+  for (const item of rawOwners) {
+    if (typeof item !== 'string') continue
+    const id = resolveConfiguredToken(item, 'lark.owners', ops)
+    if (id) ops.configuredLarkOwners.add(id)
+  }
+}
 
-  const larkSection = readChannelSection(ops.agentDir, 'lark')
+function parseLarkChats(
+  larkSection: Record<string, unknown> | undefined,
+  ops: MigrationOps,
+): Record<string, unknown>[] {
   const rawChats = larkSection?.chats
   if (rawChats === undefined) return []
 
   if (typeof rawChats === 'string') {
-    const resolved = resolveConfiguredChatId(rawChats, ops.env, ops.warnings)
+    const resolved = resolveConfiguredToken(rawChats, 'lark.chats', ops)
     if (!resolved) return []
     return resolved
       .split(',')
@@ -120,55 +145,71 @@ function readLarkChatsConfig(ops: MigrationOps): Record<string, unknown>[] {
   const chats: Record<string, unknown>[] = []
   for (const item of rawChats) {
     if (typeof item === 'string') {
-      const id = resolveConfiguredChatId(item, ops.env, ops.warnings)
+      const id = resolveConfiguredToken(item, 'lark.chats', ops)
       if (id) chats.push({ id })
     } else if (isPlainObject(item) && typeof item.id === 'string') {
-      const id = resolveConfiguredChatId(item.id, ops.env, ops.warnings)
+      const id = resolveConfiguredToken(item.id, 'lark.chats', ops)
       if (id) chats.push({ ...item, id })
     }
   }
   return chats
 }
 
-export function migrateLarkChats(ops: MigrationOps): void {
-  for (const chat of readLarkChatsConfig(ops)) {
+function buildLarkChatConfig(
+  chat: Record<string, unknown>,
+  env: Record<string, string | undefined> | undefined,
+): LarkChatMigrationConfig {
+  const extraConfig: Record<string, unknown> = {}
+  for (const key of [
+    'environment',
+    'readUntagged',
+    'topicModel',
+    'topicThinkingLevel',
+  ] as const) {
+    const raw = chat[key]
+    if (raw !== undefined) {
+      extraConfig[key] =
+        typeof raw === 'string' ? interpolateIfEnv(raw, env) : raw
+    }
+  }
+  const tools = Array.isArray(chat.tools)
+    ? chat.tools.map((item) =>
+        typeof item === 'string' ? interpolateIfEnv(item, env) : item,
+      )
+    : undefined
+
+  return {
+    defaultModel:
+      typeof chat.model === 'string' ? interpolateIfEnv(chat.model, env) : null,
+    defaultThinkingLevel:
+      typeof chat.thinkingLevel === 'string'
+        ? interpolateIfEnv(chat.thinkingLevel, env)
+        : null,
+    defaultToolsJson: tools ? JSON.stringify(tools) : null,
+    configJson:
+      Object.keys(extraConfig).length > 0 ? JSON.stringify(extraConfig) : null,
+  }
+}
+
+export function loadLarkAndChannelConfig(ops: MigrationOps): void {
+  for (const name of ['lark', 'local'] as const) {
+    const sec = readChannelSection(ops.agentDir, name)
+    if (sec && typeof sec.timezone === 'string' && sec.timezone.trim()) {
+      const tz = interpolateIfEnv(sec.timezone, ops.env).trim()
+      try {
+        ops.channelTimezones.set(name, routineTimezone(tz))
+      } catch {
+        ops.warnings.push(`Ignored invalid ${name}.timezone "${sec.timezone}"`)
+      }
+    }
+  }
+
+  const larkSection = readChannelSection(ops.agentDir, 'lark')
+  parseLarkOwners(larkSection, ops)
+  for (const chat of parseLarkChats(larkSection, ops)) {
     const chatId = String(chat.id)
     ops.configuredLarkChats.add(chatId)
-    const projectId = `lark-group:${chatId}`
-    ops.projectByChat.set(`lark\0${chatId}`, projectId)
-
-    const extraConfig: Record<string, unknown> = {}
-    for (const key of [
-      'environment',
-      'readUntagged',
-      'topicModel',
-      'topicThinkingLevel',
-    ] as const) {
-      if (chat[key] !== undefined) extraConfig[key] = chat[key]
-    }
-    const configJson =
-      Object.keys(extraConfig).length > 0 ? JSON.stringify(extraConfig) : null
-
-    ops.ensureProject({
-      id: projectId,
-      name: chatId,
-      defaultModel: typeof chat.model === 'string' ? chat.model : null,
-      defaultThinkingLevel:
-        typeof chat.thinkingLevel === 'string' ? chat.thinkingLevel : null,
-      defaultToolsJson: Array.isArray(chat.tools)
-        ? JSON.stringify(chat.tools)
-        : null,
-      configJson,
-    })
-    ops.ensureChannelBinding({
-      channel: 'lark',
-      externalId: chatId,
-      kind: 'group',
-      projectId,
-      sessionId: null,
-      enabled: true,
-      configJson,
-    })
+    ops.larkChatConfigById.set(chatId, buildLarkChatConfig(chat, ops.env))
   }
 }
 
@@ -196,9 +237,14 @@ export function migrateChannelDirectory(
         continue
       }
       const rec = rawRecord as unknown as LegacyChannelRecord
+      const activeSessionId = ops.resolveSessionId(dataDir, rec.activeSessionId)
       const isLocalChannel = rec.channel === 'local'
       const isGroup = rec.chatKind === 'group'
       const isTopic = Boolean(rec.rootId && rec.threadId)
+      const larkConfig =
+        rec.channel === 'lark'
+          ? ops.larkChatConfigById.get(rec.chatId)
+          : undefined
       let projectId: string | null = null
 
       if (isLocalChannel) {
@@ -242,7 +288,11 @@ export function migrateChannelDirectory(
           id: projectId,
           name: rec.chatId,
           dataDir: validatedDataDir,
-          hubSessionId: !isTopic ? rec.activeSessionId : null,
+          hubSessionId: !isTopic ? activeSessionId : null,
+          defaultModel: larkConfig?.defaultModel ?? null,
+          defaultThinkingLevel: larkConfig?.defaultThinkingLevel ?? null,
+          defaultToolsJson: larkConfig?.defaultToolsJson ?? null,
+          configJson: larkConfig?.configJson ?? null,
         })
       }
 
@@ -255,7 +305,7 @@ export function migrateChannelDirectory(
             : 'chat'
 
       ops.ensureSession({
-        id: rec.activeSessionId,
+        id: activeSessionId,
         projectId,
         kind: sessionKind,
         name: typeof rec.task === 'string' && rec.task ? rec.task : null,
@@ -266,6 +316,7 @@ export function migrateChannelDirectory(
       })
 
       if (!isLocalChannel) {
+        if (rec.channel === 'lark') ops.boundLarkChats.add(rec.chatId)
         const groupAllowed =
           rec.channel !== 'lark' || ops.configuredLarkChats.has(rec.chatId)
         if (isGroup) {
@@ -274,8 +325,9 @@ export function migrateChannelDirectory(
             externalId: rec.chatId,
             kind: 'group',
             projectId,
-            sessionId: !isTopic ? rec.activeSessionId : null,
+            sessionId: !isTopic ? activeSessionId : null,
             enabled: groupAllowed,
+            configJson: larkConfig?.configJson ?? null,
           })
         }
         if (isTopic && rec.rootId) {
@@ -285,35 +337,47 @@ export function migrateChannelDirectory(
             threadId: rec.threadId ?? null,
             kind: 'group',
             projectId,
-            sessionId: rec.activeSessionId,
+            sessionId: activeSessionId,
             enabled: groupAllowed,
+            configJson: larkConfig?.configJson ?? null,
           })
         } else if (!isGroup) {
+          const requesterId =
+            isPlainObject(rec.requester) && typeof rec.requester.id === 'string'
+              ? rec.requester.id
+              : undefined
+          const dmEnabled =
+            rec.channel !== 'lark' ||
+            ops.configuredLarkChats.has(rec.chatId) ||
+            (requesterId !== undefined &&
+              ops.configuredLarkOwners.has(requesterId))
           ops.ensureChannelBinding({
             channel: rec.channel,
             externalId: rec.chatId,
             kind: 'direct',
             projectId: null,
-            sessionId: rec.activeSessionId,
-            enabled: true,
+            sessionId: activeSessionId,
+            enabled: dmEnabled,
+            configJson: larkConfig?.configJson ?? null,
           })
         }
       }
 
-      ops.channelSessionByKey.set(rec.key, {
-        sessionId: rec.activeSessionId,
+      const keyEntry = {
+        sessionId: activeSessionId,
         projectId,
-      })
-      ops.channelSessionDataDirs.set(rec.activeSessionId, dataDir)
+        channel: rec.channel,
+        chatId: rec.chatId,
+      }
+      ops.channelSessionByKey.set(rec.key, keyEntry)
+      ops.channelSessionDataDirs.set(activeSessionId, dataDir)
       if (rec.legacyKey) {
-        ops.channelSessionByKey.set(rec.legacyKey, {
-          sessionId: rec.activeSessionId,
-          projectId,
-        })
+        ops.channelSessionByKey.set(rec.legacyKey, keyEntry)
       }
 
-      for (const prevId of rec.previousSessionIds ?? []) {
-        if (typeof prevId !== 'string' || !prevId) continue
+      for (const rawPrevId of rec.previousSessionIds ?? []) {
+        if (typeof rawPrevId !== 'string' || !rawPrevId) continue
+        const prevId = ops.resolveSessionId(dataDir, rawPrevId)
         ops.ensureSession({
           id: prevId,
           projectId,
@@ -326,6 +390,7 @@ export function migrateChannelDirectory(
         ops.channelSessionDataDirs.set(prevId, dataDir)
       }
 
+      const pendingEntries: { id: string; passive: boolean }[] = []
       for (const rawPending of rec.pendingMessageIds ?? []) {
         const pendingId =
           typeof rawPending === 'string'
@@ -334,26 +399,21 @@ export function migrateChannelDirectory(
               ? rawPending.id
               : undefined
         if (!pendingId) continue
-        const passive =
-          isPlainObject(rawPending) && rawPending.passive === true ? 1 : 0
-        const res = ops.db.run(
-          `INSERT OR IGNORE INTO inbox_events (
-            id, session_id, project_id, source, dedupe_key, wake, passive, status, payload_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, 1, ?, 'pending', ?, ?)`,
-          randomUUID(),
-          rec.activeSessionId,
+        pendingEntries.push({
+          id: pendingId,
+          passive: isPlainObject(rawPending) && rawPending.passive === true,
+        })
+      }
+      if (pendingEntries.length > 0) {
+        ops.deferredPendingMessages.push({
+          sessionId: activeSessionId,
           projectId,
-          rec.channel,
-          `${rec.channel}:${rec.chatId}:${pendingId}`,
-          passive,
-          JSON.stringify({
-            type: 'legacy_pending_message',
-            messageId: pendingId,
-            channelKey: rec.key,
-          }),
-          rec.updatedAt ?? ops.now,
-        )
-        if (res.changes > 0) ops.summary.inboxEvents += 1
+          channel: rec.channel,
+          chatId: rec.chatId,
+          channelKey: rec.key,
+          updatedAt: rec.updatedAt ?? ops.now,
+          entries: pendingEntries,
+        })
       }
     }
 
@@ -391,10 +451,103 @@ export function migrateChannelDirectory(
   }
 }
 
+export function migrateRemainingLarkChats(ops: MigrationOps): void {
+  for (const [chatId, cfg] of ops.larkChatConfigById) {
+    if (ops.boundLarkChats.has(chatId)) continue
+    const projectId = `lark-group:${chatId}`
+    ops.projectByChat.set(`lark\0${chatId}`, projectId)
+    ops.ensureProject({
+      id: projectId,
+      name: chatId,
+      defaultModel: cfg.defaultModel,
+      defaultThinkingLevel: cfg.defaultThinkingLevel,
+      defaultToolsJson: cfg.defaultToolsJson,
+      configJson: cfg.configJson,
+    })
+    ops.ensureChannelBinding({
+      channel: 'lark',
+      externalId: chatId,
+      kind: 'group',
+      projectId,
+      sessionId: null,
+      enabled: true,
+      configJson: cfg.configJson,
+    })
+  }
+}
+
+export function migratePendingInboxMessages(ops: MigrationOps): void {
+  for (const item of ops.deferredPendingMessages) {
+    const consumed = ops.consumedInputMessageIdsBySession.get(item.sessionId)
+    for (const entry of item.entries) {
+      const nonWaking = entry.passive || consumed?.has(entry.id) === true
+      const wake = nonWaking ? 0 : 1
+      const passive = entry.passive ? 1 : 0
+      const status = nonWaking ? 'dropped' : 'pending'
+      const res = ops.db.run(
+        `INSERT OR IGNORE INTO inbox_events (
+          id, session_id, project_id, source, dedupe_key, wake, passive, status, payload_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        randomUUID(),
+        item.sessionId,
+        item.projectId,
+        item.channel,
+        `${item.channel}:${item.chatId}:${entry.id}`,
+        wake,
+        passive,
+        status,
+        JSON.stringify({
+          type: 'legacy_pending_message',
+          messageId: entry.id,
+          channelKey: item.channelKey,
+        }),
+        item.updatedAt,
+      )
+      if (res.changes > 0) ops.summary.inboxEvents += 1
+    }
+  }
+}
+
+function resolveChannelTarget(
+  ops: MigrationOps,
+  channel: string,
+  chatId: string,
+  explicitTargetKey: unknown,
+):
+  | {
+      resolved: { sessionId: string; projectId: string | null }
+      missingExplicit: false
+    }
+  | { resolved: undefined; missingExplicit: boolean } {
+  if (typeof explicitTargetKey === 'string') {
+    const hit = ops.channelSessionByKey.get(explicitTargetKey)
+    if (hit && hit.channel === channel && hit.chatId === chatId) {
+      return {
+        resolved: { sessionId: hit.sessionId, projectId: hit.projectId },
+        missingExplicit: false,
+      }
+    }
+    return { resolved: undefined, missingExplicit: true }
+  }
+  const hit = ops.channelSessionByKey.get(
+    legacyChannelSessionId(channel, chatId),
+  )
+  if (hit && hit.channel === channel && hit.chatId === chatId) {
+    return {
+      resolved: { sessionId: hit.sessionId, projectId: hit.projectId },
+      missingExplicit: false,
+    }
+  }
+  return { resolved: undefined, missingExplicit: false }
+}
+
 export function migrateRoutinesAndSubscriptions(
   ops: MigrationOps,
   dataDirs: readonly string[],
 ): void {
+  const nowParsed = Date.parse(ops.now)
+  const nowMs = Number.isFinite(nowParsed) ? nowParsed : Date.now()
+
   for (const dataDir of dataDirs) {
     const routinesFile = join(dataDir, 'channels', 'routines.json')
     if (existsSync(routinesFile)) {
@@ -413,15 +566,17 @@ export function migrateRoutinesAndSubscriptions(
         ) {
           continue
         }
-        const targetKey =
-          typeof r.targetKey === 'string'
-            ? r.targetKey
-            : legacyChannelSessionId(r.channel, r.chatId)
-        const resolved =
-          ops.channelSessionByKey.get(targetKey) ??
-          ops.channelSessionByKey.get(
-            legacyChannelSessionId(r.channel, r.chatId),
+        const { resolved, missingExplicit } = resolveChannelTarget(
+          ops,
+          r.channel,
+          r.chatId,
+          r.targetKey,
+        )
+        if (missingExplicit) {
+          ops.warnings.push(
+            `Imported routine "${r.id}" disabled because target "${String(r.targetKey)}" is unavailable`,
           )
+        }
         const projectId =
           resolved?.projectId ??
           ops.projectByChat.get(`${r.channel}\0${r.chatId}`) ??
@@ -431,21 +586,29 @@ export function migrateRoutinesAndSubscriptions(
           typeof r.createdAt === 'string' ? r.createdAt : ops.now
         const timezone =
           ops.channelTimezones.get(r.channel) ?? routineTimezone()
-        const floorMs = Math.max(
-          Date.parse(ops.now),
-          typeof r.lastFiredAt === 'string' ? Date.parse(r.lastFiredAt) : 0,
+        const createdMs = Date.parse(createdAt)
+        const lastFiredMs =
+          typeof r.lastFiredAt === 'string'
+            ? Date.parse(r.lastFiredAt)
+            : Number.NaN
+        const editedMs =
           typeof r.scheduleUpdatedAt === 'string'
             ? Date.parse(r.scheduleUpdatedAt)
-            : 0,
+            : Number.NaN
+        const baseCreatedMs = Number.isFinite(createdMs) ? createdMs : 0
+        const floorMs = Math.max(
+          Number.isFinite(lastFiredMs) ? lastFiredMs : baseCreatedMs,
+          Number.isFinite(editedMs) ? editedMs : baseCreatedMs,
         )
-        const nextMs = nextOccurrence(
-          r.schedule as unknown as RoutineSchedule,
-          Number.isFinite(floorMs) ? floorMs : Date.now(),
-          timezone,
-        )
+        const schedule = r.schedule as unknown as RoutineSchedule
+        const catchUpMs = latestOccurrence(schedule, floorMs, nowMs, timezone)
+        const nextMs =
+          catchUpMs !== undefined
+            ? catchUpMs
+            : nextOccurrence(schedule, Math.max(nowMs, floorMs), timezone)
         const nextFireAt =
           nextMs !== undefined ? new Date(nextMs).toISOString() : null
-        const enabled = nextFireAt !== null ? 1 : 0
+        const enabled = !missingExplicit && nextFireAt !== null ? 1 : 0
 
         const res = dbInsertTimer(ops, {
           id: r.id,
@@ -487,22 +650,25 @@ export function migrateRoutinesAndSubscriptions(
         ) {
           continue
         }
-        const targetKey =
-          typeof sub.targetKey === 'string'
-            ? sub.targetKey
-            : legacyChannelSessionId(sub.channel, sub.chatId)
-        const resolved =
-          ops.channelSessionByKey.get(targetKey) ??
-          ops.channelSessionByKey.get(
-            legacyChannelSessionId(sub.channel, sub.chatId),
+        const { resolved, missingExplicit } = resolveChannelTarget(
+          ops,
+          sub.channel,
+          sub.chatId,
+          sub.targetKey,
+        )
+        if (missingExplicit) {
+          ops.warnings.push(
+            `Skipped subscription "${sub.id}" because target "${String(sub.targetKey)}" is unavailable`,
           )
+          continue
+        }
         let projectId =
           resolved?.projectId ??
           ops.projectByChat.get(`${sub.channel}\0${sub.chatId}`) ??
           (ops.localProjectIds.has(sub.chatId) ? sub.chatId : null)
         let sessionId = resolved?.sessionId
         if (!sessionId) {
-          sessionId = targetKey
+          sessionId = legacyChannelSessionId(sub.channel, sub.chatId)
           if (!projectId && sub.channel === 'lark') {
             projectId = `lark-group:${sub.chatId}`
             ops.ensureProject({ id: projectId, name: sub.chatId })

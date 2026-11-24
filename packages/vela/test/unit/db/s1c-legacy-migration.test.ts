@@ -72,6 +72,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         appId: 'cli_legacy',
         appSecret: '$LARK_SECRET',
         timezone: 'Asia/Shanghai',
+        owners: ['ou_dm'],
         chats: [
           {
             id: 'oc_team1',
@@ -79,9 +80,6 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
             topicModel: 'deepseek/deepseek-flash',
             tools: ['read', 'bash'],
             readUntagged: true,
-          },
-          {
-            id: '$UNSET_CHAT_VAR',
           },
         ],
       },
@@ -272,8 +270,8 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         creator: { id: 'ou_1', name: 'Alice' },
         message: 'Expired one-off',
         schedule: { at: '2020-01-01T00:00:00Z' },
-        createdAt: '2020-01-01T00:00:00Z',
-        lastFiredAt: null,
+        createdAt: '2019-12-31T00:00:00Z',
+        lastFiredAt: '2020-01-01T00:00:00Z',
       },
     ],
   }
@@ -634,7 +632,6 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     expect(res1.warnings.some((w) => w.includes('sk-jsonl-secret-value'))).toBe(
       false,
     )
-    expect(res1.warnings.some((w) => w.includes('$UNSET_CHAT_VAR'))).toBe(true)
     expect(res1.warnings.some((w) => w.includes('unsafe storageKey'))).toBe(
       true,
     )
@@ -680,7 +677,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       hub_session_id: null,
     })
 
-    // Removed Lark group binding stays disabled (enabled = 0), active group stays enabled = 1
+    // Removed Lark group binding stays disabled (enabled = 0), active group & owner DM stay enabled = 1
     expect(
       db.get<{ enabled: number }>(
         "SELECT enabled FROM channel_bindings WHERE external_id = 'oc_team1'",
@@ -692,6 +689,11 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       ),
     ).toEqual({ enabled: 1, kind: 'group' })
     expect(
+      db.get<{ enabled: number; kind: string }>(
+        "SELECT enabled, kind FROM channel_bindings WHERE external_id = 'ou_dm'",
+      ),
+    ).toEqual({ enabled: 1, kind: 'direct' })
+    expect(
       db.get<{ enabled: number }>(
         "SELECT enabled FROM channel_bindings WHERE external_id = 'oc_removed:om_old'",
       )?.enabled,
@@ -701,6 +703,13 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         "SELECT data_dir FROM projects WHERE id = 'lark-group:oc_removed'",
       )?.data_dir,
     ).toBeNull()
+
+    // Passive pendingMessageId was imported non-waking / dropped
+    expect(
+      db.get<{ wake: number; passive: number; status: string }>(
+        "SELECT wake, passive, status FROM inbox_events WHERE dedupe_key = 'lark:oc_team1:om_pending_1'",
+      ),
+    ).toEqual({ wake: 0, passive: 1, status: 'dropped' })
 
     // Verify V2 session metadata: folded vela.session.location, discovered_tools_json, leaf_message_id
     const v2Sess = db.get<{
@@ -722,9 +731,10 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         cwd: '/workspace',
       }),
       discovered_tools_json: JSON.stringify(['mcp__demo__echo']),
-      leaf_message_id: 'b1',
+      leaf_message_id: 'ce1',
     })
 
+    // Original m1 is preserved (not mutated by active branch context_edit), and both ce1 and ce_sib rows exist
     const m1 = db.get<{
       parent_id: string | null
       label: string | null
@@ -735,10 +745,23 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     )
     expect(m1?.parent_id).toBeNull()
     expect(m1?.label).toBe('checkpoint-1')
-    expect(m1?.include_in_context).toBe(1) // sibling ce_sib did NOT hide m1
+    expect(m1?.include_in_context).toBe(1)
     expect(JSON.parse(m1!.content_json)).toEqual({
       role: 'user',
-      content: 'edited hello',
+      content: 'hello',
+    })
+    const ce1Row = db.get<{
+      kind: string
+      parent_id: string | null
+      content_json: string
+    }>(
+      "SELECT kind, parent_id, content_json FROM vela_messages WHERE session_id = 's-v2' AND id = 'ce1'",
+    )
+    expect(ce1Row?.kind).toBe('context_edit')
+    expect(ce1Row?.parent_id).toBe('b1')
+    expect(JSON.parse(ce1Row!.content_json)).toEqual({
+      targetId: 'm1',
+      replacement: { content: 'edited hello' },
     })
 
     const cmp1 = db.get<{
@@ -762,7 +785,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         v2Sess!.leaf_message_id,
       )
       .map((r) => r.id)
-    expect(cteIds).toEqual(['m1', 'm2', 'm2_res', 'cmp1', 'b1'])
+    expect(cteIds).toEqual(['m1', 'm2', 'm2_res', 'cmp1', 'b1', 'ce1'])
 
     // Verify colliding session id across distinct project dataDirs was disambiguated, not dropped
     const dupSessions = db.all<{ id: string }>(

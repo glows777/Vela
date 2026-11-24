@@ -164,7 +164,7 @@ test('openDatabase supports :memory:, idempotent re-open, readonly guards, and r
   )
 })
 
-test('nested SAVEPOINT transactions isolate inner rollback, revert outer rollback, and reject async callbacks', () => {
+test('nested SAVEPOINT transactions isolate inner rollback, revert outer rollback, and reject async callbacks', async () => {
   const { db } = openTempDb()
   const now = '2026-11-24T00:00:00Z'
 
@@ -189,6 +189,7 @@ test('nested SAVEPOINT transactions isolate inner rollback, revert outer rollbac
 
     expect(() =>
       db.transaction((async () => {
+        await Promise.resolve()
         db.run(
           'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?)',
           'inner_async',
@@ -208,6 +209,8 @@ test('nested SAVEPOINT transactions isolate inner rollback, revert outer rollbac
     })
   })
 
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 10))
   expect(
     db
       .all<{ key: string }>('SELECT key FROM kv_meta ORDER BY key')
@@ -216,6 +219,7 @@ test('nested SAVEPOINT transactions isolate inner rollback, revert outer rollbac
 
   expect(() =>
     db.transaction((async () => {
+      await Promise.resolve()
       db.run(
         'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?)',
         'outer_async',
@@ -224,6 +228,8 @@ test('nested SAVEPOINT transactions isolate inner rollback, revert outer rollbac
       )
     }) as unknown as () => void),
   ).toThrow('synchronous')
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 10))
   expect(
     db.get<{ key: string }>(
       "SELECT key FROM kv_meta WHERE key = 'outer_async'",
@@ -512,4 +518,17 @@ test('Node.js and Bun independently initialize WAL DBs, cross-reopen each other,
       )
       .map((r) => r.key),
   ).toEqual(['c1', 'c2'])
+})
+
+test('tolerates concurrent absent-path database creation (EEXIST)', async () => {
+  const dir = tempDir('vela-s1c-race-')
+  cleanup.push({ dir })
+  const dbPath = join(dir.path, 'sub', 'race.db')
+  const opened = await Promise.all([
+    Promise.resolve().then(() => openDatabase({ path: dbPath })),
+    Promise.resolve().then(() => openDatabase({ path: dbPath })),
+  ])
+  for (const db of opened) cleanup.push({ db })
+  expect(opened[0].schemaVersion).toBe(SCHEMA_VERSION)
+  expect(opened[1].schemaVersion).toBe(SCHEMA_VERSION)
 })

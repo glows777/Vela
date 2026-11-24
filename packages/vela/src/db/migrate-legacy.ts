@@ -8,15 +8,22 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { migrateLegacyConfigFiles } from '../config/index.ts'
+import {
+  migrateLegacyConfigFiles,
+  removeConfigIfHashMatches,
+} from '../config/index.ts'
 import { isPlainObject } from '../shared/interpolate.ts'
 import {
+  loadLarkAndChannelConfig,
   migrateChannelDirectory,
-  migrateLarkChats,
+  migratePendingInboxMessages,
+  migrateRemainingLarkChats,
   migrateRoutinesAndSubscriptions,
 } from './migrate-legacy-channels.ts'
 import { parseLegacyTranscript } from './migrate-legacy-jsonl.ts'
 import {
+  type DeferredPendingMessages,
+  type LarkChatMigrationConfig,
   type LegacyLocalMessage,
   type LegacyMigrationSummary,
   type MigrationOps,
@@ -52,6 +59,7 @@ function discoverLegacyDataDirs(
   agentDir: string,
   options: { cwd?: string; dataDir?: string },
   warnings: string[],
+  incompleteRef: { incomplete: boolean },
 ): string[] {
   const dirs: string[] = []
   const seen = new Set<string>()
@@ -88,6 +96,7 @@ function discoverLegacyDataDirs(
       } else if (options.cwd) {
         add(resolve(options.cwd, expanded))
       } else {
+        incompleteRef.incomplete = true
         warnings.push(
           `Skipped relative dataDir "${parsed.dataDir}" in ${primaryConfigFile} without cwd`,
         )
@@ -122,6 +131,97 @@ function collectTranscriptFiles(
   return [...byId.entries()].map(([id, path]) => ({ id, path }))
 }
 
+function buildSessionIdResolver(
+  dataDirs: readonly string[],
+  warnings: string[],
+): (dataDir: string, legacySessionId: string) => string {
+  const dirsByRawId = new Map<string, Set<string>>()
+  const register = (dataDir: string, sessionId: string) => {
+    if (!sessionId) return
+    let dirs = dirsByRawId.get(sessionId)
+    if (!dirs) {
+      dirs = new Set<string>()
+      dirsByRawId.set(sessionId, dirs)
+    }
+    dirs.add(dataDir)
+  }
+
+  for (const dataDir of dataDirs) {
+    for (const item of collectTranscriptFiles(join(dataDir, 'sessions'))) {
+      register(dataDir, item.id)
+    }
+    const indexFile = join(dataDir, 'channels', 'index.json')
+    if (existsSync(indexFile)) {
+      const parsed = readJsonStrict(indexFile)
+      if (isPlainObject(parsed) && Array.isArray(parsed.records)) {
+        for (const rec of parsed.records) {
+          if (!isPlainObject(rec)) continue
+          if (typeof rec.activeSessionId === 'string') {
+            register(dataDir, rec.activeSessionId)
+          }
+          if (Array.isArray(rec.previousSessionIds)) {
+            for (const prev of rec.previousSessionIds) {
+              if (typeof prev === 'string') register(dataDir, prev)
+            }
+          }
+        }
+      }
+    }
+    const projectsFile = join(dataDir, 'local', 'projects.json')
+    if (existsSync(projectsFile)) {
+      const parsed = readJsonStrict(projectsFile)
+      if (isPlainObject(parsed) && Array.isArray(parsed.projects)) {
+        for (const proj of parsed.projects) {
+          if (!isPlainObject(proj) || typeof proj.id !== 'string') continue
+          const logFile = join(dataDir, 'local', `${proj.id}.json`)
+          if (!existsSync(logFile)) continue
+          const rawMessages = readJsonStrict(logFile)
+          if (!Array.isArray(rawMessages)) continue
+          for (const msg of rawMessages) {
+            if (isPlainObject(msg) && typeof msg.sessionId === 'string') {
+              register(dataDir, msg.sessionId)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const allocatedByPair = new Map<string, string>()
+  const usedIds = new Set<string>()
+  for (const [rawId, dirs] of dirsByRawId) {
+    if (dirs.size === 1) usedIds.add(rawId)
+  }
+
+  for (const [rawId, dirs] of dirsByRawId) {
+    const sortedDirs = [...dirs].sort()
+    for (let i = 0; i < sortedDirs.length; i++) {
+      const dataDir = sortedDirs[i]!
+      const pairKey = `${dataDir}\0${rawId}`
+      if (i === 0) {
+        allocatedByPair.set(pairKey, rawId)
+        usedIds.add(rawId)
+        continue
+      }
+      let candidate = `${rawId}--${shortDirHash(dataDir)}`
+      let suffix = 2
+      while (usedIds.has(candidate)) {
+        candidate = `${rawId}--${shortDirHash(dataDir)}-${suffix++}`
+      }
+      usedIds.add(candidate)
+      allocatedByPair.set(pairKey, candidate)
+      warnings.push(
+        `Disambiguated colliding session "${rawId}" in ${dataDir} as "${candidate}"`,
+      )
+    }
+  }
+
+  return (dataDir: string, legacySessionId: string): string => {
+    const pairKey = `${dataDir}\0${legacySessionId}`
+    return allocatedByPair.get(pairKey) ?? legacySessionId
+  }
+}
+
 /**
  * Performs an idempotent, single-transaction, read-only import of legacy `~/.vela/`
  * config, trust decisions, projects, channel bindings, routines, subscriptions,
@@ -139,7 +239,7 @@ export function migrateLegacyVelaDir(options: {
   const { agentDir, db } = options
   const now = new Date().toISOString()
   const createdBlobPaths: string[] = []
-  let createdConfigPath: string | undefined
+  let createdConfigSha256: string | undefined
 
   try {
     return db.transaction(() => {
@@ -173,11 +273,12 @@ export function migrateLegacyVelaDir(options: {
       }
 
       const warnings: string[] = []
+      const incompleteRef = { incomplete: false }
       let configMigrated = false
       if (options.includeConfig !== false) {
         const cfg = migrateLegacyConfigFiles(agentDir)
         configMigrated = cfg.createdConfig
-        if (cfg.createdConfig) createdConfigPath = cfg.path
+        if (cfg.createdConfig) createdConfigSha256 = cfg.createdSha256
         warnings.push(...cfg.warnings)
       }
 
@@ -194,17 +295,33 @@ export function migrateLegacyVelaDir(options: {
         blobs: 0,
       }
 
-      const dataDirs = discoverLegacyDataDirs(agentDir, options, warnings)
+      const dataDirs = discoverLegacyDataDirs(
+        agentDir,
+        options,
+        warnings,
+        incompleteRef,
+      )
+      const resolveSessionId = buildSessionIdResolver(dataDirs, warnings)
       const projectByCwd = new Map<string, string>()
       const projectByChat = new Map<string, string>()
       const localProjectIds = new Set<string>()
       const configuredLarkChats = new Set<string>()
+      const configuredLarkOwners = new Set<string>()
+      const larkChatConfigById = new Map<string, LarkChatMigrationConfig>()
+      const boundLarkChats = new Set<string>()
       const channelTimezones = new Map<string, string>()
       const channelSessionByKey = new Map<
         string,
-        { sessionId: string; projectId: string | null }
+        {
+          sessionId: string
+          projectId: string | null
+          channel: string
+          chatId: string
+        }
       >()
       const channelSessionDataDirs = new Map<string, string>()
+      const consumedInputMessageIdsBySession = new Map<string, Set<string>>()
+      const deferredPendingMessages: DeferredPendingMessages[] = []
       const fallbackLocalMessages = new Map<
         string,
         { projectId: string; messages: LegacyLocalMessage[] }
@@ -242,10 +359,18 @@ export function migrateLegacyVelaDir(options: {
             `UPDATE projects SET
               data_dir = COALESCE(data_dir, ?),
               hub_session_id = COALESCE(hub_session_id, ?),
+              default_model = COALESCE(default_model, ?),
+              default_thinking_level = COALESCE(default_thinking_level, ?),
+              default_tools_json = COALESCE(default_tools_json, ?),
+              config_json = COALESCE(config_json, ?),
               updated_at = ?
             WHERE id = ?`,
             row.dataDir ?? null,
             row.hubSessionId ?? null,
+            row.defaultModel ?? null,
+            row.defaultThinkingLevel ?? null,
+            row.defaultToolsJson ?? null,
+            row.configJson ?? null,
             now,
             row.id,
           )
@@ -289,7 +414,7 @@ export function migrateLegacyVelaDir(options: {
             summary.sessions += 1
           }
           seenSessionIds.add(row.id)
-          return
+          if (!existingRow) return
         }
         db.run(
           `UPDATE sessions SET
@@ -359,14 +484,21 @@ export function migrateLegacyVelaDir(options: {
         now,
         summary,
         warnings,
+        incompleteRef,
         createdBlobPaths,
         localProjectIds,
         configuredLarkChats,
+        configuredLarkOwners,
+        larkChatConfigById,
+        boundLarkChats,
         channelTimezones,
         projectByChat,
         channelSessionByKey,
         channelSessionDataDirs,
+        consumedInputMessageIdsBySession,
+        deferredPendingMessages,
         fallbackLocalMessages,
+        resolveSessionId,
         ensureProject,
         ensureSession,
         ensureChannelBinding,
@@ -374,24 +506,15 @@ export function migrateLegacyVelaDir(options: {
 
       migrateTrustFile(ops)
       migrateLocalProjects(ops, dataDirs)
-      migrateLarkChats(ops)
+      loadLarkAndChannelConfig(ops)
       migrateChannelDirectory(ops, dataDirs)
+      migrateRemainingLarkChats(ops)
       migrateRoutinesAndSubscriptions(ops, dataDirs)
 
       const migratedTranscriptSessions = new Set<string>()
       for (const dataDir of dataDirs) {
         for (const item of collectTranscriptFiles(join(dataDir, 'sessions'))) {
-          let targetSessionId = item.id
-          if (migratedTranscriptSessions.has(targetSessionId)) {
-            targetSessionId = `${item.id}--${shortDirHash(dataDir)}`
-            let suffix = 2
-            while (migratedTranscriptSessions.has(targetSessionId)) {
-              targetSessionId = `${item.id}--${shortDirHash(dataDir)}-${suffix++}`
-            }
-            warnings.push(
-              `Disambiguated colliding session "${item.id}" at ${item.path} as "${targetSessionId}"`,
-            )
-          }
+          const targetSessionId = resolveSessionId(dataDir, item.id)
 
           const parsed = parseLegacyTranscript(
             readFileSync(item.path, 'utf8'),
@@ -399,6 +522,16 @@ export function migrateLegacyVelaDir(options: {
             item.path,
           )
           warnings.push(...parsed.warnings)
+          if (parsed.consumedInputMessageIds.length > 0) {
+            let consumed = consumedInputMessageIdsBySession.get(targetSessionId)
+            if (!consumed) {
+              consumed = new Set<string>()
+              consumedInputMessageIdsBySession.set(targetSessionId, consumed)
+            }
+            for (const msgId of parsed.consumedInputMessageIds) {
+              consumed.add(msgId)
+            }
+          }
 
           if (parsed.channel && !channelSessionDataDirs.has(targetSessionId)) {
             warnings.push(
@@ -406,6 +539,9 @@ export function migrateLegacyVelaDir(options: {
             )
           }
 
+          const resolvedParentSessionId = parsed.parentSession
+            ? resolveSessionId(dataDir, parsed.parentSession)
+            : null
           const inferredProjectId =
             (parsed.cwd ? projectByCwd.get(parsed.cwd) : undefined) ??
             fallbackLocalMessages.get(targetSessionId)?.projectId ??
@@ -430,14 +566,14 @@ export function migrateLegacyVelaDir(options: {
             discoveredToolsJson: parsed.discoveredTools
               ? JSON.stringify(parsed.discoveredTools)
               : null,
-            parentSessionId: parsed.parentSession ?? null,
+            parentSessionId: resolvedParentSessionId,
             createdAt: parsed.createdAt,
             updatedAt: parsed.updatedAt,
           })
 
           for (const msg of parsed.messages) {
-            db.run(
-              `INSERT INTO vela_messages (
+            const res = db.run(
+              `INSERT OR IGNORE INTO vela_messages (
                 session_id, id, parent_id, seq, kind, role, content_json,
                 include_in_context, stop_reason, produced_by, first_kept_id,
                 tokens_before, label, details_json, created_at
@@ -458,11 +594,13 @@ export function migrateLegacyVelaDir(options: {
               msg.detailsJson,
               msg.createdAt,
             )
-            summary.messages += 1
+            if (res.changes > 0) summary.messages += 1
           }
           migratedTranscriptSessions.add(targetSessionId)
         }
       }
+
+      migratePendingInboxMessages(ops)
 
       for (const [sessionId, bucket] of fallbackLocalMessages) {
         if (migratedTranscriptSessions.has(sessionId)) continue
@@ -494,8 +632,8 @@ export function migrateLegacyVelaDir(options: {
                   display: true,
                 })
               : JSON.stringify({ role: msg.role, content: msg.text })
-          db.run(
-            `INSERT INTO vela_messages (
+          const res = db.run(
+            `INSERT OR IGNORE INTO vela_messages (
               session_id, id, parent_id, seq, kind, role, content_json,
               include_in_context, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
@@ -515,7 +653,7 @@ export function migrateLegacyVelaDir(options: {
             bucket.projectId,
           )
           parentId = msg.id
-          summary.messages += 1
+          if (res.changes > 0) summary.messages += 1
         }
       }
 
@@ -537,17 +675,19 @@ export function migrateLegacyVelaDir(options: {
         }
       }
 
-      db.run(
-        `INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?)`,
-        LEGACY_MIGRATION_KEY,
-        JSON.stringify({
-          version: 1,
-          migratedAt: now,
-          summary,
-          warnings,
-        }),
-        now,
-      )
+      if (!incompleteRef.incomplete) {
+        db.run(
+          `INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?)`,
+          LEGACY_MIGRATION_KEY,
+          JSON.stringify({
+            version: 1,
+            migratedAt: now,
+            summary,
+            warnings,
+          }),
+          now,
+        )
+      }
 
       return {
         skipped: false,
@@ -557,8 +697,8 @@ export function migrateLegacyVelaDir(options: {
       }
     }, 'IMMEDIATE')
   } catch (error) {
-    if (createdConfigPath) {
-      rmSync(createdConfigPath, { force: true })
+    if (createdConfigSha256) {
+      removeConfigIfHashMatches(agentDir, createdConfigSha256)
     }
     for (const blobPath of createdBlobPaths) {
       rmSync(blobPath, { force: true })

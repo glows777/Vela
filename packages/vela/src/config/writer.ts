@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
@@ -159,14 +159,40 @@ export function writeRawConfigFile(
 export function writeConfigIfMissing(
   agentDir: string,
   data: Record<string, unknown>,
-): { written: boolean; path: string } {
+): { written: boolean; path: string; sha256?: string } {
   return withConfigLockSync(agentDir, (assertOwned) => {
     const path = join(agentDir, 'config.json')
     if (existsSync(path)) return { written: false, path }
+    const writtenPath = writeRawConfigUnlocked(agentDir, data, assertOwned)
+    const sha256 = createHash('sha256')
+      .update(`${JSON.stringify(data, null, 2)}\n`)
+      .digest('hex')
     return {
       written: true,
-      path: writeRawConfigUnlocked(agentDir, data, assertOwned),
+      path: writtenPath,
+      sha256,
     }
+  })
+}
+
+/**
+ * Removes `<agentDir>/config.json` under lock only when its current SHA-256 still
+ * matches `expectedSha256`, preventing rollback from erasing concurrent user saves.
+ */
+export function removeConfigIfHashMatches(
+  agentDir: string,
+  expectedSha256: string,
+): boolean {
+  return withConfigLockSync(agentDir, (assertOwned) => {
+    const path = join(agentDir, 'config.json')
+    if (!existsSync(path)) return false
+    const actualSha256 = createHash('sha256')
+      .update(readFileSync(path))
+      .digest('hex')
+    if (actualSha256 !== expectedSha256) return false
+    assertOwned()
+    rmSync(path, { force: true })
+    return true
   })
 }
 

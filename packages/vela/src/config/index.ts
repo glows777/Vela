@@ -18,6 +18,7 @@ export {
   assertNoLegacyConfigFiles,
   LEGACY_CONFIG_FILES,
   readRawConfigFile,
+  removeConfigIfHashMatches,
   updateConfigFile,
   writeRawConfigFile,
 } from './writer.ts'

@@ -1,6 +1,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+import { types } from 'node:util'
 import { applyMigrations } from './migrations.ts'
 
 export type SqlParam = SQLInputValue
@@ -131,6 +132,9 @@ export class VelaDatabase {
     mode: 'IMMEDIATE' | 'DEFERRED' = this.readonly ? 'DEFERRED' : 'IMMEDIATE',
   ): T {
     this.assertOpen()
+    if (types.isAsyncFunction(fn) || fn.constructor?.name === 'AsyncFunction') {
+      throw new Error('SQLite transactions must be synchronous')
+    }
     if (this.readonly && mode === 'IMMEDIATE') {
       throw new Error(
         'Cannot start an IMMEDIATE write transaction on a read-only database',
@@ -196,10 +200,16 @@ export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
   if (!isMemory && !readonly) {
     ensurePrivateDir(dirname(options.path))
     if (!existsSync(options.path)) {
-      const fd = openSync(options.path, 'wx', 0o600)
-      closeSync(fd)
+      try {
+        const fd = openSync(options.path, 'wx', 0o600)
+        closeSync(fd)
+        chmodSync(options.path, 0o600)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
+      }
+    } else {
+      chmodSync(options.path, 0o600)
     }
-    chmodSync(options.path, 0o600)
   }
 
   const raw = readonly

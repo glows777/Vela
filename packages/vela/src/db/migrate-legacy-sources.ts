@@ -3,11 +3,13 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   statSync,
 } from 'node:fs'
-import { basename, extname, join, resolve, sep } from 'node:path'
+import { basename, extname, isAbsolute, join, resolve, sep } from 'node:path'
 import { formatJsonParseError } from '../config/index.ts'
 import { isPlainObject } from '../shared/interpolate.ts'
 import type { VelaDatabase } from './sqlite.ts'
@@ -41,6 +43,23 @@ export interface LegacyMigrationSummary {
   blobs: number
 }
 
+export interface LarkChatMigrationConfig {
+  defaultModel: string | null
+  defaultThinkingLevel: string | null
+  defaultToolsJson: string | null
+  configJson: string | null
+}
+
+export interface DeferredPendingMessages {
+  sessionId: string
+  projectId: string | null
+  channel: string
+  chatId: string
+  channelKey: string
+  updatedAt: string
+  entries: { id: string; passive: boolean }[]
+}
+
 export interface MigrationOps {
   agentDir: string
   db: VelaDatabase
@@ -48,20 +67,32 @@ export interface MigrationOps {
   now: string
   summary: LegacyMigrationSummary
   warnings: string[]
+  incompleteRef: { incomplete: boolean }
   createdBlobPaths: string[]
   localProjectIds: Set<string>
   configuredLarkChats: Set<string>
+  configuredLarkOwners: Set<string>
+  larkChatConfigById: Map<string, LarkChatMigrationConfig>
+  boundLarkChats: Set<string>
   channelTimezones: Map<string, string>
   projectByChat: Map<string, string>
   channelSessionByKey: Map<
     string,
-    { sessionId: string; projectId: string | null }
+    {
+      sessionId: string
+      projectId: string | null
+      channel: string
+      chatId: string
+    }
   >
   channelSessionDataDirs: Map<string, string>
+  consumedInputMessageIdsBySession: Map<string, Set<string>>
+  deferredPendingMessages: DeferredPendingMessages[]
   fallbackLocalMessages: Map<
     string,
     { projectId: string; messages: LegacyLocalMessage[] }
   >
+  resolveSessionId(dataDir: string, legacySessionId: string): string
   ensureProject(row: {
     id: string
     name: string
@@ -150,6 +181,21 @@ function sha256File(filePath: string): { sha256: string; sizeBytes: number } {
   }
 }
 
+function hasUnsafeSymlinkAttachment(
+  localRoot: string,
+  segments: string[],
+): boolean {
+  const realRoot = realpathSync(localRoot)
+  let current = localRoot
+  for (const seg of segments) {
+    current = join(current, seg)
+    if (!existsSync(current)) return true
+    if (lstatSync(current).isSymbolicLink()) return true
+  }
+  const realTarget = realpathSync(current)
+  return !isStrictlyInside(realTarget, realRoot)
+}
+
 export function migrateTrustFile(ops: MigrationOps): void {
   const trustFile = join(ops.agentDir, 'trust.json')
   if (!existsSync(trustFile)) return
@@ -161,15 +207,24 @@ export function migrateTrustFile(ops: MigrationOps): void {
   }
   for (const [dirPath, trusted] of Object.entries(parsed)) {
     if (typeof trusted !== 'boolean') continue
+    if (!isAbsolute(dirPath)) {
+      ops.warnings.push(`Skipped non-absolute trust.json key "${dirPath}"`)
+      continue
+    }
+    const resolvedPath = resolve(dirPath)
+    const existed = ops.db.get<{ path: string }>(
+      'SELECT path FROM trusted_paths WHERE path = ?',
+      resolvedPath,
+    )
     ops.db.run(
       `INSERT INTO trusted_paths (path, trusted, updated_at)
        VALUES (?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET trusted = excluded.trusted, updated_at = excluded.updated_at`,
-      resolve(dirPath),
+      resolvedPath,
       trusted ? 1 : 0,
       ops.now,
     )
-    ops.summary.trustedPaths += 1
+    if (!existed) ops.summary.trustedPaths += 1
   }
 }
 
@@ -235,12 +290,13 @@ export function migrateLocalProjects(
           continue
         }
         const msg = rawMsg as unknown as LegacyLocalMessage
-        const bucket = ops.fallbackLocalMessages.get(msg.sessionId) ?? {
+        const canonicalSessionId = ops.resolveSessionId(dataDir, msg.sessionId)
+        const bucket = ops.fallbackLocalMessages.get(canonicalSessionId) ?? {
           projectId: proj.id,
           messages: [],
         }
         bucket.messages.push(msg)
-        ops.fallbackLocalMessages.set(msg.sessionId, bucket)
+        ops.fallbackLocalMessages.set(canonicalSessionId, bucket)
 
         if (!msg.file || typeof msg.file.name !== 'string') continue
         if (!isSafeSegment(msg.sessionId) || !isSafeSegment(msg.id)) {
@@ -250,16 +306,42 @@ export function migrateLocalProjects(
           continue
         }
         const srcAttachment = join(localRoot, proj.id, msg.sessionId, msg.id)
-        if (
-          !isStrictlyInside(srcAttachment, localRoot) ||
-          !existsSync(srcAttachment) ||
-          !statSync(srcAttachment).isFile()
-        ) {
+        if (!isStrictlyInside(srcAttachment, localRoot)) {
+          ops.warnings.push(
+            `Skipped local attachment outside root for message ${msg.id}`,
+          )
+          continue
+        }
+        if (!existsSync(srcAttachment)) {
           ops.warnings.push(
             `Missing local attachment file ${srcAttachment} for message ${msg.id}`,
           )
           continue
         }
+        if (
+          hasUnsafeSymlinkAttachment(localRoot, [
+            proj.id,
+            msg.sessionId,
+            msg.id,
+          ]) ||
+          !statSync(srcAttachment).isFile()
+        ) {
+          ops.warnings.push(
+            `Skipped symlinked or non-file local attachment ${srcAttachment} for message ${msg.id}`,
+          )
+          continue
+        }
+        const { sha256, sizeBytes } = sha256File(srcAttachment)
+        const existingBlob = ops.db.get<{ id: string }>(
+          `SELECT id FROM blobs
+           WHERE project_id = ? AND message_id = ? AND filename = ? AND sha256 = ?`,
+          proj.id,
+          msg.id,
+          msg.file.name,
+          sha256,
+        )
+        if (existingBlob) continue
+
         const blobsDir = join(ops.agentDir, 'blobs')
         mkdirSync(blobsDir, { recursive: true, mode: 0o700 })
         const blobId = randomUUID()
@@ -270,7 +352,6 @@ export function migrateLocalProjects(
         ops.createdBlobPaths.push(dstBlob)
         copyFileSync(srcAttachment, dstBlob)
         chmodSync(dstBlob, 0o600)
-        const { sha256, sizeBytes } = sha256File(dstBlob)
         const direction = msg.role === 'assistant' ? 'outbound' : 'inbound'
         ops.db.run(
           `INSERT INTO blobs (
