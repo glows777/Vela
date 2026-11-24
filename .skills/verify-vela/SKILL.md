@@ -37,7 +37,7 @@ REPO=$PWD; H=$REPO/.skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date
 
 ## Choose the model
 
-`VERIFY_MODEL=mock` (default) is the keyword demo model in `packages/core/src/testing/demo-model.ts`:
+`VERIFY_MODEL=mock` (default) is the keyword demo model in `packages/vela/src/testing/core/demo-model.ts`:
 
 | Prompt | Model does |
 |---|---|
