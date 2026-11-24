@@ -62,7 +62,7 @@ export function githubFixture() {
   const statePath = join(root, 'gh.json')
   mkdirSync(cwd)
   mkdirSync(bin)
-  const settingsPath = join(agentDir, 'settings.json')
+  const settingsPath = join(agentDir, 'config.json')
   const env = {
     HOME: root,
     VELA_DIR: agentDir,

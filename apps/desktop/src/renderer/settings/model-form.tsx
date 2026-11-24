@@ -13,7 +13,7 @@ import { Button } from '../ui/button.tsx'
 import { Select } from '../ui/select.tsx'
 import styles from './model-form.module.css'
 
-/** The select value for a provider models.json doesn't define yet. */
+/** The select value for a provider config.json doesn't define yet. */
 const CUSTOM = ''
 const APIS: { value: ProviderApi; label: string }[] = [
   { value: 'openai-completions', label: 'OpenAI Chat Completions' },
@@ -136,7 +136,7 @@ export function ModelForm({
           <Field
             label="Provider name"
             htmlFor="model-provider-name"
-            note="The name in models.json and auth.json."
+            note="The name in config.json and auth.json."
           >
             <Input
               id="model-provider-name"

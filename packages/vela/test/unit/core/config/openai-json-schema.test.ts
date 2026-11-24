@@ -36,7 +36,7 @@ test.each([
     const dir = tempDir('vela-openai-json-schema-')
     dirs.push(dir)
     writeFileSync(
-      join(dir.path, 'models.json'),
+      join(dir.path, 'config.json'),
       JSON.stringify({
         providers: {
           compat: {

@@ -1,11 +1,12 @@
 /**
  * MCP server configuration (like pi's `extensions/mcp/config.ts`): the `mcpServers` format of
- * Claude Desktop / Claude Code, read from `~/.vela/mcp.json` and the trusted project's
- * `.vela/mcp.json`. Invalid entries are reported and skipped; they don't stop other servers.
+ * Claude Desktop / Claude Code, read from `~/.vela/config.json` and the trusted project's
+ * `.vela/config.json`. Invalid entries are reported and skipped; they don't stop other servers.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { formatJsonParseError } from '../config/index.ts'
 import type { ExtensionConfigDefinition } from '../extension-api.ts'
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -255,7 +256,7 @@ function interpolateServer(
 }
 
 /**
- * Reads `<agentDir>/mcp.json`, then `<cwd>/.vela/mcp.json` when the project is trusted (like pi). A
+ * Reads `mcpServers` from `<agentDir>/config.json`, then `<cwd>/.vela/config.json` when the project is trusted (like pi). A
  * project entry replaces the user entry of the same name; one without `command`, `url` or `type`
  * only overrides its `enabled`, `exposure` and `toolExposure`. Variables are resolved from `env`.
  */
@@ -266,27 +267,29 @@ export function loadMcpServers(options: {
   env: Env
 }): McpServersFile {
   const result: McpServersFile = { servers: {}, sources: {}, errors: [] }
-  const files = [join(options.agentDir, 'mcp.json')]
-  if (options.trusted) files.push(join(options.projectDir, 'mcp.json'))
+  const files = [join(options.agentDir, 'config.json')]
+  if (options.trusted) files.push(join(options.projectDir, 'config.json'))
   for (const file of files) {
     if (!existsSync(file)) continue
     let servers: unknown
+    const rawText = readFileSync(file, 'utf-8')
     try {
-      servers = (
-        JSON.parse(readFileSync(file, 'utf-8')) as { mcpServers?: unknown }
-      ).mcpServers
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(rawText)
+      } catch (error) {
+        throw new Error(formatJsonParseError(file, rawText, error))
+      }
+      servers = (parsed as { mcpServers?: unknown }).mcpServers
       if (servers === undefined) continue
       if (!isPlainObject(servers))
-        throw new Error('mcpServers must be an object')
+        throw new Error(`${file}: mcpServers must be an object`)
     } catch (error) {
-      result.errors.push(
-        `${file}: ${error instanceof Error ? error.message : String(error)}`,
-      )
+      result.errors.push(error instanceof Error ? error.message : String(error))
       continue
     }
     for (const [name, raw] of Object.entries(servers)) {
       const existing = result.servers[name]
-      let entry: unknown = raw
       if (
         isPlainObject(raw) &&
         isPlainObject(existing) &&
@@ -309,10 +312,13 @@ export function loadMcpServers(options: {
             raw[key],
           ]),
         )
-        entry = { ...existing, ...overrides }
+        // `existing` is already interpolated; apply exposure overrides without re-expanding user strings.
+        result.servers[name] = { ...existing, ...overrides }
+        result.sources[name] = file
+        continue
       }
       try {
-        result.servers[name] = interpolateServer(name, entry, options.env)
+        result.servers[name] = interpolateServer(name, raw, options.env)
         result.sources[name] = file
       } catch (error) {
         delete result.servers[name]
@@ -327,7 +333,6 @@ export function loadMcpServers(options: {
 
 export const mcpConfig: ExtensionConfigDefinition = {
   name: 'mcp',
-  projectResources: ['mcp.json'],
   resolve(section, context) {
     const files = loadMcpServers(context)
     const settings = isPlainObject(section.mcpServers) ? section.mcpServers : {}

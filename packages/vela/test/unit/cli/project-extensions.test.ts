@@ -6,7 +6,7 @@ import {
   cliProjectExtensions,
 } from '../../../src/cli/project-extensions.ts'
 import { loadCliExtensions, parseArgs } from '../../../src/cli/setup.ts'
-import { loadConfig } from '../../../src/config/index.ts'
+import { loadConfig } from '../../../src/load-config.ts'
 import { tempDir } from '../../../src/testing/core/index.ts'
 
 const dirs: ReturnType<typeof tempDir>[] = []
@@ -23,23 +23,19 @@ function fixture() {
     mkdirSync(root, { recursive: true })
   const write = (root: string, file: string, value: unknown) =>
     writeFileSync(join(root, file), JSON.stringify(value))
-  write(agentDir, 'mcp.json', {
+  write(agentDir, 'config.json', {
     mcpServers: { shared: { command: 'user-server' } },
+    extensionConfig: { custom: { marker: 'user' } },
   })
-  write(join(a, '.vela'), 'mcp.json', {
+  write(join(a, '.vela'), 'config.json', {
     mcpServers: { project: { command: 'a-server' } },
+    extensionConfig: { custom: { marker: 'A' } },
   })
-  write(join(b, '.vela'), 'mcp.json', {
+  write(join(b, '.vela'), 'config.json', {
     mcpServers: {
       project: { command: 'b-server' },
       shared: { enabled: false },
     },
-  })
-  write(agentDir, 'settings.json', {
-    extensionConfig: { custom: { marker: 'user' } },
-  })
-  write(join(a, '.vela'), 'settings.json', {
-    extensionConfig: { custom: { marker: 'A' } },
   })
   const config = loadConfig({
     cwd: a,
@@ -71,7 +67,7 @@ test('MCP snapshot follows B, merges user overrides and changes key without muta
     'mcp',
     'todo',
   ])
-  t.write(join(t.b, '.vela'), 'mcp.json', {
+  t.write(join(t.b, '.vela'), 'config.json', {
     mcpServers: { project: { command: 'new-b-server' } },
   })
   const second = await load(t.input)
@@ -170,7 +166,7 @@ test('project overrides of host user singletons are diagnosed without changing h
 test('host listener activation is frozen from startup project selection, including plus and minus overrides', async () => {
   const t = fixture()
   const errors: string[] = []
-  t.write(join(t.a, '.vela'), 'settings.json', {
+  t.write(join(t.a, '.vela'), 'config.json', {
     extensions: ['-builtin:lark'],
   })
   const disabled = loadConfig({
@@ -187,8 +183,8 @@ test('host listener activation is frozen from startup project selection, includi
       true,
     ),
   ).toEqual([])
-  t.write(t.agentDir, 'settings.json', { extensions: ['-builtin:lark'] })
-  t.write(join(t.a, '.vela'), 'settings.json', {
+  t.write(t.agentDir, 'config.json', { extensions: ['-builtin:lark'] })
+  t.write(join(t.a, '.vela'), 'config.json', {
     extensions: ['+builtin:lark'],
   })
   const enabled = loadConfig({

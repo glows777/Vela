@@ -1,10 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { anthropic, createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI, openai } from '@ai-sdk/openai'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
-import { interpolate, isPlainObject } from '../shared/interpolate.ts'
+import { assertNoLegacyConfigFiles, parseConfig } from '../config/index.ts'
+import { interpolate } from '../shared/interpolate.ts'
+import type { ModelSpec, ProviderConfig } from '../shared/provider-types.ts'
 import {
   chatGPTRequests,
   openaiChatGPTLogin,
@@ -15,36 +17,14 @@ import { deepseekReasoningStream } from './deepseek-responses.ts'
 import {
   catalogLookup,
   catalogModels,
-  type ModelCompat,
-  type ModelSpec,
+  isLocalOnlyOAuthBlocked,
   type ProviderContext,
   type ProviderDefinition,
 } from './models/index.ts'
 
+export type { ProviderConfig } from '../shared/provider-types.ts'
+
 type Env = Record<string, string | undefined>
-
-/** Wire protocol of a models.json provider (pi's `api` field; only these are supported). */
-export type ProviderApi =
-  | 'openai-completions'
-  | 'openai-responses'
-  | 'anthropic-messages'
-
-const APIS: readonly ProviderApi[] = [
-  'openai-completions',
-  'openai-responses',
-  'anthropic-messages',
-]
-
-/** One provider in `~/.vela/models.json` (same shape as pi). */
-export interface ProviderConfig {
-  api?: ProviderApi
-  baseUrl?: string
-  /** `$VAR` / `${VAR}` reads an environment variable */
-  apiKey?: string
-  headers?: Record<string, string>
-  models?: ModelSpec[]
-  compat?: ModelCompat
-}
 
 interface BuiltinProvider {
   config: ProviderConfig
@@ -126,17 +106,21 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
 }
 
 /**
- * Reads `<agentDir>/models.json`, merges it with the built-in providers and returns
- * `providers` for createVela. User-level directory only (like pi, projects have no models.json).
+ * Reads `providers` from `<agentDir>/config.json`, merges it with the built-in providers and
+ * returns `providers` for createVela. User-level directory only (projects cannot define providers).
  */
 export function loadModels(options: {
   agentDir: string
   env?: Env
+  providers?: Record<string, ProviderConfig>
   overrides?: Record<string, ProviderConfig>
 }): Record<string, ProviderDefinition> {
   const env = options.env ?? {}
-  const file = join(options.agentDir, 'models.json')
-  const fromFile = { ...readModelsFile(file), ...options.overrides }
+  const file = join(options.agentDir, 'config.json')
+  const fromFile = {
+    ...(options.providers ?? readProvidersFromConfig(file)),
+    ...options.overrides,
+  }
   const names = new Set([
     ...Object.keys(BUILTIN_PROVIDERS),
     ...Object.keys(fromFile),
@@ -199,64 +183,10 @@ function mergeModels(
   return [...byId.values()]
 }
 
-function readModelsFile(file: string): Record<string, ProviderConfig> {
+function readProvidersFromConfig(file: string): Record<string, ProviderConfig> {
+  assertNoLegacyConfigFiles(dirname(file))
   if (!existsSync(file)) return {}
-  let raw: unknown
-  try {
-    raw = JSON.parse(readFileSync(file, 'utf-8'))
-  } catch (error) {
-    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`)
-  }
-  const providers = isPlainObject(raw) ? raw.providers : undefined
-  if (providers === undefined) return {}
-  if (!isPlainObject(providers))
-    throw new Error(`${file}: providers must be an object`)
-  for (const [name, config] of Object.entries(providers)) {
-    if (!isPlainObject(config))
-      throw new Error(`${file}: providers.${name} must be an object`)
-    if (config.api !== undefined && !APIS.includes(config.api as ProviderApi))
-      throw new Error(
-        `${file}: providers.${name}.api must be one of ${APIS.join(' / ')}`,
-      )
-    validateCompat(config.compat, `${file}: providers.${name}.compat`)
-    const models = config.models
-    if (
-      models !== undefined &&
-      (!Array.isArray(models) ||
-        models.some((m) => !isPlainObject(m) || typeof m.id !== 'string'))
-    )
-      throw new Error(
-        `${file}: providers.${name}.models must be an array of objects with an id`,
-      )
-    if (Array.isArray(models))
-      for (const [index, model] of models.entries())
-        validateCompat(
-          model.compat,
-          `${file}: providers.${name}.models[${index}].compat`,
-        )
-  }
-  return providers as Record<string, ProviderConfig>
-}
-
-function validateCompat(value: unknown, label: string): void {
-  if (value === undefined) return
-  if (!isPlainObject(value)) throw new Error(`${label} must be an object`)
-  if (
-    value.hostedTools !== undefined &&
-    (!Array.isArray(value.hostedTools) ||
-      value.hostedTools.some((tool) => tool !== 'web_search'))
-  )
-    throw new Error(
-      `${label}.hostedTools must be an array containing only web_search`,
-    )
-  for (const key of [
-    'store',
-    'includeWebSearchSources',
-    'supportsDeveloperRole',
-    'deepseekReasoningStream',
-  ] as const)
-    if (value[key] !== undefined && typeof value[key] !== 'boolean')
-      throw new Error(`${label}.${key} must be a boolean`)
+  return parseConfig(readFileSync(file, 'utf-8'), file).providers ?? {}
 }
 
 /** Placeholder the AI SDK sends until the auth fetch replaces it with the key of this request */
@@ -284,14 +214,14 @@ function createProvider(
   const envKey = builtin?.envKey
   const configured = () => read(config.apiKey)
 
-  // Like pi: a stored credential first, then models.json's apiKey, then the environment variable
+  // Like pi: a stored credential first, then config.json's apiKey, then the environment variable
   const authSource = (credential: Credential | undefined) => {
     if (credential)
       return credential.type === 'oauth' ? 'OAuth (auth.json)' : 'auth.json'
     if (configured())
       return config.apiKey?.startsWith('$')
         ? config.apiKey.replace(/[${}]/g, '')
-        : 'models.json'
+        : 'config.json'
     if (envKey && env[envKey]) return envKey
   }
 
@@ -307,14 +237,23 @@ function createProvider(
           `auth.json has an OAuth credential for ${name}, but Vela has no OAuth sign-in for this provider; run /logout ${name}`,
         )
       const channel = ctx.channel()
-      if (oauthRequests?.localOnly && channel)
+      if (oauthRequests?.localOnly && channel) {
+        const fallback = configured() ?? (envKey ? env[envKey] : undefined)
+        if (fallback) return { key: fallback, oauth: false }
         throw new Error(
           `${oauth.name} is only for the local terminal, not for ${channel}; give ${name} an API key (/login ${name} → Enter an API key, or the ${envKey} environment variable) or have this channel use another model`,
         )
+      }
       return { key: credential.access, oauth: true }
     }
     const key = configured() ?? (envKey ? env[envKey] : undefined)
     if (key) return { key, oauth: false }
+    if (oauth && isLocalOnlyOAuthBlocked(ctx)) {
+      const channel = ctx.channel() ?? 'this channel'
+      throw new Error(
+        `${oauth.name} is only for the local terminal, not for ${channel}; give ${name} an API key (/login ${name} → Enter an API key, or the ${envKey} environment variable) or have this channel use another model`,
+      )
+    }
     const ways = [
       ...(oauth || builtin ? [`run /login ${name}`] : []),
       ...(config.apiKey?.startsWith('$')
@@ -485,7 +424,12 @@ function createProvider(
               }
             }
             // The OAuth route's requirements remain authoritative over caller/default options.
-            return transform && (await ctx.credential())?.type === 'oauth'
+            const blockedLocalOAuth = Boolean(
+              oauthRequests?.localOnly && ctx.channel(),
+            )
+            return transform &&
+              !blockedLocalOAuth &&
+              (await ctx.credential())?.type === 'oauth'
               ? transform(params)
               : params
           },

@@ -16,17 +16,17 @@ function setup() {
   mkdirSync(agentDir)
   const writeSettings = (cwd: string, values: object) => {
     mkdirSync(join(cwd, '.vela'), { recursive: true })
-    writeFileSync(join(cwd, '.vela/settings.json'), JSON.stringify(values))
+    writeFileSync(join(cwd, '.vela/config.json'), JSON.stringify(values))
   }
   writeSettings(a, {
-    defaultModel: 'fake/a',
-    defaultThinkingLevel: 'low',
+    model: 'fake/a',
+    thinkingLevel: 'low',
     limits: { maxRetries: 1 },
     autoCompaction: true,
   })
   writeSettings(b, {
-    defaultModel: 'fake/b',
-    defaultThinkingLevel: 'high',
+    model: 'fake/b',
+    thinkingLevel: 'high',
     limits: { maxRetries: 4, maxInputTokens: 8000 },
     autoCompaction: false,
   })
@@ -219,7 +219,7 @@ test('local project shellPath selects the real A/B shell wrapper for SDK bash', 
       )
       chmodSync(wrapper, 0o755)
       t.writeSettings(cwd, {
-        defaultModel: `fake/${label.toLowerCase()}`,
+        model: `fake/${label.toLowerCase()}`,
         shellPath: wrapper,
       })
     }

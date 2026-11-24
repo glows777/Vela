@@ -1,11 +1,12 @@
-import { interpolateDeep } from '../../shared/interpolate.ts'
-import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
 import {
-  omitProjectLocation,
-  parseSettings,
+  interpolateConfigLayer,
+  LEGACY_CONFIG_FILES,
+  parseConfig,
   RESOURCE_KEYS,
+  stripProjectPrivilegedKeys,
   type VelaSettings,
-} from './settings-values.ts'
+} from '../../config/index.ts'
+import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
 
 interface ProjectSettingsOptions {
   cwd: string
@@ -43,14 +44,32 @@ export async function loadProjectSettings(
   const projectDir = await join(options.cwd, '.vela')
   if (environment.id === 'node:local' && projectDir === options.agentDir)
     return empty
-  const file = await join(projectDir, 'settings.json')
+  const file = await join(projectDir, 'config.json')
   const content = await environment.readTextFile(file, signal)
   if (!content.ok) {
-    if (content.error.code === 'not_found') return empty
+    if (content.error.code === 'not_found') {
+      if (typeof environment.exists === 'function') {
+        const legacy: string[] = []
+        for (const name of LEGACY_CONFIG_FILES) {
+          const present = value(
+            await environment.exists(await join(projectDir, name), signal),
+          )
+          if (present) legacy.push(name)
+        }
+        if (legacy.length > 0) {
+          throw new Error(
+            `${projectDir}: found legacy config file(s) (${legacy.join(', ')}) without config.json; v0.9 uses unified config.json`,
+          )
+        }
+      }
+      return empty
+    }
     throw content.error
   }
-  const settings = parseSettings(content.value, file)
-  omitProjectLocation(settings)
+  const settings = parseConfig(content.value, file, undefined, {
+    layer: 'project',
+  })
+  stripProjectPrivilegedKeys(settings)
   for (const key of RESOURCE_KEYS) {
     const entries = settings[key]
     if (!entries) continue
@@ -68,14 +87,11 @@ export async function loadProjectSettings(
       }),
     )
   }
-  settings.extensionConfig = interpolateDeep(
-    settings.extensionConfig ?? {},
-    options.env ?? {},
-  )
+  const interpolated = interpolateConfigLayer(settings, options.env ?? {})
   return {
-    settings,
+    settings: interpolated,
     files: [file],
-    skillDirs: settings.skills ?? [],
-    promptDirs: settings.prompts ?? [],
+    skillDirs: interpolated.skills ?? [],
+    promptDirs: interpolated.prompts ?? [],
   }
 }

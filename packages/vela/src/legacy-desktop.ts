@@ -4,7 +4,7 @@
  * @internal
  */
 export { resolveModel } from './driver/diagnostics.ts'
-export { loadConfig, loadModels } from './driver/index.ts'
+export { loadModels } from './driver/index.ts'
 export {
   connectLarkSetup,
   discoverLarkGroup,
@@ -14,4 +14,5 @@ export {
   channelSessionId,
   createChannelVela,
 } from './legacy-channels/index.ts'
+export { loadConfig } from './load-config.ts'
 export { resolveShellPath } from './shared/shell-path.ts'

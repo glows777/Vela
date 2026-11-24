@@ -32,17 +32,6 @@ export type {
  */
 
 export {
-  type ExtensionEntry,
-  importExtension,
-  type LoadConfigOptions,
-  loadConfig,
-  loadModels,
-  type ProviderApi,
-  type ProviderConfig,
-  type VelaConfig,
-  type VelaSettings,
-} from './config/index.ts'
-export {
   inspectSession,
   inspectVela,
   type SessionInspection,
@@ -255,6 +244,17 @@ export type {
   IncomingMessage,
   OutgoingMessage,
 } from './legacy-channels/index.ts'
+export {
+  type ExtensionEntry,
+  importExtension,
+  type LoadConfigOptions,
+  loadConfig,
+  loadModels,
+  type ProviderApi,
+  type ProviderConfig,
+  type VelaConfig,
+  type VelaSettings,
+} from './load-config.ts'
 export {
   type McpExposure,
   type McpHttpServerConfig,

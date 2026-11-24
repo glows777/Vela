@@ -7,7 +7,26 @@ import { startHost } from './restart-host.ts'
 const mainDir = path.dirname(fileURLToPath(import.meta.url))
 const canvas = tokens.tokens['vela-white']
 
-const createWindow = (hostError = false) => {
+const LEGACY_CONFIG_NAMES = new Set([
+  'settings.json',
+  'models.json',
+  'mcp.json',
+])
+
+function extractLegacyFiles(error: unknown): string[] {
+  const message = error instanceof Error ? error.message : String(error)
+  const match =
+    /found legacy config file\(s\) \(([^)]+)\) without config\.json/i.exec(
+      message,
+    )
+  if (!match) return []
+  return match[1]!
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => LEGACY_CONFIG_NAMES.has(name))
+}
+
+const createWindow = (hostError: false | { legacyFiles: string[] } = false) => {
   const colorScheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
   const theme = nativeTheme.shouldUseHighContrastColors
     ? 'high-contrast'
@@ -40,12 +59,25 @@ const createWindow = (hostError = false) => {
       ? 'specimen.html'
       : 'index.html'
     const url = new URL(entry, MAIN_WINDOW_VITE_DEV_SERVER_URL)
-    if (hostError) url.searchParams.set('hostError', '1')
+    if (hostError) {
+      url.searchParams.set('hostError', '1')
+      if (hostError.legacyFiles.length > 0)
+        url.searchParams.set('legacyFiles', hostError.legacyFiles.join(','))
+    }
     void window.loadURL(url.href)
   } else {
     void window.loadFile(
       path.join(mainDir, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-      hostError ? { query: { hostError: '1' } } : undefined,
+      hostError
+        ? {
+            query: {
+              hostError: '1',
+              ...(hostError.legacyFiles.length > 0
+                ? { legacyFiles: hostError.legacyFiles.join(',') }
+                : {}),
+            },
+          }
+        : undefined,
     )
   }
 }
@@ -53,11 +85,11 @@ const createWindow = (hostError = false) => {
 let dispose: (() => Promise<void>) | undefined
 let closing = false
 void app.whenReady().then(async () => {
-  let hostError = false
+  let hostError: false | { legacyFiles: string[] } = false
   try {
     dispose = await startHost()
   } catch (error) {
-    hostError = true
+    hostError = { legacyFiles: extractLegacyFiles(error) }
     console.error('Vela startup failed:', error)
   }
   session.defaultSession.setPermissionRequestHandler(

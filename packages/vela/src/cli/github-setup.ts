@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process'
+import { updateConfigFile } from '../config/index.ts'
 import {
   githubOrigin,
   githubRepositories,
-  prepareGithubSettings,
+  githubSettingsPath,
+  mergeGithubSettings,
 } from './github-setup-config.ts'
-import { saveUserSettings } from './user-settings.ts'
 
 const EVENTS = [
   'check_suite',
@@ -113,12 +114,13 @@ export async function githubSetup(
     }
     const repositories = githubRepositories(repos)
     const payloadUrl = `${githubOrigin(url)}/events/github`
-    const prepared = prepareGithubSettings(options.agentDir, repositories, env)
-    secret = prepared.secret
-    saveUserSettings(options.agentDir, prepared.settings)
-    write(
-      `Saved GitHub receiver settings to ${prepared.path}. Project settings may override user settings; check the effective configuration before serving.`,
-    )
+    const path = githubSettingsPath(options.agentDir)
+    updateConfigFile(options.agentDir, (current) => {
+      const merged = mergeGithubSettings(current, repositories, env)
+      secret = merged.secret
+      return merged.settings
+    })
+    write(`Saved GitHub receiver settings to ${path}.`)
     try {
       gh(['auth', 'status', '--active', '--hostname', 'github.com'], env)
     } catch (error) {

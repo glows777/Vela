@@ -79,7 +79,7 @@ function rotated(
 
 /**
  * Checks a provider and model with one small request, then saves it through the same steps
- * `vela setup` uses: `auth.json`, `models.json` (custom providers) and `settings.json`. Nothing is
+ * `vela setup` uses: `auth.json` and `config.json`. Nothing is
  * written before the check passes, except the renewed sign-in the provider itself rotated.
  */
 export async function saveModel(options: {
@@ -130,7 +130,7 @@ export async function saveModel(options: {
     )
   const ref = `${provider}/${model}`
   // The check a session makes when it opens: a provider name or model id nothing can load is refused
-  // here, before auth.json and models.json are written for it.
+  // here, before auth.json and config.json are written for it.
   try {
     resolveModel(ref, { providers, credentials: memory })
   } catch (error) {

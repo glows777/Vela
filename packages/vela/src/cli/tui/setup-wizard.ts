@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SelectItem } from '@earendil-works/pi-tui'
+import { formatJsonParseError } from '../../config/index.ts'
 import { THINKING_LEVELS } from '../../driver/diagnostics.ts'
 import {
   type AuthInteraction,
@@ -46,20 +47,24 @@ interface Host {
 }
 
 function readObject(path: string): Record<string, unknown> {
-  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+  if (!existsSync(path)) return {}
+  const text = readFileSync(path, 'utf8')
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(formatJsonParseError(path, text, error))
+  }
 }
 
 /** One setup flow for first run and explicit `vela setup`. No credentials are persisted before verification. */
 export async function setupWizard(host: Host): Promise<boolean> {
   const { agentDir } = host
-  const settingsPath = join(agentDir, 'settings.json')
-  const modelsPath = join(agentDir, 'models.json')
+  const configPath = join(agentDir, 'config.json')
   const authPath = join(agentDir, 'auth.json')
-  const settings = readObject(settingsPath)
-  const modelsFile = readObject(modelsPath)
-  if (typeof settings.defaultModel === 'string') {
-    const name = settings.defaultModel.split('/')[0] ?? ''
-    const definitions = (modelsFile.providers ?? {}) as Record<
+  const settings = readObject(configPath)
+  if (typeof settings.model === 'string') {
+    const name = settings.model.split('/')[0] ?? ''
+    const definitions = (settings.providers ?? {}) as Record<
       string,
       ProviderConfig
     >
@@ -67,7 +72,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
       .fileCredentialStore(authPath)
       .get(name)
     const current = await host.select(
-      `Current model: ${settings.defaultModel} · thinking: ${settings.defaultThinkingLevel ?? 'medium'}\nCredential: ${credential ? 'saved' : 'not saved in auth.json'}${definitions[name]?.baseUrl ? ` · endpoint: ${definitions[name].baseUrl}` : ''}`,
+      `Current model: ${settings.model} · thinking: ${settings.thinkingLevel ?? 'medium'}\nCredential: ${credential ? 'saved' : 'not saved in auth.json'}${definitions[name]?.baseUrl ? ` · endpoint: ${definitions[name].baseUrl}` : ''}`,
       [
         { value: 'keep', label: 'Keep current configuration' },
         { value: 'change', label: 'Change configuration' },
@@ -75,7 +80,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
     )
     if (!current) return false
     if (current === 'keep') {
-      const summary = `No changes. Current configuration: ${settingsPath}`
+      const summary = `No changes. Current configuration: ${configPath}`
       host.addNotice(summary)
       host.setSummary(summary)
       return true
@@ -134,7 +139,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
       }
     }
   }
-  const savedProviders = (modelsFile.providers ?? {}) as Record<
+  const savedProviders = (settings.providers ?? {}) as Record<
     string,
     ProviderConfig
   >
@@ -254,9 +259,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
         .filter((m) => m.provider === provider)
       const selected = await host.pickModel(
         candidates,
-        typeof settings.defaultModel === 'string'
-          ? settings.defaultModel
-          : undefined,
+        typeof settings.model === 'string' ? settings.model : undefined,
       )
       id = selected?.slice(provider.length + 1)
     }
@@ -360,8 +363,8 @@ export async function setupWizard(host: Host): Promise<boolean> {
     const thinking = await host.select(
       'Thinking level',
       levels.map((level) => ({ value: level, label: level })),
-      typeof settings.defaultThinkingLevel === 'string'
-        ? settings.defaultThinkingLevel
+      typeof settings.thinkingLevel === 'string'
+        ? settings.thinkingLevel
         : 'medium',
     )
     if (!thinking) return false
@@ -372,7 +375,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
     if (!lark) return false
     const larkNote = ''
     const save = await host.select(
-      `Save configuration for ${ref}\nThinking: ${thinking}\nCredentials: ${authPath}\nModels: ${modelsPath}\nSettings: ${settingsPath}`,
+      `Save configuration for ${ref}\nThinking: ${thinking}\nCredentials: ${authPath}\nConfig: ${configPath}`,
       [
         { value: 'yes', label: 'Save configuration' },
         { value: 'no', label: 'Cancel' },

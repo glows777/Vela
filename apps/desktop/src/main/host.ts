@@ -75,7 +75,7 @@ export async function openHost(
     ? await (await import('@glows777/vela/testing')).loadFauxScenario(
         process.env.VELA_MODEL.slice(5),
       )
-    : config.settings.defaultModel
+    : config.settings.model
   const fixtureDir = process.env.VELA_DESKTOP_LARK_DIR
   const transport =
     loadLark && process.env.VELA_DESKTOP_LARK === 'fake'
@@ -92,7 +92,7 @@ export async function openHost(
     model,
     providers: config.providers,
     credentials: config.credentials,
-    thinkingLevel: config.settings.defaultThinkingLevel,
+    thinkingLevel: config.settings.thinkingLevel,
     sessionResources: config.sessionResources,
     limits: config.settings.limits,
     autoCompaction: config.settings.autoCompaction,
@@ -123,7 +123,7 @@ export async function openHost(
       })
     } catch {
       throw new Error(
-        'Could not read desktop settings. Check the data directory, settings.json, models.json and auth.json, then try again.',
+        'Could not read desktop settings. Check the data directory, config.json and auth.json, then try again.',
       )
     }
   }

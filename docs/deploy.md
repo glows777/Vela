@@ -31,10 +31,10 @@ sudo npm install -g @glows777/vela
 
 User-level configuration lives in `VELA_DIR`, which the unit sets to `/home/vela/.vela`:
 
-- `settings.json`: the channel configuration, for example `extensionConfig.lark` with `appId`, `owners` and `chats` (see [Channels](channels.md#lark)).
-- An environment file for secrets, so they stay out of `settings.json`.
+- `config.json`: the channel configuration, for example `lark` with `appId`, `owners` and `chats` (see [Channels](channels.md#lark)).
+- An environment file for secrets, so they stay out of `config.json`.
 
-Vela reads `LARK_APP_ID`, `LARK_APP_SECRET`, `LARK_OWNERS` and provider keys such as `ANTHROPIC_API_KEY` from the environment, and `settings.json` can reference them as `$LARK_APP_SECRET` ([CLI environment variables](cli.md#environment-variables)). Create the file with mode `0600`, owned by the service user:
+Vela reads `LARK_APP_ID`, `LARK_APP_SECRET`, `LARK_OWNERS` and provider keys such as `ANTHROPIC_API_KEY` from the environment, and `config.json` can reference them as `$LARK_APP_SECRET` ([CLI environment variables](cli.md#environment-variables)). Create the file with mode `0600`, owned by the service user:
 
 ```sh
 sudo install -d -m 755 /etc/vela
@@ -75,7 +75,7 @@ WantedBy=multi-user.target
 - `ExecStart` takes the absolute path from `command -v vela`. `serve` stays in the foreground until SIGTERM, which is what `Type=simple` expects.
 - `WorkingDirectory` is the folder Vela starts in, and it selects the project data directory.
 - `EnvironmentFile` holds the secrets. A missing file fails the start instead of running without a key.
-- `Restart=on-failure` restarts after a crash or a non-zero exit. `serve` exits 1 when no channel starts, so a broken `settings.json` shows up as repeated restarts in the journal rather than as a running service.
+- `Restart=on-failure` restarts after a crash or a non-zero exit. `serve` exits 1 when no channel starts, so a broken `config.json` shows up as repeated restarts in the journal rather than as a running service.
 - There is no `StandardOutput=` or shell redirection: `vela serve` writes one line per event to stderr, which journald already collects. Vela does not rotate its own log.
 
 ```sh
@@ -112,7 +112,7 @@ The running process keeps the old code until the restart. A run in progress is s
 
 | Path | What |
 |---|---|
-| `settings.json`, `trust.json` | Channel configuration and saved project-trust answers |
+| `config.json`, `trust.json` | Unified configuration (model, channels, providers) and saved project-trust answers |
 | `auth.json` | Provider credentials saved by `/login`, mode `0600` |
 | `projects/<working folder>/sessions/` | Every conversation, mode `0600` in `0700` directories |
 | `projects/<working folder>/usage/requests.jsonl` | Token usage |

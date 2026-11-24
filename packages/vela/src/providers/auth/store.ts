@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
@@ -8,9 +9,12 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs'
 import { dirname } from 'node:path'
+import { formatJsonParseError } from '../../config/index.ts'
 import { isPlainObject } from '../../shared/interpolate.ts'
 import type { Credential, CredentialStore } from './types.ts'
 
@@ -71,11 +75,12 @@ export function fileCredentialStore(path: string): CredentialStore {
     const stat = statSync(path)
     if (cache && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size)
       return cache.data
+    const text = readFileSync(path, 'utf-8')
     let raw: unknown
     try {
-      raw = JSON.parse(readFileSync(path, 'utf-8'))
+      raw = JSON.parse(text)
     } catch (error) {
-      throw new Error(`${path} is not valid JSON: ${(error as Error).message}`)
+      throw new Error(formatJsonParseError(path, text, error))
     }
     if (!isPlainObject(raw)) throw new Error(`${path} must contain an object`)
     for (const [provider, credential] of Object.entries(raw))
@@ -94,21 +99,37 @@ export function fileCredentialStore(path: string): CredentialStore {
     return cache.data
   }
 
-  const write = (data: Record<string, Credential>) => {
-    const temp = `${path}.${process.pid}.tmp`
-    writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 })
-    chmodSync(temp, 0o600)
-    renameSync(temp, path)
-    cache = undefined
+  const write = (data: Record<string, Credential>, assertOwned: () => void) => {
+    const temp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+    try {
+      writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, {
+        mode: 0o600,
+        flag: 'wx',
+      })
+      chmodSync(temp, 0o600)
+      assertOwned()
+      renameSync(temp, path)
+      cache = undefined
+    } finally {
+      rmSync(temp, { force: true })
+    }
   }
 
-  const withFileLock = async <T>(task: () => Promise<T>): Promise<T> => {
+  const withFileLock = async <T>(
+    task: (assertOwned: () => void) => Promise<T>,
+  ): Promise<T> => {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     const lock = `${path}.lock`
+    const token = `${process.pid}:${randomUUID()}`
     const started = Date.now()
     for (;;) {
       try {
-        closeSync(openSync(lock, 'wx', 0o600))
+        const fd = openSync(lock, 'wx', 0o600)
+        try {
+          writeSync(fd, token)
+        } finally {
+          closeSync(fd)
+        }
         break
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
@@ -123,10 +144,33 @@ export function fileCredentialStore(path: string): CredentialStore {
         await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS))
       }
     }
+    const assertOwned = () => {
+      let holder: string | undefined
+      try {
+        holder = readFileSync(lock, 'utf8')
+      } catch {}
+      if (holder !== token)
+        throw new Error(`Lost ${lock} ownership before committing auth update`)
+    }
+    const heartbeat = setInterval(
+      () => {
+        try {
+          if (readFileSync(lock, 'utf8') === token) {
+            const now = new Date()
+            utimesSync(lock, now, now)
+          }
+        } catch {}
+      },
+      Math.max(1000, Math.floor(STALE_LOCK_MS / 3)),
+    )
+    heartbeat.unref?.()
     try {
-      return await task()
+      return await task(assertOwned)
     } finally {
-      rmSync(lock, { force: true })
+      clearInterval(heartbeat)
+      try {
+        if (readFileSync(lock, 'utf8') === token) rmSync(lock, { force: true })
+      } catch {}
     }
   }
 
@@ -135,23 +179,23 @@ export function fileCredentialStore(path: string): CredentialStore {
     list: () => Object.keys(read()),
     modify: (provider, fn) =>
       serialize(provider, () =>
-        withFileLock(async () => {
+        withFileLock(async (assertOwned) => {
           // Re-read under the lock: another process may have refreshed or signed in meanwhile
           cache = undefined
           const data = read()
           const next = await fn(data[provider])
-          if (next) write({ ...read(), [provider]: next })
+          if (next) write({ ...read(), [provider]: next }, assertOwned)
           return read()[provider]
         }),
       ),
     delete: (provider) =>
       serialize(provider, () =>
-        withFileLock(async () => {
+        withFileLock(async (assertOwned) => {
           cache = undefined
           const data = read()
           if (!(provider in data)) return
           const { [provider]: _, ...rest } = data
-          write(rest)
+          write(rest, assertOwned)
         }),
       ),
   }

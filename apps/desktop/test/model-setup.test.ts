@@ -38,8 +38,8 @@ test('a sign-in refreshed during a refused check is still saved', async () => {
   // A model is already saved, and it is not the one being checked: with the same ref on both
   // sides, writing the refused model back would produce the same bytes and the comparison below
   // could not tell "kept" from "switched".
-  const saved = `${JSON.stringify({ defaultModel: 'openai/gpt-5', defaultThinkingLevel: 'low' }, null, 2)}\n`
-  writeFileSync(join(dir, 'settings.json'), saved)
+  const saved = `${JSON.stringify({ model: 'openai/gpt-5', thinkingLevel: 'low' }, null, 2)}\n`
+  writeFileSync(join(dir, 'config.json'), saved)
   writeFileSync(
     join(dir, 'auth.json'),
     JSON.stringify({
@@ -80,7 +80,7 @@ test('a sign-in refreshed during a refused check is still saved', async () => {
     expect(auth.openai.refresh).toBe('new-refresh')
     expect(auth.openai.access).toBe('new-access')
     // The refused model is not saved, and the saved choice is untouched.
-    expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe(saved)
+    expect(readFileSync(join(dir, 'config.json'), 'utf8')).toBe(saved)
   } finally {
     restore()
   }
@@ -112,7 +112,7 @@ test('a typed key is not saved when the check refuses it', async () => {
         env: {},
       }),
     ).rejects.toThrow('invalid api key')
-    for (const name of ['auth.json', 'settings.json', 'models.json'])
+    for (const name of ['auth.json', 'config.json'])
       expect(existsSync(join(dir, name)), name).toBe(false)
   } finally {
     restore()

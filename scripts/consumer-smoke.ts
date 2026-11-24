@@ -25,10 +25,13 @@ const IMAGE = (
 const SMOKE = `
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
-import { writeFile } from 'node:fs/promises'
+import { mkdirSync, rmSync } from 'node:fs'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createVela,
+  importExtension,
   inspectSession,
   inspectVela,
   lark,
@@ -100,6 +103,38 @@ if (!JSON.stringify(model.calls[1]?.prompt).includes('hi Vela'))
 const t = createTestVela({ responses: [fauxText('ok')] })
 await t.run('hello')
 if (t.lastAssistantText() !== 'ok') throw new Error('createTestVela failed')
+
+// Standalone .ts extension outside node_modules resolves host zod + @glows777/vela/extension-api via jiti
+const extRoot = await mkdtemp(join(tmpdir(), 'vela-ext-smoke-'))
+try {
+  const extPath = join(extRoot, 'standalone.ts')
+  await writeFile(
+    extPath,
+    [
+      "import { z } from 'zod'",
+      "import type { ExtensionAPI } from '@glows777/vela/extension-api'",
+      'export default function (api: ExtensionAPI) {',
+      "  api.registerTool({ name: 'ping', description: 'ping', inputSchema: z.object({ v: z.string() }), execute: async ({ v }: { v: string }) => 'pong:' + v })",
+      '}',
+    ].join('\\n'),
+  )
+  const extFactory = await importExtension(extPath, 'standalone')
+  const extModel = createFauxModel({
+    responses: [fauxToolCall('standalone_ping', { v: 'jiti' }), fauxText('ext ok')],
+  })
+  const extVela = createVela({ model: extModel, extensions: [extFactory] })
+  try {
+    const extSession = extVela.session('ext')
+    await extSession.prompt('ping jiti')
+    if (!JSON.stringify(extModel.calls[1]?.prompt).includes('pong:jiti'))
+      throw new Error('jiti standalone extension tool did not execute')
+  } finally {
+    await extVela.dispose()
+  }
+} finally {
+  rmSync(extRoot, { recursive: true, force: true })
+}
+void mkdirSync
 
 // Photon WASM must resolve from the installed package under both Node and Bun.
 const image: ImageContent = { type: 'image', data: '${IMAGE}', mimeType: 'image/png' }

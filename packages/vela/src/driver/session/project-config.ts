@@ -1,7 +1,7 @@
+import { mergeConfig, type VelaSettings } from '../../config/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
 import { loadProjectSettings } from '../config/project-settings.ts'
 import type { ConfigResourceSplit } from '../config/runtime-resources.ts'
-import { mergeSettings, type VelaSettings } from '../config/settings-values.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 
 /** Pinned per-session settings; distinct sessions may observe newer project files. */
@@ -57,7 +57,7 @@ export class ProjectConfig {
                   `[settings] ${env.cwd}: dataDir is host bootstrap configuration; keeping ${this.hostDataDir}`,
                 )
             }
-            const merged = mergeSettings(split.userSettings ?? {}, settings)
+            const merged = mergeConfig(split.userSettings ?? {}, settings)
             // Host resource paths do not name files in a non-local workspace.
             if (env.id !== 'node:local') {
               merged.skills = settings.skills

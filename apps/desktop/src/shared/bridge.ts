@@ -66,7 +66,7 @@ export type SettingsProvider = {
   name: string
   /** Where its credential comes from ('auth.json', 'OPENAI_API_KEY', …); absent when none is saved. */
   credential?: string
-  /** Defined in models.json rather than built in. */
+  /** Defined in config.json rather than built in. */
   custom: boolean
   models: SettingsModel[]
 }
@@ -75,7 +75,7 @@ export type SettingsState = {
   /** The user directory (VELA_DIR). */
   folder: string
   /** The files a model choice writes. */
-  files: { settings: string; models: string; auth: string }
+  files: { config: string; auth: string }
   /** Nothing can answer before a model and its credential are saved. */
   setup: {
     required: boolean
@@ -122,7 +122,7 @@ export type ModelSetup = {
   key?: string
   /** Absent keeps the saved default. */
   thinkingLevel?: ThinkingLevel
-  /** A provider that models.json doesn't define yet; saved with this model. */
+  /** A provider that config.json doesn't define yet; saved with this model. */
   custom?: { api: ProviderApi; baseUrl: string }
 }
 export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
@@ -223,7 +223,7 @@ type LocalEvent = {
 )
 export interface DesktopBridge {
   channels(): Promise<{ name: string; description: string }[]>
-  /** Vela's configuration, without the contents of settings.json, models.json or auth.json. */
+  /** Vela's configuration, without the contents of config.json or auth.json. */
   settings(): Promise<SettingsState>
   /** Checks the key with one small request, then saves the choice; returns the new state. */
   saveModel(input: ModelSetup): Promise<SettingsState>

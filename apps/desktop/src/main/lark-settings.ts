@@ -6,12 +6,12 @@ import type { LarkSetup, SettingsState } from '../shared/bridge.ts'
 export function larkStartupDiagnostic(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : ''
   if (message === 'Duplicate Lark chat id')
-    return 'Lark could not start. Remove duplicate chat IDs from extensionConfig.lark.chats in settings.json.'
+    return 'Lark could not start. Remove duplicate chat IDs from lark.chats in config.json.'
   if (message.startsWith('Unknown Lark tool '))
-    return 'Lark could not start. Check the tools for enabled chats in settings.json.'
+    return 'Lark could not start. Check the tools for enabled chats in config.json.'
   if (message.startsWith('Unknown Lark thinking level '))
-    return 'Lark could not start. Check the thinking levels for enabled chats in settings.json.'
-  return 'Lark could not start. Check extensionConfig.lark in settings.json, then restart the app.'
+    return 'Lark could not start. Check the thinking levels for enabled chats in config.json.'
+  return 'Lark could not start. Check lark in config.json, then restart the app.'
 }
 
 export function larkState(

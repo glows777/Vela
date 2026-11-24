@@ -135,7 +135,7 @@ try {
   const configDir = join(process.cwd(), 'fixture-config')
   await mkdir(configDir)
   await writeFile(
-    join(configDir, 'settings.json'),
+    join(configDir, 'config.json'),
     JSON.stringify({
       eventDefaultTarget: { channel: ' lark ', chatId: ' oc_group ' },
     }),

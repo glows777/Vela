@@ -1,6 +1,6 @@
+import type { VelaSettings } from '../../config/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
 import type { ConfigResourceSplit } from '../config/runtime-resources.ts'
-import type { VelaSettings } from '../config/settings-values.ts'
 import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
 import { loadEnvironmentContextFiles } from '../prompt/environment-context-files.ts'
 import { loadEnvironmentTemplates } from '../prompt/environment-templates.ts'

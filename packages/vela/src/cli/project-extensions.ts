@@ -1,10 +1,11 @@
 import { join, resolve } from 'node:path'
+import { toExtensionConfigView } from '../config/index.ts'
+import type { ChannelExtension } from '../legacy-channels/index.ts'
 import {
   extensionName,
   importExtension,
   type VelaConfig,
-} from '../config/index.ts'
-import type { ChannelExtension } from '../legacy-channels/index.ts'
+} from '../load-config.ts'
 import { mcpConfig } from '../mcp/index.ts'
 import {
   BUILTIN_EXTENSIONS,
@@ -55,7 +56,7 @@ export function cliProjectExtensions(
         .filter((entry) => !('builtin' in entry))
         .map((entry) => entry.name),
     )
-    for (const name of Object.keys(projectSettings.extensionConfig ?? {})) {
+    for (const name of Object.keys(toExtensionConfigView(projectSettings))) {
       if (
         HOST_STORAGE_BUILTINS.has(name) ||
         (hostNames.has(name) && !explicit.has(name))
@@ -66,7 +67,7 @@ export function cliProjectExtensions(
       if (
         name === 'lark' &&
         cwd !== config.cwd &&
-        JSON.stringify(settings.extensionConfig?.lark) !==
+        JSON.stringify(settings.lark) !==
           JSON.stringify(config.extensionConfig.lark)
       )
         onDiagnostic(
@@ -101,18 +102,21 @@ export function cliProjectExtensions(
     )
     const extensionConfig = extensionConfigFromEnv(
       split.env ?? {},
-      settings.extensionConfig ?? {},
+      toExtensionConfigView(settings),
     )
     for (const name of HOST_STORAGE_BUILTINS) delete extensionConfig[name]
     if (!local) delete extensionConfig.mcp
     if (names.includes('mcp'))
-      extensionConfig.mcp = mcpConfig.resolve(extensionConfig.mcp ?? {}, {
-        cwd,
-        agentDir: split.agentDir,
-        projectDir: join(cwd, '.vela'),
-        trusted: trusted && join(cwd, '.vela') !== split.agentDir,
-        env: split.env ?? {},
-      })
+      extensionConfig.mcp = mcpConfig.resolve(
+        {},
+        {
+          cwd,
+          agentDir: split.agentDir,
+          projectDir: join(cwd, '.vela'),
+          trusted: trusted && join(cwd, '.vela') !== split.agentDir,
+          env: split.env ?? {},
+        },
+      )
     const selected = (local && trusted ? entries : []).filter(
       (entry) => !explicit.has(entry.name),
     )

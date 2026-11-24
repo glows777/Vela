@@ -12,15 +12,24 @@ import ts from 'typescript'
  */
 const LAYER_ALLOWED: Record<string, readonly string[]> = {
   shared: [],
-  db: ['shared'],
-  runtime: ['shared', 'db'],
-  providers: ['shared'],
-  driver: ['shared', 'db', 'providers'],
-  mcp: ['shared', 'runtime', 'driver'],
-  lark: ['shared', 'runtime', 'driver', 'legacy-channels'],
-  'legacy-channels': ['shared', 'providers', 'driver'],
-  config: ['shared', 'providers', 'driver', 'mcp', 'legacy-channels'],
-  daemon: ['shared', 'db', 'runtime', 'providers', 'driver', 'mcp', 'lark'],
+  config: ['shared'],
+  db: ['shared', 'config'],
+  runtime: ['shared', 'config', 'db'],
+  providers: ['shared', 'config'],
+  driver: ['shared', 'config', 'db', 'providers'],
+  mcp: ['shared', 'config', 'runtime', 'driver'],
+  lark: ['shared', 'config', 'runtime', 'driver', 'legacy-channels'],
+  'legacy-channels': ['shared', 'config', 'providers', 'driver'],
+  daemon: [
+    'shared',
+    'config',
+    'db',
+    'runtime',
+    'providers',
+    'driver',
+    'mcp',
+    'lark',
+  ],
   cli: [
     'shared',
     'daemon',
@@ -34,6 +43,7 @@ const LAYER_ALLOWED: Record<string, readonly string[]> = {
   ],
   testing: [
     'shared',
+    'config',
     'db',
     'runtime',
     'providers',
@@ -48,6 +58,7 @@ const HEAVY_OWNER: Record<string, string> = {
   '@modelcontextprotocol/sdk': 'mcp',
   '@earendil-works/pi-tui': 'cli',
   '@silvia-odwyer/photon-node': 'shared',
+  jiti: 'driver',
 }
 const HEAVY = new Set(Object.keys(HEAVY_OWNER))
 
@@ -398,7 +409,9 @@ export async function checkBoundaries(root: string): Promise<string[]> {
           const allowedRoot =
             (dstBase === 'extension-api.ts' && canUseDriver) ||
             ((srcLayer === 'cli' || srcLayer === 'testing') &&
-              (dstBase === 'vela.ts' || dstBase === 'settings.ts'))
+              (dstBase === 'vela.ts' ||
+                dstBase === 'settings.ts' ||
+                dstBase === 'load-config.ts'))
           if (!allowedRoot)
             report(
               file,

@@ -1,6 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { saveUserSettings } from './cli/user-settings.ts'
+import {
+  assertNoLegacyConfigFiles,
+  readRawConfigFile,
+  updateConfigFile,
+} from './config/index.ts'
 import {
   type Credential,
   type CredentialStore,
@@ -8,7 +11,6 @@ import {
   type ProviderConfig,
   type ProviderDefinition,
   type ThinkingLevel,
-  writeProviderPreset,
 } from './driver/index.ts'
 
 /**
@@ -18,15 +20,6 @@ import {
  * OAuth device id only the CLI's sign-in produces), so neither frontend owns a second copy of where
  * the files live or which key goes in which one.
  */
-
-/** A settings file as an object; a document of another shape is named instead of failing later. */
-function readObject(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {}
-  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-    throw new Error(`${path} must contain a JSON object`)
-  return parsed as Record<string, unknown>
-}
 
 function objectOf(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -52,9 +45,8 @@ function expandExpression(
 
 /**
  * Writes a provider and model choice the caller has already verified: the credential to `auth.json`,
- * a custom provider preset to `models.json`, then `defaultModel` (and the thinking level when given)
- * to `settings.json`. Paths it wrote are returned in that order; fields it was not given are left as
- * they are on disk.
+ * and any custom provider preset, `model`, and `thinkingLevel` to `config.json`. Paths it wrote are
+ * returned in that order; fields it was not given are left as they are on disk.
  */
 export async function saveModelSetup(options: {
   agentDir: string
@@ -64,7 +56,7 @@ export async function saveModelSetup(options: {
   providers: Record<string, ProviderDefinition>
   /** Credential to store; omit to keep `auth.json` untouched. */
   credential?: Credential
-  /** Custom provider definition for `models.json`; omit for a built-in provider. */
+  /** Custom provider definition for `config.json`; omit for a built-in provider. */
   preset?: ProviderConfig
   /** Thinking level to save with the model; omit to keep the saved one. */
   thinkingLevel?: ThinkingLevel
@@ -78,6 +70,10 @@ export async function saveModelSetup(options: {
   if (!definition) throw new Error(`No provider named ${provider}`)
   const written: string[] = []
   try {
+    // Reject legacy-only profiles and corrupt config before touching auth.json.
+    assertNoLegacyConfigFiles(agentDir)
+    readRawConfigFile(agentDir)
+
     const authPath = join(agentDir, 'auth.json')
     if (options.credential) {
       await fileCredentialStore(authPath).modify(
@@ -86,17 +82,26 @@ export async function saveModelSetup(options: {
       )
       written.push(authPath)
     }
-    if (options.preset) {
-      writeProviderPreset(agentDir, provider, options.preset)
-      written.push(join(agentDir, 'models.json'))
-    }
-    const settingsPath = join(agentDir, 'settings.json')
-    const settings = readObject(settingsPath)
-    settings.defaultModel = ref
-    if (options.thinkingLevel)
-      settings.defaultThinkingLevel = options.thinkingLevel
-    saveUserSettings(agentDir, settings)
-    written.push(settingsPath)
+    const configPath = updateConfigFile(agentDir, (current) => {
+      let providersRecord = current.providers
+      if (options.preset) {
+        const existingProviders =
+          current.providers &&
+          typeof current.providers === 'object' &&
+          !Array.isArray(current.providers)
+            ? (current.providers as Record<string, Record<string, unknown>>)
+            : {}
+        providersRecord = {
+          ...existingProviders,
+          [provider]: { ...existingProviders[provider], ...options.preset },
+        }
+      }
+      const next: Record<string, unknown> = { ...current, model: ref }
+      if (providersRecord !== undefined) next.providers = providersRecord
+      if (options.thinkingLevel) next.thinkingLevel = options.thinkingLevel
+      return next
+    })
+    written.push(configPath)
   } catch (error) {
     // A credential file may already be on disk; saying only "failed" would hide that.
     if (written.length === 0) throw error
@@ -109,7 +114,7 @@ export async function saveModelSetup(options: {
 }
 
 /**
- * Writes the `extensionConfig.lark` section of `settings.json`: the app credentials, one enabled chat
+ * Writes the top-level `lark` section of `config.json`: the app credentials, one enabled chat
  * and the "Run Lark in this app" switch. Keys it was not given keep their saved value. Chats saved as
  * an environment expression (`"$LARK_CHATS"`) cannot be rewritten without losing that expression, so
  * adding or removing one throws instead.
@@ -130,49 +135,50 @@ export async function saveLarkSection(options: {
   if (options.addChat !== undefined && options.removeChat !== undefined)
     throw new Error('Pass either addChat or removeChat, not both')
   const env = options.env ?? {}
-  const path = join(options.agentDir, 'settings.json')
-  const settings = readObject(path)
-  const extensionConfig = objectOf(settings.extensionConfig)
-  const lark = objectOf(extensionConfig.lark)
-  const next: Record<string, unknown> = { ...lark }
-  if (options.addChat !== undefined || options.removeChat !== undefined) {
-    if (typeof lark.chats === 'string' && lark.chats.includes('$'))
-      throw new Error(
-        'Existing chats use an environment expression. Add the group manually to preserve that setting.',
-      )
-    const chats: unknown[] = Array.isArray(lark.chats)
-      ? [...lark.chats]
-      : typeof lark.chats === 'string'
-        ? lark.chats
-            .split(',')
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : []
-    const idOf = (entry: unknown): string | undefined =>
-      typeof entry === 'string'
-        ? expandExpression(entry, env).trim()
-        : typeof objectOf(entry).id === 'string'
-          ? expandExpression(objectOf(entry).id as string, env).trim()
-          : undefined
-    if (options.removeChat !== undefined)
-      next.chats = chats.filter((entry) => idOf(entry) !== options.removeChat)
-    else if (!chats.some((entry) => idOf(entry) === options.addChat))
-      next.chats = [...chats, options.addChat]
-    else next.chats = chats
-  }
-  if (options.appId !== undefined) next.appId = escapeExpression(options.appId)
-  if (options.appSecret !== undefined)
-    next.appSecret = escapeExpression(options.appSecret)
-  if (options.runInApp !== undefined) next.runInApp = options.runInApp
-  extensionConfig.lark = next
-  settings.extensionConfig = extensionConfig
-  saveUserSettings(options.agentDir, settings)
+  const path = updateConfigFile(options.agentDir, (current) => {
+    const lark = objectOf(current.lark)
+    const next: Record<string, unknown> = { ...lark }
+    if (options.addChat !== undefined || options.removeChat !== undefined) {
+      if (typeof lark.chats === 'string' && lark.chats.includes('$'))
+        throw new Error(
+          'Existing chats use an environment expression. Add the group manually to preserve that setting.',
+        )
+      const chats: unknown[] = Array.isArray(lark.chats)
+        ? [...lark.chats]
+        : typeof lark.chats === 'string'
+          ? lark.chats
+              .split(',')
+              .map((value) => value.trim())
+              .filter(Boolean)
+          : []
+      const idOf = (entry: unknown): string | undefined =>
+        typeof entry === 'string'
+          ? expandExpression(entry, env).trim()
+          : typeof objectOf(entry).id === 'string'
+            ? expandExpression(objectOf(entry).id as string, env).trim()
+            : undefined
+      if (options.removeChat !== undefined)
+        next.chats = chats.filter((entry) => idOf(entry) !== options.removeChat)
+      else if (!chats.some((entry) => idOf(entry) === options.addChat))
+        next.chats = [...chats, options.addChat]
+      else next.chats = chats
+    }
+    if (options.appId !== undefined)
+      next.appId = escapeExpression(options.appId)
+    if (options.appSecret !== undefined)
+      next.appSecret = escapeExpression(options.appSecret)
+    if (options.runInApp !== undefined) next.runInApp = options.runInApp
+    return {
+      ...current,
+      lark: next,
+    }
+  })
   return { written: [path] }
 }
 
 /**
  * Whether a `provider/id` can answer: its provider is known (an unknown one, or a passthrough model,
- * counts as usable) and that provider has a credential — `auth.json`, a key in `models.json` or the
+ * counts as usable) and that provider has a credential — `auth.json`, a key in `config.json` or the
  * provider's environment variable.
  */
 export function usableModel(options: {

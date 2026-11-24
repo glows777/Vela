@@ -28,16 +28,14 @@ function fixture(
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'vela-lark-setup-'))
   dirs.push(dir)
-  const settings = join(dir, 'settings.json')
+  const settings = join(dir, 'config.json')
   writeFileSync(
     settings,
     JSON.stringify({
-      defaultModel: 'mock/a',
-      extensionConfig: {
-        lark: {
-          owners: ['owner'],
-          chats: opts.chats ?? [{ id: 'old', tools: ['read_file'] }],
-        },
+      model: 'mock/a',
+      lark: {
+        owners: ['owner'],
+        chats: opts.chats ?? [{ id: 'old', tools: ['read_file'] }],
       },
     }),
   )
@@ -128,8 +126,8 @@ test('confirmed group merges settings, protects secrets, sends and closes', asyn
   const f = fixture()
   expect(await larkSetup(f.host)).toBe(true)
   const config = JSON.parse(readFileSync(f.settings, 'utf8'))
-  expect(config.defaultModel).toBe('mock/a')
-  expect(config.extensionConfig.lark).toEqual({
+  expect(config.model).toBe('mock/a')
+  expect(config.lark).toEqual({
     owners: ['owner'],
     chats: [{ id: 'old', tools: ['read_file'] }, 'new'],
     appId: 'app-id',

@@ -10,9 +10,9 @@ async function fixture() {
   const home = tempDir('vela-local-config-home-')
   const port = await freeLocalPort()
   await Bun.write(
-    join(home.path, 'settings.json'),
+    join(home.path, 'config.json'),
     JSON.stringify({
-      extensionConfig: { local: { enabled: true, token: '$USER_TOKEN', port } },
+      local: { enabled: true, token: '$USER_TOKEN', port },
     }),
   )
   const env = {
@@ -79,8 +79,8 @@ test.each([
   async ({ args }) => {
     const f = await fixture()
     await Bun.write(
-      join(f.home.path, 'settings.json'),
-      JSON.stringify({ extensionConfig: { local: { enabled: true } } }),
+      join(f.home.path, 'config.json'),
+      JSON.stringify({ local: { enabled: true } }),
     )
     const proc = Bun.spawn(['bun', ENTRY, ...args], {
       cwd: f.cwd.path,
@@ -112,11 +112,9 @@ test('trusted project cannot replace user Local port, token or enablement', asyn
   const f = await fixture()
   const projectPort = await freeLocalPort()
   await Bun.write(
-    join(f.cwd.path, '.vela/settings.json'),
+    join(f.cwd.path, '.vela/config.json'),
     JSON.stringify({
-      extensionConfig: {
-        local: { enabled: false, token: 'project-secret', port: projectPort },
-      },
+      local: { enabled: false, token: 'project-secret', port: projectPort },
     }),
   )
   const proc = Bun.spawn(['bun', ENTRY, 'serve', '--approve'], {

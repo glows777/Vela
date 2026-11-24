@@ -56,7 +56,7 @@ export function mcp(options: McpOptions = {}): VelaExtension {
       options.servers ?? fromConfig,
       options.servers ? {} : sources,
     )
-    // Errors found while reading mcp.json (bad JSON, unset variables)
+    // Errors found while reading config.json mcpServers (bad JSON, unset variables)
     if (!options.servers && Array.isArray(vela.config.errors))
       errors.unshift(...vela.config.errors.map(String))
 
@@ -259,7 +259,7 @@ function statusReport(
   errors: string[],
 ): string {
   if (entries.length === 0 && errors.length === 0)
-    return 'No MCP servers configured. Add them to ~/.vela/mcp.json or .vela/mcp.json (see docs/mcp.md).'
+    return 'No MCP servers configured. Add mcpServers to ~/.vela/config.json or .vela/config.json (see docs/mcp.md).'
   const lines: string[] = ['MCP servers:']
   for (const entry of entries) {
     const connection = connections.get(entry.name)

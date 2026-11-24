@@ -78,21 +78,17 @@ async function verifyWebhookServe(adapter: 'github' | 'generic') {
   const extension = join(dir.path, 'channel.ts')
   await Bun.write(extension, serveChannel('fake', replies, 'Subscribe'))
   await Bun.write(
-    join(home.path, 'settings.json'),
+    join(home.path, 'config.json'),
     JSON.stringify({
-      extensionConfig: {
-        channel: {
-          eventReceiver: {
-            port: 0,
-            [adapter]:
-              adapter === 'github'
-                ? {
-                    secret: '$WEBHOOK_FIXTURE_SECRET',
-                    repositories: ['owner/repo'],
-                  }
-                : { secret: '$WEBHOOK_FIXTURE_SECRET', source: 'sentry' },
-          },
-        },
+      webhooks: {
+        port: 0,
+        [adapter]:
+          adapter === 'github'
+            ? {
+                secret: '$WEBHOOK_FIXTURE_SECRET',
+                repositories: ['owner/repo'],
+              }
+            : { secret: '$WEBHOOK_FIXTURE_SECRET', source: 'sentry' },
       },
     }),
   )
@@ -373,8 +369,8 @@ test.each([undefined, '', '$UNSET_LOCAL_TOKEN'])(
     const home = tempDir('vela-local-home-')
     dirs.push(dir, home)
     await Bun.write(
-      join(home.path, 'settings.json'),
-      JSON.stringify({ extensionConfig: { local: { enabled: true, token } } }),
+      join(home.path, 'config.json'),
+      JSON.stringify({ local: { enabled: true, token } }),
     )
     const result = await runServe(['serve'], dir.path, home.path)
     expect(result.code).toBe(2)
@@ -388,11 +384,9 @@ test('project Local settings cannot enable a listener even in a trusted project'
   const home = tempDir('vela-local-home-')
   dirs.push(dir, home)
   await Bun.write(
-    join(dir.path, '.vela/settings.json'),
+    join(dir.path, '.vela/config.json'),
     JSON.stringify({
-      extensionConfig: {
-        local: { enabled: true, token: 'project-secret', port: 0 },
-      },
+      local: { enabled: true, token: 'project-secret', port: 0 },
     }),
   )
   const result = await runServe(['serve', '--approve'], dir.path, home.path)

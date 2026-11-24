@@ -10,7 +10,7 @@ state.calls.push({
   args,
   input,
   settings: JSON.parse(
-    readFileSync(join(process.env.VELA_DIR!, 'settings.json'), 'utf8'),
+    readFileSync(join(process.env.VELA_DIR!, 'config.json'), 'utf8'),
   ),
 })
 const save = () => writeFileSync(path, JSON.stringify(state))

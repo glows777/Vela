@@ -22,9 +22,9 @@ function project(cwd: string, label: string, thinking: ThinkingLevel) {
     `${label}_DECLARED_PROMPT`,
   )
   writeFileSync(
-    join(cwd, '.vela', 'settings.json'),
+    join(cwd, '.vela', 'config.json'),
     JSON.stringify({
-      defaultThinkingLevel: thinking,
+      thinkingLevel: thinking,
       skills: ['./declared-skills'],
       prompts: ['./declared-prompts'],
     }),
@@ -112,11 +112,11 @@ test('project settings edit leaves an open session pinned and applies to a new s
     project(t.a, 'UPDATED', 'high')
     // Change the declared location, not an already-read template's contents alone.
     const settings = {
-      defaultThinkingLevel: 'high',
+      thinkingLevel: 'high',
       skills: ['./declared-skills/UPDATED'],
       prompts: ['./declared-prompts'],
     }
-    writeFileSync(join(t.a, '.vela/settings.json'), JSON.stringify(settings))
+    writeFileSync(join(t.a, '.vela/config.json'), JSON.stringify(settings))
     await old.prompt('/project')
     expect(t.model.calls[1]!.lastUserText).toBe('A_DECLARED_PROMPT')
     expect(t.model.calls[1]!.system).toBe(first.system)
@@ -195,13 +195,13 @@ test('real CLI launched from A resumes B and uses B declared prompt and default 
     [a, 'bash'],
     [b, 'read_file'],
   ] as const) {
-    const file = join(cwd, '.vela/settings.json')
+    const file = join(cwd, '.vela/config.json')
     const original = JSON.parse(readFileSync(file, 'utf8'))
-    writeFileSync(file, JSON.stringify({ ...original, defaultTools: [name] }))
+    writeFileSync(file, JSON.stringify({ ...original, tools: [name] }))
   }
   writeFileSync(join(b, 'report.txt'), 'B_TOOL_READ_PROOF')
   writeFileSync(
-    join(home, 'settings.json'),
+    join(home, 'config.json'),
     JSON.stringify({ dataDir: join(dir.path, 'data') }),
   )
   writeFileSync(
@@ -268,7 +268,7 @@ test('TUI model cycling uses the active project instead of startup A', async () 
   const t = setup()
   try {
     writeFileSync(
-      join(t.b, '.vela/settings.json'),
+      join(t.b, '.vela/config.json'),
       JSON.stringify({
         enabledModels: ['fake/b', 'fake/start'],
       }),
@@ -304,11 +304,8 @@ test('TUI rejects invalid project tools on resume without leaving the active ses
     const b = t.vela.session('saved-b', { cwd: t.b })
     await b.prompt('A saved message in B')
     await b.close()
-    const settings = join(t.b, '.vela/settings.json')
-    writeFileSync(
-      settings,
-      JSON.stringify({ defaultTools: ['stale_project_tool'] }),
-    )
+    const settings = join(t.b, '.vela/config.json')
+    writeFileSync(settings, JSON.stringify({ tools: ['stale_project_tool'] }))
     const tui = await startTui(t.vela, {
       sessionId: 'active-a',
       configure: (session, options) => {
@@ -331,7 +328,7 @@ test('TUI rejects invalid project tools on resume without leaving the active ses
     expect(t.vela.sessions().some((session) => session.id === 'saved-b')).toBe(
       false,
     )
-    writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+    writeFileSync(settings, JSON.stringify({ tools: ['read_file'] }))
     tui.submit('/resume')
     await tui.until('Resume Session')
     tui.terminal.press(KEYS.enter)

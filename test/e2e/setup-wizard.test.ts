@@ -103,22 +103,19 @@ test('setup preserves a successful browser callback when the paste prompt closes
 
 test('setup preserves an existing custom DeepSeek provider and applies its defaults to new sessions', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'vela-setup-session-'))
-  const modelsPath = join(dir, 'models.json')
-  const originalModels = JSON.stringify(
-    {
-      providers: {
-        deepseek: {
-          api: 'openai-completions',
-          baseUrl: 'https://custom.example/v1',
-          headers: { 'x-custom': 'preserved' },
-          models: [{ id: 'deepseek-reasoner' }],
-        },
-      },
+  const configPath = join(dir, 'config.json')
+  const originalProviders = {
+    deepseek: {
+      api: 'openai-completions',
+      baseUrl: 'https://custom.example/v1',
+      headers: { 'x-custom': 'preserved' },
+      models: [{ id: 'deepseek-reasoner' }],
     },
-    null,
-    4,
+  }
+  writeFileSync(
+    configPath,
+    JSON.stringify({ providers: originalProviders }, null, 4),
   )
-  writeFileSync(modelsPath, originalModels)
   const vela = createVela({
     cwd: dir,
     providers: loadModels({ agentDir: dir }),
@@ -161,7 +158,11 @@ test('setup preserves an existing custom DeepSeek provider and applies its defau
     })
     const next = vela.session('new')
     expect(saved).toBe(true)
-    expect(readFileSync(modelsPath, 'utf8')).toBe(originalModels)
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
+      providers: originalProviders,
+      model: 'deepseek/deepseek-reasoner',
+      thinkingLevel: 'high',
+    })
     expect(next.modelInfo.ref).toBe('deepseek/deepseek-reasoner')
     expect(next.thinkingLevel).toBe('high')
   } finally {
@@ -229,12 +230,12 @@ test('empty-home DeepSeek setup uses the built-in Responses provider for its fir
       key: 'fake-deepseek-key',
     })
     expect(
-      JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')),
+      JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')),
     ).toMatchObject({
-      defaultModel: 'deepseek/deepseek-flash',
-      defaultThinkingLevel: 'high',
+      model: 'deepseek/deepseek-flash',
+      thinkingLevel: 'high',
     })
-    expect(statSync(join(dir, 'settings.json')).mode & 0o777).toBe(0o600)
+    expect(statSync(join(dir, 'config.json')).mode & 0o777).toBe(0o600)
     expect(statSync(dir).mode & 0o777).toBe(0o700)
     expect(session.modelInfo.ref).toBe('deepseek/deepseek-flash')
     const next = vela.session('new')

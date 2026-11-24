@@ -40,8 +40,8 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--tools`, `-t <tools>` | Tools for this run: a comma-separated list of names or `*` patterns (`read_*`), repeatable, which enables only those; or a list of only `+name` / `-name` entries (exact names), which turns default tools on or off and leaves the other tools alone. |
 | `--no-tools`, `-nt` | Start with no tools; `--tools` still enables the ones it names. |
 | `--exclude-tools`, `-xt <tools>` | Turn these tools off (names or `*` patterns), after `--tools`. |
-| `--list-models [search]` | Print the models listed in `models.json` and by extension providers (provider, model, context window, thinking support), optionally fuzzy-filtered, then exit. If an extension failed to load, the models that did load are still listed, but the exit code is 1. |
-| `--approve` | Trust this project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and project skills (`.vela/skills/`, `.agents/skills/`, `.skills/`) for this run, without saving the decision. |
+| `--list-models [search]` | Print the models listed in `config.json` (`providers`) and by extension providers (provider, model, context window, thinking support), optionally fuzzy-filtered, then exit. If an extension failed to load, the models that did load are still listed, but the exit code is 1. |
+| `--approve` | Trust this project's `.vela/config.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and project skills (`.vela/skills/`, `.agents/skills/`, `.skills/`) for this run, without saving the decision. |
 | `--no-approve` | Do not trust them for this run, without saving the decision. |
 | `-h`, `--help` | Print the usage, every option, the run modes, examples and environment variables to stdout, then exit with code 0. |
 | `-v`, `--version` | Print the package version to stdout, then exit with code 0. |
@@ -50,7 +50,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 
 The tool options apply to every session the CLI opens (also after `/new` and `/resume`) and are checked after extensions load: an entry that matches no tool stops the CLI with exit code 2 and lists the available tools. pi ignores unknown names; Vela reports them so that a typo can't leave a tool on or off. Like pi, they set the tools each session starts with: an extension can still change them with `setActiveTools()`.
 
-`read_file`, `write_file`, `edit_file` and `bash` are on by default; `grep`, `find` and `list_directory` are registered but off (like pi's `ls`, `grep` and `find`). `--tools +grep` turns one on, and `--tools -bash` turns a default tool off. Plain names and patterns replace the `defaultTools` setting, while `+name` / `-name` entries apply on top of it. See [Tools](tools.md) and [Settings](settings.md#defaulttools).
+`read_file`, `write_file`, `edit_file` and `bash` are on by default; `grep`, `find` and `list_directory` are registered but off (like pi's `ls`, `grep` and `find`). `--tools +grep` turns one on, and `--tools -bash` turns a default tool off. Plain names and patterns replace the `tools` setting, while `+name` / `-name` entries apply on top of it. See [Tools](tools.md) and [Settings](settings.md#tools).
 
 An extension that fails to load is reported on stderr (or in the chat log) and skipped; Vela still starts. Extension loading, discovery and the `builtin:` names are described in [Extensions](extensions.md#where-extensions-load-from) and [Built-in extensions](built-in-extensions.md).
 
@@ -265,20 +265,20 @@ Set `VELA_DEBUG=1` to see debug logs. In interactive mode they are appended to `
 | Variable | Description |
 |---|---|
 | `VELA_DIR` | User directory. Default `~/.vela`; `~` is expanded. |
-| `VELA_MODEL` | `mock` uses the offline demo model; `faux:<file.json>` replays a recorded scenario. Overrides `defaultModel` and a resumed session's model; `--model` still wins. See [Testing](testing.md). |
+| `VELA_MODEL` | `mock` uses the offline demo model; `faux:<file.json>` replays a recorded scenario. Overrides `model` and a resumed session's model; `--model` still wins. See [Testing](testing.md). |
 | `VELA_RECORD` | Record this run's model responses and user input as a faux scenario file, for replay with `VELA_MODEL=faux:<file>`. |
 | `VELA_DEBUG` | `1` enables debug logging (see above). |
 | `VELA_OFFLINE` | `1`, `true` or `yes`: never download `rg` / `fd` for the search tools. See [Tools](tools.md). |
 | `OPENAI_API_KEY` | API key of the built-in `openai` provider. |
 | `OPENAI_API_BASE_URL` | Base URL of the built-in `openai` provider, for proxies and OpenAI-compatible services. |
-| `OPENAI_API_MODEL_NAME` | Fallback model: used as `openai/<name>` when neither `--model` nor `defaultModel` is set. |
+| `OPENAI_API_MODEL_NAME` | Fallback model: used as `openai/<name>` when neither `--model` nor `model` is set. |
 | `ANTHROPIC_API_KEY` | API key of the built-in `anthropic` provider. |
 | `OPENROUTER_API_KEY` | API key of the built-in `openrouter` provider. |
 | `DEEPSEEK_API_KEY` | API key of the built-in `deepseek` provider. |
-| `TAVILY_API_KEY`, `SERPER_API_KEY` | Independent search keys for the `web` extension (`extensionConfig.web.tavilyKey`, `.serperKey`). Tavily wins if both are set; supported models may use provider-hosted search without either key. |
-| `LARK_APP_ID`, `LARK_APP_SECRET` | Credentials for the `lark` channel (`extensionConfig.lark.appId`, `.appSecret`); without them it does not connect. |
-| `LARK_OWNERS` | Comma-separated Lark open_ids whose direct chats are always enabled (`extensionConfig.lark.owners`). |
+| `TAVILY_API_KEY`, `SERPER_API_KEY` | Independent search keys for the `web` extension (`web.tavilyKey`, `web.serperKey`). Tavily wins if both are set; supported models may use provider-hosted search without either key. |
+| `LARK_APP_ID`, `LARK_APP_SECRET` | Credentials for the `lark` channel (`lark.appId`, `lark.appSecret`); without them it does not connect. |
+| `LARK_OWNERS` | Comma-separated Lark open_ids whose direct chats are always enabled (`lark.owners`). |
 
-The extension variables are defaults for the `extensionConfig` keys shown in parentheses: a value set in `settings.json` overrides them, and an empty string counts as unset. `models.json` and `extensionConfig` can read any other variable with `$NAME` or `${NAME}`. Vela does not implicitly read the SDK's `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; configure a provider `baseUrl` instead.
+The extension variables are defaults for the built-in keys shown in parentheses: a value set in `config.json` overrides them, and an empty string counts as unset. `providers`, built-in section objects, and `extensionConfig` can read any other variable with `$NAME` or `${NAME}`. Vela does not implicitly read the SDK's `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; configure a provider `baseUrl` instead.
 
 The installed `vela` command does not load `.env` files. Bun does, from the current folder, when you run the source with `bun packages/vela/src/cli/main.ts`.

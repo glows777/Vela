@@ -28,7 +28,7 @@ The faux model replays the responses each example scripts. A real app passes a r
 ```typescript
 import { createVela, loadConfig } from '@glows777/vela'
 
-// `provider/id`, with providers from loadConfig() (built-in openai / anthropic + ~/.vela/models.json)
+// `provider/id`, with providers from loadConfig() (built-in openai / anthropic + ~/.vela/config.json)
 const config = loadConfig({ env: process.env })
 const vela = createVela({ model: 'anthropic/<model-id>', providers: config.providers })
 ```

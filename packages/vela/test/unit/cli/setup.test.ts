@@ -14,7 +14,7 @@ import {
   resolveTrust,
   selectTools,
 } from '../../../src/cli/setup.ts'
-import { loadConfig } from '../../../src/config/index.ts'
+import { loadConfig } from '../../../src/load-config.ts'
 import { createFauxModel, fauxText } from '../../../src/testing/core/index.ts'
 import { createVela } from '../../../src/vela.ts'
 
@@ -115,7 +115,7 @@ test('the untrusted-project notice names the real trust.json under VELA_DIR', as
   const project = tempDir()
   dirs.push(home, project)
   mkdirSync(join(project.path, '.vela'), { recursive: true })
-  writeFileSync(join(project.path, '.vela', 'settings.json'), '{}')
+  writeFileSync(join(project.path, '.vela', 'config.json'), '{}')
   const result = await resolveTrust({
     cwd: project.path,
     agentDir: home.path,
@@ -199,7 +199,7 @@ test('packageVersion() is the package.json version', () => {
   expect(packageVersion()).toBe(pkg.version)
 })
 
-test('settings.json extension config overrides the environment defaults key by key', () => {
+test('config.json extension config overrides the environment defaults key by key', () => {
   const config = extensionConfigFromEnv(
     {
       TAVILY_API_KEY: 'env-tavily',
@@ -271,7 +271,7 @@ test('legacy -builtin:rag opt-out is accepted while positive builtin:rag fails l
   const dir = tempDir()
   dirs.push(dir)
   writeFileSync(
-    join(dir.path, 'settings.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({ extensions: ['-builtin:rag'] }),
   )
   const ok = loadConfig({
@@ -282,7 +282,7 @@ test('legacy -builtin:rag opt-out is accepted while positive builtin:rag fails l
   expect(ok.extensions.map((e) => e.name)).not.toContain('rag')
 
   writeFileSync(
-    join(dir.path, 'settings.json'),
+    join(dir.path, 'config.json'),
     JSON.stringify({ extensions: ['builtin:rag'] }),
   )
   expect(() =>
@@ -370,7 +370,7 @@ test('the removed supabase built-in is unknown, so an old -builtin:supabase fail
   dirs.push(dir)
   mkdirSync(join(dir.path, 'home'), { recursive: true })
   writeFileSync(
-    join(dir.path, 'home/settings.json'),
+    join(dir.path, 'home/config.json'),
     JSON.stringify({ extensions: ['-builtin:supabase'] }),
   )
   expect(() =>

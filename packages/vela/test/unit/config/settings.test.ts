@@ -2,13 +2,9 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
-import {
-  loadConfig,
-  projectTrustRequired,
-  savedTrust,
-  saveTrust,
-} from '../../../src/config/index.ts'
+import { savedTrust, saveTrust } from '../../../src/config/index.ts'
 import { projectDataDir } from '../../../src/driver/config/paths.ts'
+import { loadConfig, projectTrustRequired } from '../../../src/load-config.ts'
 import { interpolate } from '../../../src/shared/interpolate.ts'
 
 const dirs: { cleanup(): void }[] = []
@@ -39,23 +35,19 @@ function setup(files: Record<string, string> = {}) {
 
 const json = (value: unknown) => JSON.stringify(value)
 
-test('channel receiver config reuses extension-owned settings interpolation and project trust', () => {
+test('channel receiver config reuses config interpolation and ignores project webhooks override', () => {
   const options = setup({
-    'home/settings.json': json({
-      extensionConfig: {
-        channel: {
-          eventReceiver: {
-            port: 8787,
-            github: {
-              secret: '$WEBHOOK_FIXTURE_SECRET',
-              repositories: ['owner/repo'],
-            },
-          },
+    'home/config.json': json({
+      webhooks: {
+        port: 8787,
+        github: {
+          secret: '$WEBHOOK_FIXTURE_SECRET',
+          repositories: ['owner/repo'],
         },
       },
     }),
-    'project/.vela/settings.json': json({
-      extensionConfig: { channel: { eventReceiver: { port: 9999 } } },
+    'project/.vela/config.json': json({
+      webhooks: { port: 9999 },
     }),
   })
   expect(
@@ -73,20 +65,20 @@ test('channel receiver config reuses extension-owned settings interpolation and 
       trusted: true,
       env: { WEBHOOK_FIXTURE_SECRET: 'fixture' },
     }).extensionConfig.channel?.eventReceiver,
-  ).toMatchObject({ port: 9999 })
+  ).toMatchObject({ port: 8787 })
 })
 
-test('event default target stays in umbrella settings and validates an explicit existing-chat address', () => {
+test('event default target stays in top-level config and validates an explicit existing-chat address', () => {
   const target = { channel: 'lark', chatId: 'oc_group' }
   expect(
     loadConfig(
-      setup({ 'home/settings.json': json({ eventDefaultTarget: target }) }),
+      setup({ 'home/config.json': json({ eventDefaultTarget: target }) }),
     ).settings.eventDefaultTarget,
   ).toEqual(target)
   expect(
     loadConfig(
       setup({
-        'home/settings.json': json({
+        'home/config.json': json({
           eventDefaultTarget: { channel: ' lark ', chatId: ' oc_group ' },
         }),
       }),
@@ -98,23 +90,23 @@ test('event default target stays in umbrella settings and validates an explicit 
     { ...target, sessionId: 'other' },
   ]) {
     expect(() =>
-      loadConfig(setup({ 'home/settings.json': json({ eventDefaultTarget }) })),
+      loadConfig(setup({ 'home/config.json': json({ eventDefaultTarget }) })),
     ).toThrow(/eventDefaultTarget/)
   }
 })
 
 test('project settings override user settings: objects merge deeply, resource lists concatenate', () => {
   const { agentDir, cwd } = setup({
-    'home/settings.json': json({
+    'home/config.json': json({
       limits: { maxRetries: 5, retryBaseMs: 1000 },
       extensions: ['ext/a.ts'],
-      extensionConfig: { web: { tavilyKey: 'user', serperKey: 's' } },
+      web: { tavilyKey: 'user', serperKey: 's' },
     }),
     'home/ext/a.ts': 'export default () => {}',
-    'project/.vela/settings.json': json({
+    'project/.vela/config.json': json({
       limits: { maxRetries: 9 },
       extensions: ['../b.ts'],
-      extensionConfig: { web: { tavilyKey: 'project' } },
+      web: { tavilyKey: 'project' },
     }),
     'project/b.ts': 'export default () => {}',
   })
@@ -124,46 +116,45 @@ test('project settings override user settings: objects merge deeply, resource li
     tavilyKey: 'project',
     serperKey: 's',
   })
-  // Paths are relative to the settings file they appear in
+  // Paths are relative to the config file they appear in
   expect(config.extensions).toEqual([
     { name: 'a', path: join(agentDir, 'ext/a.ts') },
     { name: 'b', path: join(cwd, 'b.ts') },
   ])
   expect(config.files).toEqual([
-    join(agentDir, 'settings.json'),
-    join(cwd, '.vela/settings.json'),
+    join(agentDir, 'config.json'),
+    join(cwd, '.vela/config.json'),
   ])
 })
 
-test('defaultTools: project plain names replace the user list, +name / -name entries append to it', () => {
+test('tools: project plain names replace the user list, +name / -name entries append to it', () => {
   const appended = setup({
-    'home/settings.json': json({ defaultTools: ['read_file', 'bash'] }),
-    'project/.vela/settings.json': json({ defaultTools: ['-bash', '+grep'] }),
+    'home/config.json': json({ tools: ['read_file', 'bash'] }),
+    'project/.vela/config.json': json({ tools: ['-bash', '+grep'] }),
   })
-  expect(
-    loadConfig({ ...appended, trusted: true }).settings.defaultTools,
-  ).toEqual(['read_file', 'bash', '-bash', '+grep'])
+  expect(loadConfig({ ...appended, trusted: true }).settings.tools).toEqual([
+    'read_file',
+    'bash',
+    '-bash',
+    '+grep',
+  ])
   const replaced = setup({
-    'home/settings.json': json({ defaultTools: ['+grep'] }),
-    'project/.vela/settings.json': json({ defaultTools: ['read_file'] }),
+    'home/config.json': json({ tools: ['+grep'] }),
+    'project/.vela/config.json': json({ tools: ['read_file'] }),
   })
-  expect(
-    loadConfig({ ...replaced, trusted: true }).settings.defaultTools,
-  ).toEqual(['read_file'])
+  expect(loadConfig({ ...replaced, trusted: true }).settings.tools).toEqual([
+    'read_file',
+  ])
   // An empty project list turns the user's tools off; it does not append nothing
   const emptied = setup({
-    'home/settings.json': json({ defaultTools: ['read_file'] }),
-    'project/.vela/settings.json': json({ defaultTools: [] }),
+    'home/config.json': json({ tools: ['read_file'] }),
+    'project/.vela/config.json': json({ tools: [] }),
   })
-  expect(
-    loadConfig({ ...emptied, trusted: true }).settings.defaultTools,
-  ).toEqual([])
-  const bad = setup({ 'home/settings.json': json({ defaultTools: '+grep' }) })
-  expect(() => loadConfig(bad)).toThrow(
-    'defaultTools must be an array of strings',
-  )
+  expect(loadConfig({ ...emptied, trusted: true }).settings.tools).toEqual([])
+  const bad = setup({ 'home/config.json': json({ tools: '+grep' }) })
+  expect(() => loadConfig(bad)).toThrow('tools must be an array of strings')
   const pattern = setup({
-    'home/settings.json': json({ defaultTools: ['-ba*'] }),
+    'home/config.json': json({ tools: ['-ba*'] }),
   })
   expect(() => loadConfig(pattern)).toThrow(
     '+name and -name entries take exact tool names, not patterns: -ba*',
@@ -173,7 +164,7 @@ test('defaultTools: project plain names replace the user list, +name / -name ent
 test('an untrusted project only gets the user settings and user extensions', () => {
   const { agentDir, cwd } = setup({
     'home/extensions/mine.ts': 'export default () => {}',
-    'project/.vela/settings.json': json({ limits: { maxRetries: 1 } }),
+    'project/.vela/config.json': json({ limits: { maxRetries: 1 } }),
     'project/.vela/extensions/evil.ts': 'export default () => {}',
   })
   expect(projectTrustRequired(cwd)).toBe(true)
@@ -192,7 +183,7 @@ test('extension directories: files, folders with index.ts, and a folder that is 
     'home/extensions/types.d.ts': '',
     'home/extensions/notes.md': '',
     'home/extensions/empty/readme.md': '',
-    'home/settings.json': json({ extensions: ['pkg'] }),
+    'home/config.json': json({ extensions: ['pkg'] }),
     'home/pkg/index.ts': '',
     'home/pkg/helper.ts': '',
   })
@@ -206,10 +197,10 @@ test('extension directories: files, folders with index.ts, and a folder that is 
 
 test('built-in extensions load by default; -builtin: turns one off and a project +builtin: turns it back on', () => {
   const { agentDir, cwd } = setup({
-    'home/settings.json': json({
+    'home/config.json': json({
       extensions: ['-builtin:web', '-builtin:rag'],
     }),
-    'project/.vela/settings.json': json({ extensions: ['+builtin:web'] }),
+    'project/.vela/config.json': json({ extensions: ['+builtin:web'] }),
   })
   const builtins = ['memory', 'rag', 'web']
   expect(
@@ -235,7 +226,7 @@ test('defaultOffBuiltins stays off until +builtin: enables it', () => {
   ).toEqual(['memory'])
 
   const on = setup({
-    'home/settings.json': json({ extensions: ['+builtin:optional'] }),
+    'home/config.json': json({ extensions: ['+builtin:optional'] }),
   })
   expect(
     loadConfig({
@@ -247,76 +238,74 @@ test('defaultOffBuiltins stays off until +builtin: enables it', () => {
   ).toEqual(['memory', 'optional'])
 })
 
-test('mistakes in settings are reported with the file name', () => {
-  const broken = setup({ 'home/settings.json': '{ nope' })
+test('mistakes in config.json are reported with the file name and strict schema rejects unknown or nested built-in keys', () => {
+  const broken = setup({ 'home/config.json': '{ nope' })
   expect(() => loadConfig(broken)).toThrow(
-    `${join(broken.agentDir, 'settings.json')} is not valid JSON`,
+    `${join(broken.agentDir, 'config.json')} is not valid JSON`,
   )
-  const badList = setup({ 'home/settings.json': json({ extensions: 'a.ts' }) })
+  const badList = setup({ 'home/config.json': json({ extensions: 'a.ts' }) })
   expect(() => loadConfig(badList)).toThrow(
     'extensions must be an array of strings',
   )
   const missing = setup({
-    'home/settings.json': json({ extensions: ['nope.ts'] }),
+    'home/config.json': json({ extensions: ['nope.ts'] }),
   })
   expect(() => loadConfig(missing)).toThrow('Extension path does not exist')
   const unknown = setup({
-    'home/settings.json': json({ extensions: ['-builtin:nope'] }),
+    'home/config.json': json({ extensions: ['-builtin:nope'] }),
   })
   expect(() => loadConfig({ ...unknown, builtins: ['memory'] })).toThrow(
     'Unknown built-in extension builtin:nope',
   )
   const badModel = setup({
-    'home/settings.json': json({ defaultModel: 'gpt' }),
+    'home/config.json': json({ model: 'gpt' }),
   })
-  expect(() => loadConfig(badModel)).toThrow(
-    'defaultModel must be "provider/id"',
-  )
+  expect(() => loadConfig(badModel)).toThrow('model must be "provider/id"')
   const badThinking = setup({
-    'home/settings.json': json({ defaultThinkingLevel: 'huge' }),
+    'home/config.json': json({ thinkingLevel: 'huge' }),
   })
-  expect(() => loadConfig(badThinking)).toThrow(
-    'defaultThinkingLevel must be one of',
-  )
+  expect(() => loadConfig(badThinking)).toThrow('thinkingLevel must be one of')
   const badModels = setup({
-    'home/models.json': json({ providers: { x: { api: 'grpc' } } }),
+    'home/config.json': json({ providers: { x: { api: 'grpc' } } }),
   })
   expect(() => loadConfig(badModels)).toThrow('providers.x.api must be one of')
-  for (const budget of ['-1', '"120"', 'null']) {
-    const badBudget = setup({
-      'home/settings.json': `{ "bashForegroundTimeoutSeconds": ${budget} }`,
+  for (const key of [
+    'unknownTopLevel',
+    'bashForegroundTimeoutSeconds',
+    'bashForegroundTimeoutMaxSeconds',
+  ]) {
+    const unknownKey = setup({
+      'home/config.json': json({ [key]: 123 }),
     })
-    expect(() => loadConfig(badBudget)).toThrow(
-      'bashForegroundTimeoutSeconds must be 0 or a positive number of seconds',
+    expect(() => loadConfig(unknownKey)).toThrow(`unknown key "${key}"`)
+  }
+  for (const reserved of ['lark', 'web', 'mcp', 'memory', 'channel', 'local']) {
+    const nestedBuiltin = setup({
+      'home/config.json': json({ extensionConfig: { [reserved]: {} } }),
+    })
+    expect(() => loadConfig(nestedBuiltin)).toThrow(
+      `extensionConfig.${reserved} is a built-in section; move it to top-level`,
     )
   }
-  for (const ceiling of ['0', '-5', '"600"']) {
-    const badCeiling = setup({
-      'home/settings.json': `{ "bashForegroundTimeoutMaxSeconds": ${ceiling} }`,
+  for (const reservedNoSection of ['background', 'todo']) {
+    const nestedNoSection = setup({
+      'home/config.json': json({
+        extensionConfig: { [reservedNoSection]: {} },
+      }),
     })
-    expect(() => loadConfig(badCeiling)).toThrow(
-      'bashForegroundTimeoutMaxSeconds must be a positive number of seconds',
+    expect(() => loadConfig(nestedNoSection)).toThrow(
+      `extensionConfig.${reservedNoSection} is a built-in extension with no config section; remove it from extensionConfig`,
     )
   }
-  const ok = setup({
-    'home/settings.json': json({
-      bashForegroundTimeoutSeconds: 0,
-      bashForegroundTimeoutMaxSeconds: 900,
-    }),
-  })
-  expect(loadConfig(ok).settings).toMatchObject({
-    bashForegroundTimeoutSeconds: 0,
-    bashForegroundTimeoutMaxSeconds: 900,
-  })
 })
 
 // biome-ignore lint/suspicious/noTemplateCurlyInString: ${VAR} names the interpolation syntax under test
-test('extension config strings interpolate $VAR and ${VAR}; $$ is a literal dollar', () => {
+test('config section strings interpolate $VAR and ${VAR}; $$ is a literal dollar', () => {
   const { agentDir, cwd } = setup({
-    'home/settings.json': json({
+    'home/config.json': json({
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: ${OWNER} is interpolation syntax in this fixture
+      lark: { appSecret: '$SECRET', owners: ['${OWNER}', 'x'] },
       extensionConfig: {
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: ${OWNER} is interpolation syntax in this fixture
-        lark: { appSecret: '$SECRET', owners: ['${OWNER}', 'x'] },
         price: { text: 'costs $$5, $MISSING!' },
       },
     }),
@@ -348,14 +337,14 @@ test('the data directory defaults to <agentDir>/projects/<encoded cwd>; settings
     projectDataDir('/h', '/work/a/b-c'),
   )
   const custom = setup({
-    'home/settings.json': json({ dataDir: 'data' }),
+    'home/config.json': json({ dataDir: 'data' }),
   })
   expect(loadConfig(custom).dataDir).toBe(join(custom.cwd, 'data'))
 })
 
 test('skill directories, first wins: project (.vela/skills, .agents/skills up the tree, .skills), settings, user', () => {
   const { agentDir, cwd, homeDir, root } = setup({
-    'home/settings.json': json({
+    'home/config.json': json({
       skills: ['shared'],
       prompts: ['more-prompts'],
     }),
@@ -416,7 +405,7 @@ test('project skills and prompts need trust, like project settings and extension
     'project/.vela/APPEND_SYSTEM.md',
   ]) {
     const { agentDir, cwd, homeDir } = setup({
-      'home/settings.json': json({ skills: ['shared'] }),
+      'home/config.json': json({ skills: ['shared'] }),
       [dir]: 'Run the deploy',
     })
     expect(projectTrustRequired(cwd, agentDir, homeDir)).toBe(true)
@@ -492,7 +481,7 @@ test('a broken trust.json fails loudly instead of being overwritten', () => {
 
 test('running in the home directory reads ~/.vela once, as user settings, without asking for trust', () => {
   const { root } = setup({
-    'home/.vela/settings.json': json({ extensions: ['x.ts'] }),
+    'home/.vela/config.json': json({ extensions: ['x.ts'] }),
     'home/.vela/x.ts': '',
     'home/.vela/extensions/y.ts': '',
   })
@@ -505,7 +494,7 @@ test('running in the home directory reads ~/.vela once, as user settings, withou
     homeDir: home,
     trusted: true,
   })
-  expect(config.files).toEqual([join(agentDir, 'settings.json')])
+  expect(config.files).toEqual([join(agentDir, 'config.json')])
   expect(config.extensions.map((e) => e.name)).toEqual(['y', 'x'])
   expect(config.skillDirs).toEqual([
     join(home, '.skills'),
@@ -516,7 +505,7 @@ test('running in the home directory reads ~/.vela once, as user settings, withou
 
 test('compatibility config only supplies explicitly passed environment to MCP', () => {
   const options = setup({
-    'home/mcp.json': JSON.stringify({
+    'home/config.json': JSON.stringify({
       mcpServers: { local: { command: '$VELA_MCP_CONFIG_FIXTURE' } },
     }),
   })
@@ -541,17 +530,15 @@ test('compatibility config only supplies explicitly passed environment to MCP', 
   }
 })
 
-test('user extension settings preserve provenance and interpolation separately from project overrides', () => {
+test('user extension settings preserve provenance and strip privileged keys from project config', () => {
   const options = setup({
-    'home/settings.json': json({
-      extensionConfig: {
-        local: { enabled: true, token: '$LOCAL_TOKEN', port: 8788 },
-      },
+    'home/config.json': json({
+      local: { enabled: true, token: '$LOCAL_TOKEN', port: 8788 },
+      web: { tavilyKey: '$LOCAL_TOKEN', serperKey: 'user' },
     }),
-    'project/.vela/settings.json': json({
-      extensionConfig: {
-        local: { enabled: false, token: 'project-secret', port: 9999 },
-      },
+    'project/.vela/config.json': json({
+      local: { enabled: false, token: 'project-secret', port: 9999 },
+      web: { tavilyKey: 'project-key' },
     }),
   })
   const config = loadConfig({
@@ -564,9 +551,18 @@ test('user extension settings preserve provenance and interpolation separately f
     token: 'user-secret',
     port: 8788,
   })
+  // Host-owned `local` in project config is stripped, while non-privileged `web` merges.
   expect(config.extensionConfig.local).toEqual({
-    enabled: false,
-    token: 'project-secret',
-    port: 9999,
+    enabled: true,
+    token: 'user-secret',
+    port: 8788,
+  })
+  expect(config.userExtensionConfig.web).toEqual({
+    tavilyKey: 'user-secret',
+    serperKey: 'user',
+  })
+  expect(config.extensionConfig.web).toEqual({
+    tavilyKey: 'project-key',
+    serperKey: 'user',
   })
 })

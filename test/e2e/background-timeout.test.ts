@@ -39,14 +39,12 @@ type Extensions = NonNullable<
 >
 
 /**
- * A test Vela whose settings are a real `settings.json` read by the same `loadConfig()` the CLI
- * uses; user settings so a channel session, which runs in its own workspace, gets the same budget.
- * The built-in `background` extension is loaded the way the CLI loads it, per session location, so
- * the budget reaches `bash` from the settings, not from its options.
+ * A test Vela whose config is a real `config.json` read by `loadConfig()` plus an `@internal`
+ * foreground-budget split (the CLI config keys were retired in S1b).
  */
 function velaWithSettings(
   options: TestVelaOptions,
-  settings: Record<string, unknown>,
+  budget: { seconds?: number; maxSeconds?: number },
   hostExtensions: Extensions = [],
   /** What the project loader returns; empty for a session without the `background` extension. */
   builtins: Extensions = [background()],
@@ -55,10 +53,11 @@ function velaWithSettings(
   dirs.push(dir)
   const agentDir = join(dir.path, 'home')
   mkdirSync(agentDir, { recursive: true })
-  writeFileSync(join(agentDir, 'settings.json'), JSON.stringify(settings))
+  writeFileSync(join(agentDir, 'config.json'), '{}')
   const config = loadConfig({ cwd: dir.path, agentDir, trusted: true })
   const split = {
     ...config.sessionResources!,
+    foregroundBudget: budget,
     projectExtensions: async () => ({
       key: 'fixture',
       extensionConfig: {},
@@ -92,7 +91,7 @@ test('a foreground command past its budget moves to the background and its exit 
     },
     // Not sub-second: `bash -lc` pays login-shell startup first, so the command needs room to print
     // before its deadline (#372).
-    { bashForegroundTimeoutSeconds: 1.5 },
+    { seconds: 1.5 },
   )
   await t.run('run the slow check')
   // The call returns the notice and the tail so far, not the command's result.
@@ -132,7 +131,7 @@ test('a command that starts with sleep keeps the timeout kill and starts no job'
         fauxText('It stopped too.'),
       ],
     },
-    { bashForegroundTimeoutSeconds: 0.3, bashForegroundTimeoutMaxSeconds: 0.4 },
+    { seconds: 0.3, maxSeconds: 0.4 },
   )
   await t.run('wait a while')
   const result = t.model.calls[1]!.toolResults[0]!
@@ -159,7 +158,7 @@ test('with no foreground budget a command waits as before, while an explicit tim
         fauxText('It stopped.'),
       ],
     },
-    { bashForegroundTimeoutSeconds: 0 },
+    { seconds: 0 },
   )
   await t.run('wait for it')
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain('done')
@@ -184,7 +183,7 @@ test('a budget longer than the ceiling is not cut to it, and a shorter requested
       ],
       allowPendingResponses: true,
     },
-    { bashForegroundTimeoutSeconds: 0.6, bashForegroundTimeoutMaxSeconds: 0.2 },
+    { seconds: 0.6, maxSeconds: 0.2 },
   )
   await t.run('run the first one')
   expect(t.model.calls[1]!.toolResults[0]!.output).toStartWith(
@@ -211,7 +210,7 @@ test('a session without the background extension keeps the old timeout kill', as
         fauxText('It stopped.'),
       ],
     },
-    { bashForegroundTimeoutSeconds: 0.1 },
+    { seconds: 0.1 },
     [],
     [],
   )
@@ -237,8 +236,8 @@ test('a timeout above the ceiling is clamped and the notice names both values', 
       allowPendingResponses: true,
     },
     {
-      bashForegroundTimeoutSeconds: 0.2,
-      bashForegroundTimeoutMaxSeconds: 0.4,
+      seconds: 0.2,
+      maxSeconds: 0.4,
     },
   )
   await t.run('wait a long time')
@@ -285,7 +284,7 @@ test('a session without background_stop keeps the old behavior: no budget, no au
       // The job table is installed, but the tool that ends a job is not in this session's list.
       session: { tools: ['bash'] },
     },
-    { bashForegroundTimeoutSeconds: 0.2 },
+    { seconds: 0.2 },
   )
   await t.run('wait for it')
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain('done')
@@ -301,7 +300,7 @@ test('a user move competing with the deadline still produces exactly one job', a
         (request) => fauxText(request.lastUserText),
       ],
     },
-    { bashForegroundTimeoutSeconds: 0.6 },
+    { seconds: 0.6 },
   )
   const running = t.run('start the check')
   await until(
@@ -345,7 +344,7 @@ test('a topic answers "moved to the background", then the exit arrives as a seco
         },
       ],
     },
-    { bashForegroundTimeoutSeconds: 0.5 },
+    { seconds: 0.5 },
     [
       lark({
         appId: 'bot',

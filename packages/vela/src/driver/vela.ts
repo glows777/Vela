@@ -596,16 +596,16 @@ export function createVela(options: VelaOptions = {}): Vela {
         return {
           ...inventory,
           enabledModels: settings.enabledModels,
-          defaultTools: settings.defaultTools,
+          defaultTools: settings.tools,
           defaults: resourceSplit
             ? {
                 model:
                   hostDefaults.get(session.id)?.model ??
-                  settings.defaultModel ??
+                  settings.model ??
                   resourceSplit.fallbackModel,
                 thinkingLevel:
                   hostDefaults.get(session.id)?.thinkingLevel ??
-                  settings.defaultThinkingLevel,
+                  settings.thinkingLevel,
                 limits: { ...settings.limits, ...options.limits },
                 autoCompaction:
                   options.autoCompaction ?? settings.autoCompaction,

@@ -199,42 +199,44 @@ export async function runAttempt(
       }>(config.runtime, paths.legacyVela)
   const providerDir = join(config.artifactDir, 'provider')
   await mkdir(providerDir, { recursive: true })
-  await Bun.write(
-    join(providerDir, 'models.json'),
-    JSON.stringify({
-      providers: {
-        eval: {
-          api: 'openai-responses',
-          baseUrl: 'https://api.deepseek.com',
-          compat: {
-            store: false,
-            supportsDeveloperRole: false,
-            deepseekReasoningStream: true,
-          },
-          apiKey: '$OPENAI_KEY',
-          models: [
-            {
-              id: 'deepseek-flash',
-              contextWindow:
-                config.scenario === 'C5'
-                  ? compactionFixture.contextWindow
-                  : 1_000_000,
-              reasoning: true,
-              thinkingLevelMap: {
-                off: 'none',
-                minimal: 'low',
-                low: 'low',
-                medium: 'high',
-                high: 'high',
-                xhigh: 'high',
-                max: 'max',
-              },
-            },
-          ],
+  const providerConfig = JSON.stringify({
+    providers: {
+      eval: {
+        api: 'openai-responses',
+        baseUrl: 'https://api.deepseek.com',
+        compat: {
+          store: false,
+          supportsDeveloperRole: false,
+          deepseekReasoningStream: true,
         },
+        apiKey: '$OPENAI_KEY',
+        models: [
+          {
+            id: 'deepseek-flash',
+            contextWindow:
+              config.scenario === 'C5'
+                ? compactionFixture.contextWindow
+                : 1_000_000,
+            reasoning: true,
+            thinkingLevelMap: {
+              off: 'none',
+              minimal: 'low',
+              low: 'low',
+              medium: 'high',
+              high: 'high',
+              xhigh: 'high',
+              max: 'max',
+            },
+          },
+        ],
       },
-    }),
-  )
+    },
+  })
+  // Write both config.json (HEAD) and models.json (historical baseline worktrees).
+  await Promise.all([
+    Bun.write(join(providerDir, 'config.json'), providerConfig),
+    Bun.write(join(providerDir, 'models.json'), providerConfig),
+  ])
   const providers = loadModels({
     agentDir: providerDir,
     env: apiKey ? { OPENAI_KEY: apiKey } : {},

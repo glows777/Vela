@@ -16,7 +16,7 @@ import {
   loadCliExtensions,
   parseArgs,
 } from '../../packages/vela/src/cli/setup.ts'
-import { loadConfig } from '../../packages/vela/src/config/index.ts'
+import { loadConfig } from '../../packages/vela/src/load-config.ts'
 
 const alive = (pid: number) => {
   try {
@@ -45,7 +45,7 @@ test('CLI project MCP assembly isolates same-named stdio servers and shares each
   ]) {
     mkdirSync(join(cwd!, '.vela'), { recursive: true })
     writeFileSync(
-      join(cwd!, '.vela/mcp.json'),
+      join(cwd!, '.vela/config.json'),
       JSON.stringify({
         mcpServers: {
           local: {

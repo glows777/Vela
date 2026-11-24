@@ -25,14 +25,14 @@ test('startup public extension view stays ordered while host provenance excludes
     write(join(project, 'extensions', 'project-discovered.ts'))
     write(join(project, 'project-listed.ts'))
     writeFileSync(
-      join(user, 'settings.json'),
+      join(user, 'config.json'),
       JSON.stringify({
         extensions: ['-builtin:memory', './user-listed.ts'],
         extensionConfig: { plugin: { value: 'user' } },
       }),
     )
     writeFileSync(
-      join(project, 'settings.json'),
+      join(project, 'config.json'),
       JSON.stringify({
         extensions: ['+builtin:memory', './project-listed.ts'],
         extensionConfig: { plugin: { value: 'project' } },

@@ -21,11 +21,11 @@ The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructive
 
 Each core tool also contributes its own line and rules to the system prompt: `promptSnippet` supplies the `- name: what it does` line in `<tools>`, and `promptGuidelines` supplies rules in `<rules>` (for example "Read a file before you change it." from `edit_file`). The builder reads the session's active tools, so a tool the session does not have — `grep` until `+grep` enables it, or `bash` in a top-level group chat — contributes neither. Extensions set the same two fields. See [The system prompt](settings.md#the-system-prompt).
 
-The default set is `read_file`, `write_file`, `edit_file` and `bash`, plus `tool_search`. `list_directory`, `grep` and `find` stay registered but off: the model neither sees them nor can call them until a session enables one with `--tools +grep` (or `+grep,+find,+list_directory`) or the [`defaultTools`](settings.md#defaulttools) setting. pi keeps `ls`, `grep` and `find` off in the same way.
+The default set is `read_file`, `write_file`, `edit_file` and `bash`, plus `tool_search`. `list_directory`, `grep` and `find` stay registered but off: the model neither sees them nor can call them until a session enables one with `--tools +grep` (or `+grep,+find,+list_directory`) or the [`tools`](settings.md#tools) setting. pi keeps `ls`, `grep` and `find` off in the same way.
 
 Relative paths resolve against the working directory: the directory the CLI was started in, or `cwd` in `createVela()` (default `process.cwd()`). Paths outside it are not blocked.
 
-Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `list_directory` instead of `read`, `write`, `edit` and `ls`; `grep`, `find` and `bash` match pi's. Vela has no `powershell` or `codemode` tool, and `--tools` and `defaultTools` take the same `+name` / `-name` entries as pi's.
+Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `list_directory` instead of `read`, `write`, `edit` and `ls`; `grep`, `find` and `bash` match pi's. Vela has no `powershell` or `codemode` tool, and `--tools` and `tools` in `config.json` take the same `+name` / `-name` entries as pi's.
 
 ### read_file
 
@@ -140,7 +140,7 @@ A running call can also be moved to the background while it waits: `session.back
 
 With `run_in_background: true` the call starts a job and returns without waiting: `Command running in background with ID: bg-1.` and `You will be notified when it completes; do not poll the file or start a second copy.` Any output the command already wrote comes with that result, which names no file: the environment only knows its spill path once the command ends. The job belongs to the session and delivers its exit as its own message; see [background](built-in-extensions.md#background). Only a session with that extension and its `background_stop` tool has the capability; without either, the call fails with `Background commands are not enabled in this session` instead of ignoring the parameter and running the command in the foreground. Because that depends on the session, the parameter's own description states the condition and the system prompt does not tell every `bash` session to use it. When the output passes the limits above, the session's execution environment spills it to a file there and the exit delivery names it (`Full output: <path>`), so `read_file` pages the whole log; the tail sent to the model stays bounded.
 
-- Foreground budget: a call that outlives it is moved to the background instead of being killed, so the work is not lost. `Command did not complete within its 120s timeout and was moved to the background (ID: bg-1).`, then the output so far, and the exit arrives as the job's result; the result's `execution` metadata carries `backgroundTaskId` and `timedOutAfterMs`, which is how it differs from a declared job and from one moved with Ctrl+B. The budget is `bashForegroundTimeoutSeconds` (default `120`; `0` leaves commands to wait as long as they need) and a requested `timeout` is held to `bashForegroundTimeoutMaxSeconds` (default `600`), with the result naming both values when it was clamped. A command that starts with `sleep` has no work to lose, so it keeps the kill.
+- Foreground budget: a call that outlives it is moved to the background instead of being killed, so the work is not lost. `Command did not complete within its 120s timeout and was moved to the background (ID: bg-1).`, then the output so far, and the exit arrives as the job's result; the result's `execution` metadata carries `backgroundTaskId` and `timedOutAfterMs`, which is how it differs from a declared job and from one moved with Ctrl+B. The foreground budget defaults to `120` seconds, and a requested `timeout` is capped at `600` seconds, with the result naming both values when clamped. A command that starts with `sleep` has no work to lose, so it keeps the kill.
 - Kill: with no `background` extension, no `background_stop` tool in the session, or a budget of `0`, an explicit `timeout` kills the shell and its child processes as before (the process group on POSIX, the process tree on Windows) and the result stays `Command timed out after N seconds`. Abort always kills.
 - Vela does not filter commands; a user extension can confirm or block calls through a `tool_call` hook. See [Security](security.md).
 
@@ -204,7 +204,7 @@ All core tools are direct. Deferred exposure is for extensions that register man
 
 ## Tool access
 
-Every session starts with the default tools; there are no roles (like pi). Change the set for a run with `--tools`, for the CLI's sessions with the `defaultTools` setting, or per session through the SDK; an extension can call `setActiveTools()` on its session. A tool that is off is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. Channel chats share one session and its tools. See [Security](security.md#limit-tools).
+Every session starts with the default tools; there are no roles (like pi). Change the set for a run with `--tools`, for the CLI's sessions with the `tools` setting, or per session through the SDK; an extension can call `setActiveTools()` on its session. A tool that is off is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. Channel chats share one session and its tools. See [Security](security.md#limit-tools).
 
 ## Choosing tools per session
 
@@ -213,7 +213,7 @@ Every session starts with the default tools; there are no roles (like pi). Chang
 - A list with plain names enables exactly those tools; every other tool, built-in or from an extension, is off. On the command line the names may be `*` patterns (`read_*`), and `--exclude-tools` then removes names or patterns from the result; the SDK option takes exact names.
 - A list of only `+name` / `-name` entries takes exact names, cannot be mixed with plain names, and changes the default set instead, so tools from extensions stay on. `--tools +grep` enables `grep`; `--tools -bash` turns `bash` off.
 
-The `defaultTools` setting takes plain names (`*` patterns work there) and `+name` / `-name` entries, and is described in [Settings](settings.md#defaulttools). With the SDK, pass `tools` when opening a session:
+The `tools` setting in `config.json` takes plain names (`*` patterns work there) and `+name` / `-name` entries, and is described in [Settings](settings.md#tools). With the SDK, pass `tools` when opening a session:
 
 ```ts
 const session = vela.session('review', {

@@ -1,13 +1,15 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { VelaSettings } from '../../config/index.ts'
 import type { ContextFile } from '../prompt/context-files.ts'
 import type { ExtensionEntry } from './extension-discovery.ts'
-import type { VelaSettings } from './settings-values.ts'
 
 /** Internal source split for resources assembled by loadConfig and consumed by createVela. */
 export interface ConfigResourceSplit<Factory = unknown> {
   hostExtensions?: ExtensionEntry[]
   extensionBuiltins?: { names: string[]; defaultOff: string[] }
+  /** @internal Test-only foreground bash budget override (retired from config.json in S1b). */
+  foregroundBudget?: { seconds?: number; maxSeconds?: number }
   projectExtensions?: (input: {
     cwd: string
     environmentId: string

@@ -24,22 +24,20 @@ Local is an authenticated HTTP/SSE transport for apps and scripts on the daemon'
 
 ### Start the daemon
 
-Configure a model and its credentials first (see [Models](models.md)), then merge this into **user-level** `~/.vela/settings.json` (or `$VELA_DIR/settings.json`):
+Configure a model and its credentials first (see [Models](models.md)), then merge this into **user-level** `~/.vela/config.json` (or `$VELA_DIR/config.json`):
 
 ```json
 {
-  "extensionConfig": {
-    "local": {
-      "enabled": true,
-      "token": "$VELA_LOCAL_TOKEN",
-      "port": 8788,
-      "timezone": "UTC"
-    }
+  "local": {
+    "enabled": true,
+    "token": "$VELA_LOCAL_TOKEN",
+    "port": 8788,
+    "timezone": "UTC"
   }
 }
 ```
 
-The timezone is optional and defaults to the process timezone for routines. Supply a nonempty secret through the daemon's environment, not a committed settings file. For example, in a shell with OpenSSL installed:
+The timezone is optional and defaults to the process timezone for routines. Supply a nonempty secret through the daemon's environment, not a committed config file. For example, in a shell with OpenSSL installed:
 
 ```sh
 export VELA_LOCAL_TOKEN="$(openssl rand -hex 32)"
@@ -47,7 +45,7 @@ cd /absolute/path/to/daemon-workspace
 vela serve
 ```
 
-Keep the same token in the client environment through your normal secret-management mechanism. Do not print it in logs or include it in URLs. A service manager must supply the token and model credentials to the daemon; see [Deployment](deploy.md) for running `vela serve` continuously. Restart after changing settings. Local is disabled by default. Only real `vela serve` enables this listener: interactive, print, JSON, RPC and model-listing modes do not, and `--no-extensions` disables it. Project-level `extensionConfig.local` cannot enable, disable or override it. There is no `builtin:local` selector; use the user-level settings above.
+Keep the same token in the client environment through your normal secret-management mechanism. Do not print it in logs or include it in URLs. A service manager must supply the token and model credentials to the daemon; see [Deployment](deploy.md) for running `vela serve` continuously. Restart after changing config. Local is disabled by default. Only real `vela serve` enables this listener: interactive, print, JSON, RPC and model-listing modes do not, and `--no-extensions` disables it. Project-level `local` in `.vela/config.json` cannot enable, disable or override it. There is no `builtin:local` selector; use the user-level settings above.
 
 The listener binds **only `127.0.0.1`**, default port **8788**. Every route, including info and SSE, requires `Authorization: Bearer <token>`. Local has no cookie authentication or CORS support. Use an HTTP client that can set an Authorization header; browser `EventSource` cannot set that header. Local's token grants access to the daemon's configured tool authority, including its files and credentials. Loopback and a token are not a sandbox or a multi-user isolation boundary.
 
@@ -236,7 +234,7 @@ fi
 
 The built-in `lark` extension uses Lark's long connection (WebSocket), so no public URL is needed. It is loaded by default in the CLI.
 
-Run `vela setup lark` in an interactive terminal to configure a group. The wizard validates the app credentials, waits for a human to mention the bot in a group, and asks for confirmation before enabling it. The confirmation shows the chat ID and, when available, the group name. If Vela cannot retrieve the name, you can confirm using the ID alone. Every member of an enabled group has full access to Vela tools. It saves credentials in user-level `settings.json` (mode 0600), sends a connection message, and instructs you to run `vela serve`. Card callbacks and other permissions are checklist items, not verified by setup; use the manual reference below. Project settings can override user-level values.
+Run `vela setup lark` in an interactive terminal to configure a group. The wizard validates the app credentials, waits for a human to mention the bot in a group, and asks for confirmation before enabling it. The confirmation shows the chat ID and, when available, the group name. If Vela cannot retrieve the name, you can confirm using the ID alone. Every member of an enabled group has full access to Vela tools. It saves credentials in user-level `config.json` (mode 0600), sends a connection message, and instructs you to run `vela serve`. Card callbacks and other permissions are checklist items, not verified by setup; use the manual reference below. Listener configuration lives in user-level `config.json`.
 
 After setup, run `vela serve` and mention the bot again to check a real model-backed reply.
 
@@ -249,13 +247,11 @@ After setup, run `vela serve` and mention the bot again to check a real model-ba
 
    ```json
    {
-     "extensionConfig": {
-       "lark": {
-         "appId": "cli_xxx",
-         "appSecret": "$LARK_APP_SECRET",
-         "owners": ["ou_aaa"],
-         "chats": ["oc_trusted_group"]
-       }
+     "lark": {
+       "appId": "cli_xxx",
+       "appSecret": "$LARK_APP_SECRET",
+       "owners": ["ou_aaa"],
+       "chats": ["oc_trusted_group"]
      }
    }
    ```
@@ -285,7 +281,7 @@ After setup, run `vela serve` and mention the bot again to check a real model-ba
 
 Each enabled group uses `<dataDir>/channels/<channelSessionId("lark", chatId)>/` with `workspace/`, `memory/` and the existing `files/` attachment directory. The existing encoder keeps chat IDs path-safe; topic roots and physical session generations do not affect this folder. No files are moved or deleted. For local group sessions, relative file, search and bash calls and project instruction discovery use this group's `workspace/`. For Docker sessions they use the named environment’s `/workspace`. A newly allocated workspace is empty. Clone the repository there if the group needs it. Workspace skills and templates come from the selected environment. Session storage and the chat’s canonical downloads stay on the host.
 
-The channel and every topic in a group share its memory. The memory tool and `/memory` / `/dream` use that group's store for changes. Global notes remain at `<dataDir>/memory`; group sessions may only `read` or `search` them with `scope: "global"`. Other global actions fail clearly. Reads retain normal usage timestamp updates. The prompt shows a labeled group index and global index, each capped at 4,000 characters with truncation disclosed; note contents are read on demand. Local SDK/CLI sessions and owner DMs keep global memory. Each group also has its own private `.dream/inbox.jsonl` and consolidation log inside its memory store. After a reply settles, automatic dream runs at 20 pending turns or when a pending turn is older than 24 hours. It uses only that group's evidence and never writes global memory. `/memory` shows the latest dream and pending inbox size; `/dream` runs the same isolated pass immediately. Set `extensionConfig.memory.dream` to `false` to disable automatic runs. See [memory](built-in-extensions.md#memory) for retention and audit details.
+The channel and every topic in a group share its memory. The memory tool and `/memory` / `/dream` use that group's store for changes. Global notes remain at `<dataDir>/memory`; group sessions may only `read` or `search` them with `scope: "global"`. Other global actions fail clearly. Reads retain normal usage timestamp updates. The prompt shows a labeled group index and global index, each capped at 4,000 characters with truncation disclosed; note contents are read on demand. Local SDK/CLI sessions and owner DMs keep global memory. Each group also has its own private `.dream/inbox.jsonl` and consolidation log inside its memory store. After a reply settles, automatic dream runs at 20 pending turns or when a pending turn is older than 24 hours. It uses only that group's evidence and never writes global memory. `/memory` shows the latest dream and pending inbox size; `/dream` runs the same isolated pass immediately. Set `memory.dream` to `false` in `config.json` to disable automatic runs. See [memory](built-in-extensions.md#memory) for retention and audit details.
 
 For example, `"chats": ["oc_example_all", { "id": "oc_example_limited", "tools": ["read_file", "memory"] }]` leaves the first group with the default tools and selects exact registered tool names for the second. Omit `tools` for the default tools; `[]` removes optional tools. The group-only controls `channel_start_topic` and `channel_forward_to_topic` remain available in top-level group sessions and are denied in topics and DMs. `channel_list_topics`, `channel_read_topic`, `channel_skip_reply` and `channel_routines` are available in both. `channel_wait_for_input` is available only in topics. Group and topic sessions add the Lark topic tools and the two hand-off tools to a configured `tools` list, so that list cannot remove them (topics also keep `channel_wait_for_input`); DMs keep only `channel_routines` from this set and no background tools, so their `bash` refuses `run_in_background` too. Top-level group sessions and their topics run the same tools, including `bash`, `write_file`, `edit_file` and the background commands (`bash` with `run_in_background`, plus `background_output` and `background_stop`), so a quick command is answered where it was asked; a narrowed `tools` list can drop any of them, and topics still add the chat's topic tools. A background command keeps its session open while it runs instead of letting idle cleanup end it, and its exit arrives as the next input of the conversation that started it (see [background](built-in-extensions.md#background)). History search is an optional capability, available in both channel and topic sessions when selected. Without the memory tool, the memory prompt is omitted and its commands report that memory is unavailable. Malformed/duplicate chat entries fail loading. Unknown tool names reject `startChannels()` after all extensions load and before any channel transport or recovery starts.
 
@@ -297,7 +293,7 @@ At startup, only conversations with interrupted work or outstanding jobs are ope
 
 This resumes notification, not an operating-system process. SIGKILL can leave an external command's effects or child process uncertain. The directory and transcript are separate files, and remote reply delivery is separate again: one durable input does not promise unlimited exactly-once external delivery. Startup notices are messages, not changes to the cached system prompt.
 
-A chat entry can also set `model` (`provider/id`) and `thinkingLevel` for its group session, plus `topicModel` and `topicThinkingLevel` for the group's topics. A topic uses its own value when set, otherwise the group's; a group without them uses the user's `defaultModel` / `defaultThinkingLevel`. DMs use the user defaults. Unknown thinking levels fail loading. A model name that does not resolve fails when its session opens, with the chat id in the error.
+A chat entry can also set `model` (`provider/id`) and `thinkingLevel` for its group session, plus `topicModel` and `topicThinkingLevel` for the group's topics. A topic uses its own value when set, otherwise the group's; a group without them uses the user's `model` / `thinkingLevel`. DMs use the user defaults. Unknown thinking levels fail loading. A model name that does not resolve fails when its session opens, with the chat id in the error.
 
 Current chat configuration is applied from the logical directory record before opening/resuming a session, including idle reopen, process recovery, topic handoff and the fresh physical ID created by `!restart`. A configured model or thinking level is applied again whenever the session opens, so a changed chat entry takes effect on resume. A mid-session `/model` or `/thinking` change survives a resume only for a value the chat entry does not configure. Restart retains the workspace, group notes and attachments. The per-group boolean `readUntagged` defaults to true.
 
@@ -315,7 +311,7 @@ Normalized attributed input and model/tool responses live in the existing sessio
 
 ### Scheduled wake-ups (M4)
 
-The channel runtime persists routines in `<dataDir>/channels/routines.json` and delivers one-off or daily/selected-weekday wake-ups to their original logical session, including after `!restart`. `extensionConfig.lark.timezone` selects one IANA deployment timezone, defaulting to the process timezone; invalid configuration or a malformed routine file rejects channel startup. Recurring schedules retain local wall time: a DST gap shifts forward by its length and a repeated time uses its first occurrence. Changing the deployment timezone changes recurring local-time schedules, while one-off UTC instants stay fixed.
+The channel runtime persists routines in `<dataDir>/channels/routines.json` and delivers one-off or daily/selected-weekday wake-ups to their original logical session, including after `!restart`. `lark.timezone` selects one IANA deployment timezone, defaulting to the process timezone; invalid configuration or a malformed routine file rejects channel startup. Recurring schedules retain local wall time: a DST gap shifts forward by its length and a repeated time uses its first occurrence. Changing the deployment timezone changes recurring local-time schedules, while one-off UTC instants stay fixed.
 
 Ask Vela in a topic, at group top level or in an owner DM to create a reminder. The mandatory `channel_routines` tool remains available even with a group's `tools: []`. Its `create` action accepts a message and either `{ "at": "2026-11-02T09:00" }` (a future deployment-local date/time, no offset) or `{ "time": "09:00", "days": ["mon", "tue", "wed", "thu", "fri"] }` (omit days for daily). Local one-offs use the same DST rules as recurring times and are saved as UTC instants. The tool returns the saved schedule, timezone, logical target, creator and next local run for the model's confirmation; for a DST gap this shows the shifted time. Invalid dates, past one-offs, invalid/empty weekday sets and more than 20 routines in a chat are rejected.
 
@@ -449,7 +445,7 @@ Use `vela setup github owner/repo --url https://your-tunnel-host` to connect rep
 
 1. Configure at least one trusted channel, such as Lark above, and arrange a tunnel to `http://127.0.0.1:8787` (or your configured fixed receiver port from 1 to 65535; setup rejects ephemeral port 0). See [tunnel deployment](channels-reference.md#tunnel-deployment-examples). Setup does not start or provision a tunnel.
 2. Install GitHub CLI **2.57 or newer** and run `gh auth login --hostname github.com` with an account allowed to write repository webhooks. Setup checks only the active account, so an expired inactive account does not block it. Use `gh auth switch --hostname github.com` to select the account that will manage hooks.
-3. Run the setup command. It merges and lowercases the repository allowlist in user `settings.json`, saves it with mode **0600**, and creates or updates each repository's matching webhook using `gh`. It preserves unrelated settings and an existing secret. A new secret is generated and stored directly in these settings, not in `auth.json`; an existing `$VAR` reference is preserved and must resolve in the setup environment. Keep settings private. Trusted project settings can override user settings.
+3. Run the setup command. It merges and lowercases the repository allowlist under `webhooks.github` in user `config.json`, saves it with mode **0600**, and creates or updates each repository's matching webhook using `gh`. It preserves unrelated settings and an existing secret. A new secret is generated and stored directly in these settings, not in `auth.json`; an existing `$VAR` reference is preserved and must resolve in the setup environment. Keep settings private. Host webhook settings cannot be overridden by project config.
 4. Start or restart `vela serve`. With GitHub ingress configured, ask Vela in the group to subscribe it to the repository Issue feed once; the key is `github:owner/repo#issues`. The feed stays silent by default. To wake for any of several labels, set `issueLabels` to an array. To wake only when both labels are present (for example, Vela's assigned **and** approved work), use `"issueLabels": { "all": ["to:vela", "status:ready"] }`. This filters opens, closes, ordinary Issue comments and meaningful label applications; adding an unrelated label does not trigger a wake. A topic is guided to subscribe to the PR it opens or takes over instead of repeatedly polling; for a PR the topic did not open or take over, ask Vela in that topic to watch it. The PR key is exact, for example `github:owner/repo#pr/1`. Repository spelling matters, ordinary Issue comments never reach PR topics, and PR comments are not duplicated into the group feed.
 5. Open the repository's **Settings → Webhooks → Recent deliveries** and check delivery to your running receiver. Successful setup verifies hook configuration, not public reachability or topic execution.
 

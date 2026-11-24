@@ -60,6 +60,13 @@ export interface ProviderContext {
   channel(): string | undefined
 }
 
+const localOnlyOAuthChecks = new WeakMap<ProviderContext, () => boolean>()
+
+/** @internal True when this request's channel session withheld a `localOnly` OAuth token. */
+export function isLocalOnlyOAuthBlocked(ctx: ProviderContext): boolean {
+  return localOnlyOAuthChecks.get(ctx)?.() ?? false
+}
+
 /** Optional provider-hosted equivalents for Vela tools, resolved for each request. */
 export type HostedToolModel = ModelHandle & {
   hostedTools?: (options?: {
@@ -255,13 +262,26 @@ export class ModelRegistry {
       )
     const { api: _, ...catalog } = catalogLookup(provider, id) ?? { id }
     const spec = def.models?.find((m) => m.id === id) ?? catalog
+    const ctx: ProviderContext = {
+      provider,
+      credential: async () => {
+        if (def.oauth?.localOnly && options.channel?.()) {
+          const stored = this.credentials.get(provider)
+          if (stored?.type === 'api_key') return stored
+          return undefined
+        }
+        return resolveCredential(this.credentials, provider, def.oauth)
+      },
+      channel: () => options.channel?.(),
+    }
+    localOnlyOAuthChecks.set(
+      ctx,
+      () =>
+        Boolean(def.oauth?.localOnly && options.channel?.()) &&
+        this.credentials.get(provider)?.type === 'oauth',
+    )
     return {
-      model: def.createModel(id, {
-        provider,
-        credential: () =>
-          resolveCredential(this.credentials, provider, def.oauth),
-        channel: () => options.channel?.(),
-      }),
+      model: def.createModel(id, ctx),
       info: { ...spec, provider, ref: `${provider}/${id}` },
     }
   }
@@ -367,7 +387,7 @@ export function resolveModel(
   const choice = ref ?? registry.defaultRef()
   if (choice === undefined)
     throw new Error(
-      'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock.',
+      'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set model in ~/.vela/config.json. For an offline demo use VELA_MODEL=mock.',
     )
   if (typeof choice === 'string') return registry.resolve(choice).model
   assertRunnableModelHandle(choice)

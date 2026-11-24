@@ -1,16 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import {
-  type ExtensionEntry,
-  extensionName,
-  importExtension,
-  projectTrustRequired,
-  savedTrust,
-  saveTrust,
-  type VelaConfig,
-  type VelaSettings,
-} from '../config/index.ts'
+import { savedTrust, saveTrust, type VelaSettings } from '../config/index.ts'
 import {
   assertSessionId,
   getToolListError,
@@ -21,13 +12,20 @@ import type { ModelInfo, ThinkingLevel } from '../driver/index.ts'
 import { background, memory, todo, web, webConfig } from '../driver/index.ts'
 import { lark, larkConfig } from '../lark/index.ts'
 import type { ChannelExtension as VelaExtension } from '../legacy-channels/index.ts'
+import {
+  type ExtensionEntry,
+  extensionName,
+  importExtension,
+  projectTrustRequired,
+  type VelaConfig,
+} from '../load-config.ts'
 import { mcp } from '../mcp/index.ts'
 import { resolveShellPath } from './shell.ts'
 import { applyToolModifiers, type ToolLoadout } from './tool-selection.ts'
 
 type Env = Record<string, string | undefined>
 
-/** Built-in extensions shipped with the CLI (`builtin:<name>`). Config comes from `extensionConfig.<name>`. */
+/** Built-in extensions shipped with the CLI (`builtin:<name>`). Config comes from top-level `<name>` in `config.json`. */
 export const BUILTIN_EXTENSIONS: Record<
   string,
   (settings: VelaSettings) => VelaExtension
@@ -136,7 +134,7 @@ Options:
   --fork <id>                   Start in a new session copied from a saved session
   --export <id|file> [output]   Write a saved session (id or .jsonl file) as HTML and exit
   --model <provider/id>         Model to use (providers: built-in anthropic / openai / openrouter / deepseek,
-                                ~/.vela/models.json, extensions)
+                                ~/.vela/config.json, extensions)
   --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}
   --system-prompt <text>        Replace the default system prompt with text or a file's contents
                                 (repeatable; replaces ~/.vela/SYSTEM.md and .vela/SYSTEM.md)
@@ -203,7 +201,7 @@ Examples:
 Environment variables:
   OPENAI_API_KEY                API key for the built-in openai provider
   OPENAI_API_BASE_URL           Base URL for the built-in openai provider
-  OPENAI_API_MODEL_NAME         Default model id for openai when no --model / defaultModel is set
+  OPENAI_API_MODEL_NAME         Default model id for openai when no --model / model is set
   ANTHROPIC_API_KEY             API key for the built-in anthropic provider
   OPENROUTER_API_KEY            API key for the built-in openrouter provider
   DEEPSEEK_API_KEY              API key for the built-in deepseek provider
@@ -484,14 +482,14 @@ function matchesTokens(text: string, query: string): boolean {
 
 /**
  * `--list-models` output (like pi's): provider, model, context window and thinking support, sorted by
- * provider and id. Only providers with a credential (auth.json, models.json or an environment variable) appear.
+ * provider and id. Only providers with a credential (auth.json, config.json or an environment variable) appear.
  */
 export function formatModelList(
   models: readonly ModelInfo[],
   search?: string,
 ): string {
   if (!models.length)
-    return 'No models available: sign in with /login, or set a provider API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY) or a provider in ~/.vela/models.json.\n'
+    return 'No models available: sign in with /login, or set a provider API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY) or a provider in ~/.vela/config.json.\n'
   const found = (
     search
       ? [...models].filter((m) =>
@@ -537,7 +535,7 @@ function tokenCount(count: number): string {
 }
 
 /**
- * Decide whether to load a project's `.vela/settings.json`, `.vela/extensions/` and project skills (like pi's project trust):
+ * Decide whether to load a project's `.vela/config.json`, `.vela/extensions/` and project skills (like pi's project trust):
  * `--approve / --no-approve` → saved decision → ask once in interactive mode and save; untrusted when we can't ask.
  * `warning` in the result is the notice shown to the user when untrusted.
  */
@@ -572,7 +570,7 @@ export async function resolveTrust(options: {
       ),
     }
   const answer = await question(
-    `${resolve(cwd)} has project config (.vela/settings.json, .vela/extensions/, .vela/prompts/, .vela/SYSTEM.md, .vela/APPEND_SYSTEM.md, or skills in .vela/skills/, .skills/ or .agents/skills/).\nExtensions are code that runs on this machine; skills, prompts, SYSTEM.md and APPEND_SYSTEM.md are instructions for the model. Trust this project and load it? (y/N) `,
+    `${resolve(cwd)} has project config (.vela/config.json, .vela/extensions/, .vela/prompts/, .vela/SYSTEM.md, .vela/APPEND_SYSTEM.md, or skills in .vela/skills/, .skills/ or .agents/skills/).\nExtensions are code that runs on this machine; skills, prompts, SYSTEM.md and APPEND_SYSTEM.md are instructions for the model. Trust this project and load it? (y/N) `,
   )
   const trusted = answer === 'y' || answer === 'yes'
   saveTrust(agentDir, cwd, trusted)

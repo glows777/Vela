@@ -17,11 +17,27 @@ test('core config leaves MCP to its descriptor and trusts only declared project 
   const agentDir = join(dir.path, 'agent')
   mkdirSync(join(cwd, '.vela'), { recursive: true })
   writeFileSync(
-    join(cwd, '.vela', 'mcp.json'),
+    join(cwd, '.vela', 'custom.json'),
+    JSON.stringify({ token: 'custom' }),
+  )
+  const customDescriptor = {
+    name: 'custom',
+    projectResources: ['custom.json'],
+    resolve: ({
+      projectSection,
+    }: {
+      projectSection?: Record<string, unknown>
+    }) => projectSection ?? {},
+  }
+  expect(projectTrustRequired(cwd, agentDir, dir.path)).toBe(false)
+  expect(
+    projectTrustRequired(cwd, agentDir, dir.path, [customDescriptor]),
+  ).toBe(true)
+  writeFileSync(
+    join(cwd, '.vela', 'config.json'),
     JSON.stringify({ mcpServers: { local: { command: 'example' } } }),
   )
-  expect(projectTrustRequired(cwd, agentDir, dir.path)).toBe(false)
-  expect(projectTrustRequired(cwd, agentDir, dir.path, [mcpConfig])).toBe(true)
+  expect(projectTrustRequired(cwd, agentDir, dir.path)).toBe(true)
   const bare = core.loadConfig({ cwd, agentDir, homeDir: dir.path })
   expect('mcp' in bare).toBe(false)
   const resolved = core.loadConfig({

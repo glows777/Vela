@@ -4,7 +4,7 @@ Vela connects to [Model Context Protocol](https://modelcontextprotocol.io) serve
 
 ## Configure servers
 
-Vela reads servers from `~/.vela/mcp.json` and, when the project is [trusted](settings.md#project-trust), from the project's `.vela/mcp.json`. The format is the `mcpServers` object of Claude Desktop, Claude Code and pi, so an existing entry can be copied over:
+Vela reads servers from `mcpServers` in `~/.vela/config.json` and, when the project is [trusted](settings.md#project-trust), from `<project>/.vela/config.json`. The structure matches the `mcpServers` object of Claude Desktop, Claude Code and pi, so an existing entry can be copied over:
 
 ```json
 {
@@ -46,7 +46,7 @@ Keep servers with credentials in the user file, and use the project file only fo
 Rules, the same as pi's:
 
 - Server names may contain only letters, digits, `_` and `-`. Names that differ only in `-` and `_` are the same server, and the second one is an error.
-- `${NAME}` and `$NAME` in `command`, `args`, `cwd`, `url`, `env` and `headers` are replaced with environment variables (`$$` is a literal `$`). Unlike in `settings.json`, a variable that is not set is an error for that server instead of an empty string.
+- `${NAME}` and `$NAME` in `command`, `args`, `cwd`, `url`, `env` and `headers` are replaced with environment variables (`$$` is a literal `$`). Unlike other sections in `config.json`, a variable that is not set is an error for that server instead of an empty string.
 - The legacy SSE transport is not supported. Servers that offer SSE usually also offer streamable HTTP, often at `/mcp` instead of `/sse`.
 - An invalid entry is reported and skipped; the other servers still connect.
 - `exposure: "codemode"` is rejected for now: Vela has no codemode yet.
@@ -54,7 +54,7 @@ Rules, the same as pi's:
 
 ## Connections
 
-Configuration-driven CLI MCP connections belong to the selected session project's location and configuration snapshot. Sessions sharing that snapshot share connections; A and B can use the same server name with different definitions without changing each other's tools. A denied project uses only the user server definitions. Editing settings or `mcp.json` affects a newly prepared session, not an existing one. Connections start when the instance first handles a session and close after its last session closes. Closing a stdio server closes its stdin, then sends SIGTERM, then SIGKILL.
+Configuration-driven CLI MCP connections belong to the selected session project's location and configuration snapshot. Sessions sharing that snapshot share connections; A and B can use the same server name with different definitions without changing each other's tools. A denied project uses only the user server definitions. Editing `config.json` affects a newly prepared session, not an existing one. Connections start when the instance first handles a session and close after its last session closes. Closing a stdio server closes its stdin, then sends SIGTERM, then SIGKILL.
 
 An explicit SDK `mcp()` factory or CLI `-e builtin:mcp` remains host-owned and shared by that host's sessions; it is not recreated as configuration-driven project MCP. Non-local project MCP is unsupported: neither its stdio command nor its HTTP endpoint is silently executed from the host. This slice does not add E3 or remote MCP transport support.
 
@@ -107,7 +107,7 @@ An MCP server runs with your permissions (stdio) or acts with the credentials yo
 
 ## SDK
 
-`createVela()` loads no extensions by default. Pass `mcp()` with the servers in the same format; the SDK does not read `mcp.json`:
+`createVela()` loads no extensions by default. Pass `mcp()` with the servers in the same format; the SDK does not read `config.json`:
 
 ```ts
 import { createVela, mcp } from '@glows777/vela'

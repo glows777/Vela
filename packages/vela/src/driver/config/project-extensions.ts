@@ -1,11 +1,11 @@
 import { join } from 'node:path'
+import type { VelaSettings } from '../../config/index.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import {
   discoverExtensions,
   type ExtensionEntry,
   resolveExtensionEntries,
 } from './extension-discovery.ts'
-import type { VelaSettings } from './settings-values.ts'
 
 /** Descriptors only; callers import code only after selecting or creating a project scope. */
 export function loadProjectExtensionEntries(

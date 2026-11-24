@@ -24,7 +24,7 @@ export function loadDesktopConfig(cwd: string, agentDir?: string) {
 
 /**
  * Whether a saved `provider/id` names something a session could use: the same resolution a session
- * does, so a model whose provider was removed from models.json reads as unusable instead of opening
+ * does, so a model whose provider was removed from config.json reads as unusable instead of opening
  * the app on a model that would fail at the first reply.
  */
 function resolves(
@@ -40,20 +40,33 @@ function resolves(
   }
 }
 
-/** Providers `models.json` defines, by name only: their values may hold a key or a header. */
-function customProviders(agentDir: string): Set<string> {
-  const path = join(agentDir, 'models.json')
-  if (!existsSync(path)) return new Set()
+/** Raw user `<agentDir>/config.json` metadata needed before interpolation (`customProviders`, raw `lark` expressions). */
+function readRawUserSections(agentDir: string): {
+  custom: Set<string>
+  rawLark: Record<string, unknown>
+} {
+  const path = join(agentDir, 'config.json')
+  if (!existsSync(path)) return { custom: new Set(), rawLark: {} }
   const file = JSON.parse(readFileSync(path, 'utf8')) as {
     providers?: Record<string, unknown>
+    lark?: unknown
   }
-  return new Set(Object.keys(file.providers ?? {}))
+  const custom = new Set(
+    file.providers && typeof file.providers === 'object'
+      ? Object.keys(file.providers)
+      : [],
+  )
+  const rawLark =
+    file.lark && typeof file.lark === 'object' && !Array.isArray(file.lark)
+      ? (file.lark as Record<string, unknown>)
+      : {}
+  return { custom, rawLark }
 }
 
 /**
- * Vela's configuration as the pages show it: derived values only. The contents of settings.json,
- * models.json and auth.json stay in main, because a models.json entry may carry an `apiKey` and the
- * Lark section carries its secret.
+ * Vela's configuration as the pages show it: derived values only. The contents of config.json and
+ * auth.json stay in main, because a provider entry may carry an `apiKey` and the Lark section
+ * carries its secret.
  *
  * `directModel` is a model handed to the host (`VELA_MODEL=faux:<scenario>`), and
  * `hasAvailableModel` says some provider already has a credential; either one means no setup screen.
@@ -67,7 +80,7 @@ export function readSettings(options: {
   hasAvailableModel: boolean
 }): SettingsState {
   const config = loadDesktopConfig(options.cwd, options.agentDir)
-  const custom = customProviders(config.agentDir)
+  const { custom, rawLark } = readRawUserSections(config.agentDir)
   const providers: SettingsProvider[] = Object.entries(config.providers).map(
     ([name, definition]: [string, ProviderDefinition]) => ({
       name,
@@ -84,18 +97,17 @@ export function readSettings(options: {
       ),
     }),
   )
-  const model = config.settings.defaultModel
+  const model = config.settings.model
   return {
     folder: config.agentDir,
     lark: larkState(
-      config.settings.extensionConfig?.lark ?? {},
+      rawLark,
       config.extensionConfig.lark ?? {},
       options.larkLoaded,
       options.larkStartupError,
     ),
     files: {
-      settings: join(config.agentDir, 'settings.json'),
-      models: join(config.agentDir, 'models.json'),
+      config: join(config.agentDir, 'config.json'),
       auth: join(config.agentDir, 'auth.json'),
     },
     setup: options.directModel
@@ -114,9 +126,9 @@ export function readSettings(options: {
             )
           : { required: true, reason: 'unknown-model' },
     ...(model === undefined ? {} : { model }),
-    ...(config.settings.defaultThinkingLevel === undefined
+    ...(config.settings.thinkingLevel === undefined
       ? {}
-      : { thinkingLevel: config.settings.defaultThinkingLevel }),
+      : { thinkingLevel: config.settings.thinkingLevel }),
     providers,
   }
 }
