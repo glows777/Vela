@@ -35,5 +35,4 @@ if (import.meta.main) {
   // Build into the clean package directory; development artifacts cannot enter the tarball.
   const docker = join(root, 'packages', 'vela', 'dist', 'docker')
   await buildDockerAdapter(docker)
-  await cp(docker, join(root, 'dist', 'docker'), { recursive: true })
 }

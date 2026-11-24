@@ -493,9 +493,7 @@ export const openaiChatGPTLogin: OAuthLogin = {
         throw new Error(
           'The ChatGPT sign-in returned a different account than the one already saved for this installation; sign in with that account, or log out first to replace it',
         )
-      const replaced =
-        options.previous?.type === 'oauth' ? options.previous : undefined
-      const credential = credentialFrom(token, clientId, replaced, {
+      const credential = credentialFrom(token, clientId, undefined, {
         idToken,
         subject: verified.subject,
         ...(verified.email ? { email: verified.email } : {}),

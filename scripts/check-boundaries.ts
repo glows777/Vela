@@ -104,22 +104,49 @@ function layerOf(pkgDir: string, file: string): string | undefined {
   return rel.split('/')[0]
 }
 
+function isIife(fn: ts.Node): boolean {
+  let expr: ts.Node = fn
+  while (expr.parent && ts.isParenthesizedExpression(expr.parent)) {
+    expr = expr.parent
+  }
+  return (
+    !!expr.parent &&
+    ts.isCallExpression(expr.parent) &&
+    expr.parent.expression === expr
+  )
+}
+
 function isDeferredImport(node: ts.Node): boolean {
+  let prev: ts.Node = node
   let cur = node.parent
   while (cur) {
     if (
       ts.isFunctionDeclaration(cur) ||
-      ts.isFunctionExpression(cur) ||
-      ts.isArrowFunction(cur) ||
       ts.isMethodDeclaration(cur) ||
       ts.isGetAccessorDeclaration(cur) ||
       ts.isSetAccessorDeclaration(cur) ||
-      ts.isConstructorDeclaration(cur) ||
-      ts.isIfStatement(cur) ||
-      ts.isConditionalExpression(cur) ||
-      ts.isSwitchStatement(cur)
+      ts.isConstructorDeclaration(cur)
     )
       return true
+    if (
+      (ts.isFunctionExpression(cur) || ts.isArrowFunction(cur)) &&
+      !isIife(cur)
+    )
+      return true
+    if (
+      ts.isIfStatement(cur) &&
+      (prev === cur.thenStatement || prev === cur.elseStatement) &&
+      cur.expression.kind !== ts.SyntaxKind.TrueKeyword
+    )
+      return true
+    if (
+      ts.isConditionalExpression(cur) &&
+      (prev === cur.whenTrue || prev === cur.whenFalse) &&
+      cur.condition.kind !== ts.SyntaxKind.TrueKeyword
+    )
+      return true
+    if (ts.isSwitchStatement(cur) && prev === cur.caseBlock) return true
+    prev = cur
     cur = cur.parent
   }
   return false
@@ -127,9 +154,36 @@ function isDeferredImport(node: ts.Node): boolean {
 
 function edges(source: ts.SourceFile): Edge[] {
   const out: Edge[] = []
+  const createRequireNames = new Set<string>(['createRequire'])
+  const requireAliases = new Set<string>(['require'])
   const literal = (n: ts.Node | undefined) =>
     n && ts.isStringLiteralLike(n) ? n.text : undefined
+  const isCreateRequireCall = (expr: ts.Expression): boolean =>
+    (ts.isIdentifier(expr) && createRequireNames.has(expr.text)) ||
+    (ts.isPropertyAccessExpression(expr) &&
+      expr.name.text === 'createRequire' &&
+      ts.isIdentifier(expr.expression))
   const visit = (node: ts.Node) => {
+    if (
+      ts.isImportDeclaration(node) &&
+      node.importClause?.namedBindings &&
+      ts.isNamedImports(node.importClause.namedBindings)
+    ) {
+      for (const el of node.importClause.namedBindings.elements) {
+        if ((el.propertyName?.text ?? el.name.text) === 'createRequire') {
+          createRequireNames.add(el.name.text)
+        }
+      }
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isCallExpression(node.initializer) &&
+      isCreateRequireCall(node.initializer.expression)
+    ) {
+      requireAliases.add(node.name.text)
+    }
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier
@@ -159,11 +213,15 @@ function edges(source: ts.SourceFile): Edge[] {
     } else if (ts.isCallExpression(node)) {
       const dynamic = node.expression.kind === ts.SyntaxKind.ImportKeyword
       const requireCall =
-        ts.isIdentifier(node.expression) && node.expression.text === 'require'
+        (ts.isIdentifier(node.expression) &&
+          requireAliases.has(node.expression.text)) ||
+        (ts.isCallExpression(node.expression) &&
+          isCreateRequireCall(node.expression.expression))
       const requireResolve =
         ts.isPropertyAccessExpression(node.expression) &&
         node.expression.name.text === 'resolve' &&
-        node.expression.expression.getText(source) === 'require'
+        ts.isIdentifier(node.expression.expression) &&
+        requireAliases.has(node.expression.expression.text)
       if (dynamic || requireCall || requireResolve) {
         const spec = literal(node.arguments[0])
         out.push({
@@ -330,6 +388,9 @@ export async function checkBoundaries(root: string): Promise<string[]> {
     const { pkg, edges: imports } = record
     const localRel = relative(root, file).replaceAll('\\', '/')
     const srcLayer = layerOf(pkg.dir, file)
+    if (srcLayer && !(srcLayer in LAYER_ALLOWED)) {
+      report(file, undefined, `unknown layer "${srcLayer}"`)
+    }
     const eager: string[] = []
     const builtin = /[\\/]driver[\\/]extensions[\\/](memory|web)[\\/]/.test(
       file,
@@ -354,9 +415,21 @@ export async function checkBoundaries(root: string): Promise<string[]> {
       }
       if (spec.startsWith('.')) {
         destination = resolve(dirname(file), spec)
-        if (!inside(destination, pkg.dir))
+        if (!inside(destination, join(pkg.dir, 'src')))
           report(file, edge.at, `source escape ${spec}`)
-        if (!/\.[jt]s$/.test(destination)) destination += '.ts'
+        const candidates = [
+          destination,
+          destination.replace(/\.(js|mjs|cjs)$/, '.ts'),
+          destination.replace(/\.mjs$/, '.mts'),
+          destination.replace(/\.cjs$/, '.cts'),
+          `${destination}.ts`,
+          `${destination}.mts`,
+          `${destination}.cts`,
+          join(destination, 'index.ts'),
+          join(destination, 'index.mts'),
+          join(destination, 'index.cts'),
+        ]
+        destination = candidates.find((c) => sourceMap.has(c)) ?? destination
       } else {
         const name = packageName(spec)
         const target = byName.get(name)

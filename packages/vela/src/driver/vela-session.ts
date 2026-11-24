@@ -358,7 +358,7 @@ export class VelaSession {
 
   /** Current model metadata: provider, id, `provider/id`, context window, etc. */
   get modelInfo(): ModelInfo {
-    return this.resolveModel().info
+    return this.defaults.info(this.resolveModel(), this.deps, this.channel)
   }
 
   /**

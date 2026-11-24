@@ -75,6 +75,7 @@ export interface MigrationOps {
   larkChatConfigById: Map<string, LarkChatMigrationConfig>
   boundLarkChats: Set<string>
   channelTimezones: Map<string, string>
+  unresolvedTimezoneChannels: Set<string>
   projectByChat: Map<string, string>
   channelSessionByKey: Map<
     string,

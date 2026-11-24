@@ -78,6 +78,22 @@ function isToolContentValue(value: unknown): value is ToolContent {
   )
 }
 
+async function extractJsonSchema(
+  schema: ToolInputSchema,
+): Promise<Record<string, unknown>> {
+  const isLegacyZodV3 =
+    typeof schema === 'object' &&
+    schema !== null &&
+    '_def' in schema &&
+    !('_zod' in schema)
+  return isLegacyZodV3
+    ? ((await asSchema(
+        // biome-ignore lint/suspicious/noExplicitAny: Zod v3 schema adapted at provider edge
+        schema as any,
+      ).jsonSchema) as Record<string, unknown>)
+    : await toJsonSchema(schema)
+}
+
 /** Build AI SDK `ToolSet` + plain JSON Schema definitions for a model request. */
 export async function resolveProviderTools(
   model: ModelInput,
@@ -145,7 +161,7 @@ export async function resolveProviderTools(
             typeof hosted.description === 'string'
               ? hosted.description
               : undefined,
-          inputSchema: await toJsonSchema(
+          inputSchema: await extractJsonSchema(
             hosted.inputSchema as unknown as ToolInputSchema,
           ),
           strict: hosted.strict,
@@ -157,17 +173,7 @@ export async function resolveProviderTools(
     }
     if (spec.hostedOnly) continue
 
-    const isLegacyZodV3 =
-      typeof spec.inputSchema === 'object' &&
-      spec.inputSchema !== null &&
-      '_def' in spec.inputSchema &&
-      !('_zod' in spec.inputSchema)
-    const jsonSchemaObj = isLegacyZodV3
-      ? ((await asSchema(
-          // biome-ignore lint/suspicious/noExplicitAny: Zod v3 schema adapted at provider edge
-          spec.inputSchema as any,
-        ).jsonSchema) as Record<string, unknown>)
-      : await toJsonSchema(spec.inputSchema)
+    const jsonSchemaObj = await extractJsonSchema(spec.inputSchema)
     toolDefinitions.push({
       name: spec.name,
       description: spec.description,

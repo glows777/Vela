@@ -1,6 +1,7 @@
 import type { ModelRegistry } from '../../providers/models/index.ts'
 import { errorMessage, type VelaLogger } from '../../shared/logger.ts'
 import type { ProviderRequestParams } from '../../shared/provider-types.ts'
+import { isVelaJsonSchema } from '../../shared/tool-schema.ts'
 import type { CustomMessage, VelaEvent } from '../agent/events.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
 import {
@@ -162,9 +163,9 @@ export class ExtensionRunner {
           schema !== null &&
           '~standard' in schema &&
           schema['~standard'].vendor === 'zod'
-        if (!isZod && !isJsonSchemaTool(tool))
+        if (!isZod && !isVelaJsonSchema(schema) && !isJsonSchemaTool(tool))
           throw new Error(
-            `Extension "${name}": tool "${tool.name}" inputSchema must be a Zod schema`,
+            `Extension "${name}": tool "${tool.name}" inputSchema must be a Zod schema or createJsonSchema()`,
           )
         // Prefix tool names with the extension name so they cannot clash with built-in or other
         // extensions' tools; skip the prefix when the tool name equals it (memory's tool is not

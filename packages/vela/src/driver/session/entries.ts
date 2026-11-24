@@ -1,11 +1,12 @@
 import type { ThinkingLevel } from '../../providers/models/index.ts'
-import type { CustomMessageInfo } from '../agent/events.ts'
-import type { ExecutionLocation } from '../execution/types.ts'
 import {
   type ModelMessage,
+  normalizeUserContent,
   normalizeVelaMessage,
   type UserContent,
-} from '../messages.ts'
+} from '../../shared/messages.ts'
+import type { CustomMessageInfo } from '../agent/events.ts'
+import type { ExecutionLocation } from '../execution/types.ts'
 
 /**
  * Session file format version written now (like pi's CURRENT_SESSION_VERSION). Version 1 was one
@@ -425,7 +426,12 @@ export function buildSessionContext(
       original = normalizeVelaMessage(entry.message)
     } else if (entry.type === 'custom_message')
       // Like pi's convertToLlm: the model sees a custom message as a user message
-      original = { role: 'user', content: entry.content }
+      original = {
+        role: 'user',
+        content: Array.isArray(entry.content)
+          ? normalizeUserContent(entry.content).content
+          : entry.content,
+      }
     else if (entry.type === 'bash_execution' && !entry.excludeFromContext)
       original = { role: 'user', content: bashExecutionToText(entry) }
     else continue
@@ -434,7 +440,10 @@ export function buildSessionContext(
     const message = edit
       ? normalizeVelaMessage({
           ...original,
-          content: edit.replacement.content,
+          content:
+            original.role === 'user' && Array.isArray(edit.replacement.content)
+              ? normalizeUserContent(edit.replacement.content).content
+              : edit.replacement.content,
         })
       : original
     if (entry.type === 'custom_message')
@@ -542,7 +551,11 @@ export function copyBranch(path: SessionEntry[]): SessionEntry[] {
 export function messageText(content: ModelMessage['content']): string {
   return typeof content === 'string'
     ? content
-    : content.map((part) => ('text' in part ? String(part.text) : '')).join('')
+    : content
+        .map((part) =>
+          part.type === 'text' && 'text' in part ? String(part.text) : '',
+        )
+        .join('')
 }
 
 /** One `SessionStorage.list()` entry, used by the session picker and `vela.listSessions()`. */

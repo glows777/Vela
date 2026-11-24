@@ -35,6 +35,7 @@ const EXPECTED_TABLES = [
   'events',
   'inbox_events',
   'kv_meta',
+  'oauth_registrations',
   'outbox',
   'projects',
   'runs',
@@ -48,7 +49,7 @@ const EXPECTED_TABLES = [
   'vela_tool_calls',
 ]
 
-test('openDatabase initializes WAL, pragmas, 0700/0600 permissions without mutating existing parent dir, and all 18 tables', () => {
+test('openDatabase initializes WAL, pragmas, 0700/0600 permissions without mutating existing parent dir, and all 19 tables', () => {
   const parentDir = tempDir('vela-s1c-existing-')
   cleanup.push({ dir: parentDir })
   if (process.platform !== 'win32') {
@@ -101,7 +102,10 @@ test('openDatabase initializes WAL, pragmas, 0700/0600 permissions without mutat
   const migrations = db.all<{ version: number; name: string }>(
     'SELECT version, name FROM schema_migrations',
   )
-  expect(migrations).toEqual([{ version: 1, name: '001_initial' }])
+  expect(migrations).toEqual([
+    { version: 1, name: '001_initial' },
+    { version: 2, name: '002_s1_audit_schema' },
+  ])
   expect(Object.getPrototypeOf(migrations[0])).toBe(Object.prototype)
 
   db.close()
@@ -469,7 +473,7 @@ test('Node.js and Bun independently initialize WAL DBs, cross-reopen each other,
     sync: 1,
     timeout: 5000,
     fk: 1,
-    tables: 18,
+    tables: 19,
     version: SCHEMA_VERSION,
   }
   expect(JSON.parse(nodeInit.stdout.trim())).toEqual(expected)
@@ -531,4 +535,224 @@ test('tolerates concurrent absent-path database creation (EEXIST)', async () => 
   for (const db of opened) cleanup.push({ db })
   expect(opened[0].schemaVersion).toBe(SCHEMA_VERSION)
   expect(opened[1].schemaVersion).toBe(SCHEMA_VERSION)
+})
+
+test('s1c audit schema fixes: oauth_registrations, ON DELETE SET NULL, run triggers, tool_calls key, status indexes, migration tx re-check', async () => {
+  const { applyMigrations } = await import('../../../src/db/migrations.ts')
+  const { db } = openTempDb('audit-schema.db')
+
+  // oauth_registrations exists and accepts CRUD
+  db.run(
+    "INSERT INTO oauth_registrations (provider, client_id, host_id, subject, updated_at) VALUES ('openai-chatgpt', 'cid-1', 'host-1', 'sub-1', '2026-11-24T00:00:00Z')",
+  )
+  expect(
+    db.get<{ client_id: string }>(
+      "SELECT client_id FROM oauth_registrations WHERE provider = 'openai-chatgpt'",
+    ),
+  ).toEqual({ client_id: 'cid-1' })
+
+  // Status-leading indexes exist
+  const indexes = db
+    .all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_inbox_status_created', 'idx_runs_status', 'idx_bg_jobs_status', 'idx_vela_tool_calls_active_status')",
+    )
+    .map((r) => r.name)
+  expect(indexes.sort()).toEqual([
+    'idx_bg_jobs_status',
+    'idx_inbox_status_created',
+    'idx_runs_status',
+    'idx_vela_tool_calls_active_status',
+  ])
+
+  // channel_bindings.session_id uses ON DELETE SET NULL
+  db.run(
+    "INSERT INTO sessions (id, kind, state, created_at, updated_at) VALUES ('sess-bind', 'chat', 'idle', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO channel_bindings (id, channel, kind, external_id, session_id, enabled, created_at, updated_at) VALUES ('lark:chat1', 'lark', 'group', 'chat1', 'sess-bind', 1, '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run("DELETE FROM sessions WHERE id = 'sess-bind'")
+  expect(
+    db.get<{ session_id: string | null }>(
+      "SELECT session_id FROM channel_bindings WHERE id = 'lark:chat1'",
+    ),
+  ).toEqual({ session_id: null })
+
+  // runs.trigger accepts handoff & session, rejects unknown values
+  db.run(
+    "INSERT INTO sessions (id, kind, state, created_at, updated_at) VALUES ('sess-run', 'chat', 'idle', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at) VALUES ('run-h', 'sess-run', 'handoff', 'queued', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at) VALUES ('run-s', 'sess-run', 'session', 'queued', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  expect(() =>
+    db.run(
+      "INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at) VALUES ('run-bad', 'sess-run', 'invalid_trigger', 'queued', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+    ),
+  ).toThrow()
+
+  // vela_tool_calls unique index is (session_id, assistant_message_id, tool_call_id)
+  db.run(
+    "INSERT INTO vela_messages (session_id, id, seq, kind, role, content_json, created_at) VALUES ('sess-run', 'm1', 1, 'message', 'assistant', '{}', '2026-11-24T00:00:00Z'), ('sess-run', 'm2', 2, 'message', 'assistant', '{}', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO vela_tool_calls (id, run_id, session_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc1', 'run-h', 'sess-run', 'm1', 'call-dup', 0, 'bash', '{}', 'running', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO vela_tool_calls (id, run_id, session_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc2', 'run-h', 'sess-run', 'm2', 'call-dup', 0, 'bash', '{}', 'running', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  expect(() =>
+    db.run(
+      "INSERT INTO vela_tool_calls (id, run_id, session_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc3', 'run-s', 'sess-run', 'm1', 'call-dup', 0, 'bash', '{}', 'running', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+    ),
+  ).toThrow()
+
+  // applyMigrations re-checks schemaVersion inside transaction
+  expect(() => applyMigrations(db)).not.toThrow()
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 5}`)
+  expect(() => applyMigrations(db)).toThrow(/newer/i)
+
+  // v1 -> v2 upgrade preserves rows, creates oauth_registrations & indexes, and rebuilds changed constraints
+  const v1Dir = tempDir('vela-s1c-v1-upgrade-')
+  cleanup.push({ dir: v1Dir })
+  const v1Path = join(v1Dir.path, 'legacy-v1.db')
+  const rawV1 = new DatabaseSync(v1Path)
+  rawV1.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    CREATE TABLE projects (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, cwd TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE channel_bindings (
+      id TEXT PRIMARY KEY NOT NULL, channel TEXT NOT NULL, external_id TEXT NOT NULL, thread_id TEXT,
+      kind TEXT NOT NULL, project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 1, config_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (channel, external_id)
+    );
+    CREATE TABLE inbox_events (
+      id TEXT PRIMARY KEY NOT NULL, session_id TEXT, project_id TEXT, source TEXT NOT NULL,
+      dedupe_key TEXT, wake INTEGER NOT NULL DEFAULT 1, passive INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending', payload_json TEXT NOT NULL, run_id TEXT,
+      created_at TEXT NOT NULL, processed_at TEXT
+    );
+    CREATE TABLE runs (
+      id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL, driver TEXT NOT NULL DEFAULT 'vela',
+      trigger TEXT NOT NULL CHECK (trigger IN ('user', 'channel', 'timer', 'webhook', 'approval', 'job')),
+      status TEXT NOT NULL, model TEXT, error TEXT, input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL, started_at TEXT NOT NULL,
+      finished_at TEXT, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE background_jobs (id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL);
+    CREATE TABLE vela_messages (session_id TEXT NOT NULL, id TEXT NOT NULL, parent_id TEXT, seq INTEGER NOT NULL, kind TEXT NOT NULL, role TEXT, content_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (session_id, id));
+    CREATE TABLE vela_tool_calls (
+      id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, assistant_message_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL, call_index INTEGER NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+      execution_mode TEXT NOT NULL DEFAULT 'sequential', replay TEXT NOT NULL DEFAULT 'none', location_json TEXT,
+      status TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, is_error INTEGER NOT NULL DEFAULT 0,
+      preview TEXT, result_json TEXT, spill_path TEXT, details_json TEXT, duration_ms INTEGER,
+      started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (run_id, tool_call_id)
+    );
+    INSERT INTO schema_migrations VALUES (1, '001_initial', '2026-11-24T00:00:00Z');
+    INSERT INTO sessions VALUES ('s-old', 'chat', 'idle', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z');
+    INSERT INTO channel_bindings (id, channel, external_id, kind, session_id, created_at, updated_at)
+      VALUES ('b-old', 'lark', 'c1', 'group', 's-old', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z');
+    INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at)
+      VALUES ('r-old', 's-old', 'user', 'completed', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z');
+    PRAGMA user_version = 1;
+  `)
+  rawV1.close()
+
+  const upgraded = openDatabase({ path: v1Path })
+  cleanup.push({ db: upgraded })
+  expect(upgraded.schemaVersion).toBe(SCHEMA_VERSION)
+  upgraded.run("DELETE FROM sessions WHERE id = 's-old'")
+  expect(
+    upgraded.get<{ session_id: string | null }>(
+      "SELECT session_id FROM channel_bindings WHERE id = 'b-old'",
+    ),
+  ).toEqual({ session_id: null })
+  upgraded.run(
+    "INSERT INTO oauth_registrations (provider, client_id, updated_at) VALUES ('openai-chatgpt', 'cid', '2026-11-24T00:00:00Z')",
+  )
+  upgraded.run(
+    "INSERT INTO sessions VALUES ('s-new', 'chat', 'idle', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  upgraded.run(
+    "INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at) VALUES ('r-h', 's-new', 'handoff', 'queued', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+})
+
+test('v1 -> v2 schema upgrade preserves duplicate vela_tool_calls attempts across runs', () => {
+  const v1Dir = tempDir('vela-s1c-v1-tc-')
+  cleanup.push({ dir: v1Dir })
+  const v1Path = join(v1Dir.path, 'legacy-v1-dup-tc.db')
+  const rawV1 = new DatabaseSync(v1Path)
+  rawV1.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    CREATE TABLE projects (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, cwd TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE channel_bindings (
+      id TEXT PRIMARY KEY NOT NULL, channel TEXT NOT NULL, external_id TEXT NOT NULL, thread_id TEXT,
+      kind TEXT NOT NULL, project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 1, config_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (channel, external_id)
+    );
+    CREATE TABLE inbox_events (
+      id TEXT PRIMARY KEY NOT NULL, session_id TEXT, project_id TEXT, source TEXT NOT NULL,
+      dedupe_key TEXT, wake INTEGER NOT NULL DEFAULT 1, passive INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending', payload_json TEXT NOT NULL, run_id TEXT,
+      created_at TEXT NOT NULL, processed_at TEXT
+    );
+    CREATE TABLE runs (
+      id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL, driver TEXT NOT NULL DEFAULT 'vela',
+      trigger TEXT NOT NULL CHECK (trigger IN ('user', 'channel', 'timer', 'webhook', 'approval', 'job')),
+      status TEXT NOT NULL, model TEXT, error TEXT, input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL, started_at TEXT NOT NULL,
+      finished_at TEXT, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE background_jobs (id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL);
+    CREATE TABLE vela_messages (session_id TEXT NOT NULL, id TEXT NOT NULL, parent_id TEXT, seq INTEGER NOT NULL, kind TEXT NOT NULL, role TEXT, content_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (session_id, id));
+    CREATE TABLE vela_tool_calls (
+      id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, assistant_message_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL, call_index INTEGER NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+      execution_mode TEXT NOT NULL DEFAULT 'sequential', replay TEXT NOT NULL DEFAULT 'none', location_json TEXT,
+      status TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, is_error INTEGER NOT NULL DEFAULT 0,
+      preview TEXT, result_json TEXT, spill_path TEXT, details_json TEXT, duration_ms INTEGER,
+      started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (run_id, tool_call_id)
+    );
+    INSERT INTO schema_migrations VALUES (1, '001_initial', '2026-11-24T00:00:00Z');
+    INSERT INTO sessions VALUES ('s-dup', 'chat', 'idle', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z');
+    INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at)
+      VALUES ('r-1', 's-dup', 'user', 'failed', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z'),
+             ('r-2', 's-dup', 'user', 'completed', '2026-11-24T00:01:00Z', '2026-11-24T00:01:00Z');
+    INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, attempt, created_at, updated_at)
+      VALUES ('tc-older', 's-dup', 'r-1', 'm1', 'call_shared', 0, 'bash', '{}', 'failed', 1, '2026-11-24T00:00:01Z', '2026-11-24T00:00:02Z'),
+             ('tc-newer', 's-dup', 'r-2', 'm1', 'call_shared', 0, 'bash', '{}', 'completed', 2, '2026-11-24T00:01:01Z', '2026-11-24T00:01:02Z');
+    PRAGMA user_version = 1;
+  `)
+  rawV1.close()
+
+  const upgraded = openDatabase({ path: v1Path })
+  cleanup.push({ db: upgraded })
+  expect(upgraded.schemaVersion).toBe(SCHEMA_VERSION)
+  const rows = upgraded.all<{ id: string; tool_call_id: string }>(
+    'SELECT id, tool_call_id FROM vela_tool_calls ORDER BY id',
+  )
+  expect(rows).toEqual([
+    { id: 'tc-newer', tool_call_id: 'call_shared' },
+    { id: 'tc-older', tool_call_id: 'call_shared--attempt-tc-older' },
+  ])
 })

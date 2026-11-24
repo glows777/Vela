@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { defaultAgentDir } from '@glows777/vela/legacy-desktop'
 import { app, BrowserWindow, nativeTheme, session } from 'electron'
 import tokens from '../../design/tokens.json'
 import { startHost } from './restart-host.ts'
@@ -7,23 +9,31 @@ import { startHost } from './restart-host.ts'
 const mainDir = path.dirname(fileURLToPath(import.meta.url))
 const canvas = tokens.tokens['vela-white']
 
-const LEGACY_CONFIG_NAMES = new Set([
+const LEGACY_CONFIG_NAMES = [
   'settings.json',
   'models.json',
   'mcp.json',
-])
+] as const
+const LEGACY_CONFIG_NAME_SET = new Set<string>(LEGACY_CONFIG_NAMES)
 
-function extractLegacyFiles(error: unknown): string[] {
+function extractLegacyFiles(error: unknown, agentDir: string): string[] {
   const message = error instanceof Error ? error.message : String(error)
   const match =
     /found legacy config file\(s\) \(([^)]+)\) without config\.json/i.exec(
       message,
     )
-  if (!match) return []
-  return match[1]!
-    .split(',')
-    .map((name) => name.trim())
-    .filter((name) => LEGACY_CONFIG_NAMES.has(name))
+  if (match) {
+    return match[1]!
+      .split(',')
+      .map((name) => name.trim())
+      .filter((name) => LEGACY_CONFIG_NAME_SET.has(name))
+  }
+  if (!existsSync(path.join(agentDir, 'config.json'))) {
+    return LEGACY_CONFIG_NAMES.filter((name) =>
+      existsSync(path.join(agentDir, name)),
+    )
+  }
+  return []
 }
 
 const createWindow = (hostError: false | { legacyFiles: string[] } = false) => {
@@ -89,7 +99,9 @@ void app.whenReady().then(async () => {
   try {
     dispose = await startHost()
   } catch (error) {
-    hostError = { legacyFiles: extractLegacyFiles(error) }
+    hostError = {
+      legacyFiles: extractLegacyFiles(error, defaultAgentDir(process.env)),
+    }
     console.error('Vela startup failed:', error)
   }
   session.defaultSession.setPermissionRequestHandler(

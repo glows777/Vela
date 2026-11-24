@@ -81,6 +81,11 @@ function flattenLegacyConfig(inputs: LegacyConfigInputs): {
     ? { ...inputs.settings }
     : {}
 
+  if ('$schema' in config) {
+    delete config.$schema
+    warnings.push(`Dropped "$schema" from ${settingsFile}`)
+  }
+
   const renameKey = (legacyKey: string, nextKey: string) => {
     if (!(legacyKey in config)) return
     const legacyValue = config[legacyKey]
@@ -211,6 +216,20 @@ function flattenLegacyConfig(inputs: LegacyConfigInputs): {
         `${mcpFile}: mcpServers`,
       )
     }
+  }
+
+  if (Array.isArray(config.extensions)) {
+    const nextExtensions: unknown[] = []
+    for (const entry of config.extensions) {
+      if (typeof entry === 'string' && /^[+-]?builtin:rag$/.test(entry)) {
+        warnings.push(
+          `Dropped retired extension "${entry}" from ${settingsFile}`,
+        )
+        continue
+      }
+      nextExtensions.push(entry)
+    }
+    config.extensions = nextExtensions
   }
 
   parseConfig(JSON.stringify(config), targetFile)

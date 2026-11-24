@@ -32,6 +32,10 @@ export interface CredentialStore {
     provider: string,
     fn: (current: Credential | undefined) => Promise<Credential | undefined>,
   ): Promise<Credential | undefined>
+  deleteIf?(
+    provider: string,
+    predicate: (current: Credential) => boolean,
+  ): Promise<boolean>
   delete(provider: string): Promise<void>
 }
 

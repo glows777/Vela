@@ -24,6 +24,7 @@
       ]
     },
     "packages/vela": {
+      "ignore": ["dist/**"],
       "paths": { "#docker-adapter": ["../../extensions/docker/adapter.ts"] },
       "entry": [
         "src/index.ts!",
