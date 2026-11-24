@@ -612,8 +612,10 @@ test('long streaming output follows the bottom, then preserves the reading posit
   expect(viewport.isFollowingOutput).toBe(true)
 })
 
-test('a retried response keeps its partial text marked as failed, and the retry is a new message (like pi)', async () => {
+test('a retried response keeps its partial text marked as failed, and the retry is a status line that clears (like pi)', async () => {
   const t = createTestVela({
+    // A backoff long enough to see the line before the attempt resumes
+    limits: { retryBaseMs: 800 },
     responses: [
       fauxStreamError('ECONNRESET', 'Half an ans'),
       fauxText('The full answer'),
@@ -623,15 +625,19 @@ test('a retried response keeps its partial text marked as failed, and the retry 
   await tui.started
 
   tui.submit('hi')
+  await tui.until('Request failed, retrying')
   await tui.until('The full answer')
 
   const screen = tui.screen()
   expect(screen).toContain('Half an ans')
   expect(screen).toContain('(response failed)')
-  expect(screen).toContain('Request failed, retrying')
+  // The retry was a wait, not a chat message: it is gone once the attempt resumed (#566)
+  expect(screen).not.toContain('Request failed, retrying')
   expect(screen.indexOf('(response failed)')).toBeLessThan(
     screen.indexOf('The full answer'),
   )
+  await tui.until(() => !t.vela.session('tui').isRunning)
+  expect(tui.screen()).not.toContain('Request failed, retrying')
 })
 
 test('Enter while running steers, Alt+Enter queues a follow-up, Esc puts the queue back and aborts', async () => {
