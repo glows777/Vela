@@ -1,6 +1,7 @@
 /**
- * Regenerates packages/core/src/models/catalog.generated.ts from pi's model catalog (the `@earendil-works/pi-ai` npm package,
- * MIT, built from models.dev plus pi's corrections). Only the providers and fields Vela uses are kept.
+ * Regenerates packages/vela/src/providers/models/catalog.generated.ts from pi's model catalog (the
+ * `@earendil-works/pi-ai` npm package, MIT, built from models.dev plus pi's corrections). Only the providers and
+ * fields Vela uses are kept.
  *
  *   bun scripts/update-models.ts [version]   (default: the version pinned below)
  */
@@ -8,7 +9,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const PI_AI_VERSION = process.argv[2] ?? '1.1.0'
+const PI_AI_VERSION = process.argv[2] ?? '1.6.0'
 
 /** Wire protocols Vela speaks through the AI SDK */
 const APIS = ['anthropic-messages', 'openai-responses', 'openai-completions']
@@ -50,7 +51,9 @@ try {
     )
   ).json()) as { dist: { tarball: string } }
   const tarball = join(work, 'pi-ai.tgz')
-  await Bun.write(tarball, await fetch(meta.dist.tarball))
+  // Bun.write(path, Response) stalls with Bun 1.4.0, so read the body first
+  const tarballBytes = await (await fetch(meta.dist.tarball)).arrayBuffer()
+  await Bun.write(tarball, tarballBytes)
   await Bun.$`tar xzf ${tarball} -C ${work}`.quiet()
 
   const lines: string[] = []

@@ -18,6 +18,12 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **The interactive transcript folds a turn's thinking and tool calls into one line above its answer.** A turn that thought and ran tools reads `▸ Thought for 12s, searched for 3 patterns, read 2 files, ran 4 shell commands`, with its answer underneath, instead of filling the screen with thinking blocks and tool output. Text the model wrote before a tool call is a preamble and folds away; the turn's last text stays. `Ctrl+O` opens or closes every turn and clicking a line opens that one, showing full tool output. `Ctrl+T` still hides or shows thinking inside open turns. A turn that left no answer, because it was interrupted or only ran tools, stays open. A failed call, a notice, a permission prompt and your own `!` commands never fold ([#545](https://github.com/glows777/Vela/issues/545)).
 
+- **The built-in model catalog is refreshed from pi-ai 1.1.0 to 1.6.0** (514 models instead of 491): `--list-models` and `/model` show Claude Fable 5.2, GPT-6.1/GPT-6.2, Gemini 4, Kimi K3.1 Pro and the other current ids, retired ones are gone, and prices follow the providers' current ones. Anthropic's `claude-sonnet-4-5` reports a 200k window (1.1.0 said 1M), so its compaction thresholds and footer percentage follow 200k again. Default models are unchanged (`claude-opus-4-8`, `gpt-5.5`, `moonshotai/kimi-k2.6`, `deepseek-flash`), and `bun scripts/update-models.ts` runs again on Bun 1.4.0.
+
+### Fixed
+
+- Desktop: In the New routine dialog, Escape closes the Where menu first without discarding the draft. A second Escape closes the dialog ([#541](https://github.com/glows777/Vela/issues/541)).
+
 ## [0.8.1] - 2026-11-23
 
 ### Changed

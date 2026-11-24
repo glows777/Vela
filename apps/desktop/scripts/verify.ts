@@ -1336,11 +1336,14 @@ const journeyFive = async (page: Page) => {
 
   const twoDays = localTime(2 * 86_400_000)
   const dialog = page.getByRole('dialog')
-  await page.getByRole('button', { name: 'New routine' }).click()
-  await dialog.getByRole('heading', { name: 'New routine' }).waitFor()
-  await dialog.getByLabel('What Vela should do').fill('Review the report')
-  await dialog.getByLabel('Date').fill(twoDays.date)
-  await dialog.getByLabel('Time').fill('09:00')
+  const fillNewRoutine = async () => {
+    await page.getByRole('button', { name: 'New routine' }).click()
+    await dialog.getByRole('heading', { name: 'New routine' }).waitFor()
+    await dialog.getByLabel('What Vela should do').fill('Review the report')
+    await dialog.getByLabel('Date').fill(twoDays.date)
+    await dialog.getByLabel('Time').fill('09:00')
+  }
+  await fillNewRoutine()
   const where = dialog.getByRole('combobox', { name: 'Where', exact: true })
   await where.press('ArrowDown')
   const listbox = page.getByRole('listbox')
@@ -1364,6 +1367,14 @@ const journeyFive = async (page: Page) => {
   await listbox.waitFor({ state: 'hidden' })
   assert(await dialog.isVisible(), 'Escape closes only the listbox')
   assert(await where.evaluate((node) => node === document.activeElement))
+  assert.equal(
+    await dialog.getByLabel('What Vela should do').inputValue(),
+    'Review the report',
+    'The first Escape preserves the draft',
+  )
+  await where.press('Escape')
+  await dialog.waitFor({ state: 'hidden' })
+  await fillNewRoutine()
   await pick(page, where, 'Alpha · the project chat')
   await dialog.getByRole('button', { name: 'Create routine' }).click()
   await dialog.waitFor({ state: 'hidden' })
