@@ -10,7 +10,6 @@ import {
   type SelectItem,
   Spacer,
   type Terminal,
-  Text,
   TruncatedText,
   type TuiAltScreen,
 } from '@earendil-works/pi-tui'
@@ -56,6 +55,7 @@ import { Footer } from './tui/footer.ts'
 import { inputDialog, selectDialog } from './tui/input-dialogs.ts'
 import { larkSetup } from './tui/lark-setup.ts'
 import { createInteractiveTui } from './tui/layout.ts'
+import { StartupHeader } from './tui/logo.ts'
 import { captureCliLogs } from './tui/logs.ts'
 import { isModelUsable } from './tui/model-availability.ts'
 import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
@@ -331,7 +331,7 @@ export class InteractiveMode {
     this.header.clear()
     const extensions = this.vela.extensions(this.session.id).map((e) => e.name)
     const lines = [
-      `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', headerSessionLabel(this.session.id))}`,
+      `${theme.bold('Vela')} ${theme.fg('dim', headerSessionLabel(this.session.id))}`,
       theme.fg(
         'dim',
         `${keyLabel('interrupt')} interrupt · ${keyLabel('clear')} clear · ${keyLabel('exit')} exit · / commands · ${keyLabel('followUp')} follow-up · /hotkeys for more`,
@@ -347,7 +347,7 @@ export class InteractiveMode {
         ),
       )
     this.header.addChild(new Spacer(1))
-    this.header.addChild(new Text(lines.join('\n'), 1, 0))
+    this.header.addChild(new StartupHeader(() => lines))
   }
 
   /**
