@@ -34,12 +34,27 @@ test('a running turn reads in the present tense', () => {
   )
 })
 
+test('a turn that did not think does not mention thinking', () => {
+  expect(
+    foldSummary(counts({ shell: 4 }), { running: false, thoughtMs: undefined }),
+  ).toBe('ran 4 shell commands')
+})
+
+test('thinking with no recorded duration still shows', () => {
+  expect(foldSummary(counts(), { running: false, thoughtMs: 0 })).toBe(
+    'Thought',
+  )
+  expect(
+    foldSummary(counts({ read: 1 }), { running: false, thoughtMs: 0 }),
+  ).toBe('Thought, read 1 file')
+})
+
 test('the line only names what the turn did', () => {
   expect(
-    foldSummary(counts({ shell: 4 }), { running: false, thoughtMs: 0 }),
-  ).toBe('ran 4 shell commands')
-  expect(
-    foldSummary(counts({ mcp: 2, other: 1 }), { running: false, thoughtMs: 0 }),
+    foldSummary(counts({ mcp: 2, other: 1 }), {
+      running: false,
+      thoughtMs: undefined,
+    }),
   ).toBe('called 2 MCP tools, called 1 other tool')
   expect(foldSummary(counts(), { running: false, thoughtMs: 1200 })).toBe(
     'Thought for 1s',

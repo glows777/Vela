@@ -1139,16 +1139,16 @@ test('a turn folds its thinking and tool calls into one line above the answer', 
     files: { 'a.txt': 'needle in the haystack\n' },
     responses: [
       fauxToolCall(
-        'grep',
-        { pattern: 'needle', path: 'a.txt' },
-        { reasoning: 'Search for the needle' },
-      ),
-      fauxToolCall(
         'read_file',
         { path: 'a.txt' },
         { reasoning: 'Read the haystack' },
       ),
       fauxToolCall('bash', { command: 'echo done' }, { reasoning: 'Check it' }),
+      fauxToolCall(
+        'list_directory',
+        { path: '.' },
+        { reasoning: 'List the folder' },
+      ),
       fauxText('Found it', { reasoning: 'Wrap up' }),
     ],
   })
@@ -1157,22 +1157,23 @@ test('a turn folds its thinking and tool calls into one line above the answer', 
 
   tui.submit('find the needle')
   await tui.until('Found it')
+  await tui.until(() => !t.vela.session('tui').isRunning)
   const screen = tui.screen()
   expect(screen).toMatch(
-    /▸ Thought for \d+s, searched for 1 pattern, read 1 file, ran 1 shell command/,
+    /▸ Thought for \d+s, read 1 file, listed 1 directory, ran 1 shell command/,
   )
   expect(screen).toContain('Found it')
-  expect(screen).not.toContain('Search for the needle')
+  expect(screen).not.toContain('Read the haystack')
   expect(screen).not.toContain('needle in the haystack')
   expect(screen).not.toContain('$ echo done')
 
   // Ctrl+O opens every turn, and closes it again
   tui.terminal.press(KEYS.ctrlO)
-  expect(tui.screen()).toContain('Search for the needle')
+  expect(tui.screen()).toContain('Read the haystack')
   expect(tui.screen()).toContain('$ echo done')
   expect(tui.screen()).toContain('needle in the haystack')
   tui.terminal.press(KEYS.ctrlO)
-  expect(tui.screen()).not.toContain('Search for the needle')
+  expect(tui.screen()).not.toContain('Read the haystack')
   expect(tui.screen()).toContain('Found it')
 })
 
@@ -1280,7 +1281,7 @@ test('a failed tool call stays visible while its turn is folded', async () => {
   expect(screen).not.toContain('Read the missing file')
 })
 
-test('a turn that leaves no answer stays open so its process shows', async () => {
+test('a turn that leaves no answer stays open, even through the global toggle', async () => {
   const t = createTestVela({
     responses: [{ reasoning: 'Only thinking here' }],
   })
@@ -1290,6 +1291,62 @@ test('a turn that leaves no answer stays open so its process shows', async () =>
   tui.submit('just think')
   await tui.until('Only thinking here')
   expect(tui.screen()).toContain('Thought for')
+
+  // Open all, then close all: the turn has no answer, so its process stays visible
+  tui.terminal.press(KEYS.ctrlO)
+  tui.terminal.press(KEYS.ctrlO)
+  expect(tui.screen()).toContain('Only thinking here')
+  clickRow(tui, screenRow(tui, 'Thought for'))
+  expect(tui.screen()).toContain('Only thinking here')
+})
+
+test('a resumed turn shows that it thought, with no recorded duration', async () => {
+  const t = createTestVela({ sessionId: 'saved-thinking' })
+  t.session.append({
+    role: 'assistant',
+    content: [{ type: 'thinking', text: 'Saved thinking' }],
+  })
+  t.session.append({
+    role: 'assistant',
+    content: [{ type: 'text', text: 'Saved answer' }],
+  })
+  await t.session.close()
+
+  const tui = await startTui(t.vela, {
+    sessionId: 'saved-thinking',
+    resume: true,
+  })
+  await tui.started
+  await tui.until('Saved answer')
+  expect(tui.screen()).toContain('▸ Thought')
+  expect(tui.screen()).not.toContain('Saved thinking')
+})
+
+test('a ! command during a run keeps the turn in one fold', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', { command: 'echo first' }),
+      fauxText('Answered'),
+    ],
+    faux: { chunkDelayMs: 60 },
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('go')
+  await tui.until(() => t.vela.session('tui').isRunning)
+  tui.submit('!echo manual-output')
+  await tui.until('manual-output')
+  await tui.until('Answered')
+  await tui.until(() => !t.vela.session('tui').isRunning)
+
+  // The prompt keeps one fold; the manual command's output sits outside it
+  const screen = tui.screen()
+  expect(
+    screen.match(/[▸▾] (?:Thought|ran|read|called|searched|listed|edited)/g),
+  ).toHaveLength(1)
+  expect(screen).toContain('ran 1 shell command')
+  expect(screen).toContain('$ echo manual-output')
 })
 
 test('edit_file shows the diff of its change', async () => {
@@ -1403,6 +1460,20 @@ test('!cmd runs a shell command in its own block and sends the output with the n
   const answer = t.vela.session('tui').messages.at(-1)
   expect(JSON.stringify(answer)).toContain('vis2')
   expect(JSON.stringify(answer)).not.toContain('hid4')
+})
+
+test('a ! command started after Ctrl+O follows the expanded setting', async () => {
+  const t = createTestVela()
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.terminal.press(KEYS.ctrlO)
+  tui.submit('!seq 1 25')
+  await tui.until('seq 1 25')
+  await tui.until(() => !t.vela.session('tui').isBashRunning)
+  const screen = tui.screen()
+  expect(screen).not.toContain('earlier lines')
+  expect(screen).toMatch(/^\s*2$/m)
 })
 
 test('Esc cancels a running ! command', async () => {

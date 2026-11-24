@@ -79,15 +79,22 @@ function thoughtDuration(ms: number): string {
 /**
  * The fold line: `Thought for 12s, searched for 3 patterns, ran 2 shell commands`. While the turn runs the
  * verbs are present tense (`Thinking for 12s, running 2 shell commands`); zero counts are left out.
+ * `thoughtMs` is undefined when the turn did not think and 0 when it did but the duration is unknown,
+ * which a replay of saved history cannot know.
  */
 export function foldSummary(
   counts: TurnCounts,
-  options: { running: boolean; thoughtMs: number },
+  options: { running: boolean; thoughtMs?: number },
 ): string {
   const parts: string[] = []
-  if (options.thoughtMs > 0)
+  const { thoughtMs } = options
+  if (thoughtMs !== undefined)
     parts.push(
-      `${options.running ? 'Thinking' : 'Thought'} for ${thoughtDuration(options.thoughtMs)}`,
+      thoughtMs === 0
+        ? options.running
+          ? 'Thinking'
+          : 'Thought'
+        : `${options.running ? 'Thinking' : 'Thought'} for ${thoughtDuration(thoughtMs)}`,
     )
   for (const part of PARTS) {
     const count = counts[part.kind]
@@ -117,7 +124,11 @@ export class TurnFold implements Component {
   }
   private expanded: boolean
   private running = true
+  /** A turn with no answer never closes: its process is the only evidence it left */
+  private pinned = false
   private sawThinking = false
+  /** Whether a clock ran for it: a replayed thinking has a known presence but no duration */
+  private timedThinking = false
   private thoughtMs = 0
   private thinkingSince?: number
   private timer?: ReturnType<typeof setInterval>
@@ -147,7 +158,13 @@ export class TurnFold implements Component {
   /** The model started thinking (idempotent). */
   startThinking(): void {
     this.sawThinking = true
+    this.timedThinking = true
     this.thinkingSince ??= Date.now()
+  }
+
+  /** A saved turn had thinking, and its duration was not recorded. */
+  noteThought(): void {
+    this.sawThinking = true
   }
 
   /** Thinking stopped: the model moved on to text or a tool call. */
@@ -162,6 +179,8 @@ export class TurnFold implements Component {
   }
 
   setExpanded(expanded: boolean): void {
+    // A pinned turn ignores a request to close it, from a click or from Ctrl+O
+    if (this.pinned && !expanded) return
     if (this.expanded === expanded) return
     this.expanded = expanded
     this.requestRender()
@@ -176,7 +195,10 @@ export class TurnFold implements Component {
     this.stopThinking()
     this.running = false
     this.stopClock()
-    if (!hasAnswer) this.expanded = true
+    if (!hasAnswer) {
+      this.pinned = true
+      this.expanded = true
+    }
     this.requestRender()
   }
 
@@ -209,8 +231,12 @@ export class TurnFold implements Component {
       (this.thinkingSince === undefined ? 0 : Date.now() - this.thinkingSince)
     const summary = foldSummary(this.counts, {
       running: this.running,
-      // Thinking always shows: a sub-second thought still reads `for 1s`, never nothing
-      thoughtMs: this.sawThinking ? Math.max(1, thoughtMs) : 0,
+      // A live thought reads `for 1s` even when it took under a second; a replayed one has no duration
+      thoughtMs: this.sawThinking
+        ? this.timedThinking
+          ? Math.max(1000, thoughtMs)
+          : 0
+        : undefined,
     })
     const line = `${theme.fg('dim', this.expanded ? '▾' : '▸')} ${theme.fg(
       this.running ? 'muted' : 'dim',

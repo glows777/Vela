@@ -14,6 +14,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - The TUI header and `/status` show the CLI version, so you can tell which build a session runs without leaving it. The header reads `Vela v0.8.1 · session <id>`, and `/status` starts with a `Version:` line. Both come from the installed `package.json`, the same value `vela --version` prints.
 
+### Changed
+
+- **The interactive transcript folds a turn's thinking and tool calls into one line above its answer.** A turn that thought and ran tools reads `▸ Thought for 12s, searched for 3 patterns, read 2 files, ran 4 shell commands`, with its answer underneath, instead of filling the screen with thinking blocks and tool output. Text the model wrote before a tool call is a preamble and folds away; the turn's last text stays. `Ctrl+O` opens or closes every turn and clicking a line opens that one, showing full tool output. `Ctrl+T` still hides or shows thinking inside open turns. A turn that left no answer, because it was interrupted or only ran tools, stays open. A failed call, a notice, a permission prompt and your own `!` commands never fold ([#545](https://github.com/glows777/Vela/issues/545)).
+
 ## [0.8.1] - 2026-11-23
 
 ### Changed

@@ -113,9 +113,11 @@ export class ChatLog {
       }
       for (const part of message.content) {
         if (part.type === 'text') this.answerText().appendText(part.text)
-        else if (part.type === 'thinking')
+        else if (part.type === 'thinking') {
+          // Saved history keeps the thinking but not how long it took
+          this.currentTurn().noteThought()
           this.thinkingText().appendThinking(part.text)
-        else if (part.type === 'tool_call')
+        } else if (part.type === 'tool_call')
           this.addTool(part.toolCallId, part.toolName, part.input)
       }
     }
@@ -225,6 +227,8 @@ export class ChatLog {
   // ---------------------------------------------------------------- Tools
 
   addTool(id: string, name: string, input: unknown): void {
+    // The model stopped thinking to call a tool
+    this.turn?.stopThinking()
     this.foldAnswer()
     const turn = this.currentTurn()
     const block = new ToolBlock(name, input, this.requestRender)

@@ -564,12 +564,14 @@ export class InteractiveMode {
   /** `!cmd` / `!!cmd` (like pi): runs the command; its output goes to the model with the next message unless `!!` */
   private async runBash(command: string, excludeFromContext: boolean) {
     const session = this.session
+    const running = session.isRunning
     const block = this.log.addBash(
       command,
       excludeFromContext,
-      session.isRunning ? this.pendingBash : this.log.container,
+      running ? this.pendingBash : this.log.container,
     )
-    this.log.endTurn()
+    // A command run mid-turn gets its own block below the log; the turn keeps its one fold
+    if (!running) this.log.endTurn()
     this.tui.requestRender()
     try {
       const result = await session.executeBash(command, {
