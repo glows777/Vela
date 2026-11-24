@@ -21,30 +21,35 @@ const RESET = '\x1b[0m'
 
 /**
  * The brand colors from `apps/desktop/design/tokens.json` (dark theme), so the terminal mark matches the
- * desktop and Lark surfaces: a coral sail, a deeper terracotta jib, and the teal hull.
+ * desktop and Lark surfaces: a coral mainsail, a terracotta jib, the teal hull and the hull's mast.
  */
 const PALETTE: Record<string, Color> = {
   '1': rgbColor(244, 124, 91),
   '2': rgbColor(159, 211, 207),
   '3': rgbColor(194, 70, 43),
+  '4': rgbColor(242, 238, 223),
 }
 
 /**
- * The sailboat, one character per pixel: `.` is transparent, `1` the coral sail, `3` the terracotta
- * jib and `2` the teal hull. Two rows make one terminal line: `▀` for the top pixel, `▄` for the
- * bottom one, `█` when both are painted.
+ * A sailboat, one character per pixel: `.` is transparent, `1` the coral mainsail, `3` the
+ * terracotta jib, `4` the mast between them and `2` the teal hull. Two rows make one terminal line:
+ * `▀` for the top pixel, `▄` for the bottom one, `█` when both are painted.
+ *
+ * Every shape is at least two pixels wide and the hull spans the mark, so nothing lands on screen as
+ * a lone speck: at three lines tall a thinner mast or a tapered hull reads as a rendering error.
  */
 const GRID = [
-  '....1....',
-  '..311....',
-  '.331110..',
-  '33311110.',
-  '.2222222.',
-  '..22222..',
+  '....4....',
+  '....41...',
+  '...34111.',
+  '..3341111',
+  '.22222222',
+  '.22222222',
 ].map((row) => [...row])
 
-/** Columns the mark occupies, and the gap between the mark and the header text. */
+/** Columns the mark occupies, the lines it takes, and the gap before the header text. */
 export const LOGO_COLUMNS = GRID[0]?.length ?? 0
+export const LOGO_LINES = GRID.length / 2
 const LOGO_GAP = 2
 
 /**
