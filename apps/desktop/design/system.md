@@ -1,6 +1,6 @@
 Vela is an AI coworker for your group chat, and the website presents it as **a run of printed manga plates**: white paper, evergreen ink and mint, with one vermilion signal. Every illustration is printed by one halftone press, the group chat is drawn as manga scenes, and the page reads in plain sentences that say exactly what exists.
 
-This is Vela's one design system, for the website, the app and anything else that carries the brand (decks, posts, docs pages). It has two layers. **The foundations are shared**: content, colour, themes, type, wordmark and iconography below, and one set of tokens. **Each surface adds its own rules**: the website's are the sections marked *Website* below, built from vela-website; the app's are in the **App** section, with its components in the groups named *App*.
+This is Vela's one design system, for the website, the app and anything else that carries the brand (decks, posts, docs pages). It has two layers. **The foundations are shared**: content, colour, themes, type, wordmark, portrait and iconography below, and one set of tokens. **Each surface adds its own rules**: the website's are the sections marked *Website* below, built from vela-website; the app's are in the **App** section, with its components in the groups named *App*.
 
 ## Content fundamentals
 
@@ -40,9 +40,13 @@ Three themes share one set of names, so components never branch on theme.
 - **Japanese decoration**: Shippori Mincho B1 800 (`mincho`) for seals, plate-label kanji, the vertical ヴェラ and つづく. The font file is a glyph subset: set only characters the site already uses (`ja-glyphs.txt` in the source repository) or let the stack fall back.
 - Sizes are fluid on the site. Each type style records its desktop maximum and its usage note gives the site's clamp().
 
-## Wordmark
+## Wordmark and portrait
 
-Vela has no drawn logo. (The app's wordmark sizes are in **App**.) The mark is the word **VELA** in Barlow Condensed: in the masthead and footer as `mark` (24px, 0.08em, `ink`), and behind the hero as the giant `hero-type` VELA, `teal` letters spread edge to edge over a `wordmark-offset` copy shifted 0.9vw down and right, with a `teal` outline trace in front of the portrait. Never draw a symbol for it. The app icons in **Icons** are the character portrait.
+Vela has two marks: the word **VELA** and the character portrait. There is no abstract symbol: no sail, monogram or emblem stands in for either. (The app's wordmark sizes are in **App**.)
+
+- **Wordmark.** The word **VELA** in Barlow Condensed: in the masthead and footer as `mark` (24px, 0.08em, `ink`), and behind the hero as the giant `hero-type` VELA, `teal` letters spread edge to edge over a `wordmark-offset` copy shifted 0.9vw down and right, with a `teal` outline trace in front of the portrait.
+- **Portrait.** The character is the icon: the app icons in **Icons** are her portrait.
+- **Terminal portrait.** Where only text cells are available (the CLI's startup header), the portrait is reduced to a 10-column, three-line pixel face drawn with half blocks: `teal` (dark) hair with one `mint` highlight, an `ink` (dark) face, near-black eyes and `accent` (dark) cheeks. It sits left of the header text and keeps these colors in every theme. Its grid lives in `packages/vela/src/cli/tui/logo.ts`; change it there, not by drawing a new mark. Terminals that cannot draw it (Apple Terminal, or narrower than 46 columns) show text only.
 
 ## Website: layout and shape
 
