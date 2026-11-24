@@ -15,16 +15,18 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
   - `bashForegroundTimeoutSeconds` and `bashForegroundTimeoutMaxSeconds` are removed from `config.json` (the hardcoded 120s/600s foreground budget remains until S2a).
   - Direct cutover: legacy `settings.json`, `models.json`, or `mcp.json` without `config.json` fail fast with an explicit error (automatic `flattenLegacyConfig()` migration arrives in S1c).
 
+### Changed
+
+- **The built-in model catalog is refreshed from pi-ai 1.1.0 to 1.6.0** (514 models instead of 491): `--list-models` and `/model` show Claude Fable 5.2, GPT-6.1/GPT-6.2, Gemini 4, Kimi K3.1 Pro and the other current ids, retired ones are gone, and prices follow the providers' current ones. Anthropic's `claude-sonnet-4-5` reports a 200k window (1.1.0 said 1M), so its compaction thresholds and footer percentage follow 200k again. Default models are unchanged (`claude-opus-4-8`, `gpt-5.5`, `moonshotai/kimi-k2.6`, `deepseek-flash`), and `bun scripts/update-models.ts` runs again on Bun 1.4.0.
+
 ### Fixed
 
 - Single-pass per-layer `$VAR` interpolation prevents nested expansion across user and project layers and preserves literal `$VAR` credentials in `environments` ([#535](https://github.com/glows777/Vela/issues/535)).
 - Expired ChatGPT OAuth credentials in `auth.json` now fall back cleanly to `providers.openai.apiKey` or `OPENAI_API_KEY` in channel sessions instead of triggering local-only refresh failures ([#535](https://github.com/glows777/Vela/issues/535)).
 - Auth lock files now track holder ownership tokens (`pid:uuid`) across stale takeovers, provider presets write `config.json` atomically with `0600` permissions, ChatGPT OAuth refresh tolerates omitted `refresh_token`/`scope` per RFC 6749 §6, and browser callback completion wins races against delayed manual prompt errors ([#535](https://github.com/glows777/Vela/issues/535)).
 - Extension directory discovery now follows symlinked `.ts` files and directories while skipping broken symlinks, and `importExtension()` loads standalone `.ts` extensions via `jiti` under both Node.js and Bun ([#535](https://github.com/glows777/Vela/issues/535)).
-
-### Added
-
-- The TUI header and `/status` show the CLI version, so you can tell which build a session runs without leaving it. The header reads `Vela v0.8.1 · session <id>`, and `/status` starts with a `Version:` line. Both come from the installed `package.json`, the same value `vela --version` prints.
+- Desktop: Arrow keys and typing immediately after opening a picker keep it open, so Enter selects the highlighted option ([#547](https://github.com/glows777/Vela/issues/547)).
+- Desktop: In the New routine dialog, Escape closes the Where menu first without discarding the draft. A second Escape closes the dialog ([#541](https://github.com/glows777/Vela/issues/541)).
 
 ## [0.8.1] - 2026-11-23
 

@@ -149,7 +149,7 @@ Compatibility is explicit, not inferred from a hostname or model ID. Provider de
 | `deepseekReasoningStream` | Responses only; `true` recovers `response.reasoning_text.delta` events the OpenAI SDK drops. Omitted or `false` leaves the SDK stream unchanged. |
 | `includeWebSearchSources` | Responses request default for including search sources; `false` omits the optional sources include. Explicit per-request options win. |
 
-`supportsDeveloperRole` follows pi-ai 1.1.0's `OpenAIResponsesCompat` (`src/types.ts:890–892`, `src/api/openai-responses-shared.ts:214–215`). `deepseekReasoningStream` is a Vela adapter flag: pi parses plaintext reasoning directly (`src/api/openai-responses-shared.ts:625`), while Vela must recover it from the SDK's raw stream. `store` and the hosted-search fields reuse Vela's existing Responses integration; pi's completions `thinkingFormat` controls a different request shape and is not used here.
+`supportsDeveloperRole` follows pi-ai 1.6.0's `OpenAIResponsesCompat` (`dist/providers/compat-schema.d.ts:138`, applied in `dist/api/openai-responses-shared.js:169`). `deepseekReasoningStream` is a Vela adapter flag: pi parses plaintext reasoning directly (`dist/api/openai-responses-shared.js:561`), while Vela must recover it from the SDK's raw stream. `store` and the hosted-search fields reuse Vela's existing Responses integration; pi's completions `thinkingFormat` controls a different request shape and is not used here.
 
 ### Migrating existing DeepSeek configurations
 
@@ -210,7 +210,7 @@ An invalid file (bad JSON, unknown `api`, a model without `id`) stops the CLI wi
 
 ## The model catalog
 
-`packages/core/src/models/catalog.generated.ts` is generated from a pinned version of pi's `@earendil-works/pi-ai` package (MIT), keeping the providers and fields Vela uses. It is part of the package, so Vela has no runtime dependency on pi. To refresh it, run `bun scripts/update-models.ts [version]` and commit the result.
+`packages/vela/src/providers/models/catalog.generated.ts` is generated from a pinned version of pi's `@earendil-works/pi-ai` package (MIT), keeping the providers and fields Vela uses. It is part of the package, so Vela has no runtime dependency on pi. To refresh it, run `bun scripts/update-models.ts [version]` and commit the result.
 
 ## Context window and limits
 

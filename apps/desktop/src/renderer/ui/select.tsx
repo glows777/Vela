@@ -26,7 +26,7 @@ export function Select<T extends string>({
 }) {
   const listId = useId()
   const menu = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const [active, setActive] = useState(0)
   const selected = options.findIndex((item) => item.value === value)
   const itemId = (index: number) => `${listId}-${index}`
@@ -49,6 +49,7 @@ export function Select<T extends string>({
       menu.current?.hidePopover()
       return
     }
+    const open = menu.current?.matches(':popover-open')
     if (key === 'Escape' && open) {
       event.preventDefault()
       event.stopPropagation()
@@ -68,14 +69,16 @@ export function Select<T extends string>({
     ) {
       event.preventDefault()
       if (!open) event.currentTarget.click()
-      const next = !open ? Math.max(0, selected) : active
       if (key === 'Home') highlight(0)
       else if (key === 'End') highlight(options.length - 1)
       else if (open)
         highlight(
           Math.max(
             0,
-            Math.min(options.length - 1, next + (key === 'ArrowDown' ? 1 : -1)),
+            Math.min(
+              options.length - 1,
+              active + (key === 'ArrowDown' ? 1 : -1),
+            ),
           ),
         )
       return
@@ -107,10 +110,10 @@ export function Select<T extends string>({
         type="button"
         role="combobox"
         aria-label={label}
-        aria-expanded={open}
+        aria-expanded={expanded}
         aria-controls={listId}
         aria-activedescendant={
-          open && options[active] ? itemId(active) : undefined
+          expanded && options[active] ? itemId(active) : undefined
         }
         popoverTarget={listId}
         disabled={disabled || options.length === 0}
@@ -119,7 +122,8 @@ export function Select<T extends string>({
         }
         onClick={(event) => {
           event.currentTarget.focus()
-          if (!open) setActive(Math.max(0, selected))
+          if (!menu.current?.matches(':popover-open'))
+            setActive(Math.max(0, selected))
         }}
         onKeyDown={keyDown}
         onBlur={() => menu.current?.hidePopover()}
@@ -138,7 +142,7 @@ export function Select<T extends string>({
         popover="auto"
         onToggle={(event) => {
           const shown = event.newState === 'open'
-          setOpen(shown)
+          setExpanded(shown)
           if (shown)
             document
               .getElementById(itemId(active))
