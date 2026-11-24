@@ -111,6 +111,9 @@ export function migrateRoutinesAndSubscriptions(
           )
           continue
         }
+        if (ops.unresolvedTimezoneChannels.has(r.channel)) {
+          continue
+        }
         const { resolved, missingExplicit } = resolveChannelTarget(
           ops,
           dataDir,
@@ -293,7 +296,12 @@ function dbUpsertTimer(
       project_id = COALESCE(timers.project_id, excluded.project_id),
       session_id = COALESCE(timers.session_id, excluded.session_id),
       enabled = CASE WHEN excluded.enabled = 1 THEN 1 ELSE timers.enabled END,
-      next_fire_at = COALESCE(timers.next_fire_at, excluded.next_fire_at),
+      timezone = COALESCE(excluded.timezone, timers.timezone),
+      next_fire_at = CASE
+        WHEN timers.timezone IS NOT excluded.timezone AND excluded.next_fire_at IS NOT NULL
+          THEN excluded.next_fire_at
+        ELSE COALESCE(timers.next_fire_at, excluded.next_fire_at)
+      END,
       updated_at = excluded.updated_at`,
     row.id,
     row.projectId,

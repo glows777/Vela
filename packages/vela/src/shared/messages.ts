@@ -375,6 +375,52 @@ export function normalizeVelaContent(content: unknown[]): {
 }
 
 /**
+ * Normalizes array content into valid `UserContentPart[]` (for user/custom_message contexts).
+ * Converts legacy/thinking parts with text into text parts and drops structural non-user parts.
+ */
+export function normalizeUserContent(content: unknown[]): {
+  content: UserContentPart[]
+  changed: boolean
+} {
+  const base = normalizeVelaContent(content)
+  let changed = base.changed
+  const userParts: UserContentPart[] = []
+  for (const item of base.content) {
+    if (!item || typeof item !== 'object') {
+      changed = true
+      if (typeof item === 'string') {
+        userParts.push({ type: 'text', text: item })
+      }
+      continue
+    }
+    const part = item as Record<string, unknown>
+    if (part.type === 'text' && typeof part.text === 'string') {
+      userParts.push(item as TextPart)
+    } else if (
+      part.type === 'image' &&
+      typeof part.data === 'string' &&
+      typeof part.mimeType === 'string'
+    ) {
+      userParts.push(item as ImageContent)
+    } else if (part.type === 'file' && typeof part.mediaType === 'string') {
+      userParts.push(item as FilePart)
+    } else if (part.type === 'thinking' && typeof part.text === 'string') {
+      changed = true
+      userParts.push({
+        type: 'text',
+        text: part.text,
+        ...(part.providerOptions
+          ? { providerOptions: part.providerOptions as ProviderOptions }
+          : {}),
+      })
+    } else {
+      changed = true
+    }
+  }
+  return { content: userParts, changed }
+}
+
+/**
  * Normalize a message loaded from legacy JSONL transcripts (where AI SDK part tags
  * `'reasoning'`, `'tool-call'`, `'tool-result'` and legacy `{ type: 'image', image, mediaType }`
  * may appear) into canonical `VelaMessage`.

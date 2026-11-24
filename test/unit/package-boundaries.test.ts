@@ -448,9 +448,20 @@ test('boundary checker closes IIFE, createRequire alias, type re-export, unknown
     await errors({
       'packages/vela/src/lark/types.ts':
         "import * as lark from '@larksuiteoapi/node-sdk'; export type L = typeof lark",
-      'packages/vela/src/index.ts': "export { type L } from './lark/types.ts'",
+      'packages/vela/src/index.ts': "export type { L } from './lark/types.ts'",
     }),
   ).toEqual([])
+
+  expect(
+    (
+      await errors({
+        'packages/vela/src/lark/types.ts':
+          "import * as lark from '@larksuiteoapi/node-sdk'; export type L = typeof lark",
+        'packages/vela/src/index.ts':
+          "export { type L } from './lark/types.ts'",
+      })
+    ).join('\n'),
+  ).toMatch(/eagerly reachable/)
 
   expect(
     (

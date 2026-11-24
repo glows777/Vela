@@ -266,24 +266,11 @@ export function toAiModelMessages(
                 part.output,
                 supportsImages,
               )
-              const aiOutput =
-                filtered.type === 'content' &&
-                'isError' in filtered &&
-                filtered.isError === true
-                  ? ({
-                      type: 'error-text' as const,
-                      value:
-                        filtered.value
-                          .filter((item) => item.type === 'text')
-                          .map((item) => item.text)
-                          .join('\n') || 'Tool reported an error',
-                    } satisfies AIToolResultPart['output'])
-                  : toAiToolOutput(filtered)
               return {
                 type: 'tool-result' as const,
                 toolCallId: part.toolCallId,
                 toolName: part.toolName,
-                output: aiOutput,
+                output: toAiToolOutput(filtered),
                 ...opts,
               }
             }
@@ -382,7 +369,71 @@ export function toAiModelMessages(
     if (lifted.length) result.push({ role: 'user', content: lifted })
     lifted = []
   }
+  const adaptToolResult = <
+    T extends { type: 'tool-result'; output: AIToolResultPart['output'] },
+  >(
+    part: T,
+  ): T => {
+    if (part.output.type !== 'content') return part
+    const isError = 'isError' in part.output && part.output.isError === true
+    if (!isError && (!toolImagesAsUser || !supportsImages)) return part
+    const liftedBefore = lifted.length
+    const value = part.output.value.filter((item) => {
+      if (
+        supportsImages &&
+        item.type === 'file' &&
+        IMAGE_MEDIA_TYPE.test(item.mediaType) &&
+        item.data.type === 'data'
+      ) {
+        lifted.push({
+          type: 'file',
+          mediaType: item.mediaType,
+          data: item.data.data,
+          ...('providerOptions' in item && item.providerOptions
+            ? {
+                providerOptions:
+                  item.providerOptions as SharedV4ProviderOptions,
+              }
+            : {}),
+        })
+        return false
+      }
+      return true
+    })
+    return {
+      ...part,
+      output: isError
+        ? {
+            type: 'error-text' as const,
+            value:
+              value
+                .filter((item) => item.type === 'text')
+                .map((item) => item.text)
+                .join('\n') || 'Tool reported an error',
+          }
+        : value.length || lifted.length === liftedBefore
+          ? { ...part.output, value }
+          : {
+              type: 'text' as const,
+              value: '(tool image follows in the next user message)',
+            },
+    }
+  }
   for (const message of converted) {
+    if (message.role === 'assistant') {
+      flush()
+      result.push(
+        typeof message.content === 'string'
+          ? message
+          : ({
+              ...message,
+              content: message.content.map((part) =>
+                part.type === 'tool-result' ? adaptToolResult(part) : part,
+              ),
+            } as AIModelMessage),
+      )
+      continue
+    }
     if (message.role !== 'tool') {
       flush()
       result.push(message)
@@ -390,48 +441,10 @@ export function toAiModelMessages(
     }
     result.push({
       ...message,
-      content: message.content.map((part) => {
-        if (part.type !== 'tool-result' || part.output.type !== 'content')
-          return part
-        const isError = 'isError' in part.output && part.output.isError === true
-        if (!isError && (!toolImagesAsUser || !supportsImages)) return part
-        const liftedBefore = lifted.length
-        const value = part.output.value.filter((item) => {
-          if (
-            supportsImages &&
-            item.type === 'file' &&
-            IMAGE_MEDIA_TYPE.test(item.mediaType) &&
-            item.data.type === 'data'
-          ) {
-            lifted.push({
-              type: 'file',
-              mediaType: item.mediaType,
-              data: item.data.data,
-            })
-            return false
-          }
-          return true
-        })
-        return {
-          ...part,
-          output: isError
-            ? {
-                type: 'error-text' as const,
-                value:
-                  value
-                    .filter((item) => item.type === 'text')
-                    .map((item) => item.text)
-                    .join('\n') || 'Tool reported an error',
-              }
-            : value.length || lifted.length === liftedBefore
-              ? { ...part.output, value }
-              : {
-                  type: 'text' as const,
-                  value: '(tool image follows in the next user message)',
-                },
-        }
-      }),
-    })
+      content: message.content.map((part) =>
+        part.type === 'tool-result' ? adaptToolResult(part) : part,
+      ),
+    } as AIModelMessage)
   }
   flush()
   return result

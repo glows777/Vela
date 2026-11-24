@@ -44,21 +44,39 @@ function readDecisions(agentDir: string): Record<string, boolean> {
   return parsed as Record<string, boolean>
 }
 
-/** The saved decision closest to cwd, or undefined. */
+/** The saved decision closest to cwd, or undefined. Denial takes precedence on canonical ties. */
 export function savedTrust(agentDir: string, cwd: string): boolean | undefined {
   const decisions = readDecisions(agentDir)
-  const candidates = [canonicalDir(cwd)]
-  const resolved = resolve(cwd)
-  if (candidates[0] !== resolved) candidates.push(resolved)
-  for (const start of candidates) {
-    let dir = start
-    while (true) {
-      const decision = decisions[dir]
-      if (typeof decision === 'boolean') return decision
-      const parent = dirname(dir)
-      if (parent === dir) break
-      dir = parent
+  const byCanonical = new Map<string, boolean>()
+  for (const [key, val] of Object.entries(decisions)) {
+    if (typeof val !== 'boolean') continue
+    const canon = canonicalDir(key)
+    const prev = byCanonical.get(canon)
+    byCanonical.set(canon, prev !== false && val !== false)
+  }
+  let curCanon = canonicalDir(cwd)
+  let curRaw = resolve(cwd)
+  let canonDone = false
+  let rawDone = false
+  while (!canonDone || !rawDone) {
+    const matches: boolean[] = []
+    if (!rawDone && typeof decisions[curRaw] === 'boolean') {
+      matches.push(decisions[curRaw]!)
     }
+    if (!canonDone) {
+      const canonMatch = byCanonical.get(curCanon)
+      if (typeof canonMatch === 'boolean') matches.push(canonMatch)
+      if (typeof decisions[curCanon] === 'boolean') {
+        matches.push(decisions[curCanon]!)
+      }
+    }
+    if (matches.length > 0) return !matches.includes(false)
+    const nextCanon = dirname(curCanon)
+    const nextRaw = dirname(curRaw)
+    if (nextCanon === curCanon) canonDone = true
+    else curCanon = nextCanon
+    if (nextRaw === curRaw) rawDone = true
+    else curRaw = nextRaw
   }
   return undefined
 }
@@ -70,8 +88,9 @@ export function saveTrust(
 ): void {
   const decisions = readDecisions(agentDir)
   decisions[canonicalDir(cwd)] = trusted
-  mkdirSync(agentDir, { recursive: true, mode: 0o700 })
-  chmodSync(agentDir, 0o700)
+  if (!existsSync(agentDir)) {
+    mkdirSync(agentDir, { recursive: true, mode: 0o700 })
+  }
   const file = trustFile(agentDir)
   const temporary = join(
     agentDir,

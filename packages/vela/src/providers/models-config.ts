@@ -18,7 +18,6 @@ import {
   catalogLookup,
   catalogModels,
   isLocalOnlyOAuthBlocked,
-  isRemoteChannel,
   type ProviderContext,
   type ProviderDefinition,
 } from './models/index.ts'
@@ -241,7 +240,7 @@ function createProvider(
           `auth.json has an OAuth credential for ${name}, but Vela has no OAuth sign-in for this provider; run /logout ${name}`,
         )
       const channel = ctx.channel()
-      if (oauthRequests?.localOnly && isRemoteChannel(channel)) {
+      if (oauthRequests?.localOnly && channel) {
         const fallback = configured() ?? (envKey ? env[envKey] : undefined)
         if (fallback) return { key: fallback, oauth: false }
         throw new Error(
@@ -428,7 +427,7 @@ function createProvider(
             }
             // The OAuth route's requirements remain authoritative over caller/default options.
             const blockedLocalOAuth = Boolean(
-              oauthRequests?.localOnly && isRemoteChannel(ctx.channel()),
+              oauthRequests?.localOnly && Boolean(ctx.channel()),
             )
             return transform &&
               !blockedLocalOAuth &&

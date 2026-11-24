@@ -87,7 +87,19 @@ export async function packWorkspaces(root: string, work: string) {
       `${pkg.name.replace('@', '').replace('/', '-')}-${pkg.version}.tgz`,
     )
     const contents = await $`tar -tzf ${tarball}`.quiet().text()
-    if (contents.includes('package/src/') || contents.includes('package/test/'))
+    const members = new Set(
+      contents
+        .split(/\r?\n/)
+        .map((line) => line.trim().replace(/^\.\//, ''))
+        .filter(Boolean),
+    )
+    if (
+      [...members].some(
+        (member) =>
+          member.startsWith('package/src/') ||
+          member.startsWith('package/test/'),
+      )
+    )
       throw new Error(`${pkg.name} ships source or tests`)
     for (const file of [
       'package/LICENSE',
@@ -109,8 +121,7 @@ export async function packWorkspaces(root: string, work: string) {
           ]
         : []),
     ])
-      if (!contents.includes(file))
-        throw new Error(`${pkg.name} missing ${file}`)
+      if (!members.has(file)) throw new Error(`${pkg.name} missing ${file}`)
     const actual = JSON.parse(
       await $`tar -xOf ${tarball} package/package.json`.quiet().text(),
     )

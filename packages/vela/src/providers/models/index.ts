@@ -64,11 +64,6 @@ export interface ProviderContext {
 
 const localOnlyOAuthChecks = new WeakMap<ProviderContext, () => boolean>()
 
-/** True when a session belongs to a remote/external channel (such as `lark`), not local interactive/Desktop. */
-export function isRemoteChannel(channel?: string): boolean {
-  return Boolean(channel && channel !== 'local')
-}
-
 /** @internal True when this request's channel session withheld a `localOnly` OAuth token. */
 export function isLocalOnlyOAuthBlocked(ctx: ProviderContext): boolean {
   return localOnlyOAuthChecks.get(ctx)?.() ?? false
@@ -170,7 +165,7 @@ export class ModelRegistry {
   planLabel(provider: string, channel?: string): string | undefined {
     const oauth = this.providers.get(provider)?.oauth
     if (!oauth?.isSubscription) return
-    if (oauth.localOnly && isRemoteChannel(channel)) return
+    if (oauth.localOnly && channel) return
     if (this.credentials.get(provider)?.type !== 'oauth') return
     return oauth.planLabel
   }
@@ -280,6 +275,11 @@ export class ModelRegistry {
         )
       }
     }
+    if (this.credentials.deleteIf) {
+      return this.credentials.deleteIf(provider, (current) =>
+        sameCredential(credential, current),
+      )
+    }
     const current = this.credentials.get(provider)
     if (!current || !sameCredential(credential, current)) return false
     await this.credentials.delete(provider)
@@ -306,7 +306,7 @@ export class ModelRegistry {
     const ctx: ProviderContext = {
       provider,
       credential: async () => {
-        if (def.oauth?.localOnly && isRemoteChannel(options.channel?.())) {
+        if (def.oauth?.localOnly && options.channel?.()) {
           const stored = this.credentials.get(provider)
           if (stored?.type === 'api_key') return stored
           return undefined
@@ -318,7 +318,7 @@ export class ModelRegistry {
     localOnlyOAuthChecks.set(
       ctx,
       () =>
-        Boolean(def.oauth?.localOnly && isRemoteChannel(options.channel?.())) &&
+        Boolean(def.oauth?.localOnly && Boolean(options.channel?.())) &&
         this.credentials.get(provider)?.type === 'oauth',
     )
     const planLabel = this.planLabel(provider, options.channel?.())

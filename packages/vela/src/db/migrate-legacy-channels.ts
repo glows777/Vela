@@ -220,7 +220,10 @@ export function loadLarkAndChannelConfig(ops: MigrationOps): void {
     const sec = readChannelSection(ops.agentDir, name)
     if (sec && typeof sec.timezone === 'string' && sec.timezone.trim()) {
       const tz = resolveConfiguredToken(sec.timezone, `${name}.timezone`, ops)
-      if (!tz) continue
+      if (!tz) {
+        ops.unresolvedTimezoneChannels.add(name)
+        continue
+      }
       try {
         ops.channelTimezones.set(name, routineTimezone(tz))
       } catch {
@@ -462,10 +465,31 @@ export function migrateChannelDirectory(
           const note = rawNotes[idx]
           if (typeof note !== 'string') continue
           const dedupeKey = `legacy-note:${dirHash}:${groupKey}:${idx}`
+          const legacyKey = `legacy-note:${groupKey}:${idx}`
           const existingNote = ops.db.get<{ id: string }>(
             "SELECT id FROM inbox_events WHERE source = 'handoff' AND dedupe_key = ?",
             dedupeKey,
           )
+          if (!existingNote) {
+            const legacyNote = ops.db.get<{ id: string }>(
+              "SELECT id FROM inbox_events WHERE source = 'handoff' AND dedupe_key = ?",
+              legacyKey,
+            )
+            if (legacyNote) {
+              ops.db.run(
+                `UPDATE inbox_events SET
+                  dedupe_key = ?,
+                  session_id = COALESCE(session_id, ?),
+                  project_id = COALESCE(project_id, ?)
+                WHERE id = ?`,
+                dedupeKey,
+                target?.sessionId ?? null,
+                noteProjectId,
+                legacyNote.id,
+              )
+              continue
+            }
+          }
           ops.db.run(
             `INSERT INTO inbox_events (
               id, session_id, project_id, source, dedupe_key, wake, passive, status, payload_json, created_at

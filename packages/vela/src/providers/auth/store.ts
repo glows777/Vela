@@ -47,6 +47,13 @@ export function memoryCredentialStore(
         if (next) credentials.set(provider, next)
         return credentials.get(provider)
       }),
+    deleteIf: (provider, predicate) =>
+      serialize(provider, async () => {
+        const current = credentials.get(provider)
+        if (!current || !predicate(current)) return false
+        credentials.delete(provider)
+        return true
+      }),
     delete: (provider) =>
       serialize(provider, async () => {
         credentials.delete(provider)
@@ -200,6 +207,18 @@ export function fileCredentialStore(path: string): CredentialStore {
           const next = await fn(data[provider])
           if (next) write({ ...read(), [provider]: next }, assertOwned)
           return read()[provider]
+        }),
+      ),
+    deleteIf: (provider, predicate) =>
+      serialize(provider, () =>
+        withFileLock(async (assertOwned) => {
+          cache = undefined
+          const data = read()
+          const current = data[provider]
+          if (!current || !predicate(current)) return false
+          const { [provider]: _, ...rest } = data
+          write(rest, assertOwned)
+          return true
         }),
       ),
     delete: (provider) =>

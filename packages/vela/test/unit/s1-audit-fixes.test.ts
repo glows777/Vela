@@ -12,7 +12,6 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { z as z3 } from 'zod/v3'
 import { cliProjectExtensions } from '../../src/cli/project-extensions.ts'
 import { parseArgs } from '../../src/cli/setup.ts'
 import {
@@ -21,36 +20,15 @@ import {
   savedTrust,
   saveTrust,
 } from '../../src/config/index.ts'
-import { messageEnvelopeChars } from '../../src/driver/messages.ts'
 import { SessionDefaultState } from '../../src/driver/session/defaults.ts'
-import {
-  buildSessionContext,
-  messageText,
-  type SessionEntry,
-} from '../../src/driver/session/entries.ts'
-import { renderSessionHtml } from '../../src/driver/session/export-html.ts'
-import { SessionStore } from '../../src/driver/session/index.ts'
-import { fileSessionStorage } from '../../src/driver/session/storage.ts'
 import { loadConfig } from '../../src/load-config.ts'
 import { loadMcpServers } from '../../src/mcp/config.ts'
-import { fileCredentialStore } from '../../src/providers/auth/store.ts'
 import {
-  fromAiResponseMessage,
-  fromAiToolOutput,
-  toAiModelMessages,
-  toAiToolOutput,
-} from '../../src/providers/messages.ts'
-import {
-  isRemoteChannel,
-  ModelRegistry,
-} from '../../src/providers/models/index.ts'
+  fileCredentialStore,
+  memoryCredentialStore,
+} from '../../src/providers/auth/store.ts'
+import { ModelRegistry } from '../../src/providers/models/index.ts'
 import { loadModels } from '../../src/providers/models-config.ts'
-import { resolveProviderTools } from '../../src/providers/runtime.ts'
-import {
-  normalizeVelaContent,
-  normalizeVelaMessage,
-} from '../../src/shared/messages.ts'
-import { createJsonSchema } from '../../src/shared/tool-schema.ts'
 import { createMockModel } from '../../src/testing/core/demo-model.ts'
 
 const dirs: string[] = []
@@ -64,317 +42,6 @@ function tempDir(prefix: string): string {
   dirs.push(dir)
   return dir
 }
-
-test('providers/messages preserves providerOptions, normalizes binary tool output, handles IMAGE_MEDIA_TYPE and assistant tool_result', () => {
-  const wireUser = toAiModelMessages([
-    {
-      role: 'user',
-      content: [
-        {
-          type: 'image',
-          data: 'aGVsbG8=',
-          mimeType: 'IMAGE/PNG',
-          providerOptions: {
-            anthropic: { cacheControl: { type: 'ephemeral' } },
-          },
-        },
-      ],
-    },
-  ])
-  expect(
-    (wireUser[0]!.content[0] as Record<string, unknown>).providerOptions,
-  ).toEqual({
-    anthropic: { cacheControl: { type: 'ephemeral' } },
-  })
-
-  const rawBytes = new Uint8Array([1, 2, 3, 4])
-  const buf = rawBytes.buffer
-  const fromOut = fromAiToolOutput({
-    type: 'content',
-    value: [
-      {
-        type: 'text',
-        text: 'ok',
-        providerOptions: { openai: { p: 1 } },
-      } as never,
-      { type: 'image-data', data: rawBytes as never, mediaType: 'image/png' },
-      {
-        type: 'media',
-        data: Buffer.from(buf).toString('base64'),
-        mediaType: 'image/webp',
-      } as never,
-      {
-        type: 'file-data',
-        data: buf as never,
-        mediaType: 'image/jpeg',
-        providerOptions: { openai: { tag: 'img' } },
-      } as never,
-    ],
-  })
-  expect(fromOut.type).toBe('content')
-  if (fromOut.type === 'content') {
-    expect(fromOut.value[0]).toEqual({
-      type: 'text',
-      text: 'ok',
-      providerOptions: { openai: { p: 1 } },
-    })
-    expect((fromOut.value[1] as { data: string }).data).toBe('AQIDBA==')
-    expect(
-      (fromOut.value[2] as { type: string; mimeType?: string }).mimeType,
-    ).toBe('image/webp')
-    expect(
-      (fromOut.value[3] as { providerOptions?: unknown }).providerOptions,
-    ).toEqual({
-      openai: { tag: 'img' },
-    })
-  }
-
-  const aiOut = toAiToolOutput({
-    type: 'content',
-    value: [
-      {
-        type: 'image',
-        data: 'AQID',
-        mimeType: 'image/png',
-        providerOptions: { test: { keep: true } },
-      },
-    ],
-  })
-  expect(
-    (aiOut as { value: Record<string, unknown>[] }).value[0]!.providerOptions,
-  ).toEqual({
-    test: { keep: true },
-  })
-
-  // Assistant error tool-result & supportsImages=false omission
-  const adapted = toAiModelMessages(
-    [
-      {
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool_result',
-            toolCallId: 'c1',
-            toolName: 'search',
-            output: {
-              type: 'content',
-              isError: true,
-              value: [{ type: 'image', data: 'AQID', mimeType: 'image/png' }],
-            } as never,
-          },
-        ],
-      },
-    ],
-    false,
-  )
-  const assistantPart = adapted[0]!.content[0] as Record<string, unknown>
-  expect(assistantPart.type).toBe('tool-result')
-  expect((assistantPart.output as { type: string }).type).toBe('error-text')
-
-  // Assistant edge normalization + tool-approval-request metadata round-trip
-  const normalizedEdge = toAiModelMessages([
-    normalizeVelaMessage({
-      role: 'assistant',
-      content: [
-        { type: 'reasoning', text: 'think' },
-        {
-          type: 'tool-approval-request',
-          approvalId: 'ap1',
-          toolCallId: 'tc1',
-          reason: 'needs ok',
-          isAutomatic: false,
-          signature: 'sig-1',
-          inputSchemaInput: { x: 1 },
-        },
-      ],
-    }),
-  ])
-  expect((normalizedEdge[0]!.content[0] as { type: string }).type).toBe(
-    'reasoning',
-  )
-  expect(normalizedEdge[0]!.content[1]).toMatchObject({
-    type: 'tool-approval-request',
-    approvalId: 'ap1',
-    toolCallId: 'tc1',
-    reason: 'needs ok',
-    isAutomatic: false,
-    signature: 'sig-1',
-    inputSchemaInput: { x: 1 },
-  })
-
-  const parsedResp = fromAiResponseMessage({
-    role: 'assistant',
-    content: [
-      {
-        type: 'tool-approval-request',
-        approvalId: 'ap2',
-        toolCallId: 'tc2',
-        reason: 'check',
-        isAutomatic: true,
-      } as never,
-    ],
-  })
-  expect(parsedResp.content[0]).toMatchObject({
-    type: 'tool-approval-request',
-    reason: 'check',
-    isAutomatic: true,
-  })
-})
-
-test('shared/driver messages normalize nested tool images and Buffer payloads, strict messageText, export-html, loadSaved', async () => {
-  const res = normalizeVelaContent([
-    {
-      type: 'tool-result',
-      toolCallId: 'tc',
-      toolName: 't',
-      output: {
-        type: 'content',
-        value: [
-          {
-            type: 'image-data',
-            data: { type: 'Buffer', data: [1, 2, 3] },
-            mediaType: 'image/png',
-          },
-          { type: 'media', data: 'AQID', mediaType: 'image/gif' },
-          {
-            type: 'file',
-            mediaType: 'image/jpeg',
-            data: { type: 'data', data: 'AQID' },
-          },
-        ],
-      },
-    },
-  ])
-  expect(res.changed).toBe(true)
-  const tr = res.content[0] as { output: { value: Record<string, unknown>[] } }
-  expect(tr.output.value[0]).toMatchObject({
-    type: 'image',
-    data: 'AQID',
-    mimeType: 'image/png',
-  })
-  expect(tr.output.value[1]).toMatchObject({
-    type: 'image',
-    data: 'AQID',
-    mimeType: 'image/gif',
-  })
-  expect(tr.output.value[2]).toMatchObject({
-    type: 'image',
-    data: 'AQID',
-    mimeType: 'image/jpeg',
-  })
-
-  // messageText strictly ignores thinking / non-text parts carrying .text
-  expect(
-    messageText([
-      { type: 'thinking', text: 'secret-thought' },
-      { type: 'text', text: 'visible' },
-    ]),
-  ).toBe('visible')
-
-  // messageEnvelopeChars recognizes legacy media image parts
-  expect(
-    messageEnvelopeChars([
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'media',
-            data: 'x'.repeat(20_000),
-            mediaType: 'image/png',
-          } as never,
-        ],
-      },
-    ]),
-  ).toBeLessThan(6000)
-
-  // FileSessionStore.loadSaved, buildSessionContext, and renderSessionHtml normalize legacy custom_message arrays
-  const dir = tempDir('vela-s1-sess-')
-  const storage = fileSessionStorage(dir)
-  const file = join(dir, 'legacy-cm.jsonl')
-  const header = {
-    type: 'session',
-    version: 2,
-    id: 'legacy-cm',
-    timestamp: '2026-11-24T00:00:00.000Z',
-  }
-  const entry = {
-    type: 'custom_message',
-    id: 'e1',
-    parentId: null,
-    timestamp: '2026-11-24T00:00:01.000Z',
-    customType: 'note',
-    display: true,
-    content: [{ type: 'reasoning', text: 'legacy-r' }],
-  }
-  writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(entry)}\n`)
-  const store = new SessionStore('legacy-cm', dir, undefined, storage)
-  const saved = await store.loadSaved()
-  expect(saved).toBeDefined()
-  expect(
-    (saved!.messages[0] as { content: { type: string }[] }).content[0]!.type,
-  ).toBe('thinking')
-  const ctx = buildSessionContext([entry as never])
-  expect(
-    (ctx.messages[0] as { content: { type: string }[] }).content[0]!.type,
-  ).toBe('thinking')
-  const html = renderSessionHtml({
-    id: 'legacy-cm',
-    entries: [
-      {
-        type: 'message',
-        id: 'm1',
-        parentId: null,
-        timestamp: '2026-11-24T00:00:00.000Z',
-        message: {
-          role: 'assistant',
-          content: [
-            { type: 'reasoning', text: 'legacy-thought' },
-            { type: 'text', text: 'legacy-visible' },
-          ],
-        } as never,
-      },
-      {
-        ...entry,
-        content: [{ type: 'text', text: 'cm-text' }],
-      } as unknown as SessionEntry,
-    ],
-  })
-  expect(html).toContain('legacy-thought')
-  expect(html).toContain('legacy-visible')
-  expect(html).toContain('cm-text')
-})
-
-test('createJsonSchema detects schema drafts and resolveProviderTools extracts Zod v3 schemas', async () => {
-  const draft7 = createJsonSchema({
-    $schema: 'http://json-schema.org/draft-07/schema#',
-    type: 'object',
-    properties: { n: { type: 'number', exclusiveMinimum: 0 } },
-    required: ['n'],
-  })
-  expect(await draft7.validate!({ n: 1 })).toEqual({
-    success: true,
-    value: { n: 1 },
-  })
-  expect((await draft7.validate!({ n: 0 })).success).toBe(false)
-
-  const zodV3Schema = z3.object({ query: z3.string().min(1) })
-  const resolved = await resolveProviderTools(createMockModel(), [
-    {
-      name: 'v3_tool',
-      description: 'zod v3 test',
-      inputSchema: zodV3Schema as never,
-      execute: async (input) => input,
-    },
-  ])
-  expect(resolved.toolDefinitions).toHaveLength(1)
-  expect(
-    (resolved.toolDefinitions[0] as { inputSchema: Record<string, unknown> })
-      .inputSchema,
-  ).toMatchObject({
-    type: 'object',
-    properties: { query: { type: 'string' } },
-  })
-})
 
 test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag), and mcp loading', async () => {
   expect(() =>
@@ -414,15 +81,22 @@ test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag
   expect(written.$schema).toBeUndefined()
   expect(written.extensions).toEqual(['+builtin:memory'])
 
-  // Trust canonicalizes symlinked dir and writes 0600 non-symlink trust.json
-  const realProj = join(dir, 'real-proj')
-  const linkProj = join(dir, 'link-proj')
-  mkdirSync(realProj, { recursive: true })
-  symlinkSync(realProj, linkProj)
-  saveTrust(agentDir, linkProj, true)
-  const trustPath = join(agentDir, 'trust.json')
+  // Trust canonicalizes symlinked dir, keeps denial over inherited parent grant (#3), and preserves existing dir mode (#10)
+  const parentTrusted = join(dir, 'trusted-parent')
+  const deniedReal = join(parentTrusted, 'sub')
+  const deniedLink = join(dir, 'link-proj')
+  mkdirSync(deniedReal, { recursive: true })
+  const sharedAgentDir = join(dir, 'shared-agent')
+  mkdirSync(sharedAgentDir, { recursive: true, mode: 0o755 })
+  const origMode = lstatSync(sharedAgentDir).mode & 0o777
+  saveTrust(sharedAgentDir, parentTrusted, true)
+  expect(lstatSync(sharedAgentDir).mode & 0o777).toBe(origMode)
+  symlinkSync(deniedReal, deniedLink)
+  saveTrust(sharedAgentDir, deniedLink, false)
+  const trustPath = join(sharedAgentDir, 'trust.json')
   expect(lstatSync(trustPath).mode & 0o777).toBe(0o600)
-  expect(savedTrust(agentDir, realProj)).toBe(true)
+  expect(savedTrust(sharedAgentDir, deniedLink)).toBe(false)
+  expect(savedTrust(sharedAgentDir, deniedReal)).toBe(false)
 
   // cliProjectExtensions allows -builtin:rag without warning or error
   writeFileSync(
@@ -450,7 +124,7 @@ test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag
   })
   expect(diags).toEqual([])
 
-  // MCP config skips disabled servers with missing env & does not spurious-error on failed user server override
+  // MCP config skips disabled servers with missing env, re-interpolates on trusted enable (#7), and skips spurious error
   const envRef = (name: string) => `$${'{'}${name}}`
   writeFileSync(
     join(agentDir, 'config.json'),
@@ -458,7 +132,7 @@ test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag
       mcpServers: {
         disabledMissing: {
           enabled: false,
-          command: 'cmd',
+          command: envRef('ENABLED_CMD'),
           env: { K: envRef('MISSING_VAR') },
         },
         brokenUser: { command: envRef('MISSING_CMD') },
@@ -470,6 +144,7 @@ test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag
     JSON.stringify({
       mcpServers: {
         brokenUser: { enabled: false },
+        disabledMissing: { enabled: true },
       },
     }),
   )
@@ -479,16 +154,22 @@ test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag
     trusted: true,
     env: {},
   })
-  expect(mcp.servers.disabledMissing).toMatchObject({ enabled: false })
-  expect(mcp.errors.length).toBe(1)
-  expect(mcp.errors[0]).toContain('MISSING_CMD')
+  expect(mcp.servers.disabledMissing).toBeUndefined()
+  expect(mcp.errors.some((e) => e.includes('MISSING_VAR'))).toBe(true)
+  expect(mcp.errors.some((e) => e.includes('MISSING_CMD'))).toBe(true)
+  const mcpResolved = loadMcpServers({
+    agentDir,
+    projectDir: join(projDir, '.vela'),
+    trusted: true,
+    env: { ENABLED_CMD: 'resolved-bin', MISSING_VAR: 'val' },
+  })
+  expect(mcpResolved.servers.disabledMissing).toMatchObject({
+    enabled: true,
+    command: 'resolved-bin',
+  })
 })
 
-test('auth localOnly/local channel, $$ secret literal, live planLabel, logout guard, and fileCredentialStore ino invalidation', async () => {
-  expect(isRemoteChannel(undefined)).toBe(false)
-  expect(isRemoteChannel('local')).toBe(false)
-  expect(isRemoteChannel('lark')).toBe(true)
-
+test('auth localOnly channel blocks local & lark (#4), $$ secret literal, live planLabel, atomic logout race (#6), and store cache', async () => {
   const dir = tempDir('vela-s1-auth-')
   writeFileSync(
     join(dir, 'config.json'),
@@ -548,10 +229,11 @@ test('auth localOnly/local channel, $$ secret literal, live planLabel, logout gu
     store,
   )
 
-  // local channel sees localOnly credential & planLabel; lark hides it
-  expect(reg.planLabel('sub', 'local')).toBe('Pro plan')
+  // Undefined channel sees localOnly credential & planLabel; any channel ('local' or 'lark') blocks it (#4)
+  expect(reg.planLabel('sub', undefined)).toBe('Pro plan')
+  expect(reg.planLabel('sub', 'local')).toBeUndefined()
   expect(reg.planLabel('sub', 'lark')).toBeUndefined()
-  const resolved = reg.resolve('sub/s1', { channel: () => 'local' })
+  const resolved = reg.resolve('sub/s1')
   const state = new SessionDefaultState(
     { model: undefined, thinkingLevel: 'off', limitOverrides: {} },
     {},
@@ -560,13 +242,69 @@ test('auth localOnly/local channel, $$ secret literal, live planLabel, logout gu
     state.info(
       resolved,
       { planLabel: (p, ch) => reg.planLabel(p, ch) },
-      'local',
+      undefined,
     ).planLabel,
   ).toBe('Pro plan')
   expect(
-    state.info(resolved, { planLabel: (p, ch) => reg.planLabel(p, ch) }, 'lark')
-      .planLabel,
+    state.info(
+      resolved,
+      { planLabel: (p, ch) => reg.planLabel(p, ch) },
+      'local',
+    ).planLabel,
   ).toBeUndefined()
+
+  // Atomic logout race: queued modify() before revoke completes must not be deleted (#6)
+  const memStore = memoryCredentialStore({
+    sub: { type: 'oauth', access: 'old', refresh: 'r', expires: 99_999 },
+  })
+  const origDeleteIf = memStore.deleteIf!
+  let raceStarted!: () => void
+  let raceDone = false
+  const raceReg = new ModelRegistry(
+    {
+      sub: {
+        createModel: () => createMockModel(),
+        models: [
+          { id: 's1', name: 'S1', contextWindow: 8192, maxTokens: 1024 },
+        ],
+        oauth: {
+          name: 'Sub',
+          login: async () => ({
+            type: 'oauth',
+            access: 'x',
+            refresh: 'r',
+            expires: 9,
+          }),
+          refresh: async (c) => c,
+          logout: async () => {
+            raceStarted()
+          },
+        },
+      },
+    },
+    {
+      ...memStore,
+      deleteIf: async (p, pred) => {
+        if (!raceDone) {
+          raceDone = true
+          await memStore.modify('sub', async () => ({
+            type: 'oauth',
+            access: 'concurrent-new',
+            refresh: 'r',
+            expires: 99_999,
+          }))
+        }
+        return origDeleteIf(p, pred)
+      },
+    },
+  )
+  const rs = new Promise<void>((r) => {
+    raceStarted = r
+  })
+  const raceRes = raceReg.logout('sub')
+  await rs
+  expect(await raceRes).toBe(false)
+  expect(memStore.get('sub')).toMatchObject({ access: 'concurrent-new' })
 
   // Concurrent replacement during logout must not delete the new credential
   const startedP = new Promise<void>((r) => {

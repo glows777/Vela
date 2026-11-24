@@ -42,6 +42,24 @@ export interface LegacyMigrationResult {
   warnings: string[]
 }
 
+function mergeJsonObjects(
+  existingJson: string | null | undefined,
+  incomingJson: string | null | undefined,
+): string | null {
+  if (!existingJson) return incomingJson ?? null
+  if (!incomingJson) return existingJson
+  try {
+    const existingObj = JSON.parse(existingJson)
+    const incomingObj = JSON.parse(incomingJson)
+    if (isPlainObject(existingObj) && isPlainObject(incomingObj)) {
+      return JSON.stringify({ ...incomingObj, ...existingObj })
+    }
+  } catch {
+    // Keep existing JSON if either side is not a JSON object.
+  }
+  return existingJson
+}
+
 /**
  * Performs an idempotent, single-transaction, read-only import of legacy `~/.vela/`
  * config, trust decisions, projects, channel bindings, routines, subscriptions,
@@ -159,6 +177,7 @@ export function migrateLegacyVelaDir(options: {
       const larkChatConfigById = new Map<string, LarkChatMigrationConfig>()
       const boundLarkChats = new Set<string>()
       const channelTimezones = new Map<string, string>()
+      const unresolvedTimezoneChannels = new Set<string>()
       const channelSessionByKey = new Map<
         string,
         {
@@ -203,6 +222,14 @@ export function migrateLegacyVelaDir(options: {
           )
           summary.projects += 1
         } else {
+          const existingProj = db.get<{ config_json: string | null }>(
+            'SELECT config_json FROM projects WHERE id = ?',
+            row.id,
+          )
+          const mergedConfigJson = mergeJsonObjects(
+            existingProj?.config_json,
+            row.configJson,
+          )
           db.run(
             `UPDATE projects SET
               cwd = COALESCE(cwd, ?),
@@ -211,7 +238,7 @@ export function migrateLegacyVelaDir(options: {
               default_model = COALESCE(default_model, ?),
               default_thinking_level = COALESCE(default_thinking_level, ?),
               default_tools_json = COALESCE(default_tools_json, ?),
-              config_json = COALESCE(config_json, ?),
+              config_json = ?,
               updated_at = ?
             WHERE id = ?`,
             row.cwd ?? null,
@@ -220,7 +247,7 @@ export function migrateLegacyVelaDir(options: {
             row.defaultModel ?? null,
             row.defaultThinkingLevel ?? null,
             row.defaultToolsJson ?? null,
-            row.configJson ?? null,
+            mergedConfigJson,
             now,
             row.id,
           )
@@ -298,8 +325,11 @@ export function migrateLegacyVelaDir(options: {
         row,
       ) => {
         const enabledVal = row.enabled === false ? 0 : 1
-        const existingBinding = db.get<{ id: string }>(
-          'SELECT id FROM channel_bindings WHERE channel = ? AND external_id = ?',
+        const existingBinding = db.get<{
+          id: string
+          config_json: string | null
+        }>(
+          'SELECT id, config_json FROM channel_bindings WHERE channel = ? AND external_id = ?',
           row.channel,
           row.externalId,
         )
@@ -324,20 +354,24 @@ export function migrateLegacyVelaDir(options: {
           summary.channelBindings += 1
           return
         }
+        const mergedConfigJson = mergeJsonObjects(
+          existingBinding.config_json,
+          row.configJson,
+        )
         db.run(
           `UPDATE channel_bindings SET
             thread_id = COALESCE(thread_id, ?),
             project_id = COALESCE(project_id, ?),
             session_id = COALESCE(session_id, ?),
             enabled = CASE WHEN ? = 1 THEN 1 ELSE enabled END,
-            config_json = COALESCE(config_json, ?),
+            config_json = ?,
             updated_at = ?
           WHERE id = ?`,
           row.threadId ?? null,
           row.projectId,
           row.sessionId,
           enabledVal,
-          row.configJson ?? null,
+          mergedConfigJson,
           now,
           existingBinding.id,
         )
@@ -358,6 +392,7 @@ export function migrateLegacyVelaDir(options: {
         larkChatConfigById,
         boundLarkChats,
         channelTimezones,
+        unresolvedTimezoneChannels,
         projectByChat,
         channelSessionByKey,
         channelSessionDataDirs,
@@ -419,6 +454,24 @@ export function migrateLegacyVelaDir(options: {
                 ? JSON.stringify({ environment: 'local', cwd: parsed.cwd })
                 : null
 
+          const existingIdBySeq = new Map<number, string>(
+            db
+              .all<{ seq: number; id: string }>(
+                'SELECT seq, id FROM vela_messages WHERE session_id = ?',
+                targetSessionId,
+              )
+              .map((row) => [row.seq, row.id]),
+          )
+          const idMap = new Map<string, string>()
+          for (const msg of parsed.messages) {
+            const existingId = existingIdBySeq.get(msg.seq)
+            if (existingId && existingId !== msg.id) {
+              idMap.set(msg.id, existingId)
+            }
+          }
+          const remapId = (id: string | null): string | null =>
+            id ? (idMap.get(id) ?? id) : null
+
           ensureSession({
             id: targetSessionId,
             projectId: inferredProjectId,
@@ -428,7 +481,7 @@ export function migrateLegacyVelaDir(options: {
             model: parsed.model ?? null,
             thinkingLevel: parsed.thinkingLevel ?? null,
             locationJson,
-            leafMessageId: parsed.leafMessageId,
+            leafMessageId: remapId(parsed.leafMessageId),
             discoveredToolsJson: parsed.discoveredTools
               ? JSON.stringify(parsed.discoveredTools)
               : null,
@@ -438,6 +491,7 @@ export function migrateLegacyVelaDir(options: {
           })
 
           for (const msg of parsed.messages) {
+            const mappedId = idMap.get(msg.id) ?? msg.id
             const res = db.run(
               `INSERT OR IGNORE INTO vela_messages (
                 session_id, id, parent_id, seq, kind, role, content_json,
@@ -445,8 +499,8 @@ export function migrateLegacyVelaDir(options: {
                 tokens_before, label, details_json, created_at
               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               targetSessionId,
-              msg.id,
-              msg.parentId,
+              mappedId,
+              remapId(msg.parentId),
               msg.seq,
               msg.kind,
               msg.role,
@@ -454,7 +508,7 @@ export function migrateLegacyVelaDir(options: {
               msg.includeInContext ? 1 : 0,
               msg.stopReason,
               msg.producedBy,
-              msg.firstKeptId,
+              remapId(msg.firstKeptId),
               msg.tokensBefore,
               msg.label,
               msg.detailsJson,

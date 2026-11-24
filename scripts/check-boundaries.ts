@@ -189,17 +189,7 @@ function edges(source: ts.SourceFile): Edge[] {
       node.moduleSpecifier
     ) {
       const spec = literal(node.moduleSpecifier)
-      let typeOnly = false
-      if (ts.isExportDeclaration(node)) {
-        typeOnly =
-          !!node.isTypeOnly ||
-          !!(
-            node.exportClause &&
-            ts.isNamedExports(node.exportClause) &&
-            node.exportClause.elements.length > 0 &&
-            node.exportClause.elements.every((e) => e.isTypeOnly)
-          )
-      }
+      let typeOnly = ts.isExportDeclaration(node) && !!node.isTypeOnly
       if (ts.isImportDeclaration(node)) {
         const clause = node.importClause
         typeOnly =

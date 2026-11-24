@@ -108,7 +108,12 @@ export async function normalizeUserMessage(
       continue
     }
     const result = await normalizeImage(part)
-    if (result.image) content.push(result.image)
+    if (result.image)
+      content.push(
+        part.providerOptions
+          ? { ...result.image, providerOptions: part.providerOptions }
+          : result.image,
+      )
     else
       content.push({
         type: 'text',

@@ -205,6 +205,7 @@
   type Credential = ApiKeyCredential | OAuthCredential
   interface CredentialStore
     delete: (provider: string) => Promise<void>
+    deleteIf?: ((provider: string, predicate: (current: Credential) => boolean) => Promise<boolean>) | undefined
     get: (provider: string) => Credential | undefined
     list: () => string[]
     modify: (provider: string, fn: (current: Credential | undefined) => Promise<Credential | undefined>) => Promise<Credential | undefined>

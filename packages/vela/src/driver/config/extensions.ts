@@ -85,8 +85,8 @@ async function loadHostModule(
   diskPath?: string,
 ): Promise<boolean> {
   const loader =
-    hostLoaders[specifier] ??
-    (diskPath ? () => import(pathToFileURL(diskPath).href) : undefined)
+    (diskPath ? () => import(pathToFileURL(diskPath).href) : undefined) ??
+    hostLoaders[specifier]
   if (!loader) return false
   storeHostModule(specifier, await loader())
   return true

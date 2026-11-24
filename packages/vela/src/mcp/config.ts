@@ -268,6 +268,7 @@ export function loadMcpServers(options: {
 }): McpServersFile {
   const result: McpServersFile = { servers: {}, sources: {}, errors: [] }
   const failedUserServers = new Set<string>()
+  const rawDisabledServers = new Map<string, Record<string, unknown>>()
   const userFile = join(options.agentDir, 'config.json')
   const files = [userFile]
   if (options.trusted) files.push(join(options.projectDir, 'config.json'))
@@ -320,13 +321,37 @@ export function loadMcpServers(options: {
               raw[key],
             ]),
           )
-          // `existing` is already interpolated; apply exposure overrides without re-expanding user strings.
-          result.servers[name] = { ...existing, ...overrides }
+          const rawDisabled = rawDisabledServers.get(name)
+          const merged = { ...(rawDisabled ?? existing), ...overrides }
+          if (rawDisabled && merged.enabled !== false) {
+            try {
+              result.servers[name] = interpolateServer(
+                name,
+                merged,
+                options.env,
+              )
+              result.sources[name] = file
+              rawDisabledServers.delete(name)
+            } catch (error) {
+              delete result.servers[name]
+              rawDisabledServers.delete(name)
+              result.errors.push(
+                error instanceof Error ? error.message : String(error),
+              )
+            }
+            continue
+          }
+          if (rawDisabled) {
+            rawDisabledServers.set(name, merged)
+          }
+          // `existing` is already interpolated (or still disabled); apply overrides without re-expanding user strings.
+          result.servers[name] = merged
           result.sources[name] = file
           continue
         }
       }
       if (isPlainObject(raw) && raw.enabled === false) {
+        rawDisabledServers.set(name, raw)
         result.servers[name] = raw
         result.sources[name] = file
         if (file === userFile) failedUserServers.delete(name)
@@ -335,9 +360,11 @@ export function loadMcpServers(options: {
       try {
         result.servers[name] = interpolateServer(name, raw, options.env)
         result.sources[name] = file
+        rawDisabledServers.delete(name)
         if (file === userFile) failedUserServers.delete(name)
       } catch (error) {
         delete result.servers[name]
+        rawDisabledServers.delete(name)
         if (file === userFile) failedUserServers.add(name)
         result.errors.push(
           error instanceof Error ? error.message : String(error),

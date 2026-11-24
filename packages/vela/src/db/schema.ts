@@ -9,7 +9,7 @@
  *   connection for atomic step-level durability without leaking Vela internals into Runtime.
  */
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export const INITIAL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_migrations (

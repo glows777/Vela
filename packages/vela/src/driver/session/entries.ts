@@ -1,7 +1,7 @@
 import type { ThinkingLevel } from '../../providers/models/index.ts'
 import {
   type ModelMessage,
-  normalizeVelaContent,
+  normalizeUserContent,
   normalizeVelaMessage,
   type UserContent,
 } from '../../shared/messages.ts'
@@ -429,7 +429,7 @@ export function buildSessionContext(
       original = {
         role: 'user',
         content: Array.isArray(entry.content)
-          ? (normalizeVelaContent(entry.content).content as UserContent)
+          ? normalizeUserContent(entry.content).content
           : entry.content,
       }
     else if (entry.type === 'bash_execution' && !entry.excludeFromContext)

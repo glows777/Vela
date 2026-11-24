@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path'
 import { isPlainObject } from '../shared/interpolate.ts'
 import {
+  normalizeUserContent,
   normalizeVelaContent,
   normalizeVelaMessage,
   type VelaMessage,
@@ -578,7 +579,7 @@ export function parseLegacyTranscript(
 
     if (kind === 'custom_message') {
       const normalizedContent = Array.isArray(entry.content)
-        ? normalizeVelaContent(entry.content).content
+        ? normalizeUserContent(entry.content).content
         : entry.content
       messages.push({
         id: entry.id,

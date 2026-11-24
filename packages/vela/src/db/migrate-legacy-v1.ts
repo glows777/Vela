@@ -132,7 +132,10 @@ export function convertV1ToEntries(
       )
       .digest('hex')
       .slice(0, 16)
-    const seed = `${sessionId}\0${entries.length}\0${entry.type}\0${rawTimestamp ?? ''}\0${payloadHash}`
+    const seed =
+      typeof rawTimestamp === 'string' && rawTimestamp.length > 0
+        ? `${sessionId}\0${entries.length}\0${entry.type}\0${rawTimestamp}`
+        : `${sessionId}\0${entries.length}\0${entry.type}\0\0${payloadHash}`
     const id = createSyntheticId(taken, seed)
     entries.push({
       ...entry,
