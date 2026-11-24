@@ -8,13 +8,12 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
+import { parseConfig, updateConfigFile } from '../../../src/config/index.ts'
+import { migrateLegacyVelaDir, openDatabase } from '../../../src/db/index.ts'
 import {
   migrateLegacyConfigFiles,
-  parseConfig,
   removeConfigIfHashMatches,
-  updateConfigFile,
-} from '../../../src/config/index.ts'
-import { migrateLegacyVelaDir, openDatabase } from '../../../src/db/index.ts'
+} from '../../../src/db/migrate-legacy-config.ts'
 
 const dirs: { cleanup(): void }[] = []
 

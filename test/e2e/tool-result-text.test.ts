@@ -39,7 +39,7 @@ test('bash over 2000 lines keeps its tail and a single readable full-output foot
         expect(output).toContain('2100\n')
         expect(output.match(/Full output:/g)).toHaveLength(1)
         const path = output.match(/Full output: (.+)\]/)![1]!
-        return fauxToolCall('read_file', { path, offset: 1, limit: 2 })
+        return fauxToolCall('read', { path, offset: 1, limit: 2 })
       },
       fauxText('recovered'),
     ],
@@ -53,7 +53,7 @@ test.each([
   [
     'timeout',
     "printf 'partial\\n'; sleep 20",
-    'Command timed out after 2 seconds',
+    'Command timed out after 2 seconds. Pass a larger timeout (up to 1800s) or run_in_background: true for long-running commands.',
   ],
 ])(
   'bash %s remains plain error text with its execution note',
@@ -98,8 +98,8 @@ test('generic default results keep 20KB whole and truncate to the head with a re
         expect(output).toStartWith(body.slice(0, 50 * 1024))
         expect(output).not.toContain('END_EVIDENCE')
         expect(output.match(/Full output:/g)).toHaveLength(1)
-        expect(output).toContain('read_file with offset')
-        return fauxToolCall('read_file', {
+        expect(output).toContain('read with offset')
+        return fauxToolCall('read', {
           path: output.match(/Full output: (.+?);/)![1]!,
           offset: 12_001,
         })
@@ -139,8 +139,8 @@ test('web_fetch keeps a 20KB page whole and an oversized page head with one reco
           expect(output).toStartWith(large.slice(0, 50 * 1024))
           expect(output).not.toContain('FOOTEREVIDENCE')
           expect(output.match(/Full output:/g)).toHaveLength(1)
-          expect(output).toContain('read_file with offset')
-          return fauxToolCall('read_file', {
+          expect(output).toContain('read with offset')
+          return fauxToolCall('read', {
             path: output.match(/Full output: (.+?);/)![1]!,
             offset: 1,
             column: 60_005,
@@ -177,7 +177,7 @@ test('a pre-change StoredToolResult session resumes with its original result tex
     indexPath: first.session.registry.results.indexPath,
     bytes: 7,
     preview: 'legacy\n',
-    read: 'Only a preview is shown. Use read_file to read more.',
+    read: 'Only a preview is shown. Use read to read more.',
   }
   const saved = `${first.dataDir}/sessions/default/transcript.jsonl`
   await first.cleanup({ keepDir: true })
@@ -251,7 +251,7 @@ test('a resumed truncated legacy generic result keeps its full-output recovery p
     indexPath: first.session.registry.results.indexPath,
     bytes: Buffer.byteLength(body),
     preview: `${body.slice(0, 1800)}\n\n[preview: first 1800 and last 1200 of ${body.length} UTF-16 code units; ${body.length - 3000} omitted here, full output saved]\n\n${body.slice(-1200)}`,
-    read: 'Only a preview is shown. Use read_file with path, offset, limit and column to read more.',
+    read: 'Only a preview is shown. Use read with path, offset, limit and column to read more.',
   }
   const saved = `${first.dataDir}/sessions/default/transcript.jsonl`
   const entries = readFileSync(saved, 'utf8')
@@ -277,7 +277,7 @@ test('a resumed truncated legacy generic result keeps its full-output recovery p
         expect(text).toStartWith(legacy.preview)
         expect(text.match(/Full output:/g)).toHaveLength(1)
         expect(text).not.toContain('MIDDLE_EVIDENCE')
-        return fauxToolCall('read_file', {
+        return fauxToolCall('read', {
           path: text.match(/Full output: (.+?);/)![1]!,
           offset: 802,
           limit: 1,

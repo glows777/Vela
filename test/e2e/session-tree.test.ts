@@ -192,7 +192,7 @@ test('fork copies the branch before a user message into a new open session; the 
   const t = createTestVela({
     files: { 'a.txt': 'hello' },
     responses: [
-      fauxToolCall('read_file', { path: 'a.txt' }),
+      fauxToolCall('read', { path: 'a.txt' }),
       fauxText('a1'),
       fauxText('a2'),
       fauxText('forked answer'),
@@ -304,7 +304,7 @@ test('export writes the current branch as JSONL and as HTML with session content
 test('with automatic compaction off nothing compacts on its own and an overflow is reported as is; /compact still works', async () => {
   const overflow = '400 prompt is too long: 213462 tokens > 200000 maximum'
   const t = createTestVela({
-    limits: { microcompactThreshold: 1, summaryThreshold: 1 },
+    limits: { summaryThreshold: 1 },
     responses: [
       ...Array.from({ length: 4 }, (_, i) => fauxText(`Answer ${i}`)),
       fauxError(overflow),
@@ -496,7 +496,7 @@ test('a clone of an in-memory session still reads a long tool result after the s
     responses: [
       fauxToolCall('bash', { command: "printf '0\\n%.0s' {1..2100}" }),
       fauxText('saved'),
-      () => fauxToolCall('read_file', { path: inherited, offset: 101 }),
+      () => fauxToolCall('read', { path: inherited, offset: 101 }),
       fauxText('read'),
     ],
   })

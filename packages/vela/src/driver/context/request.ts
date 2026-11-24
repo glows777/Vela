@@ -3,9 +3,12 @@ import {
   type ResolvedProviderTools,
   resolveProviderTools,
 } from '../../providers/index.ts'
-import { DEFAULT_LIMITS } from '../../shared/limits.ts'
 import type { ModelInput } from '../../shared/provider-types.ts'
-import { type ModelMessage, messageEnvelopeChars } from '../messages.ts'
+import {
+  estimateMessagesTokens,
+  estimateTextTokens,
+  type ModelMessage,
+} from '../messages.ts'
 
 export interface RequestSnapshot {
   model: ModelInput
@@ -55,20 +58,25 @@ export async function resolveRequestSnapshot(
   return request
 }
 
-// A conservative, consistent local estimate, not a provider tokenizer.
+/** Estimate tokens for plain JSON Schema tool definitions. */
+export function estimateToolDefinitionsTokens(
+  toolDefinitions: unknown[],
+): number {
+  return estimateTextTokens(JSON.stringify(toolDefinitions))
+}
+
+// Weighted ASCII/CJK local estimate, not a provider tokenizer.
 export function estimateRequestTokens(
   request: RequestSnapshot,
   messages = request.messages,
 ): number {
-  return Math.ceil(
-    (request.systemPrompt.length +
-      JSON.stringify(request.toolDefinitions).length +
-      messageEnvelopeChars(messages)) *
-      0.3,
+  return (
+    estimateTextTokens(request.systemPrompt) +
+    estimateToolDefinitionsTokens(request.toolDefinitions) +
+    estimateMessagesTokens(messages)
   )
 }
 
-/** Prefer the provider's latest prompt size plus the local message delta. */
 export function contextRequestTokens(
   request: RequestSnapshot,
   reported: number | undefined,
@@ -76,5 +84,3 @@ export function contextRequestTokens(
 ): number {
   return reported ?? estimate ?? estimateRequestTokens(request)
 }
-
-export const MAX_INPUT_TOKENS = DEFAULT_LIMITS.maxInputTokens

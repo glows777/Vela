@@ -17,6 +17,7 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 - [Settings](settings.md): `config.json`, the data directory, project trust, `AGENTS.md`, skills and prompt templates.
 - [Tools](tools.md): the built-in tools the model can call.
 - [Sessions and context](sessions.md): continuing sessions, queued messages and compaction.
+- [Upgrading to v0.9](upgrading.md): unified `config.json`, tool renames, and removed v0.8 options.
 
 ## Automate or embed Vela
 

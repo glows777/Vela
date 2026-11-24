@@ -682,7 +682,7 @@ test('R1 #12, #13, #14: strict limits/models validation, strip-before-validate o
     limits: { microcompact: 'false' },
   }).agentDir
   expect(() => loadConfig({ cwd, agentDir: badLimits })).toThrow(
-    'limits.microcompact must be a boolean',
+    'Unknown key microcompact',
   )
   const badRetry = setupProject({
     limits: { maxRetries: 'typo' },

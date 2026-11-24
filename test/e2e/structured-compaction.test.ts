@@ -39,15 +39,15 @@ test('free-text checkpoint appends tool-derived file lists and reaches a resumed
     files: { 'alpha.txt': 'alpha', 'beta.txt': 'beta' },
     responses: [
       [
-        fauxToolCall('read_file', { path: 'beta.txt' }),
-        fauxToolCall('read_file', { path: 'alpha.txt' }),
-        fauxToolCall('read_file', { path: 'alpha.txt' }),
+        fauxToolCall('read', { path: 'beta.txt' }),
+        fauxToolCall('read', { path: 'alpha.txt' }),
+        fauxToolCall('read', { path: 'alpha.txt' }),
       ],
-      fauxToolCall('edit_file', {
+      fauxToolCall('edit', {
         path: 'beta.txt',
         edits: [{ oldText: 'beta', newText: 'fixed beta' }],
       }),
-      fauxToolCall('write_file', {
+      fauxToolCall('write', {
         path: 'report.txt',
         content: 'alpha passed',
       }),
@@ -106,11 +106,11 @@ for (const nestedBranch of [false, true]) {
     const t = createTestVela({
       files: { 'reference.txt': 'reference' },
       responses: [
-        fauxToolCall('write_file', { path: 'x.txt', content: 'finished' }),
+        fauxToolCall('write', { path: 'x.txt', content: 'finished' }),
         fauxText('x.txt written'),
         ...(nestedBranch
           ? [
-              fauxToolCall('read_file', { path: 'reference.txt' }),
+              fauxToolCall('read', { path: 'reference.txt' }),
               fauxText('reference read'),
             ]
           : []),
@@ -177,8 +177,8 @@ for (const copy of ['clone', 'fork'] as const) {
     const t = createTestVela({
       files: { 'reference.txt': 'reference' },
       responses: [
-        fauxToolCall('read_file', { path: 'reference.txt' }),
-        fauxToolCall('write_file', { path: 'x.txt', content: 'finished' }),
+        fauxToolCall('read', { path: 'reference.txt' }),
+        fauxToolCall('write', { path: 'x.txt', content: 'finished' }),
         fauxText('done'),
         fauxText('new branch'),
         fauxText('next turn'),
@@ -233,7 +233,7 @@ for (const [label, response, error] of [
   ['empty output', fauxText(''), 'not fully generated'],
   [
     'tool call',
-    fauxToolCall('write_file', { path: 'oops.txt', content: 'oops' }),
+    fauxToolCall('write', { path: 'oops.txt', content: 'oops' }),
     'tool calls',
   ],
 ] as const) {
@@ -336,7 +336,6 @@ for (const mode of ['manual', 'threshold', 'overflow', 'branch'] as const) {
         },
       },
       limits: {
-        microcompactThreshold: 1e9,
         summaryThreshold: mode === 'threshold' ? 50000 : 1e9,
       },
     })

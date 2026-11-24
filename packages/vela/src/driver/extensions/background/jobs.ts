@@ -338,7 +338,7 @@ export class BackgroundJobs implements BackgroundCommands {
       const result = await start({
         onOutput: (chunk) => job.output.append(chunk),
         signal: job.controller.signal,
-        timeout: this.session.backgroundWork.unattended ? undefined : timeout,
+        timeout: undefined,
         ...(this.shellPath === undefined ? {} : { shell: this.shellPath }),
       })
       this.exited(
@@ -355,13 +355,14 @@ export class BackgroundJobs implements BackgroundCommands {
     }
   }
 
-  /** Arm only when a job enters the background, not when it first started in the foreground. */
+  /** Arm when a job enters the background with an explicit timeout, or on any unattended job. */
   private armDeadline(job: Job, seconds?: number): void {
-    if (!this.session.backgroundWork.unattended) return
-    const limit =
+    const hasTimeout =
       seconds !== undefined && Number.isFinite(seconds) && seconds > 0
-        ? Math.min(seconds * 1000, MAX_LIMIT_MS)
-        : DEFAULT_LIMIT_MS
+    if (!hasTimeout && !this.session.backgroundWork.unattended) return
+    const limit = hasTimeout
+      ? Math.min(seconds * 1000, MAX_LIMIT_MS)
+      : DEFAULT_LIMIT_MS
     job.deadline = setTimeout(() => {
       if (job.controller.signal.aborted) return
       job.timedOut = true

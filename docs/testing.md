@@ -33,7 +33,7 @@ import {
 
 const model = createFauxModel({
   responses: [
-    fauxToolCall('read_file', { path: 'a.txt' }),             // one tool call
+    fauxToolCall('read', { path: 'a.txt' }),                  // one tool call
     [fauxToolCall('grep', { pattern: 'TODO' }), fauxToolCall('find', { pattern: '*.ts' })], // several in one response
     (req) => fauxText(`Read: ${req.toolResults[0]?.output}`),  // computed from the request
     fauxError('429 Too Many Requests'),                         // the request fails

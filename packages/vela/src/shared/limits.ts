@@ -10,17 +10,8 @@ export interface VelaLimits {
   retryBaseMs: number
   /** Retry backoff cap */
   retryMaxMs: number
-  /**
-   * Whether microcompaction (folding old tool results) is allowed; false skips it only, while
-   * summaries and overflow compaction still follow autoCompaction.
-   */
-  microcompact: boolean
-  /** Try microcompaction (fold old tool results) when the estimated input reaches this */
-  microcompactThreshold: number
   /** Summarize history when the estimated input reaches this */
   summaryThreshold: number
-  /** Microcompaction is only applied if it saves at least this many tokens */
-  minMicroSavings: number
   /** Safe input cap for a single request; the turn stops if exceeded */
   maxInputTokens: number
 }
@@ -29,10 +20,7 @@ export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
   maxRetries: 3,
   retryBaseMs: 500,
   retryMaxMs: 30_000,
-  microcompact: true,
-  microcompactThreshold: 120_000,
   summaryThreshold: 150_000,
-  minMicroSavings: 20_000,
   maxInputTokens: 183_616,
 })
 

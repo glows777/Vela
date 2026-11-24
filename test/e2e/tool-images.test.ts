@@ -108,11 +108,11 @@ test.each([
   'quadrants.webp',
   'quadrants.bmp',
 ])(
-  'read_file detects %s by its header even with a misleading extension',
+  'read detects %s by its header even with a misleading extension',
   async (name) => {
     const t = createTestVela({
       responses: [
-        fauxToolCall('read_file', { path: 'picture.txt' }),
+        fauxToolCall('read', { path: 'picture.txt' }),
         fauxText('seen'),
       ],
     })
@@ -123,10 +123,10 @@ test.each([
   },
 )
 
-test('text-only read_file gives the model a note while saved images survive a model switch', async () => {
+test('text-only read gives the model a note while saved images survive a model switch', async () => {
   const model = createFauxModel({
     responses: [
-      fauxToolCall('read_file', { path: 'photo.png' }),
+      fauxToolCall('read', { path: 'photo.png' }),
       fauxText('text'),
       fauxText('vision'),
     ],
@@ -177,33 +177,6 @@ test('MCP image blocks reach the model through the real MCP transport', async ()
   expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(1)
   expect(JSON.stringify(t.model.calls[1]!.prompt)).not.toContain(
     'Vela tool results are text only',
-  )
-})
-
-test('microcompaction keeps image results inline while folding old text results', async () => {
-  const t = createTestVela({
-    files: { 'long.txt': 'The long text. '.repeat(1000) },
-    limits: {
-      microcompactThreshold: 1,
-      minMicroSavings: 1,
-      summaryThreshold: 1e9,
-    },
-    responses: [
-      fauxToolCall('read_file', { path: 'photo.png' }),
-      ...Array.from({ length: 7 }, () =>
-        fauxToolCall('read_file', { path: 'long.txt' }),
-      ),
-      fauxText('done'),
-    ],
-  })
-  writeFileSync(join(t.cwd, 'photo.png'), bytes())
-  await t.run('Read the image and the text')
-  expect(toolImages(t.model.calls.at(-1)!.prompt)).toHaveLength(1)
-  expect(
-    t.eventsOf('context_prepare').some((event) => event.action === 'micro'),
-  ).toBe(true)
-  expect(JSON.stringify(t.model.calls.at(-1)!.prompt)).toContain(
-    'tool result preview omitted',
   )
 })
 
@@ -344,48 +317,6 @@ test('oversized image captions retain native tool details separately from the fu
   expect(readFileSync(result.modelTextPath, 'utf8')).not.toContain(image().data)
 })
 
-test('nested failed image results can be relayed without losing their screenshot', async () => {
-  let nestedResult: unknown
-  const t = createTestVela({
-    extensions: [
-      function pictures(v) {
-        const child = v.registerTool({
-          ...pictureTool('child'),
-          execute: async () =>
-            new ToolExecutionResult({}, [image()], { isError: true }),
-        })
-        v.registerTool({
-          ...pictureTool('relay'),
-          execute: async (_input, ctx) => {
-            const outcome = await ctx!.executeTool!(child, {})
-            nestedResult = outcome.result
-            return new ToolExecutionResult(
-              {},
-              Array.isArray(outcome.result)
-                ? outcome.result
-                : String(outcome.result),
-              { isError: outcome.isError },
-            )
-          },
-        })
-      },
-    ],
-    responses: [
-      fauxToolCall('pictures_relay', {}),
-      fauxText('received screenshot'),
-    ],
-  })
-  await t.run('Relay the child failure screenshot')
-  expect(nestedResult).toEqual([image()])
-  expect(
-    t.model.calls[1]!.prompt.flatMap((message) =>
-      message.role === 'user'
-        ? message.content.filter((part) => part.type === 'file')
-        : [],
-    ),
-  ).toHaveLength(1)
-})
-
 test('failed native-result persistence labels a saved caption as model text, not the full native output', async () => {
   const t = createTestVela({
     extensions: [
@@ -457,10 +388,10 @@ test('Chat redaction after an image tool does not promise a second attachment', 
   ).toHaveLength(1)
 })
 
-test('resized read_file transparency survives the tool request and saved image', async () => {
+test('resized read transparency survives the tool request and saved image', async () => {
   const t = createTestVela({
     responses: [
-      fauxToolCall('read_file', { path: 'diagram.dat' }),
+      fauxToolCall('read', { path: 'diagram.dat' }),
       fauxText('lines'),
     ],
   })

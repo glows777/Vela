@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import z from 'zod'
 import { ToolExecutionResult } from '../../packages/vela/src/driver/index.ts'
@@ -12,12 +12,12 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 afterEach(cleanupTestVelas)
 
 test.each(['Hello, Vela!!!', '中文 😀\n', 'hello\n', 'hello\r\n', ''])(
-  'read_file sends the exact EOF body to the model: %j',
+  'read sends the exact EOF body to the model: %j',
   async (body) => {
     const t = createTestVela({
       files: { 'notes.txt': body },
       responses: [
-        fauxToolCall('read_file', { path: 'notes.txt' }),
+        fauxToolCall('read', { path: 'notes.txt' }),
         fauxText('Done'),
       ],
     })
@@ -27,12 +27,12 @@ test.each(['Hello, Vela!!!', '中文 😀\n', 'hello\n', 'hello\r\n', ''])(
 )
 
 test.each([8191, 65535])(
-  'read_file preserves UTF-8 split across byte %i while seeking a line',
+  'read preserves UTF-8 split across byte %i while seeking a line',
   async (padding) => {
     const t = createTestVela({
       files: { 'notes.txt': `${'x'.repeat(padding - 1)}\n中文 😀` },
       responses: [
-        fauxToolCall('read_file', { path: 'notes.txt', offset: 2 }),
+        fauxToolCall('read', { path: 'notes.txt', offset: 2 }),
         fauxText('Done'),
       ],
     })
@@ -42,12 +42,12 @@ test.each([8191, 65535])(
 )
 
 test.each([0, 8191, 8192])(
-  'read_file rejects a NUL at byte %i before pagination',
+  'read rejects a NUL at byte %i before pagination',
   async (nulOffset) => {
     const t = createTestVela({
       files: { 'document.pdf': `${'x'.repeat(nulOffset)}\0binary payload` },
       responses: [
-        fauxToolCall('read_file', { path: 'document.pdf' }),
+        fauxToolCall('read', { path: 'document.pdf' }),
         fauxText('Use bash to inspect the document'),
       ],
     })
@@ -74,11 +74,11 @@ test.each([
   ],
   ['truncated UTF-8', Buffer.from([0x61, 0xe4, 0xb8])],
 ])(
-  'read_file rejects %s instead of sending bytes to the model',
+  'read rejects %s instead of sending bytes to the model',
   async (_name, bytes) => {
     const t = createTestVela({
       responses: [
-        fauxToolCall('read_file', { path: 'document.bin' }),
+        fauxToolCall('read', { path: 'document.bin' }),
         fauxText('Use bash to inspect the document'),
       ],
     })
@@ -93,12 +93,12 @@ test.each([
   },
 )
 
-test('read_file keeps line-limit continuation guidance and sends only the final page body', async () => {
+test('read keeps line-limit continuation guidance and sends only the final page body', async () => {
   const t = createTestVela({
     files: { 'notes.txt': 'first\nsecond\n' },
     responses: [
-      fauxToolCall('read_file', { path: 'notes.txt', limit: 1 }),
-      fauxToolCall('read_file', {
+      fauxToolCall('read', { path: 'notes.txt', limit: 1 }),
+      fauxToolCall('read', {
         path: 'notes.txt',
         offset: 2,
         column: 0,
@@ -109,18 +109,18 @@ test('read_file keeps line-limit continuation guidance and sends only the final 
   })
   await t.run('Read every page of notes.txt')
   expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
-    'first\n\n\n[read_file: lines 1-1, starting column=0; 6 UTF-16 code units shown. More content exists. Continue read_file with path="notes.txt", offset=2, column=0, limit=1.]',
+    'first\n\n\n[read: lines 1-1, starting column=0; 6 UTF-16 code units shown. More content exists. Continue read with path="notes.txt", offset=2, column=0, limit=1.]',
   )
   expect(t.model.calls[2]!.toolResults.at(-1)!.output).toBe('second\n')
 })
 
-test('read_file keeps byte-cap continuation within a Unicode line and sends only the final page body', async () => {
+test('read keeps byte-cap continuation within a Unicode line and sends only the final page body', async () => {
   const firstPage = '😀'.repeat(12800)
   const t = createTestVela({
     files: { 'wide.txt': `${firstPage}tail\n` },
     responses: [
-      fauxToolCall('read_file', { path: 'wide.txt' }),
-      fauxToolCall('read_file', {
+      fauxToolCall('read', { path: 'wide.txt' }),
+      fauxToolCall('read', {
         path: 'wide.txt',
         offset: 1,
         column: 25600,
@@ -131,7 +131,7 @@ test('read_file keeps byte-cap continuation within a Unicode line and sends only
   })
   await t.run('Read every page of wide.txt')
   expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
-    `${firstPage}\n\n[read_file: lines 1-1, starting column=0; 25600 UTF-16 code units shown. More content exists. Continue read_file with path="wide.txt", offset=1, column=25600, limit=2000.]`,
+    `${firstPage}\n\n[read: lines 1-1, starting column=0; 25600 UTF-16 code units shown. More content exists. Continue read with path="wide.txt", offset=1, column=25600, limit=2000.]`,
   )
   expect(t.model.calls[2]!.toolResults.at(-1)!.output).toBe('tail\n')
 })
@@ -147,7 +147,7 @@ test('several tool calls in one response all run and all results go back togethe
       [
         fauxToolCall('find', { pattern: 'src/*.ts' }),
         fauxToolCall('grep', { pattern: 'export const', path: 'src' }),
-        fauxToolCall('read_file', { path: 'src/b.ts' }),
+        fauxToolCall('read', { path: 'src/b.ts' }),
       ],
       fauxText('Found a and b'),
     ],
@@ -158,7 +158,7 @@ test('several tool calls in one response all run and all results go back togethe
   expect(t.eventsOf('tool_execution_start').map((e) => e.toolName)).toEqual([
     'find',
     'grep',
-    'read_file',
+    'read',
   ])
   expect(
     t.eventsOf('tool_execution_end').filter((e) => !e.isError),
@@ -167,10 +167,10 @@ test('several tool calls in one response all run and all results go back togethe
   expect(second.toolResults.map((r) => r.toolName).sort()).toEqual([
     'find',
     'grep',
-    'read_file',
+    'read',
   ])
   expect(
-    second.toolResults.find((r) => r.toolName === 'read_file')!.output,
+    second.toolResults.find((r) => r.toolName === 'read')!.output,
   ).toContain('export const b = 2')
   expect(t.messages.map((m) => m.role)).toEqual([
     'user',
@@ -180,14 +180,14 @@ test('several tool calls in one response all run and all results go back togethe
   ])
 })
 
-test('write_file writes into cwd and is reported as an audit event; edit_file changes it', async () => {
+test('write writes into cwd and is reported as an audit event; edit changes it', async () => {
   const t = createTestVela({
     responses: [
-      fauxToolCall('write_file', {
+      fauxToolCall('write', {
         path: 'out/hello.txt',
         content: 'hello world\n',
       }),
-      fauxToolCall('edit_file', {
+      fauxToolCall('edit', {
         path: 'out/hello.txt',
         edits: [{ oldText: 'world', newText: 'vela' }],
       }),
@@ -199,150 +199,23 @@ test('write_file writes into cwd and is reported as an audit event; edit_file ch
 
   expect(await t.readFile('out/hello.txt')).toBe('hello vela\n')
   expect(t.eventsOf('audit').map((e) => [e.toolName, e.path])).toEqual([
-    ['write_file', 'out/hello.txt'],
-    ['edit_file', 'out/hello.txt'],
+    ['write', 'out/hello.txt'],
+    ['edit', 'out/hello.txt'],
   ])
   expect(t.eventsOf('tool_execution_end').filter((e) => e.isError)).toEqual([])
 })
 
-const longFile = (lines: number) =>
-  Array.from({ length: lines }, (_, i) => `rule ${i + 1}\n`).join('')
-
-test('write_file refuses to overwrite a file this session only partly read', async () => {
-  const content = longFile(2001)
-  const t = createTestVela({
-    files: { 'rules.md': content },
-    responses: [
-      fauxToolCall('read_file', { path: 'rules.md' }),
-      fauxToolCall('write_file', { path: 'rules.md', content: 'short\n' }),
-      fauxText('I need to read the rest first'),
-    ],
-  })
-
-  await t.run('Rewrite rules.md')
-
-  expect(String(t.model.calls[1]!.toolResults[0]!.output)).toContain(
-    'More content exists',
-  )
-  const result = t.model.calls[2]!.toolResults[0]!
-  expect(result.toolName).toBe('write_file')
-  expect(result.raw).toMatchObject({ type: 'error-text' })
-  expect(result.output).toBe(
-    'Refusing to overwrite "rules.md": this session has not read the whole file. Read it with read_file through to the end first, or use edit_file for a targeted change.',
-  )
-  expect(await t.readFile('rules.md')).toBe(content)
-})
-
-test('write_file overwrites a file read to EOF until the file changes on disk', async () => {
-  const content = longFile(2001)
-  const file = 'rules.md'
-  const t = createTestVela({
-    files: { [file]: content },
-    responses: [
-      fauxToolCall('read_file', { path: file, limit: 3000 }),
-      fauxToolCall('write_file', { path: file, content: 'first rewrite\n' }),
-      () => {
-        writeFileSync(join(t.cwd, file), 'changed outside the session\n')
-        return fauxToolCall('write_file', { path: file, content: 'second\n' })
-      },
-      fauxText('The file changed'),
-    ],
-  })
-
-  await t.run('Rewrite rules.md after reading it')
-
-  expect(String(t.model.calls[1]!.toolResults[0]!.output)).toBe(content)
-  expect(String(t.model.calls[2]!.toolResults[0]!.output)).toBe(
-    'Wrote 14 characters to rules.md',
-  )
-  const result = t.model.calls[3]!.toolResults[0]!
-  expect(result.raw).toMatchObject({ type: 'error-text' })
-  expect(result.output).toBe(
-    'Refusing to overwrite "rules.md": the file changed on disk since this session read or wrote it. Read it again, or use edit_file for a targeted change.',
-  )
-  expect(await t.readFile(file)).toBe('changed outside the session\n')
-})
-
-test('a complete read through a symlink authorizes writing the same unchanged target', async () => {
-  const t = createTestVela({
-    files: { 'notes.txt': 'before' },
-    responses: [
-      fauxToolCall('read_file', { path: 'alias.txt' }),
-      fauxToolCall('write_file', { path: 'notes.txt', content: 'after' }),
-      fauxText('done'),
-    ],
-  })
-  symlinkSync(join(t.cwd, 'notes.txt'), join(t.cwd, 'alias.txt'))
-  await t.run('Read the link, then update the target')
-  expect(await t.readFile('notes.txt')).toBe('after')
-})
-
-test('write_file accepts a read that follows the footer to EOF', async () => {
-  const t = createTestVela({
-    files: { 'rules.md': 'one\ntwo\n' },
-    responses: [
-      fauxToolCall('read_file', { path: 'rules.md', limit: 1 }),
-      fauxToolCall('read_file', {
-        path: 'rules.md',
-        offset: 2,
-        column: 0,
-        limit: 1,
-      }),
-      fauxToolCall('write_file', { path: 'rules.md', content: 'rewritten\n' }),
-      fauxText('Done'),
-    ],
-  })
-
-  await t.run('Read rules.md to the end and rewrite it')
-
-  expect(String(t.model.calls[1]!.toolResults[0]!.output)).toContain(
-    'offset=2, column=0',
-  )
-  expect(String(t.model.calls[2]!.toolResults[0]!.output)).toBe('two\n')
-  expect(await t.readFile('rules.md')).toBe('rewritten\n')
-})
-
-test('write_file refuses a file that changed between read pages', async () => {
-  const t = createTestVela({
-    files: { 'rules.md': 'one\ntwo\n' },
-    responses: [
-      fauxToolCall('read_file', { path: 'rules.md', limit: 1 }),
-      () => {
-        writeFileSync(join(t.cwd, 'rules.md'), 'changed\ntwo\n')
-        return fauxToolCall('read_file', {
-          path: 'rules.md',
-          offset: 2,
-          column: 0,
-          limit: 1,
-        })
-      },
-      fauxToolCall('write_file', { path: 'rules.md', content: 'rewritten\n' }),
-      fauxText('Read it again'),
-    ],
-  })
-
-  await t.run('Rewrite rules.md')
-
-  expect(String(t.model.calls[2]!.toolResults[0]!.output)).toBe('two\n')
-  const result = t.model.calls[3]!.toolResults[0]!
-  expect(result.raw).toMatchObject({ type: 'error-text' })
-  expect(result.output).toBe(
-    'Refusing to overwrite "rules.md": this session has not read the whole file. Read it with read_file through to the end first, or use edit_file for a targeted change.',
-  )
-  expect(await t.readFile('rules.md')).toBe('changed\ntwo\n')
-})
-
-test('write_file creates new files and rewrites a file it wrote or edited', async () => {
+test('write creates new files and rewrites a file it wrote or edited', async () => {
   const t = createTestVela({
     files: { 'notes.txt': 'hello world\n' },
     responses: [
-      fauxToolCall('write_file', { path: 'out/new.md', content: 'first\n' }),
-      fauxToolCall('write_file', { path: 'out/new.md', content: 'second\n' }),
-      fauxToolCall('edit_file', {
+      fauxToolCall('write', { path: 'out/new.md', content: 'first\n' }),
+      fauxToolCall('write', { path: 'out/new.md', content: 'second\n' }),
+      fauxToolCall('edit', {
         path: 'notes.txt',
         edits: [{ oldText: 'world', newText: 'vela' }],
       }),
-      fauxToolCall('write_file', { path: 'notes.txt', content: 'rewritten\n' }),
+      fauxToolCall('write', { path: 'notes.txt', content: 'rewritten\n' }),
       fauxText('Done'),
     ],
   })
@@ -394,7 +267,7 @@ test('a force-delete bash command runs by default: there is no built-in classifi
 test('a tool that throws becomes a tool error the model can react to', async () => {
   const t = createTestVela({
     responses: [
-      fauxToolCall('read_file', { path: 'missing.txt' }),
+      fauxToolCall('read', { path: 'missing.txt' }),
       fauxText('The file does not exist'),
     ],
   })
@@ -405,11 +278,11 @@ test('a tool that throws becomes a tool error the model can react to', async () 
     t.eventTypes().filter((type) => type.startsWith('tool_execution')),
   ).toEqual(['tool_execution_start', 'tool_execution_end'])
   expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
-    toolName: 'read_file',
+    toolName: 'read',
     isError: true,
   })
   const result = t.model.calls[1]!.toolResults[0]!
-  expect(result.toolName).toBe('read_file')
+  expect(result.toolName).toBe('read')
   expect(result.raw).toMatchObject({ type: 'error-text' })
   expect(result.output).toContain('ENOENT')
   expect(t.lastAssistantText()).toBe('The file does not exist')
@@ -424,7 +297,7 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
     responses: [
       [
         fauxToolCall('no_such_tool', { x: 1 }),
-        fauxToolCall('read_file', { wrong: 'shape' }),
+        fauxToolCall('read', { wrong: 'shape' }),
       ],
       fauxText('Trying another way'),
     ],
@@ -438,7 +311,7 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
       .filter((e) => e.isError)
       .map((e) => e.toolName)
       .sort(),
-  ).toEqual(['no_such_tool', 'read_file'])
+  ).toEqual(['no_such_tool', 'read'])
   expect(t.model.calls[1]!.toolResults).toHaveLength(2)
   expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
@@ -536,93 +409,11 @@ test('bash streams its output as tool_execution_update events while it runs', as
   expect(String(t.model.calls[1]!.toolResults[0]!.output)).toContain('second')
 })
 
-test('a tool calling another tool through ctx.executeTool goes through tool selection, hooks and the bash check', async () => {
-  const blocked: string[] = []
-  const t = createTestVela({
-    session: { tools: ['-write_file'] },
-    responses: [fauxToolCall('runner', {}), fauxText('done')],
-    extensions: [
-      function blockRead(vela) {
-        vela.on('tool_call', 'read_file', (event) => {
-          blocked.push(event.toolCallId ?? '')
-          return { block: true, reason: 'reads are off' }
-        })
-      },
-    ],
-  })
-  t.internals.registry.register({
-    name: 'runner',
-    description: 'Runs other tools',
-    inputSchema: z.object({}),
-    execute: async (_input, context) => {
-      const outcomes = []
-      for (const [name, args] of [
-        ['bash', { command: 'echo nested' }],
-        ['bash', { command: 'rm -rf /' }],
-        ['write_file', { path: 'x.txt', content: 'x' }],
-        ['read_file', { path: 'x.txt' }],
-      ] as const)
-        outcomes.push(await context!.executeTool!(name, args))
-      return outcomes.map((o) => `${o.toolName}:${o.isError}`).join(' ')
-    },
-  })
-
-  await t.run('Run the runner')
-
-  expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
-    'bash:false bash:true write_file:true read_file:true',
-  )
-  await expect(t.readFile('x.txt')).rejects.toThrow('ENOENT')
-  const runnerId = t.eventsOf('tool_execution_start')[0]!.toolCallId
-  expect(blocked).toEqual([`${runnerId}/4`])
-  const nested = t
-    .eventsOf('tool_execution_end')
-    .filter((e) => e.parentToolCallId === runnerId)
-  expect(nested.map((e) => [e.toolCallId, e.toolName, e.isError])).toEqual([
-    [`${runnerId}/1`, 'bash', false],
-    [`${runnerId}/2`, 'bash', true],
-    [`${runnerId}/3`, 'write_file', true],
-    [`${runnerId}/4`, 'read_file', true],
-  ])
-  // Nested calls are in the tool history, not in the conversation
-  const history = await Bun.file(t.session.registry.results.indexPath).text()
-  expect(history).toContain(`${runnerId}/2`)
-  // Like pi's nestedCalls: recorded on the calling tool's result in the session, not sent to the model
-  const toolEntry = t.session
-    .getEntries()
-    .find((e) => e.type === 'message' && e.message.role === 'tool')
-  expect(toolEntry).toMatchObject({
-    nestedCalls: {
-      [runnerId]: {
-        complete: true,
-        calls: [
-          {
-            id: `${runnerId}/1`,
-            name: 'bash',
-            arguments: { command: 'echo nested' },
-            status: 'ok',
-          },
-          { id: `${runnerId}/2`, name: 'bash', status: 'error' },
-          { id: `${runnerId}/3`, name: 'write_file', status: 'error' },
-          { id: `${runnerId}/4`, name: 'read_file', status: 'error' },
-        ],
-      },
-    },
-  })
-  expect(JSON.stringify(t.model.calls[1]!.prompt)).not.toContain('nestedCalls')
-  expect(t.messages.map((m) => m.role)).toEqual([
-    'user',
-    'assistant',
-    'tool',
-    'assistant',
-  ])
-})
-
 test('a long bash in one session does not hold back file writes in another session', async () => {
   const t = createTestVela({
     responses: [
       fauxToolCall('bash', { command: 'sleep 1.5' }),
-      fauxToolCall('write_file', { path: 'other.txt', content: 'written' }),
+      fauxToolCall('write', { path: 'other.txt', content: 'written' }),
       fauxText('other done'),
       fauxText('slow done'),
     ],
@@ -644,34 +435,28 @@ test('a long bash in one session does not hold back file writes in another sessi
   expect(t.lastAssistantText()).toBe('slow done')
 })
 
-test('tool_execution_end carries edit_file diff details for display, the model gets only the summary (like pi)', async () => {
+test('tool_execution_end carries edit diff details for display, the model gets only the summary (like pi)', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'one\ntwo\n' },
     responses: [
-      fauxToolCall('edit_file', {
+      fauxToolCall('edit', {
         path: 'a.txt',
         edits: [{ oldText: 'two', newText: 'TWO' }],
       }),
-      fauxToolCall('runner', {}),
+      fauxToolCall('plain', {}),
       fauxText('done'),
     ],
   })
   t.internals.registry.register({
-    name: 'runner',
-    description: 'Runs other tools',
+    name: 'plain',
+    description: 'Returns a plain value',
     inputSchema: z.object({}),
-    execute: async (_input, context) => {
-      await context!.executeTool!('edit_file', {
-        path: 'a.txt',
-        edits: [{ oldText: 'TWO', newText: 'three' }],
-      })
-      return 'ok'
-    },
+    execute: async () => 'ok',
   })
 
   await t.run('edit')
 
-  const [direct, nested, runner] = t.eventsOf('tool_execution_end')
+  const [direct, plain] = t.eventsOf('tool_execution_end')
   expect(direct!.details).toMatchObject({
     diff: expect.stringContaining('+2 TWO'),
     patch: expect.stringContaining('-two'),
@@ -680,12 +465,8 @@ test('tool_execution_end carries edit_file diff details for display, the model g
   expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
     'Successfully replaced 1 block(s) in a.txt.',
   )
-  expect(nested!.parentToolCallId).toBe(runner!.toolCallId)
-  expect(nested!.details).toMatchObject({
-    diff: expect.stringContaining('+2 three'),
-  })
   // Tools that return plain values have no details
-  expect('details' in runner!).toBe(false)
+  expect('details' in plain!).toBe(false)
 })
 
 test('details of a call cut off by an abort are dropped with the call', async () => {

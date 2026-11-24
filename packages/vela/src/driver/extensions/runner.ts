@@ -413,11 +413,15 @@ export class ExtensionRunner {
   }
 
   /** Whether any extension handles `event` (lets callers skip copying data for nobody, like pi's hasHandlers). */
-  hasHandlers(event: ExtensionEventName, toolName?: string): boolean {
+  hasHandlers(
+    event: ExtensionEventName,
+    toolName?: string,
+    options?: { scopedOnly?: boolean },
+  ): boolean {
     return this.list(event).some(
       (handler) =>
         toolName === undefined ||
-        handler.toolName === undefined ||
+        (!options?.scopedOnly && handler.toolName === undefined) ||
         handler.toolName === toolName,
     )
   }
@@ -591,7 +595,6 @@ export class ExtensionRunner {
   async toolCall(
     session: VelaSession,
     toolCallId: string | undefined,
-    parentToolCallId: string | undefined,
     toolName: string,
     input: unknown,
   ): Promise<ToolCallEventResult & { input: unknown }> {
@@ -604,7 +607,6 @@ export class ExtensionRunner {
     const event = {
       type: 'tool_call' as const,
       toolCallId,
-      ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
       toolName,
       input: structuredClone(input) as Record<string, unknown>,
     }
@@ -636,17 +638,17 @@ export class ExtensionRunner {
   async toolResult(
     session: VelaSession,
     toolCallId: string | undefined,
-    parentToolCallId: string | undefined,
     toolName: string,
     input: unknown,
     output: string | ToolContent,
+    isError = false,
   ): Promise<string | ToolContent> {
     const event: import('./types.ts').ToolResultEvent = {
       type: 'tool_result' as const,
       toolCallId,
-      ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
       toolName,
       input,
+      isError,
       output: typeof output === 'string' ? output : toolContentText(output),
       ...(typeof output === 'string' ? {} : { content: output }),
     }

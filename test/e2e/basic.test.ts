@@ -76,9 +76,7 @@ test('the model receives the system prompt, the tool list and the user message',
   expect(req!.kind).toBe('stream')
   expect(req!.lastUserText).toBe('What tools are there?')
   expect(req!.system.length).toBeGreaterThan(0)
-  expect(req!.tools).toEqual(
-    expect.arrayContaining(['read_file', 'bash', 'memory']),
-  )
+  expect(req!.tools).toEqual(expect.arrayContaining(['read', 'bash', 'memory']))
   expect(req!.system).toContain('Lead with the answer or result')
   expect(req!.system).toContain('<env>')
   expect(req!.system).toContain(`\nos: ${process.platform}\n`)
@@ -119,7 +117,7 @@ test('a tool call is executed relative to cwd and its result goes back to the mo
   const t = createTestVela({
     files: { 'notes/a.txt': 'hello from a.txt\n' },
     responses: [
-      fauxToolCall('read_file', { path: 'notes/a.txt' }),
+      fauxToolCall('read', { path: 'notes/a.txt' }),
       (req) =>
         fauxText(
           `Got: ${req.toolResults[0]?.output.includes('hello from a.txt') ? 'hello' : '??'}`,
@@ -160,11 +158,11 @@ test('a tool call is executed relative to cwd and its result goes back to the mo
     ['assistant', 'stop'],
   ])
   expect(t.eventsOf('tool_execution_start')[0]).toMatchObject({
-    toolName: 'read_file',
+    toolName: 'read',
     args: { path: 'notes/a.txt' },
   })
   expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
-    toolName: 'read_file',
+    toolName: 'read',
     isError: false,
     durationMs: expect.any(Number),
   })

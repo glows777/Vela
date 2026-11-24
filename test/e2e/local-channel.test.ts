@@ -63,7 +63,7 @@ async function messages(
 function taskRouter(req: FauxRequest) {
   if (req.tools.includes('channel_start_topic')) {
     // The project chat runs quick work itself but still dispatches a longer task (#421).
-    expect(req.tools).toContain('write_file')
+    expect(req.tools).toContain('write')
     // Waiting for a decision stays a topic control.
     expect(req.tools).not.toContain('channel_wait_for_input')
     if (req.lastUserText.includes('status now'))
@@ -75,7 +75,7 @@ function taskRouter(req: FauxRequest) {
           brief: 'Write result.txt in this project',
         })
   }
-  expect(req.tools).toContain('write_file')
+  expect(req.tools).toContain('write')
   expect(req.tools).toContain('channel_wait_for_input')
   return req.toolResults.length
     ? fauxText('Task file is ready')
@@ -83,7 +83,7 @@ function taskRouter(req: FauxRequest) {
         reasoning: 'HIDDEN_THINKING_713',
         toolCalls: [
           {
-            name: 'write_file',
+            name: 'write',
             input: { path: 'result.txt', content: 'PRIVATE_TOOL_ARGUMENT_713' },
           },
         ],

@@ -74,7 +74,7 @@ function router(req: FauxRequest): FauxResponse {
       brief: 'Investigate the flaky test and write down the likely cause.',
     })
   if (text.includes('Investigate the flaky test'))
-    return call('write_file', { path: 'notes.md', content: 'cause: timing' })
+    return call('write', { path: 'notes.md', content: 'cause: timing' })
   if (/remind/i.test(text))
     return call('channel_routines', {
       action: 'create',
@@ -134,7 +134,7 @@ const root = larkEvent({
 const rootId = root.message.message_id
 const topic = { root_id: rootId, thread_id: `thread_${rootId}` }
 fake.deliver(root)
-await until('topic result', () => !!sent(fake, 'after write_file'))
+await until('topic result', () => !!sent(fake, 'after write'))
 await untilDone('topic DONE', rootId)
 const opened = fake.topics.map((t) => t.title)
 check('topics opened', opened, opened.length === 1)
@@ -154,7 +154,7 @@ check(
 const reactions = marks(rootId)
 check('reactions', reactions, reactions.at(-1) === 'DONE')
 check('cards, patches', [fake.cards.length, fake.patches.length])
-check('topic reply', sent(fake, 'after write_file'))
+check('topic reply', sent(fake, 'after write'))
 const workspaceFile = join(
   '.vela-data/channels/lark-oc_group/workspace/notes.md',
 )

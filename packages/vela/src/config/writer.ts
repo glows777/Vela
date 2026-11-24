@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
@@ -35,7 +35,7 @@ export function assertNoLegacyConfigFiles(dir: string): void {
   const legacy = detectLegacyConfigFiles(dir)
   if (legacy.length > 0) {
     throw new Error(
-      `${dir}: found legacy config file(s) (${legacy.join(', ')}) without config.json; v0.9 uses unified config.json`,
+      `${dir}: found legacy config file(s) (${legacy.join(', ')}) without config.json; v0.9 uses unified config.json (see docs/upgrading.md)`,
     )
   }
 }
@@ -149,51 +149,6 @@ export function writeRawConfigFile(
   return withConfigLockSync(agentDir, (assertOwned) =>
     writeRawConfigUnlocked(agentDir, data, assertOwned),
   )
-}
-
-/**
- * Atomically create `<agentDir>/config.json` only if it does not already exist under lock.
- * Used by legacy config migration so legacy `settings.json` / `models.json` / `mcp.json` can
- * be flattened without overwriting an existing or concurrently created `config.json`.
- */
-export function writeConfigIfMissing(
-  agentDir: string,
-  data: Record<string, unknown>,
-): { written: boolean; path: string; sha256?: string } {
-  return withConfigLockSync(agentDir, (assertOwned) => {
-    const path = join(agentDir, 'config.json')
-    if (existsSync(path)) return { written: false, path }
-    const writtenPath = writeRawConfigUnlocked(agentDir, data, assertOwned)
-    const sha256 = createHash('sha256')
-      .update(`${JSON.stringify(data, null, 2)}\n`)
-      .digest('hex')
-    return {
-      written: true,
-      path: writtenPath,
-      sha256,
-    }
-  })
-}
-
-/**
- * Removes `<agentDir>/config.json` under lock only when its current SHA-256 still
- * matches `expectedSha256`, preventing rollback from erasing concurrent user saves.
- */
-export function removeConfigIfHashMatches(
-  agentDir: string,
-  expectedSha256: string,
-): boolean {
-  return withConfigLockSync(agentDir, (assertOwned) => {
-    const path = join(agentDir, 'config.json')
-    if (!existsSync(path)) return false
-    const actualSha256 = createHash('sha256')
-      .update(readFileSync(path))
-      .digest('hex')
-    if (actualSha256 !== expectedSha256) return false
-    assertOwned()
-    rmSync(path, { force: true })
-    return true
-  })
 }
 
 /** Read, transform, and atomically write `<agentDir>/config.json` under cross-process lock with `0600` permissions. */

@@ -45,7 +45,7 @@ test('grep: matches with paths relative to the search dir, respecting .gitignore
       'src/b.test.ts:1: needle b',
       'top.ts:1: needle top',
       '',
-      '[Some lines truncated to 500 chars. Use read_file to see full lines]',
+      '[Some lines truncated to 500 chars. Use read to see full lines]',
     ].sort(),
   )
 })

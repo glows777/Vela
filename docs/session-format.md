@@ -51,7 +51,7 @@ Every other line is an entry. All entries have pi's base fields:
 
 | `type` | Fields | Description |
 |---|---|---|
-| `message` | `message`, `stopReason?`, `nestedCalls?`, `details?`, `producedBy?` | A message entered the conversation (user input, assistant reply, tool results). `message` is a Vela `ModelMessage` (see [Messages](#messages)). `stopReason` (`aborted` or `error`) marks an assistant message cut off while it streamed: like pi, it is kept for the record but never sent to the model again. `nestedCalls` is on a tool message whose tools called other tools through `ctx.executeTool()`: by tool call id, `{ calls: [{ id, name, arguments?, argumentsBytes?, status, durationMs?, error? }], complete }` (pi's `nestedCalls`, with pi's limits: 256 calls, 8 KB of arguments per call and 32 KB in total, 500 characters of error); not sent to the model. `details` is on a tool message whose tools returned display data (`tool_execution_end`'s `details`, such as `edit_file`'s diff), by tool call id (pi's `ToolResultMessage.details`); not sent to the model. The TUI uses both to draw a resumed session. `producedBy` is on an assistant message: the model that produced it, as the AI SDK names it, `provider/modelId` (e.g. `openai.responses/gpt-5`, which is pi's provider + api + model id and does not change when the same model is chosen by name or as a model object). Like pi dropping the thinking blocks of a different model, a request leaves out the reasoning of an assistant message another model produced, so a model switch never replays signatures or encrypted reasoning that the new model cannot use; switching back replays them |
+| `message` | `message`, `stopReason?`, `details?`, `producedBy?` | A message entered the conversation (user input, assistant reply, tool results). `message` is a Vela `ModelMessage` (see [Messages](#messages)). `stopReason` (`aborted` or `error`) marks an assistant message cut off while it streamed: like pi, it is kept for the record but never sent to the model again. `details` is on a tool message whose tools returned display data (`tool_execution_end`'s `details`, such as `edit`'s diff), by tool call id (pi's `ToolResultMessage.details`); not sent to the model. The TUI uses it to draw a resumed session. `producedBy` is on an assistant message: the model that produced it, as the AI SDK names it, `provider/modelId` (e.g. `openai.responses/gpt-5`, which is pi's provider + api + model id and does not change when the same model is chosen by name or as a model object). Like pi dropping the thinking blocks of a different model, a request leaves out the reasoning of an assistant message another model produced, so a model switch never replays signatures or encrypted reasoning that the new model cannot use; switching back replays them |
 | `bash_execution` | `command`, `output`, `exitCode?`, `cancelled`, `truncated`, `fullOutputPath?`, `excludeFromContext?`, `backgroundTaskId?` | A command the user ran with `!` / `!!` or `session.executeBash()` (pi's `bashExecution` message). `output` is the last 2,000 lines or 50 KB; when `truncated`, `fullOutputPath` has the whole output. `exitCode` is missing when the command was cancelled, and when the user moved it to the background: `backgroundTaskId` is then set and `output` is the output so far. The model gets it as a user message (`bashExecutionToText()`, pi's text: ``Ran `command` `` and the output in a code block, then `(command cancelled)`, `Command exited with code N` or the full-output path); `excludeFromContext` (`!!`) keeps it out of the context |
 | `model_change` | `model` | The session's model, as `provider/id`. Written when a session starts with a model given by name and on `setModel()` with a name; `resume()` restores the latest |
 | `thinking_level_change` | `thinkingLevel` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Written when a session starts and on `setThinkingLevel()`; `resume()` restores the latest |
@@ -59,10 +59,9 @@ Every other line is an entry. All entries have pi's base fields:
 | `session_archived` | `archived` | The session was archived (`true`) or unarchived (`false`) with `vela.setSessionArchived()`; the last one in the file wins. Archived sessions are left out of `listSessions()` unless asked. Not part of the model context |
 | `session_channel` | `channel` | The session was bound to a channel after it was written: the header records a session that a host opened for a channel, and a first binding that arrives later (`vela.session(id, { channel })` on an open session) appends this, because the header is never rewritten. The last one in the file wins. After resume that channel is the routing identity, so a different channel is rejected instead of appending another entry. Not part of the model context |
 | `compaction` | `summary`, `firstKeptEntryId`, `tokensBefore`, `toolHistoryViewSeq?` | Earlier history was summarized. The model context becomes the summary followed by the messages from `firstKeptEntryId` on (that entry is before the compaction; when it is the compaction itself, nothing was kept) and everything after the compaction. `tokensBefore` is the context size before the summary: the provider-reported prompt size of the latest response plus the local estimate of messages since, or a local estimate when the provider reported nothing |
-| `context_edit` | `targetId`, `replacement` | pi's context edit: the model sees `replacement.content` instead of the content of message entry `targetId` (`replacement: null` leaves it out). Vela writes one when microcompaction folds old tool output into a file reference; the original output stays in the target entry |
 | `branch_summary` | `fromId`, `summary` | A summary of the branch the session left with `navigateTree(…, { summarize: true })` (`/tree` → summarize). It is a child of the entry the session moved to, and the model sees it as a user message starting with `[Summary of the conversation branch you left]`. `fromId` is the leaf that was left (`root` if none) |
 | `label` | `targetId`, `label?` | A bookmark on entry `targetId` (`/tree` → label, `session.setLabel()`); no `label` clears it. Not sent to the model |
-| `custom_message` | `customType`, `content`, `display`, `details?` | pi's custom message: an extension's `session.sendMessage()`, or a loop-detection warning (`customType: loop`, `display: true`). The model context gets it as a user message with `content` (a string or parts, including an image part `{ "type": "image", "data", "mimeType" }`); `display` and `details` are for UIs and the extension, never sent to the model |
+| `custom_message` | `customType`, `content`, `display`, `details?` | pi's custom message: an extension's `session.sendMessage()`. The model context gets it as a user message with `content` (a string or parts, including an image part `{ "type": "image", "data", "mimeType" }`); `display` and `details` are for UIs and the extension, never sent to the model |
 | `custom` | `customType`, `data?` | pi's custom entry: extension state from `session.appendEntry()`. Not part of the model context |
 
 Entries of other types (from a newer Vela or an extension) are kept and ignored.
@@ -73,8 +72,7 @@ Entries of other types (from a newer Vela or an extension) are kept and ignored.
 
 1. Take the current branch: the entries from the leaf back to the root along `parentId`. When a session is loaded, the leaf is the last entry in the file (like pi; moving the leaf without appending anything afterwards is not remembered).
 2. Take the branch's latest `compaction` entry, if any: the context starts with its summary message, then the entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, the whole branch.
-3. Apply the branch's `context_edit` entries to their targets.
-4. Keep `message` entries (leaving out those with a `stopReason`), and `custom_message`, `branch_summary` and `bash_execution` entries (as user messages; a `bash_execution` with `excludeFromContext` is left out).
+3. Keep `message` entries (leaving out those with a `stopReason`), and `custom_message`, `branch_summary` and `bash_execution` entries (as user messages; a `bash_execution` with `excludeFromContext` is left out).
 
 The model and thinking level are the latest `model_change` and `thinking_level_change` on the branch; the name is the latest `session_info` in the whole file (like pi, it belongs to the session).
 
@@ -98,8 +96,8 @@ Messages are Vela `ModelMessage` values. Assistant messages and text-only user m
 ```json
 {"role":"user","content":[{"type":"text","text":"What is in this picture?"},{"type":"image","data":"<base64>","mimeType":"image/png"}]}
 {"role":"user","content":"What does notes.txt say?"}
-{"role":"assistant","content":[{"type":"text","text":"Let me check."},{"type":"tool-call","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"}}]}
-{"role":"tool","content":[{"type":"tool-result","toolCallId":"call_1","toolName":"read_file","output":{"type":"text","value":"Ship the docs on Friday."}}]}
+{"role":"assistant","content":[{"type":"text","text":"Let me check."},{"type":"tool_call","toolCallId":"call_1","toolName":"read","input":{"path":"notes.txt"}}]}
+{"role":"tool","content":[{"type":"tool_result","toolCallId":"call_1","toolName":"read","output":{"type":"text","value":"Ship the docs on Friday."}}]}
 {"role":"assistant","content":[{"type":"reasoning","text":"..."},{"type":"text","text":"The note says: ship the docs on Friday."}]}
 ```
 
@@ -112,22 +110,20 @@ Vela adds two conventions on top:
 **Stored tool results.** A new result that is too long is plain text. Vela saves the full output under `tool-results/`. The tool message keeps a preview plus one recovery line:
 
 ```json
-{"type":"text","value":"first part of the output ...\n\n[Full output: /.../sessions/demo/tool-results/0b6c....txt; use read_file with offset to read the rest.]"}
+{"type":"text","value":"first part of the output ...\n\n[Full output: /.../sessions/demo/tool-results/0b6c....txt; use read with offset to read the rest.]"}
 ```
 
 The model sees that text. Bash keeps its tail preview and adds a path only when truncated. See [Result size and truncation](tools.md#result-size-and-truncation).
 
-Both an older session file and a microcompaction `context_edit` can hold this JSON reference:
+Older session files can hold this JSON reference:
 
 ```json
-{"type":"json","value":{"kind":"vela-tool-result","path":"/.../sessions/demo/tool-results/0b6c....txt","indexPath":"/.../tool-history.jsonl","bytes":48213,"preview":"first and last part of the output ...","read":"Only a preview is shown. Use read_file with path, offset ..."}}
+{"type":"json","value":{"kind":"vela-tool-result","path":"/.../sessions/demo/tool-results/0b6c....txt","indexPath":"/.../tool-history.jsonl","bytes":48213,"preview":"first and last part of the output ...","read":"Only a preview is shown. Use read with path, offset ..."}}
 ```
 
 Resume loads that JSON. In the model request, Vela sends `preview` as text. When that preview contains `[preview: first ` or `[tool result preview omitted; original available at path]`, Vela appends the Full-output recovery line.
 
 **Summaries.** After a compaction, the model context starts with a user message whose content is `[Summary of the earlier conversation]` followed by the `compaction` entry's summary. The free-text summary has the sections Goal, Constraints & Preferences, Progress (Done / In Progress / Blocked), Key Decisions, Next Steps and Critical Context. Code appends nonempty `<read-files>` and `<modified-files>` lists from recorded tool calls, then one line with the earlier-output snapshot location, `Earlier tool output: /.../snapshots/through-<seq>.jsonl (through seq <seq>).` This message is not stored as a `message` entry. It is rebuilt from the `compaction` entry.
-
-Loop-detection reminders are user messages starting with `[system message]`.
 
 ## Tool call history
 
@@ -145,7 +141,7 @@ Next to the session file, each session has a directory:
 `tool-history.jsonl` has one record per line, numbered by `seq`:
 
 ```json
-{"type":"tool_call","callId":"d3296c41-...","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"},"version":1,"seq":1,"timestamp":"2026-10-08T10:50:32.614Z"}
+{"type":"tool_call","callId":"d3296c41-...","toolCallId":"call_1","toolName":"read","input":{"path":"notes.txt"},"version":1,"seq":1,"timestamp":"2026-10-08T10:50:32.614Z"}
 {"type":"tool_result","callId":"d3296c41-...","status":"completed","durationMs":7.9,"output":"Ship the docs on Friday.","version":1,"seq":2,"timestamp":"2026-10-08T10:50:32.627Z"}
 ```
 
@@ -153,7 +149,7 @@ Next to the session file, each session has a directory:
 
 Older call records may contain `plannedOutputPath`. New calls allocate a spill only after crossing the output threshold. A completed result records the actual environment path. If execution finishes and the terminal history write fails, the error can report the file while the process is alive. A restart with only the begin record leaves the outcome unconfirmed.
 
-The model reads this history (through `bash` and `read_file`) to look up tool calls that were summarized away. The header's `toolHistoryId` points to it and a `compaction` entry's `toolHistoryViewSeq` to the snapshot its summary refers to; resuming fails if that history or snapshot is missing, rather than continuing with a broken reference.
+The model reads this history (through `bash` and `read`) to look up tool calls that were summarized away. The header's `toolHistoryId` points to it and a `compaction` entry's `toolHistoryViewSeq` to the snapshot its summary refers to; resuming fails if that history or snapshot is missing, rather than continuing with a broken reference.
 
 ## Example
 
@@ -164,8 +160,8 @@ A session where the user asked one question and the model read a file:
 {"type":"model_change","model":"openai/gpt-5","id":"5f1c2a90","parentId":null,"timestamp":"2026-10-08T10:50:32.570Z"}
 {"type":"thinking_level_change","thinkingLevel":"medium","id":"0b7e44d1","parentId":"5f1c2a90","timestamp":"2026-10-08T10:50:32.570Z"}
 {"type":"message","message":{"role":"user","content":"What does notes.txt say?"},"id":"a3c90e12","parentId":"0b7e44d1","timestamp":"2026-10-08T10:50:32.574Z"}
-{"type":"message","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"}}]},"producedBy":"openai.responses/gpt-5","id":"77d2f0b4","parentId":"a3c90e12","timestamp":"2026-10-08T10:50:32.640Z"}
-{"type":"message","message":{"role":"tool","content":[{"type":"tool-result","toolCallId":"call_1","toolName":"read_file","output":{"type":"text","value":"Ship the docs on Friday.\n"}}]},"id":"c01b9a6e","parentId":"77d2f0b4","timestamp":"2026-10-08T10:50:32.646Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"tool_call","toolCallId":"call_1","toolName":"read","input":{"path":"notes.txt"}}]},"producedBy":"openai.responses/gpt-5","id":"77d2f0b4","parentId":"a3c90e12","timestamp":"2026-10-08T10:50:32.640Z"}
+{"type":"message","message":{"role":"tool","content":[{"type":"tool_result","toolCallId":"call_1","toolName":"read","output":{"type":"text","value":"Ship the docs on Friday.\n"}}]},"id":"c01b9a6e","parentId":"77d2f0b4","timestamp":"2026-10-08T10:50:32.646Z"}
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"The note says: ship the docs on Friday."}]},"producedBy":"openai.responses/gpt-5","id":"e5a8d3f7","parentId":"c01b9a6e","timestamp":"2026-10-08T10:50:32.648Z"}
 {"type":"session_info","name":"notes","id":"19f04c2b","parentId":"e5a8d3f7","timestamp":"2026-10-08T10:51:02.000Z"}
 ```

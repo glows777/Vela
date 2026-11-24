@@ -22,6 +22,7 @@ import type { ModelInput } from '../shared/provider-types.ts'
 import type { VelaSessionEventListener } from './agent/events.ts'
 import type { ConfigResourceSplit } from './config/runtime-resources.ts'
 import {
+  createLocalExecutionEnv,
   createSessionLocalExecutionEnv,
   scopeLocalResults,
 } from './execution/local.ts'
@@ -92,7 +93,7 @@ export interface VelaOptions {
   thinkingLevel?: ThinkingLevel
   /**
    * Automatic compaction for new sessions, default on (like pi's `compaction.enabled`). Off: the context is never
-   * compacted on its own (no microcompaction, no threshold summary, no compact-and-retry on overflow); `compact()` still works.
+   * compacted on its own (no threshold summary, no compact-and-retry on overflow); `compact()` still works.
    */
   autoCompaction?: boolean
   /** Working directory for file, search and bash tools and skills; default process.cwd(). */
@@ -627,36 +628,33 @@ export function createVela(options: VelaOptions = {}): Vela {
   }
 
   registry.setInterception({
+    resolveEnv: async (sessionId, signal) => {
+      const session = sessionId ? sessions.get(sessionId) : undefined
+      if (!session)
+        return createLocalExecutionEnv({ cwd, shellPath: options.shellPath })
+      const targetSignal = signal ?? session.signal
+      if (targetSignal?.aborted) throw targetSignal.reason
+      try {
+        return await abortable(resolveExecution(session), targetSignal)
+      } catch (error) {
+        if (targetSignal?.aborted) throw error
+        throw new Error(
+          `Execution environment unavailable for ${session.location.environment}:${session.cwd}`,
+          { cause: error },
+        )
+      }
+    },
     before: async (name, input, context) => {
       const session = context.sessionId
         ? sessions.get(context.sessionId)
         : undefined
-      if (session) {
-        try {
-          const signal = session.signal
-          if (signal?.aborted) throw signal.reason
-          context.execution = await abortable(resolveExecution(session), signal)
-        } catch {
-          return {
-            input,
-            block: true,
-            reason: `Execution environment unavailable for ${session.location.environment}:${session.cwd}`,
-          }
-        }
-      }
       return session
         ? await projects
             .runner(activeKey(session.id))
-            .toolCall(
-              session,
-              context.toolCallId,
-              context.parentToolCallId,
-              name,
-              input,
-            )
+            .toolCall(session, context.toolCallId, name, input)
         : { input }
     },
-    after: async (name, input, output, context) => {
+    after: async (name, input, output, context, isError) => {
       const session = context.sessionId
         ? sessions.get(context.sessionId)
         : undefined
@@ -666,10 +664,10 @@ export function createVela(options: VelaOptions = {}): Vela {
             .toolResult(
               session,
               context.toolCallId,
-              context.parentToolCallId,
               name,
               input,
               output,
+              isError,
             )
         : output
     },

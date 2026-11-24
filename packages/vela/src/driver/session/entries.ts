@@ -1,10 +1,5 @@
 import type { ThinkingLevel } from '../../providers/models/index.ts'
-import {
-  type ModelMessage,
-  normalizeUserContent,
-  normalizeVelaMessage,
-  type UserContent,
-} from '../../shared/messages.ts'
+import type { ModelMessage, UserContent } from '../../shared/messages.ts'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
 
@@ -47,28 +42,6 @@ interface SessionEntryBase {
   timestamp: string
 }
 
-/** A tool call another tool made through `ctx.executeTool()` (pi's `NestedToolCallRecord`). */
-export interface NestedToolCallRecord {
-  id: string
-  name: string
-  /** Omitted when over the size limits; `argumentsBytes` then gives their size */
-  arguments?: unknown
-  /** UTF-8 size of the arguments as JSON, set when `arguments` is omitted */
-  argumentsBytes?: number
-  /** `unfinished`: the call was still running when the calling tool finished */
-  status: 'ok' | 'error' | 'unfinished'
-  durationMs?: number
-  /** Error text, truncated */
-  error?: string
-}
-
-/** Bounded record of the nested calls one tool call made (pi's `NestedToolCalls`). Results are not recorded. */
-export interface NestedToolCalls {
-  calls: NestedToolCallRecord[]
-  /** False when calls were dropped, arguments omitted, or calls had not finished */
-  complete: boolean
-}
-
 /** A message in the conversation. */
 export interface SessionMessageEntry extends SessionEntryBase {
   type: 'message'
@@ -78,8 +51,6 @@ export interface SessionMessageEntry extends SessionEntryBase {
    * Such a message is kept for the record but never sent to the model again.
    */
   stopReason?: 'aborted' | 'error'
-  /** On a tool message: calls each of its tools made through `ctx.executeTool()`, by tool call id. Not sent to the model. */
-  nestedCalls?: Record<string, NestedToolCalls>
   /** On a tool message: each tool's display data (`tool_execution_end`'s `details`), by tool call id. Not sent to the model. */
   details?: Record<string, unknown>
   /** On an assistant message: the model that produced it, as its `provider/modelId` (pi's provider + api + model). Only that model gets its reasoning back. */
@@ -159,17 +130,6 @@ export interface CompactionEntry extends SessionEntryBase {
 }
 
 /**
- * Append-only change to an earlier message's contribution to the model context (pi's `context_edit`).
- * Vela writes it when old tool output is folded into file references; the original stays in its entry.
- */
-export interface ContextEditEntry extends SessionEntryBase {
-  type: 'context_edit'
-  targetId: string
-  /** Null leaves the target out of the context; otherwise its content is replaced */
-  replacement: { content: ModelMessage['content'] } | null
-}
-
-/**
  * Summary of a branch the session left through `navigateTree(…, { summarize: true })` (like pi). It is a
  * child of the navigation target and enters the model context as a user message.
  */
@@ -215,7 +175,6 @@ export type SessionEntry =
   | SessionArchivedEntry
   | SessionChannelEntry
   | CompactionEntry
-  | ContextEditEntry
   | BranchSummaryEntry
   | LabelEntry
   | CustomEntry
@@ -408,9 +367,6 @@ export function buildSessionContext(
       compaction,
     )
   }
-  const edits = new Map<string, ContextEditEntry>()
-  for (const entry of selected)
-    if (entry.type === 'context_edit') edits.set(entry.targetId, entry)
   for (const entry of selected) {
     if (entry.type === 'branch_summary') {
       if (entry.summary)
@@ -420,32 +376,19 @@ export function buildSessionContext(
         )
       continue
     }
-    let original: ModelMessage
+    let message: ModelMessage
     if (entry.type === 'message') {
       if (entry.stopReason) continue
-      original = normalizeVelaMessage(entry.message)
+      message = entry.message
     } else if (entry.type === 'custom_message')
       // Like pi's convertToLlm: the model sees a custom message as a user message
-      original = {
+      message = {
         role: 'user',
-        content: Array.isArray(entry.content)
-          ? normalizeUserContent(entry.content).content
-          : entry.content,
+        content: entry.content,
       }
     else if (entry.type === 'bash_execution' && !entry.excludeFromContext)
-      original = { role: 'user', content: bashExecutionToText(entry) }
+      message = { role: 'user', content: bashExecutionToText(entry) }
     else continue
-    const edit = edits.get(entry.id)
-    if (edit?.replacement === null) continue
-    const message = edit
-      ? normalizeVelaMessage({
-          ...original,
-          content:
-            original.role === 'user' && Array.isArray(edit.replacement.content)
-              ? normalizeUserContent(edit.replacement.content).content
-              : edit.replacement.content,
-        })
-      : original
     if (entry.type === 'custom_message')
       context.custom.set(message, {
         customType: entry.customType,

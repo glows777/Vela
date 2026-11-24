@@ -79,8 +79,6 @@ export interface ProviderStreamEvent {
 export interface ToolCallEvent {
   type: 'tool_call'
   toolCallId: string | undefined
-  /** Set when another tool issued this call through `ctx.executeTool()` (its id is then `<parent id>/<n>`) */
-  parentToolCallId?: string
   toolName: string
   input: Record<string, unknown>
 }
@@ -94,10 +92,10 @@ export interface ToolCallEventResult {
 export interface ToolResultEvent {
   type: 'tool_result'
   toolCallId: string | undefined
-  /** Set when another tool issued this call through `ctx.executeTool()` */
-  parentToolCallId?: string
   toolName: string
   input: unknown
+  /** True when the tool failed or threw an error. */
+  isError?: boolean
   /** The text the model will see (a preview for oversized results) */
   output: string
   /** Ordered text/image blocks when the tool returned multimodal content. */

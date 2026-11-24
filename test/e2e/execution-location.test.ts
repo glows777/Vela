@@ -262,8 +262,8 @@ test('execution environment resolver is consulted for each tool call and fails c
   writeFileSync(join(dir.path, 'secret.txt'), 'host marker')
   const model = createFauxModel({
     responses: [
-      fauxToolCall('read_file', { path: 'secret.txt' }),
-      fauxToolCall('read_file', { path: 'secret.txt' }),
+      fauxToolCall('read', { path: 'secret.txt' }),
+      fauxToolCall('read', { path: 'secret.txt' }),
       fauxText('done'),
     ],
   })
@@ -930,7 +930,7 @@ test('stopping a model tool call does not wait for an unresolved environment', a
   const vela = createVela({
     cwd: dir.path,
     model: createFauxModel({
-      responses: [fauxToolCall('read_file', { path: 'marker' })],
+      responses: [fauxToolCall('read', { path: 'marker' })],
     }),
     env: () => {
       if (!prepared) return createLocalExecutionEnv({ cwd: dir.path })
@@ -1000,7 +1000,7 @@ test.skipIf(process.platform === 'win32')(
     })
     try {
       const shell = await env.exec(
-        ['sh', '-c', 'sleep 30 >/dev/null 2>&1 & echo $$'],
+        ['sh', '-c', 'trap "" TERM; sleep 30 >/dev/null 2>&1 & echo $$'],
         {
           onOutput: (text) => {
             pgid = -Number(text.trim())

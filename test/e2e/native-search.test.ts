@@ -312,10 +312,7 @@ test('a hosted search does not prevent a local tool from completing its required
     '../../packages/vela/src/testing/core/index.ts'
   )
   const faux = createFauxModel({
-    responses: [
-      fauxToolCall('read_file', { path: 'a.txt' }),
-      fauxText('Finished.'),
-    ],
+    responses: [fauxToolCall('read', { path: 'a.txt' }), fauxText('Finished.')],
   })
   const original = faux.doStream.bind(faux)
   let injected = false
@@ -354,8 +351,7 @@ test('a hosted search does not prevent a local tool from completing its required
   expect(
     faux.calls[1]?.toolResults.some(
       (result) =>
-        result.toolName === 'read_file' &&
-        result.output.includes('file content'),
+        result.toolName === 'read' && result.output.includes('file content'),
     ),
   ).toBe(true)
   expect(t.lastAssistantText()).toBe('Finished.')
@@ -580,7 +576,7 @@ test.each([
 test.each([
   {
     label: 'search excluded from selection',
-    session: { tools: ['read_file'] as string[] },
+    session: { tools: ['read'] as string[] },
   },
 ])(
   '$label does not expose an unapproved hosted search',

@@ -27,11 +27,6 @@ import {
 import { ModelRegistry } from '../../src/providers/models/index.ts'
 import { resolveProviderTools } from '../../src/providers/runtime.ts'
 import { silentLogger } from '../../src/shared/logger.ts'
-import {
-  normalizeUserContent,
-  normalizeVelaContent,
-  normalizeVelaMessage,
-} from '../../src/shared/messages.ts'
 import { createJsonSchema } from '../../src/shared/tool-schema.ts'
 import { createMockModel } from '../../src/testing/core/demo-model.ts'
 
@@ -129,15 +124,19 @@ test('providers/messages preserves providerOptions (incl normalizeUserMessage & 
         text: 'ok',
         providerOptions: { openai: { p: 1 } },
       } as never,
-      { type: 'image-data', data: rawBytes as never, mediaType: 'image/png' },
       {
-        type: 'media',
-        data: Buffer.from(buf).toString('base64'),
+        type: 'file',
+        data: { type: 'data', data: rawBytes },
+        mediaType: 'image/png',
+      } as never,
+      {
+        type: 'file',
+        data: { type: 'data', data: Buffer.from(buf).toString('base64') },
         mediaType: 'image/webp',
       } as never,
       {
-        type: 'file-data',
-        data: buf as never,
+        type: 'file',
+        data: { type: 'data', data: buf },
         mediaType: 'image/jpeg',
         providerOptions: { openai: { tag: 'img' } },
       } as never,
@@ -208,10 +207,10 @@ test('providers/messages preserves providerOptions (incl normalizeUserMessage & 
 
   // Assistant edge normalization + tool-approval-request metadata round-trip
   const normalizedEdge = toAiModelMessages([
-    normalizeVelaMessage({
+    {
       role: 'assistant',
       content: [
-        { type: 'reasoning', text: 'think' },
+        { type: 'thinking', text: 'think' },
         {
           type: 'tool-approval-request',
           approvalId: 'ap1',
@@ -222,7 +221,7 @@ test('providers/messages preserves providerOptions (incl normalizeUserMessage & 
           inputSchemaInput: { x: 1 },
         },
       ],
-    }),
+    },
   ])
   expect((normalizedEdge[0]!.content[0] as { type: string }).type).toBe(
     'reasoning',
@@ -256,48 +255,7 @@ test('providers/messages preserves providerOptions (incl normalizeUserMessage & 
   })
 })
 
-test('shared/driver messages normalize nested tool images, Buffer payloads, custom_message -> legal user parts + generateText (#13)', async () => {
-  const res = normalizeVelaContent([
-    {
-      type: 'tool-result',
-      toolCallId: 'tc',
-      toolName: 't',
-      output: {
-        type: 'content',
-        value: [
-          {
-            type: 'image-data',
-            data: { type: 'Buffer', data: [1, 2, 3] },
-            mediaType: 'image/png',
-          },
-          { type: 'media', data: 'AQID', mediaType: 'image/gif' },
-          {
-            type: 'file',
-            mediaType: 'image/jpeg',
-            data: { type: 'data', data: 'AQID' },
-          },
-        ],
-      },
-    },
-  ])
-  expect(res.changed).toBe(true)
-  const tr = res.content[0] as { output: { value: Record<string, unknown>[] } }
-  expect(tr.output.value[0]).toMatchObject({
-    type: 'image',
-    data: 'AQID',
-    mimeType: 'image/png',
-  })
-  expect(tr.output.value[1]).toMatchObject({
-    type: 'image',
-    data: 'AQID',
-    mimeType: 'image/gif',
-  })
-  expect(tr.output.value[2]).toMatchObject({
-    type: 'image',
-    data: 'AQID',
-    mimeType: 'image/jpeg',
-  })
-
+test('driver messages helpers ignore thinking text, ignore image base64 size, and convert custom_message cleanly', async () => {
   // messageText strictly ignores thinking / non-text parts carrying .text
   expect(
     messageText([
@@ -306,30 +264,29 @@ test('shared/driver messages normalize nested tool images, Buffer payloads, cust
     ]),
   ).toBe('visible')
 
-  // messageEnvelopeChars recognizes legacy media image parts
+  // messageEnvelopeChars treats inline image as fixed char budget instead of raw base64 length
   expect(
     messageEnvelopeChars([
       {
         role: 'user',
         content: [
           {
-            type: 'media',
+            type: 'image',
             data: 'x'.repeat(20_000),
-            mediaType: 'image/png',
-          } as never,
+            mimeType: 'image/png',
+          },
         ],
       },
     ]),
   ).toBeLessThan(6000)
 
-  // SessionStore.loadSaved, buildSessionContext, and renderSessionHtml normalize legacy custom_message arrays
   const dir = tempDir('vela-s1-sess-')
   const storage = fileSessionStorage(dir)
-  const file = join(dir, 'legacy-cm.jsonl')
+  const file = join(dir, 'cm.jsonl')
   const header = {
     type: 'session',
     version: 2,
-    id: 'legacy-cm',
+    id: 'cm',
     timestamp: '2026-11-24T00:00:00.000Z',
   }
   const entry = {
@@ -339,16 +296,16 @@ test('shared/driver messages normalize nested tool images, Buffer payloads, cust
     timestamp: '2026-11-24T00:00:01.000Z',
     customType: 'note',
     display: true,
-    content: [{ type: 'reasoning', text: 'legacy-r' }],
+    content: [{ type: 'text', text: 'cm-note' }],
   }
   writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(entry)}\n`)
-  const store = new SessionStore('legacy-cm', dir, undefined, storage)
+  const store = new SessionStore('cm', dir, undefined, storage)
   const saved = await store.loadSaved()
   expect(saved).toBeDefined()
   expect(
     (saved!.messages[0] as { content: { type: string; text?: string }[] })
       .content[0],
-  ).toEqual({ type: 'text', text: 'legacy-r' })
+  ).toEqual({ type: 'text', text: 'cm-note' })
   const ctx = buildSessionContext([entry as never])
   expect(
     (ctx.messages[0] as { content: { type: string }[] }).content[0]!.type,
@@ -359,12 +316,9 @@ test('shared/driver messages normalize nested tool images, Buffer payloads, cust
     messages: aiMessages,
   })
   expect(gen.text).toBeDefined()
-  expect(
-    normalizeUserContent([{ type: 'reasoning', text: 'thought' }]).content,
-  ).toEqual([{ type: 'text', text: 'thought' }])
 
   const html = renderSessionHtml({
-    id: 'legacy-cm',
+    id: 'cm-html',
     entries: [
       {
         type: 'message',
@@ -374,20 +328,17 @@ test('shared/driver messages normalize nested tool images, Buffer payloads, cust
         message: {
           role: 'assistant',
           content: [
-            { type: 'reasoning', text: 'legacy-thought' },
-            { type: 'text', text: 'legacy-visible' },
+            { type: 'thinking', text: 'thought' },
+            { type: 'text', text: 'visible-html' },
           ],
-        } as never,
+        },
       },
-      {
-        ...entry,
-        content: [{ type: 'text', text: 'cm-text' }],
-      } as unknown as SessionEntry,
+      entry as unknown as SessionEntry,
     ],
   })
-  expect(html).toContain('legacy-thought')
-  expect(html).toContain('legacy-visible')
-  expect(html).toContain('cm-text')
+  expect(html).toContain('thought')
+  expect(html).toContain('visible-html')
+  expect(html).toContain('cm-note')
 })
 
 test('createJsonSchema detects schema drafts and resolveProviderTools extracts Zod v3 schemas', async () => {
@@ -479,45 +430,6 @@ test('toAiModelMessages lifts URL-backed images from failed assistant tool_resul
   expect((liftedUser.content[0]?.data as URL | undefined)?.href).toBe(
     'https://example.com/fail.png',
   )
-})
-
-test('buildSessionContext normalizes legacy reasoning arrays in context_edit targeting user messages for generateText', async () => {
-  const entries: SessionEntry[] = [
-    {
-      type: 'message',
-      id: 'u1',
-      parentId: null,
-      timestamp: '2026-11-24T00:00:00.000Z',
-      message: { role: 'user', content: 'original' },
-    },
-    {
-      type: 'context_edit',
-      id: 'ce1',
-      parentId: 'u1',
-      timestamp: '2026-11-24T00:00:01.000Z',
-      targetId: 'u1',
-      replacement: {
-        content: [
-          { type: 'reasoning', text: 'legacy thought' },
-          { type: 'text', text: 'edited prompt' },
-        ] as never,
-      },
-    },
-  ]
-  const ctx = buildSessionContext(entries, 'ce1')
-  expect(ctx.messages).toHaveLength(1)
-  expect(ctx.messages[0]).toEqual({
-    role: 'user',
-    content: [
-      { type: 'text', text: 'legacy thought' },
-      { type: 'text', text: 'edited prompt' },
-    ],
-  })
-  const res = await generateText({
-    model: createMockModel(),
-    messages: toAiModelMessages(ctx.messages, true, true),
-  })
-  expect(res.text).toBeDefined()
 })
 
 test('ExtensionRunner.registerTool accepts createJsonSchema directly and rejects plain JSON objects', async () => {

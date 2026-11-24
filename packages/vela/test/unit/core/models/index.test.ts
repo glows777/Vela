@@ -96,8 +96,6 @@ test('context limits follow the model window; explicit limits win', () => {
     maxInputTokens: 16_384,
     // The summary request itself must fit: 10% of the window below the input cap
     summaryThreshold: 13_108,
-    microcompactThreshold: 10_486,
-    minMicroSavings: 3_276,
     maxRetries: DEFAULT_LIMITS.maxRetries,
   })
   // A 200k window yields the current defaults
@@ -110,10 +108,4 @@ test('context limits follow the model window; explicit limits win', () => {
     limitsForModel({ contextWindow: 32_768 }, { maxInputTokens: 30_000 })
       .maxInputTokens,
   ).toBe(30_000)
-  // The microcompaction switch is not derived from the window; only an explicit value changes it
-  expect(limitsForModel({ contextWindow: 200_000 }).microcompact).toBe(true)
-  expect(
-    limitsForModel({ contextWindow: 200_000 }, { microcompact: false })
-      .microcompact,
-  ).toBe(false)
 })

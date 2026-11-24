@@ -380,10 +380,6 @@ test('text-only requests omit compatible AI SDK image file parts from user and t
               data: { type: 'data', data: image.data },
               mediaType: 'image',
             },
-            {
-              type: 'image-file-reference',
-              providerReference: { openai: 'reference-image-1' },
-            },
           ],
         },
       },
@@ -392,7 +388,7 @@ test('text-only requests omit compatible AI SDK image file parts from user and t
   await t.session.prompt('Continue')
   const request = JSON.stringify(model.calls[0]!.prompt)
   expect(request).toContain('(image omitted: model does not support images)')
-  expect(request.match(/tool image omitted/g)).toHaveLength(2)
+  expect(request.match(/tool image omitted/g)).toHaveLength(1)
   expect(request).not.toContain(image.data)
   expect(request).not.toContain('reference-image-1')
   expect(JSON.stringify(t.session.messages)).toContain(image.data)

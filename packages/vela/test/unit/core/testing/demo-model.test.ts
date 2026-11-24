@@ -37,7 +37,7 @@ test('demo model reads a local docs/ file instead of searching Notion', async ()
   for await (const part of stream)
     if (part.type === 'tool-call') calls.push(part)
   expect(calls.map((c) => [c.toolName, JSON.parse(c.input)])).toEqual([
-    ['read_file', { path: 'docs/guide.md' }],
+    ['read', { path: 'docs/guide.md' }],
   ])
 })
 

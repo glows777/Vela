@@ -7,20 +7,20 @@ describe('Local progress privacy', () => {
       localProgress({
         type: 'tool_execution_start',
         toolCallId: 'secret-id',
-        toolName: 'read_file',
+        toolName: 'read',
         args: { path: 'SECRET' },
       }),
-    ).toEqual({ stage: 'tool', tool: 'read_file', state: 'started' })
+    ).toEqual({ stage: 'tool', tool: 'read', state: 'started' })
     expect(
       localProgress({
         type: 'tool_execution_end',
         toolCallId: 'secret-id',
-        toolName: 'read_file',
+        toolName: 'read',
         result: 'SECRET',
         details: { secret: true },
         isError: false,
       }),
-    ).toEqual({ stage: 'tool', tool: 'read_file', state: 'finished' })
+    ).toEqual({ stage: 'tool', tool: 'read', state: 'finished' })
   })
   test('omits raw model messages, thinking, tool updates and error strings', () => {
     expect(

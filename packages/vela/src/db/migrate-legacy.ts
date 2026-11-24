@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import {
-  migrateLegacyConfigFiles,
-  removeConfigIfHashMatches,
-} from '../config/index.ts'
 import { isPlainObject } from '../shared/interpolate.ts'
 import {
   loadLarkAndChannelConfig,
@@ -12,6 +8,10 @@ import {
   migratePendingInboxMessages,
   migrateRemainingLarkChats,
 } from './migrate-legacy-channels.ts'
+import {
+  migrateLegacyConfigFiles,
+  removeConfigIfHashMatches,
+} from './migrate-legacy-config.ts'
 import {
   buildSessionIdResolver,
   collectTranscriptFiles,

@@ -117,7 +117,7 @@ for (const shape of ['native', 'mixed'] as const) {
         {
           type: 'tool_call',
           toolCallId: 'picture',
-          toolName: 'read_file',
+          toolName: 'read',
           input: { path: 'picture.png' },
         },
       ],
@@ -128,7 +128,7 @@ for (const shape of ['native', 'mixed'] as const) {
         {
           type: 'tool_result',
           toolCallId: 'picture',
-          toolName: 'read_file',
+          toolName: 'read',
           output: {
             type: 'content',
             value:
@@ -321,7 +321,7 @@ for (const phase of ['live', 'resumed'] as const) {
   })
 }
 
-test('clipboard image paste inserts a private temp path, read_file sends the image, and shutdown removes it', async () => {
+test('clipboard image paste inserts a private temp path, read sends the image, and shutdown removes it', async () => {
   const image = blueImage()
   let file = ''
   const t = createTestVela({
@@ -331,7 +331,7 @@ test('clipboard image paste inserts a private temp path, read_file sends the ima
         expect(readFileSync(file)).toEqual(image)
         if (process.platform !== 'win32')
           expect(statSync(file).mode & 0o777).toBe(0o600)
-        return fauxToolCall('read_file', { path: file })
+        return fauxToolCall('read', { path: file })
       },
       (req) => {
         expect(JSON.stringify(req.prompt)).toContain('"mediaType":"image/png"')
@@ -534,7 +534,7 @@ test('a prompt shows the user message, tool calls with results and the streamed 
   const t = createTestVela({
     files: { 'a.txt': 'hello from a' },
     responses: [
-      fauxToolCall('read_file', { path: 'a.txt' }),
+      fauxToolCall('read', { path: 'a.txt' }),
       fauxText('**The file** says hello'),
     ],
   })
@@ -548,7 +548,7 @@ test('a prompt shows the user message, tool calls with results and the streamed 
   tui.terminal.press(KEYS.ctrlO)
   const screen = tui.screen()
   expect(screen).toContain('read a.txt')
-  expect(screen).toContain('read_file a.txt')
+  expect(screen).toContain('read a.txt')
   expect(screen).toContain('hello from a')
   // Footer: session, model, thinking
   expect(screen).toContain('tui')
@@ -739,7 +739,7 @@ test('the queue shortcut moves queued messages back into the editor, and the hin
 test('terminal control sequences in tool output are not written to the terminal', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'x\x1b]0;PWNED\x07y\x1b[31mred\x1b]52;c;ZXZpbA==\x07' },
-    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxText('done')],
+    responses: [fauxToolCall('read', { path: 'a.txt' }), fauxText('done')],
   })
   const tui = await startTui(t.vela)
   await tui.started
@@ -1233,16 +1233,12 @@ test('a turn folds its thinking and tool calls into one line above the answer', 
     files: { 'a.txt': 'needle in the haystack\n' },
     responses: [
       fauxToolCall(
-        'read_file',
+        'read',
         { path: 'a.txt' },
         { reasoning: 'Read the haystack' },
       ),
       fauxToolCall('bash', { command: 'echo done' }, { reasoning: 'Check it' }),
-      fauxToolCall(
-        'list_directory',
-        { path: '.' },
-        { reasoning: 'List the folder' },
-      ),
+      fauxToolCall('ls', { path: '.' }, { reasoning: 'List the folder' }),
       fauxText('Found it', { reasoning: 'Wrap up' }),
     ],
   })
@@ -1378,7 +1374,7 @@ test('a failed tool call stays visible while its turn is folded', async () => {
   const t = createTestVela({
     responses: [
       fauxToolCall(
-        'read_file',
+        'read',
         { path: '/nope/missing.txt' },
         { reasoning: 'Read the missing file' },
       ),
@@ -1391,7 +1387,7 @@ test('a failed tool call stays visible while its turn is folded', async () => {
   tui.submit('read it')
   await tui.until('It is not there')
   const screen = tui.screen()
-  expect(screen).toContain('read_file /nope/missing.txt')
+  expect(screen).toContain('read /nope/missing.txt')
   expect(screen).toContain('It is not there')
   expect(screen).not.toContain('Read the missing file')
 })
@@ -1464,11 +1460,11 @@ test('a ! command during a run keeps the turn in one fold', async () => {
   expect(screen).toContain('$ echo manual-output')
 })
 
-test('edit_file shows the diff of its change', async () => {
+test('edit shows the diff of its change', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'one\ntwo\nthree\n' },
     responses: [
-      fauxToolCall('edit_file', {
+      fauxToolCall('edit', {
         path: 'a.txt',
         edits: [{ oldText: 'two', newText: 'TWO' }],
       }),
@@ -1484,7 +1480,7 @@ test('edit_file shows the diff of its change', async () => {
 
   tui.terminal.press(KEYS.ctrlO)
   const screen = tui.screen()
-  expect(screen).toContain('edit_file a.txt')
+  expect(screen).toContain('edit a.txt')
   expect(screen).toContain('-2 two')
   expect(screen).toContain('+2 TWO')
   expect(screen).toContain(' 1 one')
@@ -1496,8 +1492,8 @@ test('a write and an edit are counted in the fold, never announced as [audit] no
   const t = createTestVela({
     files: { 'a.txt': 'one\n' },
     responses: [
-      fauxToolCall('write_file', { path: 'b.txt', content: 'two' }),
-      fauxToolCall('edit_file', {
+      fauxToolCall('write', { path: 'b.txt', content: 'two' }),
+      fauxToolCall('edit', {
         path: 'a.txt',
         edits: [{ oldText: 'one', newText: 'ONE' }],
       }),
@@ -1514,45 +1510,16 @@ test('a write and an edit are counted in the fold, never announced as [audit] no
 
   tui.terminal.press(KEYS.ctrlO)
   const screen = tui.screen()
-  expect(screen).toContain('write_file b.txt')
-  expect(screen).toContain('edit_file a.txt')
+  expect(screen).toContain('write b.txt')
+  expect(screen).toContain('edit a.txt')
   expect(screen).not.toContain('[audit]')
-})
-
-test('calls a tool makes through ctx.executeTool are listed inside its block', async () => {
-  const t = createTestVela({
-    files: { 'a.txt': 'hello' },
-    responses: [fauxToolCall('runner', {}), fauxText('ran')],
-  })
-  t.internals.registry.register({
-    name: 'runner',
-    description: 'Runs other tools',
-    inputSchema: z.object({}),
-    execute: async (_input, context) => {
-      await context!.executeTool!('read_file', { path: 'a.txt' })
-      await context!.executeTool!('read_file', { path: 'missing.txt' })
-      return 'ok'
-    },
-  })
-  const tui = await startTui(t.vela)
-  await tui.started
-
-  tui.submit('run')
-  await tui.until('ran')
-  tui.terminal.press(KEYS.ctrlO)
-
-  const screen = tui.screen()
-  expect(screen).toMatch(/↳ ✓ read_file a\.txt \d+\.\ds/)
-  expect(screen).toMatch(/↳ ✗ read_file missing\.txt/)
-  // No separate blocks for the nested calls
-  expect(screen.match(/read_file/g)).toHaveLength(2)
 })
 
 test('/copy copies the last answer to the clipboard (like pi)', async () => {
   const t = createTestVela({
     responses: [
       fauxText('The **answer**'),
-      fauxToolCall('read_file', { path: 'missing.txt' }),
+      fauxToolCall('read', { path: 'missing.txt' }),
       fauxText(''),
     ],
   })
@@ -1631,32 +1598,20 @@ test('Esc cancels a running ! command', async () => {
   expect(t.vela.session('tui').isBashRunning).toBe(false)
 })
 
-test('a resumed session shows edit diffs, nested calls and ! commands again', async () => {
+test('a resumed session shows edit diffs and ! commands again', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'one\ntwo\n' },
     responses: [
-      fauxToolCall('edit_file', {
+      fauxToolCall('edit', {
         path: 'a.txt',
         edits: [{ oldText: 'two', newText: 'TWO' }],
       }),
       fauxText('edited'),
-      fauxToolCall('runner', {}),
-      fauxText('ran'),
     ],
-  })
-  t.internals.registry.register({
-    name: 'runner',
-    description: 'Runs other tools',
-    inputSchema: z.object({}),
-    execute: async (_input, context) => {
-      await context!.executeTool!('read_file', { path: 'a.txt' })
-      return 'ok'
-    },
   })
   const session = t.vela.session('saved')
   await session.prompt('edit it')
   await session.executeBash('echo from-bang')
-  await session.prompt('run')
   await session.close()
 
   const tui = await startTui(t.vela, { sessionId: 'saved', resume: true })
@@ -1665,7 +1620,6 @@ test('a resumed session shows edit diffs, nested calls and ! commands again', as
   tui.terminal.press(KEYS.ctrlO)
   const screen = tui.screen()
   expect(screen).toContain('+2 TWO')
-  expect(screen).toMatch(/↳ ✓ read_file a\.txt/)
   expect(screen).toContain('$ echo from-bang')
   expect(screen).toContain('from-bang')
 })

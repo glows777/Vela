@@ -35,7 +35,7 @@ function fixture(
       model: 'mock/a',
       lark: {
         owners: ['owner'],
-        chats: opts.chats ?? [{ id: 'old', tools: ['read_file'] }],
+        chats: opts.chats ?? [{ id: 'old', tools: ['read'] }],
       },
     }),
   )
@@ -129,7 +129,7 @@ test('confirmed group merges settings, protects secrets, sends and closes', asyn
   expect(config.model).toBe('mock/a')
   expect(config.lark).toEqual({
     owners: ['owner'],
-    chats: [{ id: 'old', tools: ['read_file'] }, 'new'],
+    chats: [{ id: 'old', tools: ['read'] }, 'new'],
     appId: 'app-id',
     appSecret: 'secret',
   })

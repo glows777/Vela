@@ -216,14 +216,7 @@ function validateModelSpec(
 function validateLimits(limits: Record<string, unknown>, label: string): void {
   assertLimitKeys(limits, label)
   for (const [key, value] of Object.entries(limits)) {
-    if (key === 'microcompact') {
-      if (typeof value !== 'boolean')
-        throw new Error(`${label}.${key} must be a boolean`)
-    } else if (
-      typeof value !== 'number' ||
-      !Number.isFinite(value) ||
-      value < 0
-    ) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       throw new Error(`${label}.${key} must be a non-negative finite number`)
     }
   }

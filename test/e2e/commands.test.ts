@@ -443,7 +443,7 @@ test('a message from a channel runs through the same model and tools, and the re
   const t = createTestVela({
     files: { 'faq.md': 'Opening hours: 9:00-18:00' },
     responses: [
-      fauxToolCall('read_file', { path: 'faq.md' }),
+      fauxToolCall('read', { path: 'faq.md' }),
       fauxText('We are open from 9 to 6'),
     ],
     extensions: [
@@ -477,7 +477,7 @@ test('a message from a channel runs through the same model and tools, and the re
     { channelId: 'c1', recipientId: 'u1', text: 'We are open from 9 to 6' },
   ])
   expect(t.eventsOf('tool_execution_start')[0]).toMatchObject({
-    toolName: 'read_file',
+    toolName: 'read',
   })
   // Channel sessions are separate from the CLI session
   expect(t.messages).toEqual([])

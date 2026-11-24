@@ -352,7 +352,7 @@ test('serve rejects the flags of a single-session run', async () => {
   for (const args of [
     ['serve', '-p', 'hi'],
     ['serve', '--mode', 'json'],
-    ['serve', '-t', 'read_file'],
+    ['serve', '-t', 'read'],
     ['serve', 'a prompt'],
   ]) {
     const result = await runServe(args, dir.path, home.path)

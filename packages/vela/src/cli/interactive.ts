@@ -393,15 +393,6 @@ export class InteractiveMode {
         if (part.type !== 'tool_result') continue
         const block = this.log.tool(part.toolCallId)
         if (!block) continue
-        for (const call of entry.nestedCalls?.[part.toolCallId]?.calls ?? []) {
-          block.addNested(call.id, call.name, call.arguments)
-          if (call.status !== 'unfinished')
-            block.setNestedResult(
-              call.id,
-              call.status === 'error',
-              call.durationMs,
-            )
-        }
         this.log.settleTool(
           block,
           part.output,
@@ -455,29 +446,15 @@ export class InteractiveMode {
         this.log.nextMessage()
         break
       case 'tool_execution_start':
-        // Calls made through ctx.executeTool() are listed inside the top-level call's block (like pi)
-        if (event.parentToolCallId) {
-          this.log
-            .rootTool(event.parentToolCallId)
-            ?.addNested(event.toolCallId, event.toolName, event.args)
-          break
-        }
         if (!this.log.hasTool(event.toolCallId))
           this.log.addTool(event.toolCallId, event.toolName, event.args)
         this.log.startTool(event.toolCallId)
         this.setLoader(`Running ${event.toolName}…`)
         break
       case 'tool_execution_update':
-        if (!event.parentToolCallId)
-          this.log.updateTool(event.toolCallId, event.partialResult)
+        this.log.updateTool(event.toolCallId, event.partialResult)
         break
       case 'tool_execution_end':
-        if (event.parentToolCallId) {
-          this.log
-            .rootTool(event.parentToolCallId)
-            ?.setNestedResult(event.toolCallId, event.isError, event.durationMs)
-          break
-        }
         this.log.settleTool(
           this.log.tool(event.toolCallId),
           event.result,
@@ -490,12 +467,6 @@ export class InteractiveMode {
         this.addNotice(
           `Request failed, retrying in ${Math.round(event.delayMs / 1000)}s (${event.attempt}/${event.maxAttempts}): ${event.errorMessage}`,
           'warning',
-        )
-        break
-      case 'loop_detected':
-        this.addNotice(
-          event.message,
-          event.level === 'critical' ? 'error' : 'warning',
         )
         break
       case 'agent_end': {

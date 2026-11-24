@@ -15,11 +15,7 @@ import { ToolResultStore } from '../session/tool-results.ts'
 import type { BackgroundCommands } from './background.ts'
 import { prepareCallResult } from './call-result.ts'
 import { validateToolDefinition } from './definition-validation.ts'
-import {
-  ActiveCalls,
-  ExecutionGate,
-  NestedExecutionGate,
-} from './execution-gate.ts'
+import { ActiveCalls, ExecutionGate } from './execution-gate.ts'
 import {
   type CallOptions,
   errorOutput,
@@ -32,10 +28,8 @@ import {
 import { countToolTokens, toProviderTools } from './sdk-tools.ts'
 import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
 import {
-  type ExecuteToolOptions,
   type InterceptionContext,
   type ToolAnnotations,
-  type ToolCallOutcome,
   type ToolExecutionMode,
   ToolExecutionResult,
   type ToolExposure,
@@ -52,24 +46,12 @@ export interface ToolContext {
   sessionId?: string
   scope?: Readonly<SessionScope>
   toolCallId?: string
+  /** Resolve the session's execution environment on demand (file, search, bash tools only). */
+  requireEnv?: (signal?: AbortSignal) => Promise<ExecutionEnv>
   /** Fires when the session is interrupted (abort, close); long-running tools should honor it */
   signal?: AbortSignal
-  /**
-   * Reports partial output while the tool runs (like pi's `onUpdate`); each call emits a
-   * `tool_execution_update` event. Calls after the tool settled are ignored.
-   */
+  /** Reports partial output while the tool runs (`tool_execution_update`); calls after settle are ignored. */
   onUpdate?: (partialResult: unknown) => void
-  /**
-   * Runs another tool through the same availability checks, hooks and tool history as
-   * a model-issued call (like pi's `ctx.executeTool()`). The call gets the id `<calling id>/<n>`, its
-   * `tool_execution_*` events carry `parentToolCallId`, and it does not enter the conversation.
-   * Never rejects for tool failures: they come back as `isError: true`.
-   */
-  executeTool?: (
-    name: string,
-    args: unknown,
-    options?: ExecuteToolOptions,
-  ) => Promise<ToolCallOutcome>
   /** @internal The session's tool result store (bash writes large output to files) */
   results: ToolResultStore
   /** @internal This call's id in the tool history */
@@ -93,7 +75,7 @@ export interface ToolDefinition {
   /**
    * Same as pi: "sequential" tools run one at a time with the session's other tool calls;
    * "parallel" (default) tools run concurrently. Only calls of the same session wait for each
-   * other. write_file / edit_file additionally queue per file across all sessions.
+   * other. write / edit additionally queue per file across all sessions.
    */
   /** Whether an interrupted call may be replayed after a restart. Default unsafe. */
   replay?: 'safe' | 'unsafe'
@@ -220,8 +202,6 @@ export class ToolRegistry {
   /** Tools selected for the session; undefined means no limit */
   private selection?: ReadonlySet<string>
   private defaultToolStates?: ReadonlyMap<string, boolean> // +name / -name overrides from --tools or defaultTools
-  private readonly unavailableTools = new Set<string>()
-  private readonly runtimeEnabledTools = new Set<string>()
   private channel?: string
   /** Only these tools are visible / callable by the model; undefined removes the limit */
   setSelection(names: Iterable<string> | undefined): void {
@@ -243,7 +223,7 @@ export class ToolRegistry {
   /** Whether tool selection and channel eligibility make a tool available in this session. */
   private isAvailable(toolName: string): boolean {
     const tool = this.tools.get(toolName)
-    if (!tool || this.unavailableTools.has(toolName)) return false
+    if (!tool) return false
     if (
       tool.channel === true
         ? !this.channel
@@ -253,7 +233,6 @@ export class ToolRegistry {
     if (this.selection) return this.selection.has(toolName)
     const enabled = this.defaultToolStates?.get(toolName)
     if (enabled === false) return false
-    if (this.runtimeEnabledTools.has(toolName)) return true
     return enabled ?? tool.activeByDefault !== false
   }
 
@@ -268,7 +247,6 @@ export class ToolRegistry {
   discoveredTools = new Set<string>() // loaded with tool_search; a resumed session restores it from its history
 
   private readonly gate = new ExecutionGate()
-  private readonly nestedGate = new NestedExecutionGate()
 
   register(...tools: ToolDefinition[]) {
     for (const tool of tools) {
@@ -333,9 +311,6 @@ export class ToolRegistry {
     const context: InterceptionContext = {
       sessionId: this.sessionId,
       toolCallId: options.toolCallId,
-      ...(options.parentToolCallId === undefined
-        ? {}
-        : { parentToolCallId: options.parentToolCallId }),
     }
     if (interception?.before) {
       const pre = await interception.before(name, input, context)
@@ -360,22 +335,29 @@ export class ToolRegistry {
       if (typeof command !== 'string')
         return await reject('[Rejected] bash command must be a string')
     }
-    // A nested call runs inside its parent's turn at the gate (waiting there could deadlock), so
-    // nested calls have their own queue
-    const gated = <T>(fn: () => Promise<T>) =>
-      options.parentToolCallId === undefined
-        ? this.gate.run(mode, fn)
-        : this.nestedGate.run(
-            mode,
-            options.parentToolCallId,
-            options.toolCallId,
-            fn,
-          )
-    return await gated(async () => {
+    return await this.gate.run(mode, async () => {
       if (this.isDraining()) return rejectDraining()
       this.shared.logger.debug(`[tools] ${name} started (${mode})`)
       this.assertHealthy()
       const history = this.results.history
+      const requireEnv = interception?.resolveEnv
+        ? async (envSignal?: AbortSignal): Promise<ExecutionEnv> => {
+            if (context.execution) return context.execution
+            const targetSignal = envSignal ?? signal
+            targetSignal?.throwIfAborted()
+            context.execution = await interception.resolveEnv!(
+              this.sessionId,
+              targetSignal,
+            )
+            return context.execution
+          }
+        : undefined
+      if (
+        (tool.replay === 'safe' || options.recovery?.location) &&
+        !context.execution &&
+        requireEnv
+      )
+        await requireEnv(signal)
       const location = context.execution && {
         environment: context.execution.id,
         cwd: context.execution.cwd,
@@ -409,19 +391,15 @@ export class ToolRegistry {
           toolName: name,
           args: input,
           partialResult,
-          ...(options.parentToolCallId === undefined
-            ? {}
-            : { parentToolCallId: options.parentToolCallId }),
         })
         options.onUpdate?.(partialResult)
       }
-      let nested = 0
-      const parentId = options.toolCallId ?? call.callId
       let raw: unknown
       try {
         signal?.throwIfAborted()
         raw = await tool.execute(input, {
           ...context,
+          requireEnv,
           background: this.background,
           scope: this.scope?.(),
           results: this.results,
@@ -430,28 +408,44 @@ export class ToolRegistry {
           signal,
           registry: this,
           onUpdate,
-          executeTool: (nestedName, args, nestedOptions = {}) =>
-            this.executeTool(
-              `${parentId}/${++nested}`,
-              parentId,
-              nestedName,
-              args,
-              {
-                ...nestedOptions,
-                signal: nestedOptions.signal ?? signal,
-              },
-            ),
         })
       } catch (error) {
         settled = true
+        let errorText = error instanceof Error ? error.message : String(error)
+        let afterOutput: string | ReturnType<typeof errorOutput> | unknown =
+          errorText
+        if (interception?.after) {
+          afterOutput = await interception.after(
+            name,
+            input,
+            errorText,
+            context,
+            true,
+          )
+          if (isToolContent(afterOutput)) {
+            const normalized = await normalizeToolContent(afterOutput)
+            afterOutput = normalized
+            errorText = toolContentText(normalized) || errorText
+          } else if (typeof afterOutput === 'string') {
+            errorText = afterOutput
+          }
+        }
         await history.append<ResultRecord>({
           type: 'tool_result',
           callId: call.callId,
           status: signal?.aborted ? 'cancelled' : 'failed',
           durationMs: performance.now() - started,
-          error: error instanceof Error ? error.message : String(error),
-          modelOutput: errorOutput(error),
+          error: errorText,
+          modelOutput: errorOutput(errorText),
         })
+        if (isToolContent(afterOutput))
+          throw new ToolResultError(errorText, afterOutput)
+        if (
+          typeof afterOutput === 'string' &&
+          afterOutput !==
+            (error instanceof Error ? error.message : String(error))
+        )
+          throw new ToolResultError(afterOutput)
         throw error
       }
       settled = true
@@ -462,6 +456,7 @@ export class ToolRegistry {
         name,
         results: this.results,
         environment: context.execution,
+        resolveEnvironment: requireEnv ? () => requireEnv(signal) : undefined,
         call,
         started,
         signal,
@@ -472,16 +467,14 @@ export class ToolRegistry {
       })
       let { output } = result
       const { execution } = result
-      if (execution.toolUnavailable) {
-        this.unavailableTools.add(name)
-        if (name === 'bash' && !this.selection) {
-          for (const fallback of ['list_directory', 'grep', 'find'])
-            if (this.defaultToolStates?.get(fallback) !== false)
-              this.runtimeEnabledTools.add(fallback)
-        }
-      }
       if (interception?.after) {
-        output = await interception.after(name, input, output, context)
+        output = await interception.after(
+          name,
+          input,
+          output,
+          context,
+          Boolean(execution.isError),
+        )
       }
       // Normalize after all post hooks, including replacement image payloads.
       if (isToolContent(output)) output = await normalizeToolContent(output)
@@ -519,92 +512,6 @@ export class ToolRegistry {
           }),
         ),
     )
-  }
-
-  /**
-   * Whether `name` can be run through ctx.executeTool() in this session (like pi: active direct
-   * tools and every codemode / deferred tool; never model-only or hidden ones).
-   */
-  isCallable(name: string): boolean {
-    const tool = this.tools.get(name)
-    if (!tool || !this.isAvailable(name)) return false
-    const exposure = tool.exposure ?? 'direct'
-    return exposure !== 'model-only' && exposure !== 'hidden'
-  }
-
-  /** Runs a call a tool made through ctx.executeTool(); never rejects for tool failures. */
-  private async executeTool(
-    toolCallId: string,
-    parentToolCallId: string,
-    name: string,
-    args: unknown,
-    options: ExecuteToolOptions,
-  ): Promise<ToolCallOutcome> {
-    const event = { toolCallId, toolName: name, parentToolCallId }
-    this.onEvent?.({ type: 'tool_execution_start', ...event, args })
-    const started = performance.now()
-    const finish = (result: unknown, isError: boolean, ran: boolean) => {
-      const details = this.takeDetails(toolCallId)
-      const outcome: ToolCallOutcome = {
-        toolCallId,
-        toolName: name,
-        result,
-        isError,
-        ...(ran ? { durationMs: Math.round(performance.now() - started) } : {}),
-      }
-      this.onEvent?.({
-        type: 'tool_execution_end',
-        ...event,
-        result,
-        isError,
-        ...(details === undefined || isError ? {} : { details }),
-        ...(outcome.durationMs === undefined
-          ? {}
-          : { durationMs: outcome.durationMs }),
-      })
-      return outcome
-    }
-    const tool = this.tools.get(name)
-    if (!tool || !this.isCallable(name)) {
-      const reason = tool
-        ? `[Rejected] ${name} cannot be called from a tool in this session`
-        : `Tool ${name} not found`
-      await this.recordRejection(name, toolCallId, args, reason)
-      return finish(reason, true, false)
-    }
-    let input: unknown
-    try {
-      input = await validateInput(tool.inputSchema, args)
-    } catch (error) {
-      const reason = `Invalid arguments for ${name}: ${error instanceof Error ? error.message : String(error)}`
-      await this.recordRejection(name, toolCallId, args, reason)
-      return finish(reason, true, false)
-    }
-    try {
-      const output = await this.active.track(() =>
-        this.runCall(tool, input, {
-          toolCallId,
-          parentToolCallId,
-          abortSignal: options.signal,
-          onUpdate: options.onUpdate,
-        }),
-      )
-      return output instanceof ToolRejection
-        ? finish(output.reason, true, false)
-        : finish(output, false, true)
-    } catch (error) {
-      // A failed result save stops the session, as it does for model-issued calls
-      if (error === this.persistenceFailure) throw error
-      return finish(
-        error instanceof ToolResultError && error.content
-          ? error.content
-          : error instanceof Error
-            ? error.message
-            : String(error),
-        true,
-        true,
-      )
-    }
   }
 
   /** Display data (`ToolExecutionResult.value`) of a finished call, for its `tool_execution_end`; removes it. */
@@ -655,17 +562,14 @@ export class ToolRegistry {
     for (const [key, tools] of namespaces) {
       const description = tools.find((t) => t.namespace?.description)?.namespace
         ?.description
-      const count = `${tools.length} tool${tools.length === 1 ? '' : 's'}`
-      lines.push(`- ${key} (${count})${description ? ` — ${description}` : ''}`)
+      lines.push(
+        `- ${key} (${tools.length} tool${tools.length === 1 ? '' : 's'})${description ? ` — ${description}` : ''}`,
+      )
     }
     return lines.join('\n')
   }
 
-  /**
-   * Loads deferred tools for this session (like pi's tool_search). A query of comma-separated exact
-   * tool names loads those tools; any other query loads the `limit` best BM25 matches over names,
-   * descriptions, parameters and namespaces.
-   */
+  /** Loads deferred tools (comma-separated exact names, or top `limit` BM25 matches). */
   async searchTools(query: string, limit = 8): Promise<ToolDefinition[]> {
     const loadable = this.searchableTools(true)
     const names = query

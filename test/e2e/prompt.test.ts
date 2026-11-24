@@ -77,15 +77,15 @@ function toolsSection(system: string): string {
 
 test('the prompt lists exactly the tools the session can call, and no rule names another', async () => {
   const t = createTestVela({
-    session: { tools: ['read_file', 'bash'] },
+    session: { tools: ['read', 'bash'] },
     responses: [fauxText('ok')],
   })
   await t.run('hello')
   const system = t.model.calls[0]!.system
   const tools = toolsSection(system)
-  expect(tools).toContain('- read_file:')
+  expect(tools).toContain('- read:')
   expect(tools).toContain('- bash:')
-  for (const absent of ['edit_file', 'write_file', 'tool_search']) {
+  for (const absent of ['edit', 'write', 'tool_search']) {
     expect(tools).not.toContain(absent)
     // No section advises a tool the model does not have
     expect(system).not.toContain(`${absent} with`)
@@ -96,24 +96,24 @@ test('the prompt lists exactly the tools the session can call, and no rule names
 
 test('the intro claims no capability, and the tools that are present still describe theirs', async () => {
   const intro = (prompt: string) => prompt.split('\n\n')[0]!
-  const narrow = createTestVela({ session: { tools: ['read_file'] } })
+  const narrow = createTestVela({ session: { tools: ['read'] } })
   const narrowed = (await inspectSession(narrow.vela, narrow.session))
     .systemPrompt
   expect(intro(narrowed)).toBe(
     'You are Vela, an AI agent that helps users by calling the tools this session provides.',
   )
-  expect(toolsSection(narrowed)).toContain('- read_file:')
+  expect(toolsSection(narrowed)).toContain('- read:')
 
   // A session with the execution tools keeps describing them, through `<tools>`
   const full = createTestVela()
   const system = (await inspectSession(full.vela, full.session)).systemPrompt
   expect(intro(system)).toBe(intro(narrowed))
   expect(system).toContain('- bash: Run a shell command')
-  expect(system).toContain('- edit_file: Make precise file edits')
-  expect(system).toContain('- write_file: Create or overwrite a file')
+  expect(system).toContain('- edit: Make precise file edits')
+  expect(system).toContain('- write: Create or overwrite a file')
 })
 
-test('a group session narrowed to read_file is not told it can edit files or run commands', async () => {
+test('a group session narrowed to read is not told it can edit files or run commands', async () => {
   let receive!: (message: IncomingMessage) => void | Promise<void>
   const channel: ChannelDefinition = {
     name: 'fixture',
@@ -124,7 +124,7 @@ test('a group session narrowed to read_file is not told it can edit files or run
     onMessage(handler) {
       receive = handler
     },
-    sessionOptions: () => ({ tools: ['read_file'] }),
+    sessionOptions: () => ({ tools: ['read'] }),
   }
   const t = createTestVela({
     responses: [fauxText('ok')],
@@ -147,7 +147,7 @@ test('a group session narrowed to read_file is not told it can edit files or run
   expect(system).not.toContain('editing files')
   expect(system).not.toContain('running commands')
   expect(toolsSection(system)).toBe(
-    '<tools>\n- read_file: Read file contents (text, or an image by path)\n',
+    '<tools>\n- read: Read file contents (text, or an image by path)\n',
   )
 })
 
@@ -157,21 +157,21 @@ test('the default tools carry their own rules, and hiding one drops its rule', a
   })
   await t.run('hello')
   const withDefaults = t.model.calls[0]!.system
-  expect(withDefaults).toContain('- edit_file:')
+  expect(withDefaults).toContain('- edit:')
   expect(withDefaults).toContain('- tool_search:')
   expect(withDefaults).toContain('- Read a file before you change it.')
-  expect(withDefaults).toContain('- Use read_file instead of `cat` or `sed`')
+  expect(withDefaults).toContain('- Use read instead of `cat` or `sed`')
 
   const other = createTestVela({
-    session: { tools: ['-edit_file'] },
+    session: { tools: ['-edit'] },
     responses: [fauxText('ok')],
   })
   await other.run('hello')
   const withoutEdit = other.model.calls[0]!.system
-  expect(toolsSection(withoutEdit)).not.toContain('edit_file')
+  expect(toolsSection(withoutEdit)).not.toContain('edit')
   expect(withoutEdit).not.toContain('Read a file before you change it.')
-  // write_file keeps its own rule
-  expect(withoutEdit).toContain('- write_file:')
+  // write keeps its own rule
+  expect(withoutEdit).toContain('- write:')
 })
 
 test('deferred tools are named only while tool_search can load them', async () => {
@@ -376,7 +376,7 @@ test('extension sections are tagged, so a channel session can read its own secti
   }
   const t = createTestVela({
     extensions: [section],
-    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxText('ok')],
+    responses: [fauxToolCall('read', { path: 'a.txt' }), fauxText('ok')],
     files: { 'a.txt': 'content' },
   })
   await t.run('hello')

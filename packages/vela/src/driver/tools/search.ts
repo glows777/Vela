@@ -165,7 +165,9 @@ export const createGrepTool = (
     const { pattern, path = '.', glob, ignoreCase, literal } = input
     const env =
       context?.execution ??
-      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+      (context?.requireEnv
+        ? await context.requireEnv(context?.signal)
+        : createLocalExecutionEnv({ cwd: cwd ?? process.cwd() }))
     const rg =
       env.id === 'node:local'
         ? await binary(resolveBinary, 'rg', context?.signal)
@@ -187,6 +189,7 @@ export const createGrepTool = (
     }
 
     const args = ['--json', '--line-number', '--color=never', '--hidden']
+    if (contextLines > 0) args.push('-C', String(contextLines))
     if (ignoreCase) args.push('--ignore-case')
     if (literal) args.push('--fixed-strings')
     if (glob) args.push('--glob', glob)
@@ -200,7 +203,14 @@ export const createGrepTool = (
     // --hidden would also search git's own files (logs, config); pi doesn't exclude them, Vela does
     args.push('--glob', '!.git', '--', pattern, searchPath)
 
-    const matches: { file: string; line: number; text?: string }[] = []
+    const entries: {
+      file: string
+      line: number
+      text: string
+      isMatch: boolean
+    }[] = []
+    let matchCount = 0
+    let hasMore = false
     const { code, stderr } = await runLines(
       env,
       rg,
@@ -219,76 +229,57 @@ export const createGrepTool = (
         } catch {
           return true
         }
-        if (event.type !== 'match') return true
+        if (event.type !== 'match' && event.type !== 'context') return true
         const file = event.data?.path?.text
         const lineNumber = event.data?.line_number
-        if (file && typeof lineNumber === 'number')
-          matches.push({
-            file,
-            line: lineNumber,
-            text: event.data?.lines?.text,
-          })
-        return matches.length < limit
+        if (!file || typeof lineNumber !== 'number') return true
+        if (event.type === 'match') {
+          if (matchCount >= limit) {
+            hasMore = true
+            return false
+          }
+          matchCount++
+        } else if (matchCount > limit) {
+          return false
+        }
+        entries.push({
+          file,
+          line: lineNumber,
+          text: event.data?.lines?.text ?? '',
+          isMatch: event.type === 'match',
+        })
+        return true
       },
       context?.signal,
     )
     // rg exits 1 when nothing matched; anything else is an error (bad regex, unreadable path)
     if (code !== null && code !== 0 && code !== 1)
       throw new Error(stderr.trim() || `ripgrep exited with code ${code}`)
-    if (matches.length === 0) return 'No matches found'
+    if (matchCount === 0) return 'No matches found'
 
-    const fileLines = new Map<string, string[]>()
-    const linesOf = async (file: string) => {
-      let lines = fileLines.get(file)
-      if (!lines) {
-        const result = await env.readTextFile(file, context?.signal)
-        lines = result.ok
-          ? result.value.replace(/\r\n?/g, '\n').split('\n')
-          : []
-        fileLines.set(file, lines)
-      }
-      return lines
-    }
     let linesTruncated = false
     const out: string[] = []
-    for (const match of matches) {
-      const shown = formatPath(match.file)
-      if (contextLines === 0 && match.text !== undefined) {
-        const { text, truncated } = truncateLine(
-          match.text.replace(/\r?\n$/, '').replace(/\r/g, ''),
-        )
-        linesTruncated ||= truncated
-        out.push(`${shown}:${match.line}: ${text}`)
-        continue
-      }
-      const lines = await linesOf(match.file)
-      if (!lines.length) {
-        out.push(`${shown}:${match.line}: (unable to read file)`)
-        continue
-      }
-      const start = Math.max(1, match.line - contextLines)
-      const end = Math.min(lines.length, match.line + contextLines)
-      for (let current = start; current <= end; current++) {
-        const { text, truncated } = truncateLine(
-          (lines[current - 1] ?? '').replace(/\r/g, ''),
-        )
-        linesTruncated ||= truncated
-        out.push(
-          current === match.line
-            ? `${shown}:${current}: ${text}`
-            : `${shown}-${current}- ${text}`,
-        )
-      }
+    for (const entry of entries) {
+      const shown = formatPath(entry.file)
+      const { text, truncated } = truncateLine(
+        entry.text.replace(/\r?\n$/, '').replace(/\r/g, ''),
+      )
+      linesTruncated ||= truncated
+      out.push(
+        entry.isMatch
+          ? `${shown}:${entry.line}: ${text}`
+          : `${shown}-${entry.line}- ${text}`,
+      )
     }
 
     const notices: string[] = []
-    if (matches.length >= limit)
+    if (hasMore)
       notices.push(
         `${limit} matches limit reached. Use limit=${limit * 2} for more, or refine pattern`,
       )
     if (linesTruncated)
       notices.push(
-        `Some lines truncated to ${MAX_LINE_LENGTH} chars. Use read_file to see full lines`,
+        `Some lines truncated to ${MAX_LINE_LENGTH} chars. Use read to see full lines`,
       )
     return notices.length
       ? `${out.join('\n')}\n\n[${notices.join('. ')}]`
@@ -347,7 +338,9 @@ export const createFindTool = (
     const { pattern, path = '.' } = input
     const env =
       context?.execution ??
-      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+      (context?.requireEnv
+        ? await context.requireEnv(context?.signal)
+        : createLocalExecutionEnv({ cwd: cwd ?? process.cwd() }))
     const fd =
       env.id === 'node:local'
         ? await binary(resolveBinary, 'fd', context?.signal)
@@ -364,7 +357,7 @@ export const createFindTool = (
     // git-aware behavior keeps parent .gitignore rules from crossing nested repos (same as pi)
     if (!(await insideGitRepo(env, searchPath, context?.signal)))
       args.push('--no-require-git')
-    args.push('--max-results', String(limit))
+    args.push('--max-results', String(limit + 1))
     // fd matches the basename unless --full-path; then it matches the absolute path, so a
     // pattern with a slash needs a leading **/ to match anything
     let effective = pattern
@@ -381,23 +374,48 @@ export const createFindTool = (
     }
     args.push('--', effective, searchPath)
 
-    const results: string[] = []
-    const { code, stderr } = await runLines(
-      env,
-      fd,
-      args,
-      (line) => {
-        const trimmed = line.replace(/\r$/, '').trim()
-        if (trimmed) results.push(relativeTo(searchPath, trimmed))
-        return true
-      },
-      context?.signal,
-    )
-    if (code !== 0 && results.length === 0)
+    const collect = async (cmd: string) => {
+      const found: string[] = []
+      const run = await runLines(
+        env,
+        cmd,
+        args,
+        (line) => {
+          const trimmed = line.replace(/\r$/, '').trim()
+          if (trimmed) found.push(relativeTo(searchPath, trimmed))
+          return true
+        },
+        context?.signal,
+      )
+      return { ...run, found }
+    }
+
+    let outcome: { code: number | null; stderr: string; found: string[] }
+    try {
+      outcome = await collect(fd)
+    } catch (error) {
+      if (env.id === 'node:local') throw error
+      outcome = await collect('fdfind').catch(() => {
+        throw error
+      })
+    }
+    if (
+      outcome.code !== 0 &&
+      outcome.found.length === 0 &&
+      env.id !== 'node:local' &&
+      /(?:not found|no such file|ENOENT)/i.test(outcome.stderr)
+    ) {
+      const retry = await collect('fdfind').catch(() => outcome)
+      if (retry.code === 0 || retry.found.length > 0) outcome = retry
+    }
+    const { code, stderr, found } = outcome
+    if (code !== 0 && found.length === 0)
       throw new Error(stderr.trim() || `fd exited with code ${code}`)
-    if (results.length === 0) return 'No files found matching pattern'
-    return results.length >= limit
-      ? `${results.join('\n')}\n\n[${limit} results limit reached. Use limit=${limit * 2} for more, or refine pattern]`
-      : results.join('\n')
+    if (found.length === 0) return 'No files found matching pattern'
+    const hasMore = found.length > limit
+    const shown = hasMore ? found.slice(0, limit) : found
+    return hasMore
+      ? `${shown.join('\n')}\n\n[${limit} results limit reached. Use limit=${limit * 2} for more, or refine pattern]`
+      : shown.join('\n')
   },
 })

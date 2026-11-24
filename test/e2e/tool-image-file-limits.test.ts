@@ -12,12 +12,12 @@ afterEach(cleanupTestVelas)
 const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 
 test.each(['BMC deployment checklist\n1. Restart service\n', 'BM'])(
-  'read_file preserves ordinary text beginning with BM: %s',
+  'read preserves ordinary text beginning with BM: %s',
   async (text) => {
     const t = createTestVela({
       files: { 'notes.txt': text },
       responses: [
-        fauxToolCall('read_file', { path: 'notes.txt' }),
+        fauxToolCall('read', { path: 'notes.txt' }),
         fauxText('Read the note.'),
       ],
     })
@@ -26,10 +26,10 @@ test.each(['BMC deployment checklist\n1. Restart service\n', 'BM'])(
   },
 )
 
-test('read_file refuses oversized image input before loading its bytes', async () => {
+test('read refuses oversized image input before loading its bytes', async () => {
   const t = createTestVela({
     responses: [
-      fauxToolCall('read_file', { path: 'large.data' }),
+      fauxToolCall('read', { path: 'large.data' }),
       fauxText('The image is too large.'),
     ],
   })
@@ -43,10 +43,10 @@ test('read_file refuses oversized image input before loading its bytes', async (
   expect(t.eventsOf('tool_execution_end')[0]!.isError).toBe(true)
 })
 
-test('read_file recognizes a truncated image signature and gives an invalid-image hint', async () => {
+test('read recognizes a truncated image signature and gives an invalid-image hint', async () => {
   const t = createTestVela({
     responses: [
-      fauxToolCall('read_file', { path: 'truncated.txt' }),
+      fauxToolCall('read', { path: 'truncated.txt' }),
       fauxText('The image is invalid.'),
     ],
   })
@@ -54,16 +54,16 @@ test('read_file recognizes a truncated image signature and gives an invalid-imag
   await t.run('Read truncated.txt')
   const prompt = JSON.stringify(t.model.calls[1]!.prompt)
   expect(prompt).toContain('unsupported or invalid image format')
-  expect(prompt).not.toContain('�PNG')
+  expect(prompt).not.toContain('PNG')
 })
 
-test('read_file explains that image reads ignore text pagination parameters', async () => {
+test('read explains that image reads ignore text pagination parameters', async () => {
   const image = readFileSync(
     new URL('../fixtures/images/blue.png', import.meta.url),
   )
   const faux = createFauxModel({
     responses: [
-      fauxToolCall('read_file', {
+      fauxToolCall('read', {
         path: 'picture.txt',
         offset: 100,
         limit: 1,
@@ -77,7 +77,7 @@ test('read_file explains that image reads ignore text pagination parameters', as
     model: Object.assign({}, faux, {
       async doStream(options: Parameters<typeof faux.doStream>[0]) {
         const tool = options.tools?.find(
-          (tool: { name?: string }) => tool.name === 'read_file',
+          (tool: { name?: string }) => tool.name === 'read',
         )
         if (tool?.type === 'function') description = tool.description ?? ''
         return faux.doStream(options)

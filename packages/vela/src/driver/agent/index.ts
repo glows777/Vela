@@ -11,21 +11,24 @@ import type {
   ReasoningOption,
 } from '../../shared/provider-types.ts'
 import {
-  contextRequestTokens,
   createRequestSnapshot,
+  estimateToolDefinitionsTokens,
   type RequestSnapshot,
 } from '../context/request.ts'
-import type { AssistantModelMessage, ModelMessage } from '../messages.ts'
+import {
+  type AssistantModelMessage,
+  estimateMessagesTokens,
+  type ModelMessage,
+} from '../messages.ts'
 import { getStoredResult } from '../session/tool-results.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
 import type { VelaEvent, VelaEventListener } from './events.ts'
-import { LoopDetector } from './loop-detection.ts'
 import { isContextOverflow } from './overflow.ts'
 import {
-  calculateDelay,
   classifyAgentError,
   isRetryable,
+  retryDelayMs,
   sleep,
 } from './retry.ts'
 import {
@@ -68,6 +71,10 @@ interface AgentLoopParameter {
   limits?: Partial<VelaLimits>
   /** Whether the selected model accepts image input; unknown models default to true. */
   supportsImages?: boolean
+  /** Explicit output token cap passed through to `streamText`. */
+  maxOutputTokens?: number | (() => number | undefined)
+  /** Session identifier forwarded for prompt cache routing (e.g. OpenAI `promptCacheKey`). */
+  sessionId?: string
   /**
    * AI SDK reasoning option (mapped from the thinking level); not sent when omitted. A function is
    * called before every request, so a change during the run applies to the next step (like pi).
@@ -94,11 +101,6 @@ interface AgentLoopParameter {
   /** Flush the recorded assistant tool calls before the SDK may execute them. */
   onCheckpoint?: () => Promise<void>
   /**
-   * Turns a loop-detection warning into the message appended after that step (pi's custom notice).
-   * The model sees the returned message. Absent, the warning is only an event.
-   */
-  injectNotice?: (content: string) => ModelMessage
-  /**
    * Called for an assistant message aborted or failed while it streamed. Like pi, it is kept for the session
    * record but not added to `messages`, so it is never sent to the model.
    */
@@ -123,13 +125,14 @@ export const agentLoop = async ({
   limits: limitOverrides,
   reasoning,
   supportsImages = true,
+  maxOutputTokens,
+  sessionId,
   takeSteering,
   takeFollowUp,
   newMessages = [],
   onMessage,
   onCheckpoint,
   onInterrupted,
-  injectNotice,
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   // The model that sends this loop's requests, as provider/modelId (pi's provider + api + model): the
@@ -139,8 +142,6 @@ export const agentLoop = async ({
   let hostedPauses = 0
   const hostedCalls = new Set<string>()
   const checkpoints = new WeakMap<StepMessage, AssistantModelMessage>()
-  // Each agent loop has its own call history, so concurrent sessions don't interfere
-  const loopDetector = new LoopDetector()
   const emit = (event: VelaEvent) => onEvent?.(event)
   let endReason: Extract<VelaEvent, { type: 'agent_end' }>['reason'] | undefined
 
@@ -166,9 +167,10 @@ export const agentLoop = async ({
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
   const currentReasoning = () =>
     typeof reasoning === 'function' ? reasoning() : reasoning
+  const currentMaxOutputTokens = () =>
+    typeof maxOutputTokens === 'function' ? maxOutputTokens() : maxOutputTokens
   try {
-    // Like pi: no turn limit. Run until the model stops calling tools and nothing is queued
-    // (or until aborted / stopped by loop detection)
+    // Like pi: no turn limit. Run until the model stops calling tools and nothing is queued (or aborted)
     for (;;) {
       checkDrain()
       abortSignal?.throwIfAborted()
@@ -209,16 +211,24 @@ export const agentLoop = async ({
         messages,
         abortSignal,
       )
+      const requestToolTokens = estimateToolDefinitionsTokens(
+        resolvedTools.toolDefinitions,
+      )
+      tokenTracker.syncToolTokens(requestToolTokens)
       await prepareContext?.(request)
       abortSignal?.throwIfAborted()
       const inferenceSystem = currentSystem()
       const messagesForRequest = async () =>
         transformContext ? transformContext(messages, producer) : messages
       let requestMessages = await messagesForRequest()
+      if (transformContext) {
+        tokenTracker.setContextDelta(
+          estimateMessagesTokens(requestMessages) -
+            estimateMessagesTokens(messages),
+        )
+      }
 
-      let shouldBreak = false
       const sources = new Map<string, string>()
-      let loopWarning: string | undefined
       let finalStep: ProviderStepFinal | undefined
       let step!: StepMessage
       let sourcesShown = false
@@ -237,44 +247,20 @@ export const agentLoop = async ({
         compactedForOverflow = true
         await compactOnOverflow?.(signal)
         requestMessages = await messagesForRequest()
+        tokenTracker.setContextDelta(
+          transformContext
+            ? estimateMessagesTokens(requestMessages) -
+                estimateMessagesTokens(messages)
+            : 0,
+        )
       }
-      const sizeError =
-        'Request exceeds the safe input size; this turn was stopped.'
 
       const started = performance.now()
       for (;;) {
         checkDrain()
         abortSignal?.throwIfAborted()
-        if (
-          contextRequestTokens(
-            {
-              ...request,
-              systemPrompt: inferenceSystem,
-              messages: requestMessages,
-            },
-            tokenTracker.reportedContextTokens,
-          ) > limits.maxInputTokens
-        ) {
-          if (compactedForOverflow || !compactOnOverflow) {
-            endTurnEmpty()
-            throw new Error(sizeError)
-          }
-          try {
-            await recoverOverflow(abortSignal)
-          } catch (error) {
-            endTurnEmpty()
-            abortSignal?.throwIfAborted()
-            throw new Error(
-              `${sizeError} (compacting the context to recover failed: ${errorMessageOf(error)})`,
-              { cause: error },
-            )
-          }
-          continue
-        }
         const current = new StepMessage(emit)
         step = current
-        shouldBreak = false
-        loopWarning = undefined
         try {
           const preparedMessages: ModelMessage[] = requestMessages.map(
             (message) => {
@@ -293,7 +279,7 @@ export const agentLoop = async ({
                         stored.preview.includes(
                           '[tool result preview omitted; original available at path]',
                         ) || stored.preview.includes('[preview: first ')
-                          ? `${stored.preview}\n\n[Full output: ${stored.path}; use read_file with offset to read the rest.]`
+                          ? `${stored.preview}\n\n[Full output: ${stored.path}; use read with offset to read the rest.]`
                           : stored.preview,
                     },
                   }
@@ -309,6 +295,8 @@ export const agentLoop = async ({
             tools: request.tools,
             supportsImages,
             reasoning: requestReasoning,
+            maxOutputTokens: currentMaxOutputTokens(),
+            sessionId,
             abortSignal,
             onModelCallEnd: async (event) => {
               current.modelFinished(event.finishReason, event.toolCallIds)
@@ -368,25 +356,6 @@ export const agentLoop = async ({
               case 'tool-call': {
                 if (part.providerExecuted) hostedCalls.add(part.toolCallId)
                 step.toolCallEnd(part)
-                const detectResult = loopDetector.detect(
-                  part.toolName,
-                  part.input,
-                )
-                if (detectResult.stuck) {
-                  emit({
-                    type: 'loop_detected',
-                    level: detectResult.level,
-                    detector: detectResult.detector,
-                    message: detectResult.message,
-                  })
-                  if (detectResult.level === 'critical') {
-                    shouldBreak = true
-                  } else if (detectResult.level === 'warning') {
-                    // Appended after this step's assistant and tool messages, once the call that triggered it has a result
-                    loopWarning = detectResult.message
-                  }
-                }
-                loopDetector.record(part.toolCallId, part.toolName, part.input)
                 break
               }
               case 'tool-error': {
@@ -510,7 +479,8 @@ export const agentLoop = async ({
             // Like pi: this attempt's message ends as an error (not kept in history) and the step is sent again
             step.endInterrupted('error', errorMessage)
             retried++
-            const delay = calculateDelay(
+            const delay = retryDelayMs(
+              error,
               retried,
               limits.retryBaseMs,
               limits.retryMaxMs,
@@ -549,8 +519,30 @@ export const agentLoop = async ({
         throw new Error('Agent loop did not receive a final response.')
       }
 
+      if (
+        finalStep.rawFinishReason === 'model_context_window_exceeded' &&
+        !step.toolsStarted &&
+        !checkpoints.has(step)
+      ) {
+        if (!compactedForOverflow && compactOnOverflow) {
+          step.endInterrupted('error', 'model_context_window_exceeded')
+          try {
+            await recoverOverflow(abortSignal)
+          } catch (compactError) {
+            endTurnEmpty()
+            abortSignal?.throwIfAborted()
+            throw new Error(
+              `model_context_window_exceeded (compacting the context to recover failed: ${errorMessageOf(compactError)})`,
+            )
+          }
+          continue
+        }
+        step.endInterrupted('error', 'model_context_window_exceeded')
+        throw new Error('Context overflow: model_context_window_exceeded')
+      }
+
       const inputToken = finalStep.usage.inputTokens ?? 0
-      if (inputToken > 0) tokenTracker.updateFromAPI(inputToken)
+      const outputToken = finalStep.usage.outputTokens ?? 0
 
       // Normalize usage and record it in the shared tracker
       const norm = normalizeUsage(finalStep.usage)
@@ -618,10 +610,14 @@ export const agentLoop = async ({
         const toolMessage = step.toolMessage(true)
         if (toolMessage) responseMessages.push(toolMessage)
       }
-      // The assistant message was announced while it streamed
+      // The assistant message was announced while it streamed; calibrate after assistant so only post-assistant messages count as delta.
       for (const message of responseMessages)
-        if (message.role !== 'assistant' || !checkpoints.has(step))
-          add(message, message.role !== 'assistant')
+        if (message.role === 'assistant' && !checkpoints.has(step))
+          add(message, false)
+      if (inputToken > 0 || outputToken > 0)
+        tokenTracker.updateFromAPI(inputToken, outputToken, requestToolTokens)
+      for (const message of responseMessages)
+        if (message.role !== 'assistant') add(message, true)
       const assistant = responseMessages.find(
         (message): message is AssistantModelMessage =>
           message.role === 'assistant',
@@ -651,17 +647,6 @@ export const agentLoop = async ({
         if (needToolCall) throw shutdown()
         endReason = 'done'
         break
-      }
-
-      if (shouldBreak) {
-        emit({ type: 'turn_end', turn, message: assistant, toolResults })
-        endReason = 'loop'
-        break
-      }
-
-      if (loopWarning) {
-        const notice = injectNotice?.(loopWarning)
-        if (notice) add(notice)
       }
 
       // Every turn_start has a matching turn_end; the following agent_end gives the stop reason

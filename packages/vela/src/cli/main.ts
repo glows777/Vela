@@ -3,8 +3,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
-import { migrateLegacyConfigFiles, savedTrust } from '../config/index.ts'
+import { join, resolve } from 'node:path'
+import { savedTrust } from '../config/index.ts'
 import { registerExtensionHostModules } from '../driver/config/extensions.ts'
 import {
   buildSessionPath,
@@ -45,7 +45,6 @@ import {
   type CliArgs,
   formatModelList,
   HELP,
-  legacyDataHint,
   loadCliExtensions,
   packageVersion,
   parseArgs,
@@ -75,15 +74,6 @@ if (args.help || args.version) {
 }
 if (args.setupTarget === 'github') {
   const setupAgentDir = defaultAgentDir(process.env)
-  try {
-    const migratedSetup = migrateLegacyConfigFiles(setupAgentDir)
-    for (const warning of migratedSetup.warnings) {
-      console.error(`[config] ${warning}`)
-    }
-  } catch (error) {
-    console.error(`[config] ${error instanceof Error ? error.message : error}`)
-    process.exit(1)
-  }
   const { githubSetup } = await import('./github-setup.ts')
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
   const input = interactive
@@ -188,15 +178,6 @@ const agentDir = defaultAgentDir(env)
 let config: VelaConfig
 let localOptions: LocalOptions | undefined
 try {
-  const migratedConfig = migrateLegacyConfigFiles(agentDir)
-  if (migratedConfig.createdConfig) {
-    console.error(
-      `[config] Migrated ${migratedConfig.sources.map((file) => basename(file)).join(', ')} to ${migratedConfig.path} (legacy files kept read-only)`,
-    )
-  }
-  for (const warning of migratedConfig.warnings) {
-    console.error(`[config] ${warning}`)
-  }
   const trust = await resolveTrust({
     cwd,
     agentDir,
@@ -228,8 +209,6 @@ if (previousDataDir)
       ? `[data] Using owner dataDir ${config.dataDir}. The project dataDir ${previousDataDir} is ignored.`
       : `[data] Owner environments select ${config.dataDir}. The previous settings select ${previousDataDir}. To keep using that history, pin dataDir to ${JSON.stringify(previousDataDir)} in the owner settings and restart.`,
   )
-const legacyHint = legacyDataHint(cwd, config.dataDir)
-if (legacyHint) console.error(legacyHint)
 
 /**
  * Default model: VELA_MODEL=mock / faux:<scenario> wins (offline demo, replay), then `--model` → config

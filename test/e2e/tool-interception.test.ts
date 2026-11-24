@@ -35,7 +35,7 @@ test.each(['allow', 'block', 'throw', 'cancel'] as const)(
         },
       ],
       responses: [
-        fauxToolCall('write_file', { path: 'effect.txt', content: 'written' }),
+        fauxToolCall('write', { path: 'effect.txt', content: 'written' }),
         fauxText('done'),
       ],
       allowPendingResponses: decision === 'cancel',
@@ -75,7 +75,7 @@ test('ordered async input rewrites reach later handlers, execution and original 
       },
     ],
     responses: [
-      fauxToolCall('write_file', { path: 'initial.txt', content: 'written' }),
+      fauxToolCall('write', { path: 'initial.txt', content: 'written' }),
       fauxText('done'),
     ],
   })
@@ -107,7 +107,7 @@ test('async tool_result transformations chain before the next model request with
         }))
       },
     ],
-    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxText('done')],
+    responses: [fauxToolCall('read', { path: 'a.txt' }), fauxText('done')],
   })
   const run = t.run('Read')
   await entered.promise
@@ -140,7 +140,7 @@ test('a block without a reason retains the extension rejection message', async (
       },
     ],
     responses: [
-      fauxToolCall('write_file', { path: 'blocked.txt', content: 'no' }),
+      fauxToolCall('write', { path: 'blocked.txt', content: 'no' }),
       fauxText('done'),
     ],
   })

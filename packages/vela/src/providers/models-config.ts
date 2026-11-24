@@ -375,7 +375,9 @@ function createProvider(
       }
       const transform = oauthRequests?.transformParams
       if (
-        (api !== 'openai-responses' && !transform) ||
+        (api !== 'openai-responses' &&
+          api !== 'openai-completions' &&
+          !transform) ||
         typeof model === 'string'
       ) {
         return typeof model === 'string' ? model : declareHosted(model)
@@ -388,32 +390,35 @@ function createProvider(
             ? { wrapStream: deepseekReasoningStream }
             : {}),
           transformParams: async ({ params }) => {
-            if (api === 'openai-responses') {
+            if (api === 'openai-responses' || api === 'openai-completions') {
               const openai = { ...params.providerOptions?.openai }
-              if (compat.store !== undefined && openai.store === undefined)
-                openai.store = compat.store
-              if (
-                compat.includeWebSearchSources !== undefined &&
-                openai.includeWebSearchSources === undefined
-              )
-                openai.includeWebSearchSources = compat.includeWebSearchSources
-              // The SDK infers capability from IDs; positive metadata also enables custom IDs.
-              if (
-                openai.forceReasoning === undefined &&
-                spec?.reasoning === true
-              )
-                openai.forceReasoning = true
-              const level =
-                params.reasoning === 'none' ? 'off' : params.reasoning
-              const effort =
-                level && level !== 'provider-default'
-                  ? spec?.thinkingLevelMap?.[level]
-                  : undefined
-              if (
-                openai.reasoningEffort === undefined &&
-                typeof effort === 'string'
-              )
-                openai.reasoningEffort = effort
+              if (api === 'openai-responses') {
+                if (compat.store !== undefined && openai.store === undefined)
+                  openai.store = compat.store
+                if (
+                  compat.includeWebSearchSources !== undefined &&
+                  openai.includeWebSearchSources === undefined
+                )
+                  openai.includeWebSearchSources =
+                    compat.includeWebSearchSources
+                // The SDK infers capability from IDs; positive metadata also enables custom IDs.
+                if (
+                  openai.forceReasoning === undefined &&
+                  spec?.reasoning === true
+                )
+                  openai.forceReasoning = true
+                const level =
+                  params.reasoning === 'none' ? 'off' : params.reasoning
+                const effort =
+                  level && level !== 'provider-default'
+                    ? spec?.thinkingLevelMap?.[level]
+                    : undefined
+                if (
+                  openai.reasoningEffort === undefined &&
+                  typeof effort === 'string'
+                )
+                  openai.reasoningEffort = effort
+              }
               // pi's supportsDeveloperRole: false keeps the system instruction's role.
               if (
                 compat.supportsDeveloperRole === false &&
@@ -429,15 +434,69 @@ function createProvider(
             const blockedLocalOAuth = Boolean(
               oauthRequests?.localOnly && Boolean(ctx.channel()),
             )
-            return transform &&
+            let finalParams =
+              transform &&
               !blockedLocalOAuth &&
               (await ctx.credential())?.type === 'oauth'
-              ? transform(params)
-              : params
+                ? transform(params)
+                : params
+            if (
+              api === 'openai-responses' &&
+              finalParams.providerOptions?.openai?.store === false
+            ) {
+              finalParams = stripUnencryptedResponsesItemIds(finalParams)
+            }
+            return finalParams
           },
         },
       })
       return declareHosted(wrapped)
     },
   }
+}
+
+/**
+ * When targeting `store: false` (e.g. OAuth Responses or stateless compat proxies), stored-item
+ * `rs_...` `itemId`s without `reasoningEncryptedContent` produce broken server `item_reference`s.
+ */
+function stripUnencryptedResponsesItemIds(
+  params: LanguageModelV4CallOptions,
+): LanguageModelV4CallOptions {
+  if (!Array.isArray(params.prompt)) return params
+  let changed = false
+  const prompt = params.prompt.map((message) => {
+    if (message.role !== 'assistant' || !Array.isArray(message.content))
+      return message
+    let partChanged = false
+    const content = message.content.map((part) => {
+      const openai = part.providerOptions?.openai as
+        | Record<string, unknown>
+        | undefined
+      if (
+        !openai ||
+        typeof openai.itemId !== 'string' ||
+        !openai.itemId.startsWith('rs_') ||
+        openai.reasoningEncryptedContent !== undefined
+      )
+        return part
+      partChanged = true
+      changed = true
+      const { itemId: _, ...restOpenai } = openai
+      const restOpts: Record<string, unknown> = { ...part.providerOptions }
+      if (Object.keys(restOpenai).length > 0) restOpts.openai = restOpenai
+      else delete restOpts.openai
+      if (Object.keys(restOpts).length > 0)
+        return {
+          ...part,
+          providerOptions:
+            restOpts as LanguageModelV4CallOptions['providerOptions'],
+        }
+      const { providerOptions: __, ...plain } = part
+      return plain
+    })
+    return partChanged ? { ...message, content } : message
+  })
+  return changed
+    ? ({ ...params, prompt } as LanguageModelV4CallOptions)
+    : params
 }

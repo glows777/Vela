@@ -36,7 +36,7 @@ try {
 For checks, `createTestVela()` wraps this with a temp cwd, seeded files and helpers (`run`, `eventsOf`, `eventTypes`, `lastAssistantText`, `messages`, `model.calls`, `exists`, `readFile`):
 
 ```ts
-const t = createTestVela({ files: { 'a.txt': 'A' }, responses: [fauxToolCall('read_file', { path: 'a.txt' }), (req) => fauxText(`saw ${req.toolResults[0].output}`)] })
+const t = createTestVela({ files: { 'a.txt': 'A' }, responses: [fauxToolCall('read', { path: 'a.txt' }), (req) => fauxText(`saw ${req.toolResults[0].output}`)] })
 await t.run('read it')
 t.lastAssistantText()      // the model saw the tool result
 await cleanupTestVelas()
@@ -51,7 +51,7 @@ Write a script in the run's `work/` that imports `$REPO/packages/vela/src/index.
 | Behavior | Recipe | Check | Covered in |
 |---|---|---|---|
 | One turn | `responses: [fauxText('hi')]`, `t.run('x')` | Events start `agent_start`, end `agent_settled`; 2 messages; `sessions/default/transcript.jsonl` exists | e2e/basic |
-| Parallel tools | `[[call('read_file',{path:'a.txt'}), call('read_file',{path:'b.txt'})], fauxText('ok')]` | `t.model.calls[1].toolResults.length === 2` | e2e/tools |
+| Parallel tools | `[[call('read',{path:'a.txt'}), call('read',{path:'b.txt'})], fauxText('ok')]` | `t.model.calls[1].toolResults.length === 2` | e2e/tools |
 | Retry | `[fauxError('429 Too Many Requests'), fauxText('ok')]` | One `auto_retry_start`, answer `ok` | e2e/resilience |
 | No retry on 4xx | `[fauxError('400 Bad Request: …')]` | `run` rejects with the 400; no `auto_retry_start` | e2e/resilience |
 | Broken stream | `[fauxStreamError('ECONNRESET', 'half'), fauxText('whole')]` | Only `whole` is in history | e2e/resilience |
@@ -59,20 +59,19 @@ Write a script in the run's `work/` that imports `$REPO/packages/vela/src/index.
 | Concurrent prompt | Second `prompt()` on a busy session | Rejects (use `steer` / `followUp` or `streamingBehavior`) | e2e/resilience, e2e/queue |
 | Steer | `faux: { chunkDelayMs: 20 }`, tool call then `(req) => fauxText(req.lastUserText)`; `steer('S')` during the run | The next request ends with `S` | e2e/queue |
 | Follow-up | Same, with `followUp('N')` while the first answer streams | A second answer for `N` in the same run | e2e/queue |
-| Truncated tool call | `call('read_file', {…}, { finishReason: 'length' })` | Error `tool_execution_end`; the loop continues | e2e/resilience |
+| Truncated tool call | `call('read', {…}, { finishReason: 'length' })` | Error `tool_execution_end`; the loop continues | e2e/resilience |
 | Long tool output | `call('bash', { command: 'seq 1 20000' })` | The model gets a preview and a `tool-results/<id>.txt` path | e2e/tools |
 | Manual compact | 4 turns, `generate: [fauxSummary()]`, `session.compact()` | Message 0 holds `[Summary of the earlier conversation]`; `compaction_end` reason `manual` | e2e/context |
-| Threshold compact | `limits: { summaryThreshold: 50000, microcompactThreshold: 1e9 }`, four `fauxText` replies with `usage: { input: 60000 }` on the fourth, then one more `fauxText`, `generate: [fauxSummary()]`, five short prompts | No `compaction_end` before the last prompt. That prompt emits reason `threshold`. Six ~800-character turns at a threshold of 6000 emit none, because faux reports prompt tokens and that count stays under 6000 | e2e/context |
+| Threshold compact | `limits: { summaryThreshold: 50000 }`, four `fauxText` replies with `usage: { input: 60000 }` on the fourth, then one more `fauxText`, `generate: [fauxSummary()]`, five short prompts | No `compaction_end` before the last prompt. That prompt emits reason `threshold`. Six ~800-character turns at a threshold of 6000 emit none, because faux reports prompt tokens and that count stays under 6000 | e2e/context |
 | Overflow | 4 turns, then `fauxError('prompt is too long: 250000 tokens > 200000 maximum')`, `fauxText('after')` | `compaction_end` reason `overflow`, answer `after` | e2e/context |
-| Loop detection | 11 identical `read_file` calls, then text | A `loop_detected` event | e2e/resilience |
-| Tool selection and user confirmation | `session: { tools: ['-write_file'] }`; separately load `examples/extensions/confirm-dangerous.ts` and issue `rm junk.txt`, first headless, then with a supplied `ui.confirm` | Unselected tool is not active; headless confirmation blocks with its reason visible to the model; UI approval runs the command and refusal leaves the file intact | e2e/extensions, e2e/confirm-dangerous |
+| Tool selection and user confirmation | `session: { tools: ['-write'] }`; separately load `examples/extensions/confirm-dangerous.ts` and issue `rm junk.txt`, first headless, then with a supplied `ui.confirm` | Unselected tool is not active; headless confirmation blocks with its reason visible to the model; UI approval runs the command and refusal leaves the file intact | e2e/extensions, e2e/confirm-dangerous |
 | Hooks | `extensions: [(v) => { v.on('tool_call', e => ({ block: true, reason })); v.on('tool_result', () => ({ output: 'X' })) }]` | `[Blocked by hook] …`; the model sees `X`; mutating `e.input` changes the call | e2e/extensions |
 | Providers, model, thinking | `v.registerProvider('local', { models: [{ id: 'm1', reasoning: true }], createModel })`; `await vela.ready()`; `setModel('local/m1')`, `setThinkingLevel('high')` | Answer from that model; `availableThinkingLevels()` | e2e/models |
 | Session tree | 2 turns; `fork(userEntry.id, { sessionId })`, `navigateTree(id)`, `clone({ sessionId })` | Fork returns `selectedText` and the history before it; navigate returns `editorText`; clone copies the branch | e2e/session-tree |
 | Persistence | `createVela({ cwd, dataDir: '.d', model })`, prompt, `dispose()`; a new Vela, `session(id).resume()` | Resumed history; `listSessions()`; with `sessionStorage: memorySessionStorage()`, `session.persistence.type` is `memory` | e2e/session, e2e/sessions, e2e/sdk |
 | Image inputs | Load a fixture as `{ type: 'image', data: base64, mimeType }`; `session.prompt('describe', { images })`, then steer/follow-up, resume/clone/fork; switch between text-only and vision model metadata | Provider receives an image file; oversized images become <=2000px / <=4.5 MiB; text-only request has a placeholder but history still has image data; invalid images have a text reason; summaries contain no base64 text | e2e/images, e2e/rpc |
-| Tool image results | Run `examples/sdk/06-tool-images.ts`; call read_file on a misleading image extension; replace tool content in a hook; change to a text-only model, dispose and resume | Canonical inline image, post-hook resize, text-only omission, resumed vision image; no base64 in caption files or summary text | e2e/tool-images, e2e/tool-image-file-limits, e2e/tool-image-providers |
-| Session cwd | `proj-b/AGENTS.md` exists; `vela.session('b', { cwd: 'proj-b' })`; faux `write_file` `out.txt`, then `(req) => fauxText(req.system.includes('<B rule>') ? 'yes' : 'no')` | `session.cwd` is the absolute `proj-b`; `proj-b/out.txt` exists and the Vela cwd has no `out.txt`; the system prompt carries proj-b's AGENTS.md | e2e/session-cwd |
+| Tool image results | Run `examples/sdk/06-tool-images.ts`; call read on a misleading image extension; replace tool content in a hook; change to a text-only model, dispose and resume | Canonical inline image, post-hook resize, text-only omission, resumed vision image; no base64 in caption files or summary text | e2e/tool-images, e2e/tool-image-file-limits, e2e/tool-image-providers |
+| Session cwd | `proj-b/AGENTS.md` exists; `vela.session('b', { cwd: 'proj-b' })`; faux `write` `out.txt`, then `(req) => fauxText(req.system.includes('<B rule>') ? 'yes' : 'no')` | `session.cwd` is the absolute `proj-b`; `proj-b/out.txt` exists and the Vela cwd has no `out.txt`; the system prompt carries proj-b's AGENTS.md | e2e/session-cwd |
 | Many sessions | `Promise.all([a.prompt('A'), b.prompt('B')])` | Separate histories | e2e/sessions |
 | User bash, dispose | `session.executeBash('echo X')`, then `run` | `exitCode` 0; `vela.session()` throws after `dispose()` | e2e/user-bash, e2e/disposal |
 

@@ -239,7 +239,7 @@ test('deleting the last memory replaces the old index message', async () => {
 
 test('automatic compaction keeps the memory index in the request it summarizes', async () => {
   const t = withMemory({
-    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
+    limits: { summaryThreshold: 50_000 },
     responses: [
       fauxText('Answer 0'),
       fauxText('Answer 1'),

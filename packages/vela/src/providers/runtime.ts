@@ -386,6 +386,8 @@ export interface StreamProviderStepOptions {
   tools: ResolvedProviderTools
   supportsImages?: boolean
   reasoning?: ReasoningOption
+  maxOutputTokens?: number
+  sessionId?: string
   abortSignal?: AbortSignal
   onModelCallEnd?: (info: {
     finishReason: FinishReason
@@ -393,6 +395,11 @@ export interface StreamProviderStepOptions {
     hasClientToolCalls: boolean
     buildCheckpoint: () => Promise<VelaAssistantMessage>
   }) => Promise<void>
+}
+
+function isAnthropicModel(model: LanguageModel): boolean {
+  if (typeof model === 'string') return model.startsWith('anthropic/')
+  return model.provider.startsWith('anthropic')
 }
 
 export function streamProviderStep(options: StreamProviderStepOptions): {
@@ -407,6 +414,7 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
     options.messages,
     options.supportsImages ?? true,
     toolImagesAsUser,
+    { normalizeToolCallIds: isAnthropicModel(aiModel) },
   )
 
   const result = streamText({
@@ -417,7 +425,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
       messages: modelMessages,
     }),
     maxRetries: 0,
+    ...(options.maxOutputTokens !== undefined
+      ? { maxOutputTokens: options.maxOutputTokens }
+      : {}),
     ...(options.reasoning ? { reasoning: options.reasoning } : {}),
+    ...(options.sessionId
+      ? { providerOptions: { openai: { promptCacheKey: options.sessionId } } }
+      : {}),
     abortSignal: options.abortSignal,
     onError: () => {},
     onLanguageModelCallEnd: options.onModelCallEnd
@@ -604,7 +618,9 @@ export async function generateProviderText(options: {
     ? await generateText({
         model: aiModel,
         instructions: options.instructions,
-        messages: toAiModelMessages(options.messages, false),
+        messages: toAiModelMessages(options.messages, false, false, {
+          normalizeToolCallIds: isAnthropicModel(aiModel),
+        }),
         abortSignal: options.abortSignal,
         maxOutputTokens: options.maxOutputTokens,
         maxRetries: 0,

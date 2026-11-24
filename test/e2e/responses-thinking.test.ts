@@ -156,7 +156,7 @@ test('DeepSeek reasoning preserves tool execution and the following answer', asy
       body,
       'text',
       requests.length === 1
-        ? { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }) }
+        ? { name: 'read', arguments: JSON.stringify({ path: 'a.txt' }) }
         : undefined,
     )
   }) as typeof fetch
@@ -169,7 +169,7 @@ test('DeepSeek reasoning preserves tool execution and the following answer', asy
   await t.run('Read a.txt then answer OK')
   expect(t.eventsOf('tool_execution_start')).toHaveLength(1)
   expect(t.eventsOf('tool_execution_start')[0]).toMatchObject({
-    toolName: 'read_file',
+    toolName: 'read',
     args: { path: 'a.txt' },
   })
   expect(t.eventsOf('tool_execution_end')[0]?.isError).toBe(false)

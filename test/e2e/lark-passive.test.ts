@@ -12,6 +12,7 @@ import { messageTime } from '../../packages/vela/src/lark/history.ts'
 import { type LarkOptions, lark } from '../../packages/vela/src/lark/index.ts'
 import { UNTAGGED_INPUT } from '../../packages/vela/src/legacy-channels/input.ts'
 import {
+  fauxError,
   fauxStreamError,
   fauxText,
   fauxToolCall,
@@ -239,7 +240,11 @@ test('a passive flood is trimmed to a safe evaluation and the next explicit inpu
 
 test('a passive input rejected by the context guard leaves the session usable', async () => {
   const run = setup({
-    responses: [fauxText('first answer'), fauxText('owner answer')],
+    responses: [
+      fauxText('first answer'),
+      fauxError('400 prompt is too long: 213462 tokens > 200000 maximum'),
+      fauxText('owner answer'),
+    ],
   })
   await run.start()
   // Each input is inside the merge budget, but together with the answered one it exceeds the
@@ -259,7 +264,7 @@ test('a passive input rejected by the context guard leaves the session usable', 
     { messageId: 'big-1', text: 'first answer' },
     { messageId: 'owner', text: 'owner answer' },
   ])
-  expect(run.t.model.calls).toHaveLength(2)
+  expect(run.t.model.calls).toHaveLength(3)
   // The rejected input left the branch instead of staying at the leaf.
   expect(
     JSON.stringify(run.t.vela.session('lark-oc_group').messages),

@@ -114,8 +114,6 @@ export interface CallOptions {
   recovery?: CallRecord
   toolCallId?: string
   abortSignal?: AbortSignal
-  /** Set for calls a tool made through ctx.executeTool() */
-  parentToolCallId?: string
   onUpdate?: (partialResult: unknown) => void
 }
 

@@ -184,13 +184,6 @@
     tokensBefore: number
   function configString: (config: Readonly<Record<string, unknown>>, key: string) => string | undefined
   function configStrings: (config: Readonly<Record<string, unknown>>, key: string) => string[] | undefined
-  interface ContextEditEntry
-    id: string
-    parentId: string | null
-    replacement: { content: ModelMessage["content"]; } | null
-    targetId: string
-    timestamp: string
-    type: "context_edit"
   interface ContextEvent
     messages: VelaMessage[]
     type: "context"
@@ -245,9 +238,6 @@
     docs?: string | undefined
     examples?: string | undefined
     readme?: string | undefined
-  interface ExecuteToolOptions
-    onUpdate?: ((partialResult: unknown) => void) | undefined
-    signal?: AbortSignal | undefined
   interface ExecutionEnv
     absolutePath: (path: string, signal?: AbortSignal) => Promise<Result<string, FileError>>
     canonicalPath: (path: string, signal?: AbortSignal) => Promise<Result<string, FileError>>
@@ -292,8 +282,6 @@
     isError?: boolean | undefined
     signal?: string | null | undefined
     timedOut?: boolean | undefined
-    timedOutAfterMs?: number | undefined
-    toolUnavailable?: boolean | undefined
   interface ExtensionAPI
     on: { <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>): () => void; (event: "tool_call", toolName: string, handler: ExtensionHandler<"tool_call">): () => void; }
     onShutdown: (handler: () => void | Promise<void>) => void
@@ -694,17 +682,6 @@
     focus?: string | undefined
     label?: string | undefined
     summarize?: boolean | undefined
-  interface NestedToolCallRecord
-    arguments?: unknown
-    argumentsBytes?: number | undefined
-    durationMs?: number | undefined
-    error?: string | undefined
-    id: string
-    name: string
-    status: "error" | "ok" | "unfinished"
-  interface NestedToolCalls
-    calls: NestedToolCallRecord[]
-    complete: boolean
   interface OAuthCredential
     access: string
     expires: number
@@ -910,7 +887,6 @@
       | SessionArchivedEntry
       | SessionChannelEntry
       | CompactionEntry
-      | ContextEditEntry
       | BranchSummaryEntry
       | LabelEntry
       | CustomEntry
@@ -945,7 +921,6 @@
     details?: Record<string, unknown> | undefined
     id: string
     message: VelaMessage
-    nestedCalls?: Record<string, NestedToolCalls> | undefined
     parentId: string | null
     producedBy?: string | undefined
     stopReason?: "aborted" | "error" | undefined
@@ -1100,19 +1075,12 @@
     type: "tool-approval-response"
   interface ToolCallEvent
     input: Record<string, unknown>
-    parentToolCallId?: string | undefined
     toolCallId: string | undefined
     toolName: string
     type: "tool_call"
   interface ToolCallEventResult
     block?: boolean | undefined
     reason?: string | undefined
-  interface ToolCallOutcome
-    durationMs?: number | undefined
-    isError: boolean
-    result: unknown
-    toolCallId: string
-    toolName: string
   interface ToolCallPart
     input: unknown
     providerExecuted?: boolean | undefined
@@ -1122,8 +1090,8 @@
     type: "tool_call"
   type ToolContent = (TextContent | ImageContent)[]
   interface ToolContext
-    executeTool?: ((name: string, args: unknown, options?: ExecuteToolOptions) => Promise<ToolCallOutcome>) | undefined
     onUpdate?: ((partialResult: unknown) => void) | undefined
+    requireEnv?: ((signal?: AbortSignal) => Promise<ExecutionEnv>) | undefined
     scope?: Readonly<SessionScope> | undefined
     sessionId?: string | undefined
     signal?: AbortSignal | undefined
@@ -1180,23 +1148,14 @@
       mediaType: string
       }
       | {
-      type: 'image-data'
-      data: string
-      mediaType: string
-      }
-      | {
       type: 'custom'
       providerOptions?: ProviderOptions
-      }
-      | {
-      type: 'image-file-reference'
-      [key: string]: unknown
       }
   interface ToolResultEvent
     content?: ToolContent | undefined
     input: unknown
+    isError?: boolean | undefined
     output: string
-    parentToolCallId?: string | undefined
     toolCallId: string | undefined
     toolName: string
     type: "tool_result"
@@ -1312,7 +1271,6 @@
       toolCallId: string
       toolName: string
       args: unknown
-      parentToolCallId?: string
       }
       | {
       type: 'tool_execution_update'
@@ -1320,7 +1278,6 @@
       toolName: string
       args: unknown
       partialResult: unknown
-      parentToolCallId?: string
       }
       | {
       type: 'tool_execution_end'
@@ -1330,13 +1287,6 @@
       isError: boolean
       details?: unknown
       durationMs?: number
-      parentToolCallId?: string
-      }
-      | {
-      type: 'loop_detected'
-      level: 'warning' | 'critical'
-      detector: string
-      message: string
       }
       | {
       type: 'auto_retry_start'
@@ -1366,7 +1316,7 @@
       | {
       type: 'agent_end'
       messages: ModelMessage[]
-      reason: 'done' | 'loop' | 'aborted' | 'error'
+      reason: 'done' | 'aborted' | 'error'
       error?: unknown
       errorKind?: AgentErrorKind
       }
@@ -1375,11 +1325,8 @@
       | { type: 'bash_execution_update'; id?: string; delta: string }
       | {
       type: 'context_prepare'
-      action: 'micro' | 'summary-required'
+      action: 'summary-required'
       before: number
-      after?: number
-      saved?: number
-      calls?: number
       }
       | { type: 'compaction_start'; reason: CompactionReason }
       | {
@@ -1432,9 +1379,6 @@
   interface VelaLimits
     maxInputTokens: number
     maxRetries: number
-    microcompact: boolean
-    microcompactThreshold: number
-    minMicroSavings: number
     retryBaseMs: number
     retryMaxMs: number
     summaryThreshold: number
@@ -1633,9 +1577,6 @@
   function customMessageIfChanged: (session: VelaSession, customType: string, content: string) => CustomMessage | undefined
   function customMessageMissing: (messages: readonly ModelMessage[], markers: readonly string[]) => boolean
   function defineJsonSchemaTool: (tool: ToolDefinition & { inputSchema: VelaJsonSchema<unknown>; }) => ToolDefinition
-  interface ExecuteToolOptions
-    onUpdate?: ((partialResult: unknown) => void) | undefined
-    signal?: AbortSignal | undefined
   interface ExtensionAPI
     on: { <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>): () => void; (event: "tool_call", toolName: string, handler: ExtensionHandler<"tool_call">): () => void; }
     onShutdown: (handler: () => void | Promise<void>) => void
@@ -1769,23 +1710,16 @@
     readOnlyHint?: boolean | undefined
   interface ToolCallEvent
     input: Record<string, unknown>
-    parentToolCallId?: string | undefined
     toolCallId: string | undefined
     toolName: string
     type: "tool_call"
   interface ToolCallEventResult
     block?: boolean | undefined
     reason?: string | undefined
-  interface ToolCallOutcome
-    durationMs?: number | undefined
-    isError: boolean
-    result: unknown
-    toolCallId: string
-    toolName: string
   type ToolContent = (TextContent | ImageContent)[]
   interface ToolContext
-    executeTool?: ((name: string, args: unknown, options?: ExecuteToolOptions) => Promise<ToolCallOutcome>) | undefined
     onUpdate?: ((partialResult: unknown) => void) | undefined
+    requireEnv?: ((signal?: AbortSignal) => Promise<ExecutionEnv>) | undefined
     scope?: Readonly<SessionScope> | undefined
     sessionId?: string | undefined
     signal?: AbortSignal | undefined
@@ -1830,8 +1764,8 @@
   interface ToolResultEvent
     content?: ToolContent | undefined
     input: unknown
+    isError?: boolean | undefined
     output: string
-    parentToolCallId?: string | undefined
     toolCallId: string | undefined
     toolName: string
     type: "tool_result"
@@ -1880,7 +1814,6 @@
       toolCallId: string
       toolName: string
       args: unknown
-      parentToolCallId?: string
       }
       | {
       type: 'tool_execution_update'
@@ -1888,7 +1821,6 @@
       toolName: string
       args: unknown
       partialResult: unknown
-      parentToolCallId?: string
       }
       | {
       type: 'tool_execution_end'
@@ -1898,13 +1830,6 @@
       isError: boolean
       details?: unknown
       durationMs?: number
-      parentToolCallId?: string
-      }
-      | {
-      type: 'loop_detected'
-      level: 'warning' | 'critical'
-      detector: string
-      message: string
       }
       | {
       type: 'auto_retry_start'
@@ -1934,7 +1859,7 @@
       | {
       type: 'agent_end'
       messages: ModelMessage[]
-      reason: 'done' | 'loop' | 'aborted' | 'error'
+      reason: 'done' | 'aborted' | 'error'
       error?: unknown
       errorKind?: AgentErrorKind
       }
@@ -1943,11 +1868,8 @@
       | { type: 'bash_execution_update'; id?: string; delta: string }
       | {
       type: 'context_prepare'
-      action: 'micro' | 'summary-required'
+      action: 'summary-required'
       before: number
-      after?: number
-      saved?: number
-      calls?: number
       }
       | { type: 'compaction_start'; reason: CompactionReason }
       | {
@@ -2156,7 +2078,7 @@
     path: string
   interface ReplayResult
     errors: unknown[]
-    t: Omit<{ vela: Vela; session: VelaSession; cwd: string; dataDir: string; events: VelaEvent[]; readonly model: FauxModel; readonly messages: ModelMessage[]; run: (input: string, runOptions?: PromptOptions) => Promise<void>; tracker: () => TokenTracker; eventTypes: () => VelaEvent["type"][]; eventsOf: <T extends VelaEvent["type"]>(type: T) => (Extract<{ type: "agent_start"; input: string; }, { type: T; }> | Extract<{ type: "turn_start"; turn: number; }, { type: T; }> | Extract<{ type: "message_start"; message: ModelMessage; custom?: CustomMessageInfo; }, { type: T; }> | Extract<{ type: "message_update"; message: AssistantModelMessage; assistantMessageEvent: AssistantMessageEvent; }, { type: T; }> | Extract<{ type: "message_end"; message: ModelMessage; stopReason?: StopReason; errorMessage?: string; custom?: CustomMessageInfo; }, { type: T; }> | Extract<{ type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean; details?: unknown; durationMs?: number; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "loop_detected"; level: "warning" | "critical"; detector: string; message: string; }, { type: T; }> | Extract<{ type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; }, { type: T; }> | Extract<{ type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string; }, { type: T; }> | Extract<{ type: "usage"; modelId: string; usage: StepUsage; record?: StepRecord; }, { type: T; }> | Extract<{ type: "turn_end"; turn: number; message: AssistantModelMessage; toolResults: ToolResultPart[]; }, { type: T; }> | Extract<{ type: "agent_end"; messages: ModelMessage[]; reason: "done" | "loop" | "aborted" | "error"; error?: unknown; errorKind?: AgentErrorKind; }, { type: T; }> | Extract<{ type: "queue_update"; steering: string[]; followUp: string[]; }, { type: T; }> | Extract<{ type: "agent_settled"; }, { type: T; }> | Extract<{ type: "bash_execution_update"; id?: string; delta: string; }, { type: T; }> | Extract<{ type: "context_prepare"; action: "micro" | "summary-required"; before: number; after?: number; saved?: number; calls?: number; }, { type: T; }> | Extract<{ type: "compaction_start"; reason: CompactionReason; }, { type: T; }> | Extract<{ type: "compaction_end"; reason: CompactionReason; result?: CompactionResult; aborted: boolean; willRetry: boolean; errorMessage?: string; }, { type: T; }> | Extract<{ type: "session_save_failed"; error: unknown; }, { type: T; }> | Extract<{ type: "audit"; toolName: string; path: string; }, { type: T; }> | Extract<{ type: "notify"; message: string; level: "info" | "warning" | "error"; }, { type: T; }> | Extract<{ type: "channel_message"; channel: string; senderId: string; senderName: string; text: string; }, { type: T; }> | Extract<{ type: "channel_reply"; channel: string; recipientId: string; text: string; }, { type: T; }> | Extract<{ type: "channel_error"; channel: string; senderId: string; error: unknown; aborted: boolean; source?: "feedback"; }, { type: T; }>)[]; eventsIn: (sessionId: string) => VelaEvent[]; clearEvents: () => void; streamedText: () => string; lastAssistantText: () => string; path: (relative: string) => string; dataPath: (relative: string) => string; exists: (relative: string) => boolean; readData: (relative: string) => Promise<string>; readFile: (relative: string) => Promise<string>; writeFile: (relative: string, content: string) => void; cleanup({ keepDir }?: { keepDir?: boolean | undefined; }): Promise<void>; }, "vela"> & { vela: Vela; }
+    t: Omit<{ vela: Vela; session: VelaSession; cwd: string; dataDir: string; events: VelaEvent[]; readonly model: FauxModel; readonly messages: ModelMessage[]; run: (input: string, runOptions?: PromptOptions) => Promise<void>; tracker: () => TokenTracker; eventTypes: () => VelaEvent["type"][]; eventsOf: <T extends VelaEvent["type"]>(type: T) => (Extract<{ type: "agent_start"; input: string; }, { type: T; }> | Extract<{ type: "turn_start"; turn: number; }, { type: T; }> | Extract<{ type: "message_start"; message: ModelMessage; custom?: CustomMessageInfo; }, { type: T; }> | Extract<{ type: "message_update"; message: AssistantModelMessage; assistantMessageEvent: AssistantMessageEvent; }, { type: T; }> | Extract<{ type: "message_end"; message: ModelMessage; stopReason?: StopReason; errorMessage?: string; custom?: CustomMessageInfo; }, { type: T; }> | Extract<{ type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; }, { type: T; }> | Extract<{ type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; }, { type: T; }> | Extract<{ type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean; details?: unknown; durationMs?: number; }, { type: T; }> | Extract<{ type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; }, { type: T; }> | Extract<{ type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string; }, { type: T; }> | Extract<{ type: "usage"; modelId: string; usage: StepUsage; record?: StepRecord; }, { type: T; }> | Extract<{ type: "turn_end"; turn: number; message: AssistantModelMessage; toolResults: ToolResultPart[]; }, { type: T; }> | Extract<{ type: "agent_end"; messages: ModelMessage[]; reason: "done" | "aborted" | "error"; error?: unknown; errorKind?: AgentErrorKind; }, { type: T; }> | Extract<{ type: "queue_update"; steering: string[]; followUp: string[]; }, { type: T; }> | Extract<{ type: "agent_settled"; }, { type: T; }> | Extract<{ type: "bash_execution_update"; id?: string; delta: string; }, { type: T; }> | Extract<{ type: "context_prepare"; action: "summary-required"; before: number; }, { type: T; }> | Extract<{ type: "compaction_start"; reason: CompactionReason; }, { type: T; }> | Extract<{ type: "compaction_end"; reason: CompactionReason; result?: CompactionResult; aborted: boolean; willRetry: boolean; errorMessage?: string; }, { type: T; }> | Extract<{ type: "session_save_failed"; error: unknown; }, { type: T; }> | Extract<{ type: "audit"; toolName: string; path: string; }, { type: T; }> | Extract<{ type: "notify"; message: string; level: "info" | "warning" | "error"; }, { type: T; }> | Extract<{ type: "channel_message"; channel: string; senderId: string; senderName: string; text: string; }, { type: T; }> | Extract<{ type: "channel_reply"; channel: string; recipientId: string; text: string; }, { type: T; }> | Extract<{ type: "channel_error"; channel: string; senderId: string; error: unknown; aborted: boolean; source?: "feedback"; }, { type: T; }>)[]; eventsIn: (sessionId: string) => VelaEvent[]; clearEvents: () => void; streamedText: () => string; lastAssistantText: () => string; path: (relative: string) => string; dataPath: (relative: string) => string; exists: (relative: string) => boolean; readData: (relative: string) => Promise<string>; readFile: (relative: string) => Promise<string>; writeFile: (relative: string, content: string) => void; cleanup({ keepDir }?: { keepDir?: boolean | undefined; }): Promise<void>; }, "vela"> & { vela: Vela; }
   function replayScenario: (path: string, options?: Omit<TestVelaOptions, "responses" | "generate" | "model">) => Promise<ReplayResult>
   function tempDir: (prefix?: string) => { path: string; cleanup(): void; }
   type TestVela = ReturnType<typeof createTestVela>

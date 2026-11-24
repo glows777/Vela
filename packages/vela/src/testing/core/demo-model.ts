@@ -291,11 +291,11 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
 
   // Built-in tools (not deferred, called directly)
   if (text.includes('测试截断') || text.includes('test truncation')) {
-    return { toolName: 'read_file', args: { path: 'sample-data.txt' } }
+    return { toolName: 'read', args: { path: 'sample-data.txt' } }
   }
   if (text.includes('测试编辑') || text.includes('test edit')) {
     return {
-      toolName: 'edit_file',
+      toolName: 'edit',
       args: {
         path: 'sample-data.txt',
         edits: [
@@ -346,7 +346,7 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
       text.includes('文件') ||
       text.includes('file'))
   ) {
-    return { toolName: 'read_file', args: { path: fileMatch[1] } }
+    return { toolName: 'read', args: { path: fileMatch[1] } }
   }
 
   return null

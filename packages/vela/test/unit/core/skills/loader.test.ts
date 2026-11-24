@@ -94,11 +94,11 @@ test('the prompt section lists name, description and location, needs a reading t
   })
   const loader = new SkillLoader([join(root, 'skills')])
   loader.load()
-  const section = loader.buildPromptSection(['read_file', 'bash'])!
+  const section = loader.buildPromptSection(['read', 'bash'])!
   // The builder wraps this content in <skills>
   expect(section.startsWith('<skills>')).toBe(false)
   expect(section.startsWith('The following skills')).toBe(true)
-  expect(section).toContain('Use the read_file tool to load')
+  expect(section).toContain('Use the read tool to load')
   expect(section).toContain('<name>review</name>')
   expect(section).toContain(
     '<description>Review &lt;code&gt; &amp; more</description>',

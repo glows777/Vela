@@ -39,6 +39,29 @@ const executesTools = (finishReason: FinishReason) =>
 export const errorMessageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
+const TOOL_DELTA_PARSE_INTERVAL_MS = 50
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+function deepMergeOptions(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...target }
+  for (const [key, value] of Object.entries(patch)) {
+    const existing = merged[key]
+    merged[key] =
+      isPlainRecord(existing) && isPlainRecord(value)
+        ? deepMergeOptions(existing, value)
+        : value
+  }
+  return merged
+}
+
 /**
  * One model request's assistant message as it streams, turned into pi-shaped events:
  * `message_start`, `message_update`s, `message_end`, then `tool_execution_start / end` for its tool calls.
@@ -48,6 +71,7 @@ export class StepMessage {
   private readonly content: ContentPart[] = []
   private readonly byStreamId = new Map<string, number>()
   private readonly rawToolInput = new Map<string, string>()
+  private readonly lastDeltaParseAt = new Map<string, number>()
   /** Tool calls the model finished writing, in order */
   readonly toolCalls: ToolCallPart[] = []
   /** Tool calls that got a result or an error, by id */
@@ -129,7 +153,12 @@ export class StepMessage {
   private merge(index: number, providerMetadata: ProviderOptions | undefined) {
     const part = this.content[index]
     if (!part || !providerMetadata) return
-    part.providerOptions = { ...part.providerOptions, ...providerMetadata }
+    part.providerOptions = part.providerOptions
+      ? (deepMergeOptions(
+          part.providerOptions as Record<string, unknown>,
+          providerMetadata as Record<string, unknown>,
+        ) as ProviderOptions)
+      : providerMetadata
   }
 
   textStart(id: string, providerMetadata?: ProviderOptions): void {
@@ -216,9 +245,14 @@ export class StepMessage {
     if (contentIndex === undefined) return
     const raw = (this.rawToolInput.get(id) ?? '') + delta
     this.rawToolInput.set(id, raw)
-    const parsed = await parsePartialJson(raw)
-    const part = this.content[contentIndex] as ToolCallPart
-    if (parsed.value !== undefined) part.input = parsed.value
+    const now = performance.now()
+    const last = this.lastDeltaParseAt.get(id)
+    if (last === undefined || now - last >= TOOL_DELTA_PARSE_INTERVAL_MS) {
+      this.lastDeltaParseAt.set(id, now)
+      const parsed = await parsePartialJson(raw)
+      const part = this.content[contentIndex] as ToolCallPart
+      if (parsed.value !== undefined) part.input = parsed.value
+    }
     this.update({ type: 'toolcall_delta', contentIndex, delta })
   }
 
@@ -229,6 +263,8 @@ export class StepMessage {
     providerExecuted?: boolean
     providerMetadata?: ProviderOptions
   }): void {
+    this.lastDeltaParseAt.delete(call.toolCallId)
+    this.rawToolInput.delete(call.toolCallId)
     if (!this.byStreamId.has(call.toolCallId))
       this.toolCallStart(
         call.toolCallId,

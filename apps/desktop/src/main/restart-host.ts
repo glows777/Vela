@@ -1,8 +1,4 @@
 import { saveLarkSection } from '@glows777/vela'
-import {
-  defaultAgentDir,
-  migrateLegacyConfigFiles,
-} from '@glows777/vela/legacy-desktop'
 import { ipcMain, type WebContents } from 'electron'
 import { REQUEST, type Request } from '../shared/bridge.ts'
 import { openAvailableHost, openHost } from './host.ts'
@@ -22,7 +18,6 @@ const reloadDiagnostic =
 
 /** Only writing settings and replacing the host require exclusive access. */
 export async function startHost() {
-  migrateLegacyConfigFiles(defaultAgentDir(process.env))
   let workingConfig = loadDesktopConfig(process.cwd())
   type Host = Awaited<ReturnType<typeof openHost>>
   let host: Promise<Host> | undefined = Promise.resolve(

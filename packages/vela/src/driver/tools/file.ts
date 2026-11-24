@@ -1,5 +1,6 @@
 import z from 'zod'
 import { imageMimeType, isBinaryFile } from '../../shared/images/metadata.ts'
+import { followFileInfo } from '../execution/file-info.ts'
 import { createLocalExecutionEnv } from '../execution/local.ts'
 import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
 import {
@@ -12,11 +13,10 @@ import {
   splitBom,
 } from './edit-diff.ts'
 import { withEnvironmentMutationQueue } from './file-mutation-queue.ts'
-import { stateFor } from './file-write-guard.ts'
 import type { ToolDefinition } from './registry.ts'
 import { ToolExecutionResult } from './types.ts'
 
-/** Default page of read_file, same as pi: 2000 lines or 50KB, whichever comes first */
+/** Default page of read, same as pi: 2000 lines or 50KB, whichever comes first */
 const READ_MAX_LINES = 2000
 const READ_MAX_BYTES = 50 * 1024
 
@@ -108,13 +108,13 @@ export const readFileParamSchema = z.object({
     ),
 })
 export const createReadFileTool = (cwd?: string): ToolDefinition => ({
-  name: 'read_file',
+  name: 'read',
   replay: 'safe',
   description: `Reads a text file, a saved tool result file, or a JPEG, PNG, GIF, WebP or BMP image detected by its contents. Images are returned whole as image content; offset, limit and column are ignored for images and only paginate text. A text page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. When more content remains, appends a footer with the range shown and the offset/column for the next page. At EOF, returns only the file content with no added footer.`,
   inputSchema: readFileParamSchema,
   annotations: { readOnlyHint: true },
   promptSnippet: 'Read file contents (text, or an image by path)',
-  promptGuidelines: ['Use read_file instead of `cat` or `sed` to read a file.'],
+  promptGuidelines: ['Use read instead of `cat` or `sed` to read a file.'],
   // A full page plus the footer must fit, so pages are never saved to a file again
   maxResultChars: READ_MAX_BYTES + 1024,
   execute: async (input: z.infer<typeof readFileParamSchema>, context) => {
@@ -126,16 +126,14 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     } = readFileParamSchema.parse(input)
     const env =
       context?.execution ??
-      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+      (context?.requireEnv
+        ? await context.requireEnv(context?.signal)
+        : createLocalExecutionEnv({ cwd: cwd ?? process.cwd() }))
     const file = unwrap(await env.absolutePath(path, context?.signal))
     const image = await readSpecialFile(env, file, path, context?.signal)
     if (image) return image
-    const state = stateFor(context)
-    const canonical = unwrap(await env.canonicalPath(file, context?.signal))
-    const guardKey = `${env.id}:${canonical}`
-    const snapshot = unwrap(await env.fileInfo(canonical, context?.signal))
     const decoder = new TextDecoder('utf-8', { fatal: true })
-    // Validate every chunk the pager reads, including bytes past the header.
+    // Validate every chunk the pager reads, starting at the requested line.
     // Streaming preserves UTF-8 characters split across chunks.
     const decodeText = (bytes?: Buffer): string => {
       if (bytes?.includes(0)) throw binaryFileError(path)
@@ -145,12 +143,12 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
         throw binaryFileError(path)
       }
     }
-    let line = 1
+    let line = offset
     let col = 0
     let body = ''
     let bodyBytes = 0
     let more = false
-    let reachedStart = offset === 1 && column === 0
+    let reachedStart = column === 0
     let lastLine = offset
     const consume = (text: string): boolean => {
       for (const char of text) {
@@ -186,7 +184,15 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       await env.openBinaryReader(file, undefined, context?.signal),
     )
     try {
-      let position = 0
+      const scan = unwrap(
+        await reader.scanLines(
+          { startLine: offset - 1, endLine: offset - 1 + limit },
+          context?.signal,
+        ),
+      )
+      if (offset - 1 > scan.newlines)
+        throw new Error('offset/column is past the end of the file')
+      let position = scan.start
       while (true) {
         const chunk = unwrap(
           await reader.read(position, 64 * 1024, context?.signal),
@@ -201,13 +207,9 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     if (!more) consume(decodeText())
     if (!reachedStart && !(line === offset && col === column))
       throw new Error('offset/column is past the end of the file')
-    if (!more) {
-      state?.noteRead(guardKey, offset, column, undefined, snapshot)
-      return body
-    }
-    state?.noteRead(guardKey, offset, column, { line, col }, snapshot)
-    const next = `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
-    return `${body}\n\n[read_file: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`
+    if (!more) return body
+    const next = `More content exists. Continue read with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
+    return `${body}\n\n[read: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`
   },
 })
 
@@ -218,13 +220,13 @@ const writeFileToolParamSchema = z.object({
   content: z.string().describe('Full content to write'),
 })
 export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
-  name: 'write_file',
+  name: 'write',
   description:
     'Writes content to a file, replacing the whole file. Creates the file and missing parent directories.',
   inputSchema: writeFileToolParamSchema,
   promptSnippet: 'Create or overwrite a file',
   promptGuidelines: [
-    'Use write_file only for new files or complete rewrites; read a file before you replace it.',
+    'Use write only for new files or complete rewrites; read a file before you replace it.',
   ],
   annotations: { destructiveHint: true, idempotentHint: true },
   execute: async (
@@ -233,32 +235,17 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
   ) => {
     const env =
       context?.execution ??
-      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+      (context?.requireEnv
+        ? await context.requireEnv(context?.signal)
+        : createLocalExecutionEnv({ cwd: cwd ?? process.cwd() }))
     const signal = context?.signal
     const resolved = unwrap(await env.absolutePath(path, signal))
-    const state = stateFor(context)
     await withEnvironmentMutationQueue(
       resolved,
-      async (canonical) => {
-        const guardKey = `${env.id}:${canonical}`
-        if (state) {
-          const info = await env.fileInfo(canonical, signal)
-          if (!info.ok && info.error.code !== 'not_found') throw info.error
-          const refusal = state.refusal(
-            guardKey,
-            path,
-            info.ok ? info.value : undefined,
-          )
-          if (refusal) throw new Error(refusal)
-        }
+      async () => {
         const parent = unwrap(await env.joinPath([resolved, '..'], signal))
         unwrap(await env.createDir(parent, { recursive: true }, signal))
         unwrap(await env.writeFile(resolved, content, signal))
-        if (state)
-          state.noteWritten(
-            guardKey,
-            unwrap(await env.fileInfo(canonical, signal)),
-          )
       },
       env,
       signal,
@@ -274,7 +261,7 @@ const listDirectoryToolParamSchema = z.object({
     .describe('Directory path. Defaults to the working directory'),
 })
 export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
-  name: 'list_directory',
+  name: 'ls',
   replay: 'safe',
   description: 'Lists the files and subdirectories in a directory.',
   inputSchema: listDirectoryToolParamSchema,
@@ -284,9 +271,26 @@ export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
   execute: async ({ path = '.' }: { path?: string }, context) => {
     const env =
       context?.execution ??
-      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+      (context?.requireEnv
+        ? await context.requireEnv(context?.signal)
+        : createLocalExecutionEnv({ cwd: cwd ?? process.cwd() }))
     const resolved = unwrap(await env.absolutePath(path, context?.signal))
-    return unwrap(await env.listDir(resolved, context?.signal))
+    const entries = unwrap(await env.listDir(resolved, context?.signal))
+    const formatted = await Promise.all(
+      entries.map(async (entry) => {
+        let kind = entry.kind
+        if (kind === 'symlink') {
+          const entryPath = unwrap(
+            await env.joinPath([resolved, entry.name], context?.signal),
+          )
+          const target = await followFileInfo(env, entryPath, context?.signal)
+          if (target.ok) kind = target.value.kind
+        }
+        return { name: entry.name, kind }
+      }),
+    )
+    formatted.sort((a, b) => a.name.localeCompare(b.name))
+    return formatted
       .map(
         (entry) =>
           `${entry.kind === 'directory' ? '[DIR]' : '[FILE]'} ${entry.name}`,
@@ -361,7 +365,7 @@ export const editFileToolParamSchema = z.preprocess(
   editSchema,
 )
 
-/** Structured result of edit_file (kept in the tool history; the model only gets the summary line) */
+/** Structured result of edit (kept in the tool history; the model only gets the summary line) */
 export interface EditFileDetails {
   /** Display diff with line numbers and a few lines of context */
   diff: string
@@ -372,7 +376,7 @@ export interface EditFileDetails {
 }
 
 export const createEditFileTool = (cwd?: string): ToolDefinition => ({
-  name: 'edit_file',
+  name: 'edit',
   description:
     'Edits a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.',
   inputSchema: editFileToolParamSchema,
@@ -380,20 +384,20 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
   promptSnippet: 'Make precise file edits by replacing exact text',
   promptGuidelines: [
     'Read a file before you change it.',
-    'Use edit_file for targeted changes, and batch the changes to one file in a single call.',
+    'Use edit for targeted changes, and batch the changes to one file in a single call.',
   ],
   execute: async (input: EditInput, context) => {
     const { path, edits } = input
     const env =
       context?.execution ??
-      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+      (context?.requireEnv
+        ? await context.requireEnv(context?.signal)
+        : createLocalExecutionEnv({ cwd: cwd ?? process.cwd() }))
     const signal = context?.signal
     const resolved = unwrap(await env.absolutePath(path, signal))
-    const state = stateFor(context)
     return withEnvironmentMutationQueue(
       resolved,
-      async (canonical) => {
-        const guardKey = `${env.id}:${canonical}`
+      async () => {
         const throwIfAborted = () => {
           if (signal?.aborted) throw new Error('Operation aborted')
         }
@@ -422,11 +426,6 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
             signal,
           ),
         )
-        if (state)
-          state.noteWritten(
-            guardKey,
-            unwrap(await env.fileInfo(canonical, signal)),
-          )
         throwIfAborted()
         const { diff, firstChangedLine } = generateDiffString(
           baseContent,

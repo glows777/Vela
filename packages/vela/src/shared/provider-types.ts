@@ -154,6 +154,7 @@ export interface ProviderHooks {
       | 'provider_stream_event'
       | 'tool_call',
     toolName?: string,
+    options?: { scopedOnly?: boolean },
   ): boolean
   beforeRequest(params: ProviderRequestParams): Promise<ProviderRequestParams>
   afterResponse(headers: Record<string, string>): Promise<void>
@@ -164,6 +165,7 @@ export interface ProviderHooks {
 export interface ProviderApiErrorInfo {
   statusCode?: number
   responseBody?: string
+  responseHeaders?: Record<string, string>
   isRetryable: boolean
   message: string
 }

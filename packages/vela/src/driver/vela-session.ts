@@ -55,7 +55,6 @@ import {
 import { exportBranch } from './session/export.ts'
 import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
-import { NestedCallLog, takeToolDetails } from './session/nested-calls.ts'
 import type {
   InternalSessionOptions,
   PromptOptions,
@@ -188,9 +187,7 @@ export class VelaSession {
   }
 
   private readonly listeners = new Set<VelaEventListener>()
-  /** Calls tools made through ctx.executeTool(), recorded on their caller's tool result (like pi's nestedCalls) */
-  private readonly nestedCalls = new NestedCallLog()
-  /** Tools' display data from `tool_execution_end`, recorded on their tool message like nestedCalls */
+  /** Tools' display data from `tool_execution_end`, recorded on their tool message. */
   private readonly toolDetails = new Map<string, unknown>()
   private readonly userBash: UserBash
   private readonly builder: SystemPromptBuilder
@@ -268,7 +265,6 @@ export class VelaSession {
       { messages: this.messages, timestamps: new Map(), summary: '' },
       this.emit,
       this.limits,
-      this.execEnv,
     )
     this.timestamps = this.contextManager.state.timestamps
     this.userBash = new UserBash({
@@ -336,8 +332,8 @@ export class VelaSession {
 
   private requestModel(): ModelInput {
     this.defaults.hooked ??= withProviderHooks(this.model, {
-      has: (event, toolName) =>
-        this.deps.extensions.hasHandlers(event, toolName),
+      has: (event, toolName, opts) =>
+        this.deps.extensions.hasHandlers(event, toolName, opts),
       beforeRequest: (params) =>
         this.deps.extensions.beforeProviderRequest(this, params),
       afterResponse: (headers) =>
@@ -480,12 +476,7 @@ export class VelaSession {
       const custom = this.messageQueue.customMessages.get(event.message)
       if (custom) event = { ...event, custom }
     }
-    this.nestedCalls.observe(event)
-    if (
-      event.type === 'tool_execution_end' &&
-      !event.parentToolCallId &&
-      event.details !== undefined
-    )
+    if (event.type === 'tool_execution_end' && event.details !== undefined)
       this.toolDetails.set(event.toolCallId, event.details)
     for (const listener of this.listeners) listener(event)
     this.deps.forward(event, this.id)
@@ -537,7 +528,7 @@ export class VelaSession {
     return this.deps.extensions.beforeAgentStart(this, '')
   }
 
-  /** @internal Prepares the context before a request (microcompaction / summary). */
+  /** @internal Prepares the context before a request (threshold summary). */
   prepareContext(
     request: RequestSnapshot,
     options?: { allowSummary?: boolean },
@@ -605,7 +596,7 @@ export class VelaSession {
   }
 
   /**
-   * Whether the context is compacted automatically (like pi's autoCompactionEnabled). Off: no microcompaction,
+   * Whether the context is compacted automatically (like pi's autoCompactionEnabled). Off:
    * no threshold summary, no compact-and-retry on overflow; compact() still works.
    */
   get autoCompaction(): boolean {
@@ -869,7 +860,7 @@ export class VelaSession {
     this.emit({ type: 'message_end', message })
   }
 
-  /** Appends a message that entered the history to the session; a tool message carries its tools' nested calls and details. */
+  /** Appends a message that entered the history to the session; a tool message carries its tools' details. */
   private record(message: ModelMessage, producedBy?: string): void {
     this.timestamps.set(message, Date.now())
     const custom = this.messageQueue.customMessages.get(message)
@@ -877,8 +868,17 @@ export class VelaSession {
       this.store.appendCustomMessage(message, custom)
       return
     }
-    const audit = takeToolDetails(message, this.nestedCalls, this.toolDetails)
-    this.store.appendMessage(message, { ...audit, producedBy })
+    const details: Record<string, unknown> = {}
+    if (message.role === 'tool') {
+      for (const part of message.content) {
+        if (part.type !== 'tool_result') continue
+        if (this.toolDetails.has(part.toolCallId)) {
+          details[part.toolCallId] = this.toolDetails.get(part.toolCallId)
+          this.toolDetails.delete(part.toolCallId)
+        }
+      }
+    }
+    this.store.appendMessage(message, { details, producedBy })
   }
 
   /** Whether an `executeBash()` command is running */
@@ -1333,6 +1333,8 @@ export class VelaSession {
     if (!inputs.length) await this.save()
     await agentLoop({
       model: this.requestModel(),
+      sessionId: this.id,
+      maxOutputTokens: () => this.modelInfo.maxTokens,
       supportsImages: info.input?.includes('image') ?? true,
       // Like pi, read per request: a level changed during the run applies to the next step. It is
       // clamped to `info`, the model that serves this loop, like `setModel` waits for the next prompt.
@@ -1368,12 +1370,6 @@ export class VelaSession {
       onMessage: (message, producer) => this.record(message, producer),
       onCheckpoint: () => this.save(),
       isDraining: () => this.draining,
-      injectNotice: (content) =>
-        this.messageQueue.customMessage({
-          customType: 'loop',
-          content,
-          display: true,
-        }),
       // Like pi: kept in the session, never sent to the model again
       onInterrupted: (message, stopReason) =>
         this.store.appendMessage(message, { stopReason }),

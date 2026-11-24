@@ -358,7 +358,7 @@ Summarizes earlier history now, keeps recent messages and saves. `customInstruct
 {"id":"23","type":"set_auto_compaction","enabled":false}
 ```
 
-Turns automatic compaction on or off for the active session (like pi; not saved). Off: no microcompaction, threshold summary or compact-and-retry on overflow; `compact` still works.
+Turns automatic compaction on or off for the active session (like pi; not saved). Off: no threshold summary or compact-and-retry on overflow; `compact` still works.
 
 ### Commands
 
@@ -484,7 +484,7 @@ process.wait()
 
 | | pi | Vela |
 |---|---|---|
-| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are Vela `ModelMessage`s (an inline image part is `{ "type": "image", "data", "mimeType" }`) and the stop reason is on `message_end`; the same `compaction_start` / `compaction_end`; Vela adds `context_prepare` (microcompaction), `usage`, `loop_detected` and others. See [SDK events](sdk.md#events). |
+| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are Vela `ModelMessage`s (an inline image part is `{ "type": "image", "data", "mimeType" }`) and the stop reason is on `message_end`; the same `compaction_start` / `compaction_end`; Vela adds `context_prepare` (`summary-required`), `usage` and others. See [SDK events](sdk.md#events). |
 | `prompt` / `steer` / `follow_up` | Accept `images` | Accept `images` as `{ "type": "image", "data", "mimeType" }`. See [Image attachments](#image-attachments). |
 | `steer` / `follow_up` when idle | Queued | Start a run (`disposition: "started"`) |
 | `new_session`, `switch_session` | Return `{ cancelled }`; `switch_session` takes `sessionPath` | Return `{ sessionId }`; `switch_session` takes `sessionId` |

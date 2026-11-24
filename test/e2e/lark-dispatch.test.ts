@@ -89,7 +89,7 @@ test('short channel answers and topic/DM requests have the right prompts and vis
   for (const call of t.model.calls.slice(1)) {
     expect(call.tools).not.toContain('channel_start_topic')
     expect(call.tools).not.toContain('channel_forward_to_topic')
-    expect(call.tools).toContain('read_file')
+    expect(call.tools).toContain('read')
   }
   // A topic can look around and hand off like the group session; a DM has no group to work in.
   const handoffTools = [
@@ -107,8 +107,8 @@ test('short channel answers and topic/DM requests have the right prompts and vis
   // A hub runs quick work itself, so its prompt lists the execution tools and their rules (#421).
   const groupPrompt = t.model.calls[0]?.system ?? ''
   expect(groupPrompt).toContain('<tools>')
-  expect(groupPrompt).toContain('- read_file:')
-  for (const present of ['bash', 'write_file', 'edit_file'])
+  expect(groupPrompt).toContain('- read:')
+  for (const present of ['bash', 'write', 'edit'])
     expect(groupPrompt).toContain(`- ${present}:`)
   expect(groupPrompt).toContain('Read a file before you change it.')
   expect(t.model.calls[1]?.system).toContain('- bash:')

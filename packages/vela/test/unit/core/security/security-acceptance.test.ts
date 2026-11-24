@@ -108,7 +108,7 @@ test('tool_call modifications chain through handlers into execution and history'
       },
     ],
     responses: [
-      fauxToolCall('read_file', { path: 'original.txt' }),
+      fauxToolCall('read', { path: 'original.txt' }),
       fauxText('done'),
     ],
   })
@@ -176,7 +176,7 @@ for (const kind of ['zod', 'json'] as const) {
       before: () => ({ input: { command: 42 } }),
     })
     registry.register(
-      fake('read_file', {
+      fake('read', {
         ...(kind === 'json'
           ? {
               inputSchema: createJsonSchema({
@@ -192,7 +192,7 @@ for (const kind of ['zod', 'json'] as const) {
         },
       }),
     )
-    await rejected(registry, invoke(registry, 'read_file'))
+    await rejected(registry, invoke(registry, 'read'))
     expect(calls).toBe(0)
   })
 }
@@ -226,10 +226,7 @@ test('tool_result chains modifications and preserves the previous output after e
         })
       },
     ],
-    responses: [
-      fauxToolCall('read_file', { path: 'source.txt' }),
-      fauxText('done'),
-    ],
+    responses: [fauxToolCall('read', { path: 'source.txt' }), fauxText('done')],
   })
   await t.run('Read the file')
   expect(seen).toEqual(['original', 'one', 'one', 'one'])
@@ -250,12 +247,12 @@ test('post changes model text while history preserves native small result', asyn
     },
   })
   registry.register(
-    fake('read_file', {
+    fake('read', {
       execute: async () =>
         new ToolExecutionResult({ native: true }, 'original', { exitCode: 0 }),
     }),
   )
-  expect(await invoke(registry, 'read_file')).toBe('decorated')
+  expect(await invoke(registry, 'read')).toBe('decorated')
   const record = (await rows(registry)).find(
     (row) => row.type === 'tool_result',
   )
@@ -274,14 +271,14 @@ for (const preStored of [false, true]) {
       },
     })
     registry.register(
-      fake('read_file', {
+      fake('read', {
         maxResultChars: 30,
         execute: async (_input, ctx) => {
           if (!preStored)
             return new ToolExecutionResult(original, original, { exitCode: 0 })
           const stored = await ctx!.results.save(
             original,
-            'read_file',
+            'read',
             'initial preview',
             ctx!.toolCallId,
             ctx!.callId,
@@ -291,7 +288,7 @@ for (const preStored of [false, true]) {
         },
       }),
     )
-    const result = await invoke(registry, 'read_file')
+    const result = await invoke(registry, 'read')
     expect(result).toBe('custom preview')
     const record = (await rows(registry)).find(
       (row) => row.type === 'tool_result',
@@ -307,7 +304,7 @@ test('pre-aborted call never executes and existing cancelled history survives', 
   const { registry } = fixture()
   let calls = 0
   registry.register(
-    fake('read_file', {
+    fake('read', {
       execute: async () => {
         calls++
         return 'bad'
@@ -318,7 +315,7 @@ test('pre-aborted call never executes and existing cancelled history survives', 
   controller.abort()
   await invoke(
     registry,
-    'read_file',
+    'read',
     { command: 'echo hello' },
     controller.signal,
   ).catch(() => {})

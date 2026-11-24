@@ -120,8 +120,6 @@ export type VelaEvent =
       toolCallId: string
       toolName: string
       args: unknown
-      /** Set on a call made by another tool through `ctx.executeTool()`: the calling tool's id */
-      parentToolCallId?: string
     }
   /** Partial output of a running tool (like pi; tools that stream their output emit it). */
   | {
@@ -130,8 +128,6 @@ export type VelaEvent =
       toolName: string
       args: unknown
       partialResult: unknown
-      /** Set on a call made by another tool through `ctx.executeTool()`: the calling tool's id */
-      parentToolCallId?: string
     }
   /** A tool call finished: `result` is the tool's output, or the error when `isError`. */
   | {
@@ -141,20 +137,12 @@ export type VelaEvent =
       result: unknown
       isError: boolean
       /**
-       * Structured data for display that the model does not get (like pi's `result.details`), e.g. edit_file's
+       * Structured data for display that the model does not get (like pi's `result.details`), e.g. edit's
        * `{ diff, patch, firstChangedLine }`: the `value` of a `ToolExecutionResult`
        */
       details?: unknown
       /** How long the tool ran; absent when it did not run */
       durationMs?: number
-      /** Set on a call made by another tool through `ctx.executeTool()`: the calling tool's id */
-      parentToolCallId?: string
-    }
-  | {
-      type: 'loop_detected'
-      level: 'warning' | 'critical'
-      detector: string
-      message: string
     }
   /** A request failed with a retryable error; the step is sent again after `delayMs` (like pi). */
   | {
@@ -185,13 +173,12 @@ export type VelaEvent =
       toolResults: ToolResultPart[]
     }
   /**
-   * The agent loop ended. `messages` are the messages it added (like pi); `reason` / `error` say why it stopped
-   * (Vela keeps them: `loop` is Vela's loop detection, and `prompt()` still rejects with `error`).
+   * The agent loop ended. `messages` are the messages it added (like pi); `reason` / `error` say why it stopped.
    */
   | {
       type: 'agent_end'
       messages: ModelMessage[]
-      reason: 'done' | 'loop' | 'aborted' | 'error'
+      reason: 'done' | 'aborted' | 'error'
       error?: unknown
       /** Present on failed runs; the original error and prompt rejection stay unchanged. */
       errorKind?: AgentErrorKind
@@ -209,16 +196,13 @@ export type VelaEvent =
    */
   | { type: 'bash_execution_update'; id?: string; delta: string }
   /**
-   * Old tool output was folded into file references (`micro`), or the context needs a summary that this
-   * request may not run (`summary-required`). Vela-specific; summaries are compaction_start / compaction_end.
+   * The context needs a summary that this request may not run (`summary-required`).
+   * Vela-specific; summaries are compaction_start / compaction_end.
    */
   | {
       type: 'context_prepare'
-      action: 'micro' | 'summary-required'
+      action: 'summary-required'
       before: number
-      after?: number
-      saved?: number
-      calls?: number
     }
   /** Summarizing earlier history starts (like pi): `threshold` before a request, `manual` from session.compact(), `overflow` after the provider said the context is too long. */
   | { type: 'compaction_start'; reason: CompactionReason }

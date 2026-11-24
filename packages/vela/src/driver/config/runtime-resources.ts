@@ -8,8 +8,6 @@ import type { ExtensionEntry } from './extension-discovery.ts'
 export interface ConfigResourceSplit<Factory = unknown> {
   hostExtensions?: ExtensionEntry[]
   extensionBuiltins?: { names: string[]; defaultOff: string[] }
-  /** @internal Test-only foreground bash budget override (retired from config.json in S1b). */
-  foregroundBudget?: { seconds?: number; maxSeconds?: number }
   projectExtensions?: (input: {
     cwd: string
     environmentId: string

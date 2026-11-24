@@ -21,10 +21,10 @@ export interface TurnCounts {
 const TOOL_KIND: Record<string, keyof TurnCounts> = {
   grep: 'searched',
   find: 'searched',
-  read_file: 'read',
-  list_directory: 'listed',
-  edit_file: 'edited',
-  write_file: 'edited',
+  read: 'read',
+  ls: 'listed',
+  edit: 'edited',
+  write: 'edited',
   bash: 'shell',
 }
 

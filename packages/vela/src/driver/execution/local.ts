@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process'
-import { access, appendFile, writeFile } from 'node:fs/promises'
+import { access, type FileHandle, open } from 'node:fs/promises'
 import { constants } from 'node:os'
 import { signalProcessTree } from '../tools/process-tree.ts'
 import { StreamDecoder } from './decode.ts'
@@ -23,19 +23,18 @@ function error(
     code,
   })
 }
+const STOP_GRACE_MS = 500
+
 export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
   constructor(options: {
     cwd: string
     shellPath?: string
     tempRoot?: string
-    loginShell?: boolean
   }) {
     super(options.cwd, options.tempRoot)
     this.shellPath = options.shellPath
-    this.loginShell = options.loginShell ?? false
   }
   private readonly shellPath?: string
-  private readonly loginShell: boolean
   private readonly active = new Set<ChildProcess>()
   async exec(
     command: string | readonly string[],
@@ -57,7 +56,7 @@ export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
         ? [
             this.shellPath ??
               (process.platform === 'win32' ? 'bash.exe' : 'bash'),
-            this.loginShell ? '-lc' : '-c',
+            '-c',
             command,
           ]
         : [...command]
@@ -116,15 +115,38 @@ export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
       | undefined
     let streamError: unknown
     let spillPath: string | undefined
+    let spillHandle: FileHandle | undefined
     let bytes = 0,
       lines = 0
     let retained: Buffer[] = []
     let queue = Promise.resolve()
     let pending = 0
+    let killTimer: ReturnType<typeof setTimeout> | undefined
+    let killSent = false
+    let stoppedAt = 0
+    const isAlive = () =>
+      child.exitCode === null && child.signalCode === null
+        ? true
+        : process.platform !== 'win32' && this.groupStatus(child) === 'present'
+    const sendKill = async () => {
+      if (killSent || !isAlive()) return
+      killSent = true
+      await signalProcessTree(child, 'SIGKILL').catch(() => {})
+    }
     const stop = (reason: typeof stopped) => {
       if (stopped) return
       stopped = reason
-      void signalProcessTree(child, 'SIGKILL').catch(() => {})
+      stoppedAt = Date.now()
+      void signalProcessTree(child, 'SIGTERM')
+        .then(() => {
+          if (!isAlive()) return
+          killTimer = setTimeout(() => {
+            killTimer = undefined
+            void sendKill()
+          }, STOP_GRACE_MS)
+          killTimer.unref?.()
+        })
+        .catch(() => {})
     }
     const abort = () => stop('aborted')
     signal?.addEventListener('abort', abort, { once: true })
@@ -171,10 +193,11 @@ export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
                   )
                   if (!result.ok) throw result.error
                   spillPath = result.value
-                  await writeFile(spillPath, Buffer.concat(retained))
+                  spillHandle = await open(spillPath, 'w', 0o600)
+                  await spillHandle.writeFile(Buffer.concat(retained))
                   retained = []
                 }
-              } else await appendFile(spillPath, chunk)
+              } else if (spillHandle) await spillHandle.write(chunk)
             }
           })
           .catch((cause) => {
@@ -241,6 +264,8 @@ export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
         })
       })
       await queue
+      await spillHandle?.close().catch(() => {})
+      spillHandle = undefined
       for (const name of ['stdout', 'stderr'] as const) {
         const text = decoders[name].decode()
         if (text && !stopped) {
@@ -288,6 +313,18 @@ export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
       }
     } finally {
       if (timer) clearTimeout(timer)
+      if (killTimer) {
+        clearTimeout(killTimer)
+        killTimer = undefined
+      }
+      if (stopped && isAlive()) {
+        const deadline = stoppedAt + STOP_GRACE_MS
+        while (isAlive() && Date.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25))
+        }
+        await sendKill()
+      }
+      await spillHandle?.close().catch(() => {})
       signal?.removeEventListener('abort', abort)
       // The shell may exit while a background descendant still owns its group.
       // Keep that group reachable until cleanup; otherwise drop the finished child.
@@ -312,8 +349,20 @@ export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
   async cleanup(): Promise<void> {
     await Promise.all(
       [...this.active].map(async (child) => {
+        const isAlive = () =>
+          child.exitCode === null && child.signalCode === null
+            ? true
+            : process.platform !== 'win32' &&
+              this.groupStatus(child) === 'present'
         try {
-          await signalProcessTree(child, 'SIGKILL')
+          await signalProcessTree(child, 'SIGTERM')
+          if (isAlive()) {
+            const deadline = Date.now() + STOP_GRACE_MS
+            while (isAlive() && Date.now() < deadline) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 25))
+            }
+            if (isAlive()) await signalProcessTree(child, 'SIGKILL')
+          }
         } catch (cause) {
           const exited = child.exitCode !== null || child.signalCode !== null
           if (!exited || (cause as NodeJS.ErrnoException)?.code !== 'EPERM')
@@ -375,5 +424,5 @@ export function createSessionLocalExecutionEnv(options: {
   shellPath?: string
   tempRoot: string
 }): ExecutionEnv {
-  return new LocalExecutionEnv({ ...options, loginShell: true })
+  return new LocalExecutionEnv(options)
 }

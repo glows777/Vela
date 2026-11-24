@@ -94,7 +94,7 @@ test('registering a tool with the removed isReadOnly or an unknown exposure thro
   expect(registry.get('ok')?.annotations).toEqual({ readOnlyHint: true })
 })
 
-test('exposure decides what the model sees, what tool_search finds and what executeTool can call (like pi)', async () => {
+test('exposure decides what the model sees and what tool_search finds (like pi)', async () => {
   const registry = makeRegistry()
   for (const exposure of [
     'direct',
@@ -106,16 +106,11 @@ test('exposure decides what the model sees, what tool_search finds and what exec
   const active = () => registry.getActiveTools().map((t) => t.name)
   expect(active()).toEqual(['direct', 'model-only'])
   expect(
-    ['direct', 'model-only', 'deferred', 'hidden'].filter((n) =>
-      registry.isCallable(n),
-    ),
-  ).toEqual(['direct', 'deferred'])
-  expect(
     (await registry.searchTools('hidden,deferred')).map((t) => t.name),
   ).toEqual(['deferred'])
   expect(active()).toEqual(['direct', 'model-only', 'deferred'])
   registry.setDefaultToolModifiers(['-direct'])
-  expect(registry.isCallable('direct')).toBe(false)
+  expect(active()).toEqual(['model-only', 'deferred'])
 })
 
 test('the deferred tool summary lists each namespace once, not its tools (like pi)', () => {

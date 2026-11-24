@@ -19,7 +19,7 @@ test('umbrella replay retains its channel assembly and optional RAG fixture', as
         inputs: ['Read the guide'],
         responses: [
           {
-            toolCalls: [{ name: 'read_file', input: { path: 'guide.md' } }],
+            toolCalls: [{ name: 'read', input: { path: 'guide.md' } }],
           },
           { text: 'Guide read' },
         ],
@@ -31,7 +31,7 @@ test('umbrella replay retains its channel assembly and optional RAG fixture', as
     expect(errors).toEqual([undefined])
     expect(typeof t.vela.startChannels).toBe('function')
     expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
-      toolName: 'read_file',
+      toolName: 'read',
       isError: false,
     })
     expect(t.lastAssistantText()).toBe('Guide read')

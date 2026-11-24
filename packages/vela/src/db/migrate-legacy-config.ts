@@ -1,8 +1,122 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
 import { join } from 'node:path'
+import { formatJsonParseError, parseConfig } from '../config/schema.ts'
+import { LEGACY_CONFIG_FILES } from '../config/writer.ts'
 import { isPlainObject } from '../shared/interpolate.ts'
-import { formatJsonParseError, parseConfig } from './schema.ts'
-import { LEGACY_CONFIG_FILES, writeConfigIfMissing } from './writer.ts'
+
+const CONFIG_LOCK_TIMEOUT_MS = 10_000
+const CONFIG_STALE_LOCK_MS = 30_000
+const CONFIG_LOCK_RETRY_MS = 15
+const sleepBuffer = new Int32Array(new SharedArrayBuffer(4))
+
+function withLegacyConfigLockSync<T>(
+  agentDir: string,
+  fn: (assertOwned: () => void) => T,
+): T {
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 })
+  chmodSync(agentDir, 0o700)
+  const lock = join(agentDir, 'config.json.lock')
+  const token = `${process.pid}:${randomUUID()}`
+  const started = Date.now()
+  for (;;) {
+    try {
+      const fd = openSync(lock, 'wx', 0o600)
+      try {
+        writeSync(fd, token)
+      } finally {
+        closeSync(fd)
+      }
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > CONFIG_STALE_LOCK_MS)
+          rmSync(lock, { force: true })
+      } catch {}
+      if (Date.now() - started > CONFIG_LOCK_TIMEOUT_MS)
+        throw new Error(
+          `Timed out waiting for ${lock}; if no other Vela is modifying config.json, delete it`,
+        )
+      Atomics.wait(sleepBuffer, 0, 0, CONFIG_LOCK_RETRY_MS)
+    }
+  }
+  const assertOwned = () => {
+    let holder: string | undefined
+    try {
+      holder = readFileSync(lock, 'utf8')
+    } catch {}
+    if (holder !== token)
+      throw new Error(
+        `Lost ${lock} ownership before committing config.json update`,
+      )
+  }
+  try {
+    return fn(assertOwned)
+  } finally {
+    try {
+      if (readFileSync(lock, 'utf8') === token) rmSync(lock, { force: true })
+    } catch {}
+  }
+}
+
+function writeConfigIfMissing(
+  agentDir: string,
+  data: Record<string, unknown>,
+): { written: boolean; path: string; sha256?: string } {
+  return withLegacyConfigLockSync(agentDir, (assertOwned) => {
+    const path = join(agentDir, 'config.json')
+    if (existsSync(path)) return { written: false, path }
+    const serialized = `${JSON.stringify(data, null, 2)}\n`
+    parseConfig(serialized, path)
+    const temporary = join(
+      agentDir,
+      `.config-${randomBytes(12).toString('hex')}.tmp`,
+    )
+    try {
+      writeFileSync(temporary, serialized, {
+        mode: 0o600,
+        flag: 'wx',
+      })
+      chmodSync(temporary, 0o600)
+      assertOwned()
+      renameSync(temporary, path)
+    } finally {
+      rmSync(temporary, { force: true })
+    }
+    const sha256 = createHash('sha256').update(serialized).digest('hex')
+    return { written: true, path, sha256 }
+  })
+}
+
+export function removeConfigIfHashMatches(
+  agentDir: string,
+  expectedSha256: string,
+): boolean {
+  return withLegacyConfigLockSync(agentDir, (assertOwned) => {
+    const path = join(agentDir, 'config.json')
+    if (!existsSync(path)) return false
+    const actualSha256 = createHash('sha256')
+      .update(readFileSync(path))
+      .digest('hex')
+    if (actualSha256 !== expectedSha256) return false
+    assertOwned()
+    rmSync(path, { force: true })
+    return true
+  })
+}
 
 interface LegacyConfigInputs {
   settings?: unknown

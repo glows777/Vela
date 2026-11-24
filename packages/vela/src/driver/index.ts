@@ -158,14 +158,11 @@ export {
   type BranchSummaryEntry,
   bashExecutionToText,
   type CompactionEntry,
-  type ContextEditEntry,
   type CustomEntry,
   type CustomMessageEntry,
   type LabelEntry,
   type ModelChangeEntry,
   migrateSessionV1,
-  type NestedToolCallRecord,
-  type NestedToolCalls,
   SESSION_FORMAT_VERSION,
   type SessionArchivedEntry,
   type SessionChannelEntry,
@@ -202,9 +199,7 @@ export { defineJsonSchemaTool } from './tools/json-schema.ts'
 export type { ToolContext, ToolDefinition } from './tools/registry.ts'
 export type { BashResult } from './tools/shell.ts'
 export type {
-  ExecuteToolOptions,
   ToolAnnotations,
-  ToolCallOutcome,
   ToolExecutionMode,
   ToolExposure,
   ToolNamespace,

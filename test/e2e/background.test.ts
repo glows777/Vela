@@ -353,59 +353,6 @@ test('an enabled session states the background condition on the parameter, not a
   expect(bash.description).not.toContain('output file')
 })
 
-test('a nested bash call cancelled while its job is being recorded starts nothing', async () => {
-  // The calling tool's own signal: no agent_end cleanup covers this path.
-  const controller = new AbortController()
-  const gate = Promise.withResolvers<void>()
-  let started = false
-  let nested: unknown
-  const results: string[] = []
-  const t = createTestVela({
-    responses: [fauxToolCall('probe', {}), fauxText('The probe gave up.')],
-    extensions: [
-      background(),
-      function probe(vela) {
-        vela.registerTool({
-          name: 'probe',
-          description: 'Starts a background command through another tool',
-          inputSchema: z.object({}).strict(),
-          execute: async (_input, context) => {
-            nested = await context!.executeTool!(
-              'bash',
-              { command: 'touch marker; echo RAN', run_in_background: true },
-              { signal: controller.signal },
-            )
-            return 'probed'
-          },
-        })
-      },
-    ],
-    session: {
-      tools: ['bash', 'background_stop', 'probe'],
-      host: {
-        deliver() {},
-        async background(event) {
-          if (event.type === 'result') results.push(event.text)
-          if (event.type !== 'started') return
-          started = true
-          await gate.promise
-        },
-      },
-    },
-  })
-  const running = t.run('probe it')
-  await until(() => started, 'the admitted job')
-  // Cancelled while the host is still recording the job; it must launch nothing.
-  controller.abort()
-  gate.resolve()
-  await running
-  expect(nested).toMatchObject({ isError: true })
-  expect(nested).toMatchObject({ result: expect.stringContaining('aborted') })
-  // Nothing ran, so nothing has an exit to announce.
-  expect(results).toEqual([])
-  expect(existsSync(t.path('marker'))).toBe(false)
-})
-
 test('a DM refuses run_in_background because it has no tool to read or stop the job', async () => {
   const fake = fakeLark()
   const t = createTestVela({
@@ -460,7 +407,7 @@ test('a narrowed chat list drops the background tools the group session gets by 
       lark({
         appId: 'bot',
         owners: ['ou_alice'],
-        chats: [{ id: 'oc_group', tools: ['read_file'] }],
+        chats: [{ id: 'oc_group', tools: ['read'] }],
         transport: fake.transport,
       }),
     ],
@@ -473,7 +420,7 @@ test('a narrowed chat list drops the background tools the group session gets by 
   await until(() => t.model.calls.length === 1, 'the group reply')
   for (const name of ['background_output', 'background_stop', 'bash'])
     expect(t.model.calls[0]!.tools).not.toContain(name)
-  expect(t.model.calls[0]!.tools).toContain('read_file')
+  expect(t.model.calls[0]!.tools).toContain('read')
 })
 
 test('a group hub runs a background command and answers its exit in the main timeline', async () => {
@@ -620,17 +567,17 @@ test('bash run_in_background returns at once with its id, then the exit starts i
   ).toContain('"backgroundTaskId":"bg-1"')
 })
 
-test('a long background command spills in the session environment, and read_file pages it', async () => {
+test('a long background command spills in the session environment, and read pages it', async () => {
   let log = ''
   const t = createTestVela({
     responses: [
       fauxToolCall('bash', { command: 'seq 1 20000', run_in_background: true }),
       () => fauxText('Started it.'),
       fauxText('It finished.'),
-      () => fauxToolCall('read_file', { path: log, offset: 1, limit: 3 }),
+      () => fauxToolCall('read', { path: log, offset: 1, limit: 3 }),
       (request) => {
         expect(request.toolResults[0]!.output).toStartWith('1\n2\n3\n')
-        return fauxToolCall('read_file', { path: log, offset: 20000, limit: 3 })
+        return fauxToolCall('read', { path: log, offset: 20000, limit: 3 })
       },
       (request) => {
         expect(request.toolResults[0]!.output).toBe('20000\n')
@@ -651,7 +598,7 @@ test('a long background command spills in the session environment, and read_file
   expect(delivery).toContain('\n18001\n')
   expect(delivery).not.toContain('\n1\n')
   log = /Full output: (\S+)/.exec(delivery)![1]!
-  // The file is the environment's own spill file, inside the session, so read_file pages all of it.
+  // The file is the environment's own spill file, inside the session, so read pages all of it.
   expect(log).toStartWith(t.session.registry.results.dir)
   expect(await Bun.file(log).text()).toEndWith('20000\n')
   expect((await Bun.file(log).text()).split('\n').length).toBe(20001)
@@ -696,7 +643,7 @@ test('an adapter that only implements the published contract gets its own log na
       fauxToolCall('bash', { command: 'seq 1 20000', run_in_background: true }),
       fauxText('Started it.'),
       fauxText('The command finished.'),
-      () => fauxToolCall('read_file', { path: log, offset: 1, limit: 2 }),
+      () => fauxToolCall('read', { path: log, offset: 1, limit: 2 }),
       (request) => {
         expect(request.toolResults[0]!.output).toStartWith('1\n2\n')
         return fauxText('Read the adapter log.')

@@ -83,7 +83,7 @@ export function withProviderHooks(
           const tools = await hostedTools.call(model, options)
           return Object.fromEntries(
             Object.entries(tools).filter(
-              ([name]) => !hooks.has('tool_call', name),
+              ([name]) => !hooks.has('tool_call', name, { scopedOnly: true }),
             ),
           )
         },

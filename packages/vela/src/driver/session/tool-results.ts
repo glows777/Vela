@@ -17,7 +17,7 @@ export class StoredToolResult {
     readonly indexPath: string,
     readonly bytes: number,
     readonly preview: string,
-    readonly read = 'Only a preview is shown. Use read_file with path, offset (1-based line), limit and column (0-based UTF-16 offset within a long line) to read more.',
+    readonly read = 'Only a preview is shown. Use read with path, offset (1-based line), limit and column (0-based UTF-16 offset within a long line) to read more.',
   ) {}
 }
 
@@ -43,12 +43,6 @@ export function getStoredResult(
   ) {
     return value as unknown as StoredToolResult
   }
-}
-
-export function storedResultOutput(
-  result: StoredToolResult,
-): ToolResultPart['output'] {
-  return { type: 'json', value: JSON.parse(JSON.stringify(result)) }
 }
 
 export class ToolResultStore {

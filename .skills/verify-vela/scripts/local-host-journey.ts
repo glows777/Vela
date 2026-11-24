@@ -57,7 +57,7 @@ const router = (request: FauxRequest) => {
           })
     return request.toolResults.length
       ? fauxText('Created result.txt successfully')
-      : fauxToolCall('write_file', {
+      : fauxToolCall('write', {
           path: 'result.txt',
           content: 'local host verification succeeded\n',
         })

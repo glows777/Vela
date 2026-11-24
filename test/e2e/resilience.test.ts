@@ -213,7 +213,7 @@ test('a response cut off by the output limit answers its tool calls with an erro
     files: { 'a.txt': 'A' },
     responses: [
       {
-        ...fauxToolCall('write_file', { path: 'a.txt', content: 'trunc' }),
+        ...fauxToolCall('write', { path: 'a.txt', content: 'trunc' }),
         finishReason: 'length',
       },
       (req) => fauxText(`retrying: ${req.toolResults[0]!.output}`),
@@ -230,7 +230,7 @@ test('a response cut off by the output limit answers its tool calls with an erro
       ?.stopReason,
   ).toBe('length')
   expect(t.eventsOf('tool_execution_end')).toEqual([
-    expect.objectContaining({ toolName: 'write_file', isError: true }),
+    expect.objectContaining({ toolName: 'write', isError: true }),
   ])
   expect(t.messages.map((m) => m.role)).toEqual([
     'user',
@@ -355,144 +355,6 @@ test('a second run while one is in flight is refused', async () => {
   await expect(running).rejects.toThrow()
 })
 
-const LOOP_NOTICE =
-  'The same tool has been called 10 times with the same arguments. Change your approach instead of repeating it.'
-
-test('the loop warning fires on the 10th identical call and is stored as a notice', async () => {
-  const same = () => fauxToolCall('read_file', { path: 'a.txt' })
-  const t = createTestVela({
-    files: { 'a.txt': 'A' },
-    responses: [...Array.from({ length: 10 }, same), fauxText('stop')],
-  })
-
-  await t.run('read a.txt')
-
-  expect(t.eventsOf('loop_detected')).toEqual([
-    {
-      type: 'loop_detected',
-      level: 'warning',
-      detector: 'generic_repeat',
-      message: LOOP_NOTICE,
-    },
-  ])
-  expect(
-    t.eventsOf('tool_execution_end').map((event) => event.toolCallId),
-  ).toEqual(Array.from({ length: 10 }, (_, i) => `faux-call-${i + 1}-1`))
-  const notice = t.messages[21]
-  expect(t.messages.slice(19, 22).map((message) => message.role)).toEqual([
-    'assistant',
-    'tool',
-    'user',
-  ])
-  expect(notice).toEqual({ role: 'user', content: LOOP_NOTICE })
-  expect(JSON.stringify(t.messages[19]?.content)).toContain('faux-call-10-1')
-  expect(t.session.customMessageOf(notice!)).toEqual({
-    customType: 'loop',
-    display: true,
-  })
-  expect(
-    t.eventsOf('message_end').find((event) => event.message === notice),
-  ).toEqual({
-    type: 'message_end',
-    message: { role: 'user', content: LOOP_NOTICE },
-    custom: { customType: 'loop', display: true },
-  })
-  expect(
-    t.session.getEntries().find((entry) => entry.type === 'custom_message'),
-  ).toMatchObject({
-    type: 'custom_message',
-    customType: 'loop',
-    content: LOOP_NOTICE,
-    display: true,
-  })
-  expect(
-    t.session
-      .getEntries()
-      .some(
-        (entry) =>
-          entry.type === 'message' &&
-          JSON.stringify(entry.message).includes(LOOP_NOTICE),
-      ),
-  ).toBe(false)
-  expect(t.model.calls).toHaveLength(11)
-  expect(t.model.calls[10]?.lastUserText).toBe(LOOP_NOTICE)
-  expect(t.lastAssistantText()).toBe('stop')
-  expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('done')
-
-  const resumed = createTestVela({ cwd: t.cwd, responses: [fauxText('again')] })
-  expect(await resumed.session.resume()).toBe(true)
-  const restored = resumed.messages.find((message) =>
-    resumed.session.customMessageOf(message),
-  )
-  expect(restored).toEqual({ role: 'user', content: LOOP_NOTICE })
-  expect(resumed.session.customMessageOf(restored!)).toEqual({
-    customType: 'loop',
-    display: true,
-  })
-  await resumed.run('more')
-  expect(resumed.lastAssistantText()).toBe('again')
-  expect(JSON.stringify(resumed.model.calls[0]?.prompt)).toContain(LOOP_NOTICE)
-})
-
-test('repeating the same tool call trips the loop detector: warning, then critical stop', async () => {
-  const same = () => fauxToolCall('list_directory', { path: '.' })
-  const t = createTestVela({
-    responses: Array.from({ length: 20 }, same),
-  })
-
-  await t.run('Keep listing the directory')
-
-  const detections = t.eventsOf('loop_detected')
-  expect(detections[0]).toMatchObject({
-    level: 'warning',
-    detector: 'generic_repeat',
-    message: LOOP_NOTICE,
-  })
-  expect(detections.at(-1)).toMatchObject({ level: 'critical' })
-  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
-    type: 'agent_end',
-    reason: 'loop',
-  })
-  const firstWarning = t.messages.findIndex(
-    (message) => t.session.customMessageOf(message)?.customType === 'loop',
-  )
-  expect(
-    t.messages.slice(firstWarning - 2, firstWarning).map((m) => m.role),
-  ).toEqual(['assistant', 'tool'])
-  expect(JSON.stringify(t.messages[firstWarning - 2]?.content)).toContain(
-    'faux-call-10-1',
-  )
-  expect(t.model.calls).toHaveLength(20)
-})
-
-test('a critical loop stop keeps the stopping step in the history: the tool that ran has its call and result', async () => {
-  const same = () => fauxToolCall('list_directory', { path: '.' })
-  const t = createTestVela({ responses: Array.from({ length: 20 }, same) })
-
-  await t.run('Keep listing the directory')
-
-  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({ reason: 'loop' })
-  // The 20th call trips the critical stop, but its tool already ran
-  const ran = t.eventsOf('tool_execution_end').map((e) => e.toolCallId)
-  expect(ran).toContain('faux-call-20-1')
-  // Every tool that ran has its assistant call and tool result in the session messages
-  const json = (role: string) =>
-    JSON.stringify(t.messages.filter((m) => m.role === role))
-  for (const id of ran) {
-    expect(json('assistant')).toContain(id)
-    expect(json('tool')).toContain(id)
-  }
-  expect(t.messages.at(-1)?.role).toBe('tool')
-  // The step's messages are emitted as message events before turn_end
-  const types = t.eventTypes()
-  expect(types.lastIndexOf('message_end')).toBeLessThan(
-    types.lastIndexOf('turn_end'),
-  )
-  expect(types.lastIndexOf('turn_end')).toBeGreaterThan(
-    types.lastIndexOf('tool_execution_end'),
-  )
-})
-
 test('there is no turn limit: the loop runs until the model stops calling tools (same as pi)', async () => {
   const t = createTestVela({
     responses: [
@@ -512,8 +374,12 @@ test('there is no turn limit: the loop runs until the model stops calling tools 
   })
 })
 
-test('a request over maxInputTokens is stopped before it is sent', async () => {
-  const t = createTestVela({ limits: { maxInputTokens: 10 }, responses: [] })
-  await expect(t.run('hi')).rejects.toThrow('safe input size')
-  expect(t.model.calls).toHaveLength(0)
+test('a request over maxInputTokens is still sent to the provider (no local pre-flight throw)', async () => {
+  const t = createTestVela({
+    limits: { maxInputTokens: 10 },
+    responses: [fauxText('handled by provider')],
+  })
+  await t.run('hi')
+  expect(t.model.calls).toHaveLength(1)
+  expect(t.lastAssistantText()).toBe('handled by provider')
 })

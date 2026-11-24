@@ -15,7 +15,7 @@ const source = process.argv[2]
 await writeFile(join(root, 'picture.txt'), source)
 const model = createFauxModel({
   responses: [
-    fauxToolCall('read_file', { path: 'picture.txt' }),
+    fauxToolCall('read', { path: 'picture.txt' }),
     fauxText('Read the image.'),
     fauxText('Text-only continuation.'),
     fauxText('Restored image.'),
@@ -23,7 +23,7 @@ const model = createFauxModel({
 })
 const captions: VelaExtension = (v) => {
   v.on('tool_result', (event) =>
-    event.toolName === 'read_file' && event.content
+    event.toolName === 'read' && event.content
       ? {
           content: [
             { type: 'text', text: 'An image read from picture.txt' },

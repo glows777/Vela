@@ -42,7 +42,7 @@ prepareWorkspace()
     await vela.dispose()
   }
 }
-for (const tools of [['read_file'], ['-bash']] as string[][]) {
+for (const tools of [['read'], ['-bash']] as string[][]) {
   const model = createFauxModel({
     responses: [
       fauxToolCall('bash', { command: 'echo blocked' }),

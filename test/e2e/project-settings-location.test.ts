@@ -193,7 +193,7 @@ test('real CLI launched from A resumes B and uses B declared prompt and default 
   project(b, 'B', 'high')
   for (const [cwd, name] of [
     [a, 'bash'],
-    [b, 'read_file'],
+    [b, 'read'],
   ] as const) {
     const file = join(cwd, '.vela/config.json')
     const original = JSON.parse(readFileSync(file, 'utf8'))
@@ -212,7 +212,7 @@ test('real CLI launched from A resumes B and uses B declared prompt and default 
     join(home, 'scenario.json'),
     JSON.stringify({
       responses: [
-        { toolCalls: [{ name: 'read_file', input: { path: 'report.txt' } }] },
+        { toolCalls: [{ name: 'read', input: { path: 'report.txt' } }] },
         { text: 'done' },
       ],
     }),
@@ -328,12 +328,12 @@ test('TUI rejects invalid project tools on resume without leaving the active ses
     expect(t.vela.sessions().some((session) => session.id === 'saved-b')).toBe(
       false,
     )
-    writeFileSync(settings, JSON.stringify({ tools: ['read_file'] }))
+    writeFileSync(settings, JSON.stringify({ tools: ['read'] }))
     tui.submit('/resume')
     await tui.until('Resume Session')
     tui.terminal.press(KEYS.enter)
     await tui.until('Resumed session saved-b')
-    expect(t.vela.session('saved-b').getActiveTools()).toContain('read_file')
+    expect(t.vela.session('saved-b').getActiveTools()).toContain('read')
   } finally {
     await stopTuis()
     await t.vela.dispose()

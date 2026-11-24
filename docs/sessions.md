@@ -101,32 +101,20 @@ In interactive mode the queue is shown above the editor. Alt+Up (macOS: Option+U
 
 ## Compaction
 
-Before every model request, including requests that continue after tool calls, Vela measures the context and compacts when it gets too large. The size is the prompt tokens the provider reported for the latest response plus a local estimate for the messages added since (like pi). Until a provider reports usage, Vela estimates the whole request from the system prompt, tool definitions and messages (about 0.3 tokens per character). Compaction has two stages.
-
-### Microcompaction
-
-When the size reaches `microcompactThreshold`, Vela folds old tool results: their text is replaced by a reference to a file holding the full output (`[tool result preview omitted; original available at path]`). The model can read it back with `read_file`.
-
-- Only results of `read_file`, `bash`, `grep`, `find`, `list_directory`, `edit_file` and `write_file` are folded.
-- The five most recent tool calls are kept as they are.
-- Failed or timed-out results, and failed bash commands, are kept. A folded successful `bash` result keeps its `exit=0` line.
-
-Microcompaction is applied only if it saves at least `minMicroSavings` tokens and brings the request below `summaryThreshold`. It emits a `context_prepare` event with `action: 'micro'`. Each changed tool message is recorded as a `context_edit` entry (pi's context edit); the original output stays in the session file. Because it changes messages only from the oldest ones forward, most of the cached prompt prefix survives.
-
-Set the `microcompact` [limit](settings.md#limits) to `false` in settings or `createVela({ limits })` to turn microcompaction off; summaries and overflow compaction keep working.
+Before every model request, including requests that continue after tool calls, Vela measures the context and compacts when it gets too large. The size is the prompt + completion tokens the provider reported for the latest response plus a calibrated delta for active tool definitions, context-hook modifications, and messages added since (like pi). Until a provider reports usage, Vela estimates the whole request from the system prompt, tool definitions and messages (ASCII `0.25` tokens/char, CJK `1.2` tokens/char, other non-ASCII `0.5` tokens/char, excluding opaque `providerOptions` / encrypted reasoning).
 
 ### Summary
 
-When the size reaches `summaryThreshold` and there is an earlier turn to summarize (and microcompaction wasn't enough), Vela asks the model to summarize the earlier history:
+When the size reaches `summaryThreshold` and there is an earlier turn to summarize, Vela asks the model to summarize the earlier history:
 
 1. It picks a split point at a user message, at least six messages from the end, where every tool call before it has its result.
 2. It sends only the dropped messages, serialized as text in a `<conversation>` block, plus a `context_compaction` instruction. The instruction asks for a free-text checkpoint with Goal, Constraints & Preferences, Progress (Done / In Progress / Blocked), Key Decisions, Next Steps and Critical Context. The model synthesizes facts rather than selecting verbatim quotes.
-3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary. Code appends sorted, deduplicated `<read-files>` and `<modified-files>` lists from `read_file`, `write_file` and `edit_file` calls (including recorded nested calls). A modified file appears only in the modified list; empty lists are omitted. Prior compacted calls and calls behind branch summaries are read from the session log so the lists survive tree navigation, repeated compaction and resume. The summary keeps one line with the earlier-output snapshot location, `Earlier tool output: /.../snapshots/through-<seq>.jsonl (through seq <seq>).`, so the model can still look up earlier tool output.
+3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary. Code appends sorted, deduplicated `<read-files>` and `<modified-files>` lists from `read`, `write` and `edit` calls. A modified file appears only in the modified list; empty lists are omitted. Prior compacted calls and calls behind branch summaries are read from the session log so the lists survive tree navigation, repeated compaction and resume. The summary keeps one line with the earlier-output snapshot location, `Earlier tool output: /.../snapshots/through-<seq>.jsonl (through seq <seq>).`, so the model can still look up earlier tool output.
 4. Like pi, a `compaction` entry is appended to the session (summary and the first kept message); the summarized messages stay in the file. `compaction_start` and `compaction_end` events (`reason: 'threshold'`) are emitted around it.
 
-If there is no earlier turn to summarize, the request is sent as long as it is within `maxInputTokens`.
+If there is no earlier turn to summarize, the request is still sent to the provider (if it exceeds the provider's window, the provider reports overflow).
 
-If the summary fails (a provider error, empty or incomplete output, tool calls, or a result still too large to send), the turn stops with an error and the original history is kept. Nothing is lost; fix the cause (for example switch to a model with a larger window) and try again.
+If the summary fails (a provider error, empty or incomplete output, or tool calls), the turn stops with an error and the original history is kept. Nothing is lost; fix the cause (for example switch to a model with a larger window) and try again.
 
 The summary request uses the same model and system prompt as the main request. It leaves out the retained messages. It sends no tool definitions. It does not add `cache_control` breakpoints. It does not reuse the main request's prompt cache. It uses the model's `maxTokens` output limit when known; otherwise the provider chooses its output limit. Compaction thresholds only decide when to summarize. Its token usage is recorded with `kind: 'summary'`.
 
@@ -136,32 +124,19 @@ The summary request uses the same model and system prompt as the main request. I
 
 ### Turning automatic compaction off
 
-Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, set `session.autoCompaction = false`, or send the `set_auto_compaction` RPC command. Then nothing changes the context on its own: no microcompaction, no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). To turn off only microcompaction and keep the summaries, use the `microcompact` [limit](settings.md#limits) instead. `/compact` still works, and a request above `maxInputTokens` still stops the turn with an error.
+Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, set `session.autoCompaction = false`, or send the `set_auto_compaction` RPC command. Then nothing changes the context on its own: no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works.
 
 ### Thresholds and context window
 
-The thresholds are the `microcompactThreshold`, `summaryThreshold`, `minMicroSavings` and `maxInputTokens` limits. Their defaults match a 200k window; when the model entry has a `contextWindow`, they are derived from it and recomputed when you switch models. Values set in the `limits` setting or the `limits` option of `createVela()` always win. See [Settings](settings.md#limits) for the defaults and formulas.
-
-A request that is still above `maxInputTokens` after compaction is not sent; the turn stops with an error.
+The token thresholds are `summaryThreshold` and `maxInputTokens`. Their defaults match a 200k window; when the model entry has a `contextWindow`, they are derived from it and recomputed when you switch models. Values set in the `limits` setting or the `limits` option of `createVela()` always win. See [Settings](settings.md#limits) for the defaults and formulas.
 
 ## Long tool output
 
-A tool result longer than the tool's limit (12,000 characters for `grep` and `find`, 51,200 by default and for web tools; `read_file` pages and `bash` previews have their own limits; see [Tools](tools.md#result-size-and-truncation)) is saved in full to `<dataDir>/sessions/<id>/tool-results/<callId>.txt`. The model gets the head up to the limit, followed by one line with the file path and a hint to page through the rest with `read_file` and `offset`. Bash keeps its existing tail preview, with the file path only when truncated.
+A tool result longer than the tool's line limit (200 lines for `grep` and `find`, 500 lines by default and for web tools; `read` pages and `bash` previews have their own limits; see [Tools](tools.md#result-size-and-truncation)) is saved in full to `<dataDir>/sessions/<id>/tool-results/<callId>.txt`. The model gets the head up to the limit, followed by one line with the file path and a hint to page through the rest with `read` and `offset`. Bash keeps its existing tail preview, with the file path only when truncated.
 
 Every tool call and its result is also appended to a tool call history file (`<dataDir>/sessions/<id>/<historyId>/tool-history.jsonl`), which survives compaction. See [Session format](session-format.md#tool-call-history).
 
-Vela doesn't expire tool results by age: content changes only through microcompaction and summaries, when the thresholds above are reached.
-
-## Loop detection
-
-Vela watches the last 30 tool calls of a run for repetition:
-
-| Detector | Warning | Critical |
-|---|---|---|
-| `generic_repeat`: the same tool with the same arguments | 10 calls | 20 calls |
-| `ping_pong`: alternating between two calls | 10 alternations | 20 alternations |
-
-A warning emits `loop_detected` and appends a custom message (`customType: loop`, `display: true`) after that step. The text names the count from the table. The model sees it as a user message. The session stores it as a notice, so a resumed session does not show it as something you typed. A critical detection emits `loop_detected` and ends the run with `agent_end` reason `loop`. The window starts fresh with each prompt.
+Vela doesn't expire tool results by age: content changes only through compaction summaries when reached.
 
 ## Retries
 

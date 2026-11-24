@@ -129,25 +129,25 @@ test('project settings override user settings: objects merge deeply, resource li
 
 test('tools: project plain names replace the user list, +name / -name entries append to it', () => {
   const appended = setup({
-    'home/config.json': json({ tools: ['read_file', 'bash'] }),
+    'home/config.json': json({ tools: ['read', 'bash'] }),
     'project/.vela/config.json': json({ tools: ['-bash', '+grep'] }),
   })
   expect(loadConfig({ ...appended, trusted: true }).settings.tools).toEqual([
-    'read_file',
+    'read',
     'bash',
     '-bash',
     '+grep',
   ])
   const replaced = setup({
     'home/config.json': json({ tools: ['+grep'] }),
-    'project/.vela/config.json': json({ tools: ['read_file'] }),
+    'project/.vela/config.json': json({ tools: ['read'] }),
   })
   expect(loadConfig({ ...replaced, trusted: true }).settings.tools).toEqual([
-    'read_file',
+    'read',
   ])
   // An empty project list turns the user's tools off; it does not append nothing
   const emptied = setup({
-    'home/config.json': json({ tools: ['read_file'] }),
+    'home/config.json': json({ tools: ['read'] }),
     'project/.vela/config.json': json({ tools: [] }),
   })
   expect(loadConfig({ ...emptied, trusted: true }).settings.tools).toEqual([])

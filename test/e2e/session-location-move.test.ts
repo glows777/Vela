@@ -77,7 +77,7 @@ function fixture() {
     cache: true,
     responses: [
       fauxText('first'),
-      fauxToolCall('read_file', { path: 'marker' }),
+      fauxToolCall('read', { path: 'marker' }),
       fauxText('done'),
       fauxText('again'),
     ],

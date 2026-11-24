@@ -1151,7 +1151,7 @@ test('--baseline overrides the pinned old arm for the selected scenarios', () =>
 test('G6 worker starts B first, then A reads the real group fixture; no unsupported handoff is fabricated', async () => {
   const { result, calls, pending } = await exitAttempt('G6', [
     fauxText('Waiting for topic A.'),
-    fauxToolCall('read_file', { path: 'task/handoff.txt' }),
+    fauxToolCall('read', { path: 'task/handoff.txt' }),
     fauxText('The code is ORBIT-73, but I cannot hand it to B.'),
   ])
   expect(result.status).toBe('fail')
@@ -1190,8 +1190,8 @@ test('G6 worker passes when topic A hands the fact to B with channel_message_top
           : 'Waiting for topic A.',
       )
     const last = req.toolResults.at(-1)?.toolName
-    if (!last) return fauxToolCall('read_file', { path: 'task/handoff.txt' })
-    if (last === 'read_file')
+    if (!last) return fauxToolCall('read', { path: 'task/handoff.txt' })
+    if (last === 'read')
       return fauxToolCall('channel_message_topic', {
         root_id: 'g6_b',
         text: 'The release verification code is ORBIT-73.',
@@ -1217,7 +1217,7 @@ test('G6 worker fails when B reads the code itself after a note without it', asy
   }) => {
     const last = req.toolResults.at(-1)
     if (inB(req)) {
-      if (!last) return fauxToolCall('read_file', { path: 'task/handoff.txt' })
+      if (!last) return fauxToolCall('read', { path: 'task/handoff.txt' })
       return fauxText(
         last.output.includes('ORBIT-73')
           ? 'Release confirmed ORBIT-73, which I read myself.'
@@ -1236,9 +1236,9 @@ test('G6 worker fails when B reads the code itself after a note without it', asy
   expect(
     result.evidence!.calls.map((call) => [call.name, call.success]),
   ).toEqual([
-    ['read_file', false],
+    ['read', false],
     ['channel_message_topic', true],
-    ['read_file', true],
+    ['read', true],
   ])
   expect(result.checks).toEqual([
     { name: 'B final fact', pass: true },
@@ -1797,7 +1797,7 @@ for (const id of ['G7', 'G8'] as const) {
     const { result, calls, pending } = await exitAttempt(id, [
       fauxText('Kestrel.'),
       fauxToolCall('bash', { command: 'pwd' }),
-      fauxToolCall('read_file', {
+      fauxToolCall('read', {
         path: `../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${topic}_store`)}`,
       }),
       fauxToolCall('memory', stagingMemory),
@@ -1888,7 +1888,7 @@ for (const id of ['G7', 'G8'] as const) {
     const { result, calls } = await exitAttempt(id, [
       fauxToolCall('memory', stagingMemory),
       fauxText('Saved.'),
-      fauxToolCall('read_file', {
+      fauxToolCall('read', {
         path: '../memory/project_staging-server.md',
       }),
       fauxText('Kestrel.'),

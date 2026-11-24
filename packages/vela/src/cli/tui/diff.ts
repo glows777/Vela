@@ -2,7 +2,7 @@ import { diffWords } from 'diff'
 import { theme } from './theme.ts'
 
 /**
- * Colors an edit_file display diff (`+12 added`, `-12 removed`, ` 12 context`, `   ...`) like pi's
+ * Colors an edit display diff (`+12 added`, `-12 removed`, ` 12 context`, `   ...`) like pi's
  * renderDiff (`modes/interactive/components/diff.ts`): removed lines red, added lines green, and
  * when one line was replaced by one line, the changed words inverted.
  */

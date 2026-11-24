@@ -1,3 +1,4 @@
+import { isContextOverflow } from '../driver/agent/overflow.ts'
 import type {
   ImageContent,
   ModelMessage,
@@ -151,8 +152,7 @@ export class ChannelRecovery {
     boundary: string | null,
     error: unknown,
   ): Promise<void> {
-    if (!(error instanceof Error) || !error.message.includes('safe input size'))
-      return
+    if (!isContextOverflow(error)) return
     try {
       const branch = session.getBranch()
       const turn = branch.slice(

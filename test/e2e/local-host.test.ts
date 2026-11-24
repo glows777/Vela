@@ -268,7 +268,7 @@ function taskRouter(request: FauxRequest) {
         })
   return request.toolResults.length
     ? fauxText('File ready')
-    : fauxToolCall('write_file', {
+    : fauxToolCall('write', {
         path: 'result.txt',
         content: 'local host file',
       })
@@ -330,12 +330,7 @@ test('a project hub gets the group tool split, including in a session the host o
   const hub = t.vela.session(opened.sessionId)
   // A hub runs quick work itself (#421) but never waits for a decision: that is a topic control.
   expect(hub.getActiveTools()).toEqual(
-    expect.arrayContaining([
-      'bash',
-      'write_file',
-      'edit_file',
-      'channel_start_topic',
-    ]),
+    expect.arrayContaining(['bash', 'write', 'edit', 'channel_start_topic']),
   )
   expect(hub.getActiveTools()).not.toContain('channel_wait_for_input')
   const prompt = (await inspectSession(t.vela, hub)).systemPrompt
@@ -362,12 +357,12 @@ test('a project hub gets the group tool split, including in a session the host o
 
   // The channel narrows a host's own allowlist, never widens it.
   const allowlists: { tools: string[]; expected: string[] }[] = [
-    { tools: ['read_file'], expected: ['read_file'] },
+    { tools: ['read'], expected: ['read'] },
     {
-      tools: ['read_file', 'channel_wait_for_input'],
-      expected: ['read_file'],
+      tools: ['read', 'channel_wait_for_input'],
+      expected: ['read'],
     },
-    { tools: ['read_file', 'bash'], expected: ['read_file', 'bash'] },
+    { tools: ['read', 'bash'], expected: ['read', 'bash'] },
   ]
   for (const [index, { tools, expected }] of allowlists.entries()) {
     const dir = join(t.cwd, `selected-${index}`)

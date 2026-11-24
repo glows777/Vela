@@ -47,7 +47,7 @@ test('Lark tools reach channel sessions only', async () => {
   await t.run('hello')
   const plain = t.model.calls[0]!.tools
   expect(plain.filter((name) => name.startsWith('lark_'))).toEqual([])
-  expect(plain).toContain('read_file')
+  expect(plain).toContain('read')
 
   await t.vela.ready()
   await t.vela.startChannels()
@@ -64,7 +64,7 @@ test('Lark tools reach channel sessions only', async () => {
   )
   // The group channel's own deny list still hides the topic-only tool.
   expect(group).not.toContain('channel_wait_for_input')
-  expect(group).toContain('read_file')
+  expect(group).toContain('read')
 
   fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => t.model.calls.length === 3)
@@ -77,7 +77,7 @@ test('Lark tools reach channel sessions only', async () => {
     ]),
   )
   expect(topic).not.toContain('channel_start_topic')
-  expect(topic).toContain('read_file')
+  expect(topic).toContain('read')
 })
 
 test('Lark does not start or log started without app credentials', async () => {

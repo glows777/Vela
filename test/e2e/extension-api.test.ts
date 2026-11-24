@@ -409,42 +409,6 @@ test('without provider_stream_event handlers no raw chunks are requested', async
   expect(t.lastAssistantText()).toBe('plain')
 })
 
-// ---------- nested tool calls ----------
-
-test('tool_call and tool_result carry parentToolCallId for calls made through ctx.executeTool', async () => {
-  const calls: [string, string | undefined, string | undefined][] = []
-  function ext(vela: ExtensionAPI) {
-    vela.registerTool({
-      name: 'outer',
-      description: 'Reads a file through another tool',
-      inputSchema: z.object({}),
-      execute: async (_input, ctx) => {
-        const result = await ctx!.executeTool!('read_file', { path: 'a.txt' })
-        return result.isError ? 'failed' : 'read'
-      },
-    })
-    vela.on('tool_call', (event) => {
-      calls.push(['call', event.toolName, event.parentToolCallId])
-    })
-    vela.on('tool_result', (event) => {
-      calls.push(['result', event.toolName, event.parentToolCallId])
-    })
-  }
-  const t = createTestVela({
-    extensions: [ext],
-    files: { 'a.txt': 'hello' },
-    responses: [fauxToolCall('ext_outer', {}), fauxText('done')],
-  })
-  await t.run('go')
-  const outerId = t.eventsOf('tool_execution_start')[0]!.toolCallId
-  expect(calls).toEqual([
-    ['call', 'ext_outer', undefined],
-    ['call', 'read_file', outerId],
-    ['result', 'read_file', outerId],
-    ['result', 'ext_outer', undefined],
-  ])
-})
-
 test('an extension tool returning ToolExecutionResult gives the model its text and UIs its details', async () => {
   function ext(vela: ExtensionAPI) {
     vela.registerTool({

@@ -1,17 +1,9 @@
 import { resolveLimits, type VelaLimits } from '../../shared/limits.ts'
 import type { CompactionReason, VelaEventListener } from '../agent/events.ts'
-import { createSessionLocalExecutionEnv } from '../execution/local.ts'
-import { abortable } from '../execution/location.ts'
-import type { ExecutionEnv } from '../execution/types.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { SessionState, SessionStore } from '../session/index.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
-import {
-  canSummarize,
-  persistMicrocompact,
-  planMicrocompact,
-  summarize,
-} from './compressor.ts'
+import { canSummarize, summarize } from './compressor.ts'
 import {
   contextRequestTokens,
   estimateRequestTokens,
@@ -33,7 +25,6 @@ export class ContextManager {
     public onEvent?: VelaEventListener,
     /** Compaction thresholds and input cap; missing fields use defaults. */
     limits: Partial<VelaLimits> = {},
-    private readonly resolveEnv?: () => Promise<ExecutionEnv>,
   ) {
     this.limits = resolveLimits(limits)
   }
@@ -42,7 +33,7 @@ export class ContextManager {
 
   /**
    * Automatic compaction (like pi's compaction.enabled). When off, nothing changes the context on its own:
-   * no microcompaction, no threshold summary (the session also skips compact-and-retry on overflow).
+   * no threshold summary (the session also skips compact-and-retry on overflow).
    * Manual compact() still works.
    */
   autoCompaction = true
@@ -99,20 +90,6 @@ export class ContextManager {
       this.tracker.setEstimatedTokens(tokens)
   }
 
-  /** Folded tool output: each changed message is recorded as a context edit (the original stays in the session). */
-  private applyMicrocompact(messages: ModelMessage[]): void {
-    messages.forEach((message, index) => {
-      const original = this.state.messages[index]
-      if (original && message !== original) {
-        this.store.appendContextEdit(original, message)
-        const timestamp = this.state.timestamps.get(original)
-        if (timestamp !== undefined)
-          this.state.timestamps.set(message, timestamp)
-      }
-    })
-    this.replace(messages)
-  }
-
   /**
    * Summarizes earlier history (like pi's compaction): emits compaction_start / compaction_end, appends a
    * compaction entry (the summarized messages stay in the session) and replaces the context in memory.
@@ -136,10 +113,6 @@ export class ContextManager {
         focus,
       )
       const after = estimateRequestTokens(request, compacted.messages)
-      if (reason === 'threshold' && after > this.limits.maxInputTokens)
-        throw new Error(
-          'Context still exceeds the safe input size after summarizing; this turn was stopped and the original history kept.',
-        )
       request.abortSignal?.throwIfAborted()
       const [summaryMessage, firstKept] = compacted.messages
       const entry = this.store.appendCompaction(
@@ -204,80 +177,7 @@ export class ContextManager {
       estimate,
     )
     if (!this.autoCompaction) {
-      if (before > this.limits.maxInputTokens)
-        throw new Error(
-          'Context exceeds the safe input size and automatic compaction is off; compact manually or start a new session.',
-        )
       this.syncContextEstimate(before)
-      return
-    }
-    const micro =
-      this.limits.microcompact && before >= this.limits.microcompactThreshold
-        ? planMicrocompact(request.messages, this.store.results)
-        : null
-    const microAfter = micro
-      ? before - (estimate - estimateRequestTokens(request, micro.messages))
-      : before
-    const savings = before - microAfter
-    if (
-      micro &&
-      savings >= this.limits.minMicroSavings &&
-      microAfter < this.limits.summaryThreshold
-    ) {
-      const signal = request.abortSignal
-      const pending =
-        this.resolveEnv?.() ??
-        Promise.resolve(
-          createSessionLocalExecutionEnv({
-            cwd: process.cwd(),
-            tempRoot: this.store.results.dir,
-          }),
-        )
-      const env = await abortable(pending, signal)
-      const paths = await persistMicrocompact(
-        micro.candidates,
-        this.store.results,
-        env,
-        signal,
-      )
-      signal?.throwIfAborted()
-      const rewritten = micro.messages.map((message) => {
-        if (message.role !== 'tool' || !Array.isArray(message.content))
-          return message
-        let changed = false
-        const content = message.content.map((part) => {
-          if (
-            part.type !== 'tool_result' ||
-            part.output.type !== 'json' ||
-            !part.output.value ||
-            typeof part.output.value !== 'object' ||
-            Array.isArray(part.output.value)
-          )
-            return part
-          const reference = part.output.value as Record<string, unknown>
-          const next =
-            typeof reference.path === 'string'
-              ? paths.get(reference.path)
-              : undefined
-          if (!next) return part
-          changed = true
-          return {
-            ...part,
-            output: { ...part.output, value: { ...reference, path: next } },
-          }
-        })
-        return changed ? { ...message, content } : message
-      })
-      this.applyMicrocompact(rewritten)
-      this.tracker.reduceEstimatedTokens(microAfter)
-      this.onEvent?.({
-        type: 'context_prepare',
-        action: 'micro',
-        before,
-        after: microAfter,
-        saved: savings,
-        calls: micro.candidates.length,
-      })
       return
     }
     if (
@@ -289,18 +189,12 @@ export class ContextManager {
           type: 'context_prepare',
           action: 'summary-required',
           before,
-          saved: savings,
         })
         return
       }
-      // Summarize before micro changes history so the main request prefix stays intact.
       await this.summarizeHistory(request, 'threshold')
       return
     }
-    if (before > this.limits.maxInputTokens && !canSummarize(request.messages))
-      throw new Error(
-        'Context exceeds the safe input size; this turn was stopped and the original history kept.',
-      )
     this.syncContextEstimate(before)
   }
 }

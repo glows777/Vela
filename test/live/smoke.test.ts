@@ -34,7 +34,7 @@ test.skipIf(!live)(
 )
 
 test.skipIf(!live)(
-  'a real model can call read_file in the temp cwd',
+  'a real model can call read in the temp cwd',
   async () => {
     const t = createTestVela({
       model: realModel(),
@@ -42,10 +42,10 @@ test.skipIf(!live)(
       limits: { retryBaseMs: 500 },
     })
     await t.run(
-      'Use read_file to read secret.txt, then reply with only the code word in it',
+      'Use read to read secret.txt, then reply with only the code word in it',
     )
     expect(t.eventsOf('tool_execution_start').map((e) => e.toolName)).toContain(
-      'read_file',
+      'read',
     )
     expect(t.lastAssistantText()).toContain('PINEAPPLE')
   },

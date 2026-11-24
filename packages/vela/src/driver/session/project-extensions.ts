@@ -7,17 +7,11 @@ import type { ConfigResourceSplit } from '../config/runtime-resources.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import { ExtensionRunner } from '../extensions/runner.ts'
 import type { ExtensionAPI, VelaExtension } from '../extensions/types.ts'
-import {
-  type ForegroundBudget,
-  resolveForegroundBudget,
-  setForegroundBudget,
-} from '../tools/foreground-budget.ts'
 import { ToolRegistry } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
 import type { ProjectConfig } from './project-config.ts'
 
 interface Scope {
-  budget: ForegroundBudget
   runner: ExtensionRunner
   registry: ToolRegistry
 }
@@ -61,10 +55,8 @@ export class ProjectExtensions {
 
   bind(key: string, registry: ToolRegistry) {
     const scope = this.bound.get(key)
-    if (scope) {
-      setForegroundBudget(registry, scope.budget)
-      registry.bindScope(scope.registry)
-    } else registry.bindScope(this.deps.registry)
+    if (scope) registry.bindScope(scope.registry)
+    else registry.bindScope(this.deps.registry)
   }
 
   async prepare(id: string, env: ExecutionEnv): Promise<void> {
@@ -85,9 +77,6 @@ export class ProjectExtensions {
     const { split, config, host, registry, models, dataDir, logger } = this.deps
     const trusted = env.id === 'node:local' && config.mode(env.cwd) === 'all'
     const settings = await config.get(id, env)
-    // The session's own settings decide its shell and any internal test foreground `bash` budget,
-    // so both travel with the registry a call runs in.
-    const budget = resolveForegroundBudget(split!.foregroundBudget)
     const projectSettings = await config.project(id, env)
     const discovered = await loadProjectExtensionEntries(env, {
       trusted,
@@ -165,7 +154,7 @@ export class ProjectExtensions {
             { cause: error },
           )
         }
-        return { runner, registry: scopedRegistry, budget }
+        return { runner, registry: scopedRegistry }
       })()
       shared = { ready, sessions: new Set() }
       this.scopes.set(key, shared)

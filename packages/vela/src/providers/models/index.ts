@@ -420,11 +420,6 @@ export function limitsForModel(
     derived = {
       maxInputTokens,
       summaryThreshold,
-      microcompactThreshold: Math.min(
-        Math.floor(window * 0.6),
-        Math.floor(summaryThreshold * 0.8),
-      ),
-      minMicroSavings: Math.floor(window * 0.1),
     }
   }
   return applyLimits({ ...DEFAULT_LIMITS, ...derived }, overrides)

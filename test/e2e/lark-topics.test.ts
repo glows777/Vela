@@ -625,8 +625,8 @@ test('the group session runs execution and background tools like its topics, and
   expect(groupTools).toEqual(
     expect.arrayContaining([
       'bash',
-      'write_file',
-      'edit_file',
+      'write',
+      'edit',
       'background_output',
       'background_stop',
     ]),
@@ -642,7 +642,7 @@ test('the group session runs execution and background tools like its topics, and
   fake.deliver(topic)
   await until(() => t.model.calls.length === 2)
   expect(t.model.calls[1]!.tools).toEqual(
-    expect.arrayContaining(['bash', 'write_file', 'edit_file']),
+    expect.arrayContaining(['bash', 'write', 'edit']),
   )
 })
 
@@ -658,7 +658,7 @@ test('a chat tool list cannot add the waiting control to its group session, and 
         chats: [
           {
             id: 'oc_group',
-            tools: ['read_file', 'bash', 'channel_wait_for_input'],
+            tools: ['read', 'bash', 'channel_wait_for_input'],
           },
         ],
         transport: fake.transport,
@@ -672,7 +672,7 @@ test('a chat tool list cannot add the waiting control to its group session, and 
   )
   await until(() => t.model.calls.length === 1)
   const groupTools = t.model.calls[0]!.tools
-  expect(groupTools).toEqual(expect.arrayContaining(['read_file', 'bash']))
+  expect(groupTools).toEqual(expect.arrayContaining(['read', 'bash']))
   expect(groupTools).not.toContain('channel_wait_for_input')
   // A narrowed list also drops the hub's background tools; only a chat without one keeps them.
   expect(groupTools).not.toContain('background_output')
@@ -685,6 +685,6 @@ test('a chat tool list cannot add the waiting control to its group session, and 
   fake.deliver(topic)
   await until(() => t.model.calls.length === 2)
   expect(t.model.calls[1]!.tools).toEqual(
-    expect.arrayContaining(['read_file', 'bash', 'channel_wait_for_input']),
+    expect.arrayContaining(['read', 'bash', 'channel_wait_for_input']),
   )
 })

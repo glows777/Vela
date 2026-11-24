@@ -66,7 +66,7 @@ test('summary sends only the dropped messages as text, without tool definitions'
   const registry = new ToolRegistry(store.results)
   registry.register(
     {
-      name: 'read_file',
+      name: 'read',
       description: 'read',
       inputSchema: z.object({ path: z.string() }),
       execute: async () => 'unused',
@@ -148,6 +148,6 @@ test('summary sends only the dropped messages as text, without tool definitions'
     discoveredTools,
     restored,
   )
-  expect(Object.keys(snapshot.tools.sdkTools)).toEqual(['read_file'])
-  expect(Object.keys(discovered.tools.sdkTools)).toEqual(['read_file', 'later'])
+  expect(Object.keys(snapshot.tools.sdkTools)).toEqual(['read'])
+  expect(Object.keys(discovered.tools.sdkTools)).toEqual(['read', 'later'])
 })

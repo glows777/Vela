@@ -76,7 +76,7 @@ const cases = [
     ),
     kind: 'billing',
     hint: 'Check your provider balance and billing limits.',
-    retries: 1,
+    retries: 0,
   },
   {
     name: 'ChatGPT plan limit',

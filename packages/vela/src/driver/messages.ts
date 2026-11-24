@@ -7,7 +7,6 @@
 
 import { normalizeImage } from '../shared/images/normalize.ts'
 import type {
-  ProviderOptions,
   TextContent,
   ToolContent,
   ToolResultPart,
@@ -46,7 +45,6 @@ export type {
   VelaToolMessage,
   VelaUserMessage,
 } from '../shared/messages.ts'
-export { normalizeVelaMessage } from '../shared/messages.ts'
 
 /** @experimental Shared frontend contract. */
 export function isToolContent(value: unknown): value is ToolContent {
@@ -76,19 +74,18 @@ export async function normalizeToolContent(
   return message.content as ToolContent
 }
 
-/** Pi's conservative image estimate, independent of the encoded file's byte length. */
-export const IMAGE_CHARS = 4800
+/** Pi's conservative image estimate (4800 chars ≈ 1200 tokens), independent of encoded byte length. */
+const IMAGE_CHARS = 4800
+export const IMAGE_TOKENS = 1200
 
-/** Canonical images plus image shapes legacy messages may carry. */
+/** Canonical images (or image file parts). */
 export function isImageContentPart(part: {
   type: string
   mediaType?: string
 }): boolean {
   return (
     part.type === 'image' ||
-    part.type.startsWith('image-') ||
-    ((part.type === 'file' || part.type === 'media') &&
-      /^image(?:\/|$)/i.test(part.mediaType ?? ''))
+    (part.type === 'file' && /^image(?:\/|$)/i.test(part.mediaType ?? ''))
   )
 }
 
@@ -192,54 +189,97 @@ export function withoutForeignReasoning(
             text: `Provider search result: ${JSON.stringify(part.output, (key, value) => (key === 'encrypted_content' || key === 'encryptedContent' ? undefined : value))}`,
           },
         ]
+      if ('providerOptions' in part && part.providerOptions !== undefined) {
+        const { providerOptions: _, ...rest } = part
+        return [rest]
+      }
       return [part]
     })
-    if (!hosted.size && content.length === message.content.length)
-      return [message]
+    const { providerOptions: _, ...messageWithoutOptions } = message
     // A message that held nothing but thinking would reach the provider empty
-    return content.length ? [{ ...message, content }] : []
+    return content.length ? [{ ...messageWithoutOptions, content }] : []
   })
 }
 
-/** JSON-envelope estimate: replace image payloads and exclude opaque encrypted provider data. */
-export function messageEnvelopeChars(messages: VelaMessage[]): number {
-  const withoutOpaqueOptions = <
-    T extends { providerOptions?: ProviderOptions },
-  >(
-    part: T,
-  ): T => {
-    const options = part.providerOptions
-    const openai = options?.openai
-    if (
-      !openai ||
-      !('reasoningEncryptedContent' in openai || 'encryptedContent' in openai)
-    )
-      return part
-    const counted = { ...openai }
-    delete counted.reasoningEncryptedContent
-    delete counted.encryptedContent
-    return { ...part, providerOptions: { ...options, openai: counted } }
+function isCjkCodePoint(cp: number): boolean {
+  return (
+    (cp >= 0x4e00 && cp <= 0x9fff) || // CJK Unified Ideographs
+    (cp >= 0x3400 && cp <= 0x4dbf) || // CJK Extension A
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK Compatibility Ideographs
+    (cp >= 0x3000 && cp <= 0x303f) || // CJK Symbols and Punctuation
+    (cp >= 0x3040 && cp <= 0x30ff) || // Hiragana & Katakana
+    (cp >= 0xac00 && cp <= 0xd7af) || // Hangul Syllables
+    (cp >= 0xff00 && cp <= 0xffef) || // Halfwidth and Fullwidth Forms
+    (cp >= 0x20000 && cp <= 0x2ebef) // CJK Extensions B-F
+  )
+}
+
+/** Weighted token estimator: ASCII (~0.25), CJK (~1.2), other non-ASCII (~0.5). */
+export function estimateTextTokens(text: string): number {
+  let sum = 0
+  for (let i = 0; i < text.length; ) {
+    const cp = text.codePointAt(i)!
+    i += cp > 0xffff ? 2 : 1
+    if (cp <= 0x7f) sum += 0.25
+    else if (isCjkCodePoint(cp)) sum += 1.2
+    else sum += 0.5
   }
+  return Math.ceil(sum)
+}
+
+/** Recursively strips opaque provider encryption payloads (e.g. web_search `encrypted_content`). */
+export function stripOpaqueFields<T>(
+  value: T,
+  seen = new WeakSet<object>(),
+): T {
+  if (!value || typeof value !== 'object') return value
+  if (seen.has(value)) return value
+  if (Array.isArray(value)) {
+    seen.add(value)
+    return value.map((item) => stripOpaqueFields(item, seen)) as unknown as T
+  }
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) return value
+  seen.add(value)
+  const record = value as Record<string, unknown>
+  const cleaned: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(record)) {
+    if (key === 'encrypted_content' || key === 'encryptedContent') continue
+    cleaned[key] = stripOpaqueFields(entry, seen)
+  }
+  return cleaned as T
+}
+
+function sanitizeMessagesForEstimation(messages: VelaMessage[]): {
+  cleaned: unknown[]
+  imageCount: number
+} {
   let imageCount = 0
   const image = () => {
     imageCount++
     return null
   }
-  const envelope = messages.map((message) => {
+  const cleaned = messages.map((message) => {
     if (typeof message.content === 'string') return message
     return {
       ...message,
       content: message.content.map((part) => {
         if (isImageContentPart(part)) return image()
-        const counted =
-          'providerOptions' in part ? withoutOpaqueOptions(part) : part
-        if (part.type !== 'tool_result' || part.output.type !== 'content')
-          return counted
+        const rest =
+          'providerOptions' in part
+            ? (({ providerOptions: _, ...kept }) => kept)(part)
+            : part
+        const stripped = stripOpaqueFields(rest) as typeof rest
+        if (
+          stripped.type !== 'tool_result' ||
+          stripped.output.type !== 'content'
+        )
+          return stripped
         return {
-          ...counted,
+          ...stripped,
           output: {
-            ...part.output,
-            value: part.output.value.map((item) =>
+            ...stripped.output,
+            value: stripped.output.value.map((item) =>
               isImageContentPart(item) ? image() : item,
             ),
           },
@@ -247,5 +287,21 @@ export function messageEnvelopeChars(messages: VelaMessage[]): number {
       }),
     }
   })
-  return JSON.stringify(envelope).length + imageCount * (IMAGE_CHARS - 4)
+  return { cleaned, imageCount }
+}
+
+/** Weighted token estimate for Vela messages, stripping all provider signatures and encrypted payloads. */
+export function estimateMessagesTokens(messages: VelaMessage[]): number {
+  const { cleaned, imageCount } = sanitizeMessagesForEstimation(messages)
+  // `null` serializes as 4 ASCII chars (1 token), replaced by IMAGE_TOKENS.
+  return (
+    estimateTextTokens(JSON.stringify(cleaned)) +
+    imageCount * (IMAGE_TOKENS - 1)
+  )
+}
+
+/** JSON-envelope char estimate: strips opaque providerOptions / encrypted payloads and replaces images. */
+export function messageEnvelopeChars(messages: VelaMessage[]): number {
+  const { cleaned, imageCount } = sanitizeMessagesForEstimation(messages)
+  return JSON.stringify(cleaned).length + imageCount * (IMAGE_CHARS - 4)
 }

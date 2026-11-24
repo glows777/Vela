@@ -1,189 +1,17 @@
 import { generateProviderText } from '../../providers/index.ts'
 import type { ProviderUsage } from '../../shared/provider-types.ts'
-import type { ExecutionEnv } from '../execution/types.ts'
-import type { ModelMessage, ToolResultPart } from '../messages.ts'
+import type { ModelMessage } from '../messages.ts'
 import {
   branchSummaryMessageText,
   summaryMessageText,
 } from '../session/entries.ts'
 import type { SessionStore } from '../session/index.ts'
-import type { LegacyResultRecord } from '../session/tool-history.ts'
-import {
-  archiveToolResults,
-  getStoredResult,
-  StoredToolResult,
-  storedResultOutput,
-  type ToolResultStore,
-} from '../session/tool-results.ts'
+import { archiveToolResults } from '../session/tool-results.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
-import {
-  estimateRequestTokens,
-  MAX_INPUT_TOKENS,
-  type RequestSnapshot,
-} from './request.ts'
+import type { RequestSnapshot } from './request.ts'
 import { toolResultOutputToText } from './tool-result-output.ts'
 
-const KEEP_RECENT_CALLS = 5
 const KEEP_RECENT_MESSAGES = 6
-const CLEARABLE_TOOLS = new Set([
-  'read_file',
-  'bash',
-  'grep',
-  'find',
-  'list_directory',
-  'edit_file',
-  'write_file',
-])
-const OMITTED = '[tool result preview omitted; original available at path]'
-
-export interface MicroCandidate {
-  toolCallId: string
-  toolName: string
-  reference: StoredToolResult
-  text?: string
-}
-
-export function planMicrocompact(
-  messages: ModelMessage[],
-  store: ToolResultStore,
-): { messages: ModelMessage[]; candidates: MicroCandidate[] } {
-  const calls = new Map<string, { name: string; index: number }>()
-  const results = new Map<
-    string,
-    { part: ToolResultPart; message: number; index: number }
-  >()
-  const invalid = new Set<string>()
-  messages.forEach((message, index) => {
-    if (!Array.isArray(message.content)) return
-    message.content.forEach((part, partIndex) => {
-      if (part.type === 'tool_call') {
-        if (calls.has(part.toolCallId)) invalid.add(part.toolCallId)
-        calls.set(part.toolCallId, { name: part.toolName, index })
-      } else if (part.type === 'tool_result') {
-        if (results.has(part.toolCallId)) invalid.add(part.toolCallId)
-        results.set(part.toolCallId, { part, message: index, index: partIndex })
-      }
-    })
-  })
-  const completed = [...results.entries()].filter(([id, { part, message }]) => {
-    const call = calls.get(id)
-    return (
-      !invalid.has(id) &&
-      call &&
-      call.name === part.toolName &&
-      call.index < message
-    )
-  })
-  const keep = new Set(completed.slice(-KEEP_RECENT_CALLS).map(([id]) => id))
-  const replacement = messages.slice()
-  const candidates: MicroCandidate[] = []
-  for (const [id, { part, message, index }] of completed) {
-    if (keep.has(id) || !CLEARABLE_TOOLS.has(part.toolName)) continue
-    const stored = getStoredResult(part.output)
-    if (stored?.execution?.isError || stored?.execution?.timedOut) continue
-    if (!stored && part.output.type !== 'text') continue
-    const text =
-      stored?.preview ?? (part.output.type === 'text' ? part.output.value : '')
-    if (!text) continue
-    if (
-      part.toolName === 'bash' &&
-      // Older Vela versions wrote failed bash results starting with 命令执行失败, keep matching both forms
-      (/^(?:exit=[1-9]|命令执行失败|Command failed)/.test(text) ||
-        /^exit=[^\n]*signal=/.test(text))
-    )
-      continue
-    const status =
-      part.toolName === 'bash' ? text.match(/^exit=0[^\n]*/)?.[0] : undefined
-    const preview = status ? `${status}\n${OMITTED}` : OMITTED
-    const reference = stored
-      ? new StoredToolResult(
-          stored.path,
-          stored.indexPath,
-          stored.bytes,
-          preview,
-        )
-      : store.plan(text, preview)
-    if (stored) {
-      reference.callId = stored.callId
-      reference.historySeq = stored.historySeq
-      reference.execution = stored.execution
-    }
-    const output = storedResultOutput(reference)
-    if (JSON.stringify(output).length >= JSON.stringify(part.output).length)
-      continue
-    const original = replacement[message]
-    if (original?.role !== 'tool') continue
-    const content = original.content.slice()
-    content[index] = { ...part, output }
-    replacement[message] = { ...original, content }
-    candidates.push({
-      toolCallId: id,
-      toolName: part.toolName,
-      reference,
-      ...(!stored && { text }),
-    })
-  }
-  return { messages: candidates.length ? replacement : messages, candidates }
-}
-
-export async function persistMicrocompact(
-  candidates: MicroCandidate[],
-  store: ToolResultStore,
-  env: ExecutionEnv,
-  signal?: AbortSignal,
-): Promise<Map<string, string>> {
-  const paths = new Map<string, string>()
-  const created: string[] = []
-  let historyStarted = false
-  try {
-    for (const candidate of candidates) {
-      signal?.throwIfAborted()
-      if (candidate.text !== undefined) {
-        const temp = await env.createTempFile(
-          { prefix: 'vela-micro-', suffix: '.txt' },
-          signal,
-        )
-        if (!temp.ok) throw temp.error
-        created.push(temp.value)
-        const written = await env.writeFile(temp.value, candidate.text, signal)
-        if (!written.ok) throw written.error
-        const recorded = await store.history.completed(candidate.toolCallId)
-        if (
-          !recorded &&
-          !store.history.hasLegacy(candidate.toolCallId, temp.value)
-        ) {
-          historyStarted = true
-          await store.history.append<LegacyResultRecord>({
-            type: 'legacy_result',
-            toolCallId: candidate.toolCallId,
-            toolName: candidate.toolName,
-            outputPath: temp.value,
-            bytes: Buffer.byteLength(candidate.text),
-            note: 'Archived from old context; the original call arguments/execution time were not recorded at call time, so do not replay from this.',
-          })
-        }
-        paths.set(candidate.reference.path, temp.value)
-      } else {
-        const opened = await env.openBinaryReader(
-          candidate.reference.path,
-          undefined,
-          signal,
-        )
-        if (!opened.ok) throw opened.error
-        await opened.value.close()
-      }
-    }
-    return paths
-  } catch (error) {
-    if (!historyStarted)
-      await Promise.all(
-        created.map((path) =>
-          env.remove(path, { force: true }, undefined).catch(() => {}),
-        ),
-      )
-    throw error
-  }
-}
 
 /** Index of the user message a summary splits at, or -1 when no split keeps the recent messages and tool call pairs intact */
 function findSummaryBoundary(messages: ModelMessage[]): number {
@@ -222,6 +50,14 @@ export interface CompactionResult {
   historyViewSequence?: number
 }
 
+const MAX_SUMMARY_TOOL_INPUT_CHARS = 4_000
+const MAX_SUMMARY_TOOL_OUTPUT_CHARS = 8_000
+
+function capSummaryText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  return `${text.slice(0, maxChars)}\n... [truncated ${text.length - maxChars} chars]`
+}
+
 function sourceText(message: ModelMessage): string {
   if (typeof message.content === 'string') return message.content
   return message.content
@@ -229,9 +65,12 @@ function sourceText(message: ModelMessage): string {
       if (part.type === 'text') return part.text
       // Like pi's serialized conversation, keep the tool name so the summary can say what ran
       if (part.type === 'tool_call')
-        return `${part.toolName}(${JSON.stringify(part.input)})`
+        return `${part.toolName}(${capSummaryText(JSON.stringify(part.input) ?? '', MAX_SUMMARY_TOOL_INPUT_CHARS)})`
       if (part.type === 'tool_result')
-        return toolResultOutputToText(part.output)
+        return capSummaryText(
+          toolResultOutputToText(part.output),
+          MAX_SUMMARY_TOOL_OUTPUT_CHARS,
+        )
       return ''
     })
     .join('\n')
@@ -269,7 +108,7 @@ export async function summarize(
   request: RequestSnapshot,
   store: SessionStore,
   tracker: TokenTracker,
-  maxInputTokens = MAX_INPUT_TOKENS,
+  _maxInputTokens?: number,
   /** Focus given by the user for a manual compaction (like pi's /compact instructions); guides what the summary preserves */
   focus?: string,
   /**
@@ -313,10 +152,6 @@ export async function summarize(
     tools: { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
     toolDefinitions: [],
   }
-  if (estimateRequestTokens(summaryRequest) > maxInputTokens)
-    throw new Error(
-      'Summary input exceeds the safe input size; this turn was stopped and the original history kept.',
-    )
   const started = performance.now()
   const modelId =
     typeof request.model === 'string' ? request.model : request.model.modelId
@@ -381,10 +216,6 @@ export async function summarize(
       }
     } else if (entry.type === 'message' && !entry.stopReason) {
       fileMessages.push(entry.message)
-      for (const nested of Object.values(entry.nestedCalls ?? {})) {
-        for (const call of nested.calls)
-          calls.push({ toolName: call.name, input: call.arguments })
-      }
     }
   }
   for (const message of fileMessages) {
@@ -396,8 +227,8 @@ export async function summarize(
   for (const call of calls) {
     const input = call.input as { path?: unknown } | undefined
     if (typeof input?.path !== 'string' || !input.path) continue
-    if (call.toolName === 'read_file') read.add(input.path)
-    else if (call.toolName === 'write_file' || call.toolName === 'edit_file')
+    if (call.toolName === 'read') read.add(input.path)
+    else if (call.toolName === 'write' || call.toolName === 'edit')
       modified.add(input.path)
   }
   const readFiles = [...read].filter((path) => !modified.has(path)).sort()

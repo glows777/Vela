@@ -186,7 +186,7 @@ remember. After its run ends, the worker snapshots actual group memory entries
 name without importing topic 1's conversation. `store` checks entry content in
 that snapshot; `recall` requires topic 2's last delivered answer to contain the
 fact and an observed source in that topic: a memory read/search/list/lint result,
-an injected memory index, `read_file`/`grep` of its legitimate memory files, or
+an injected memory index, `read`/`grep` of its legitimate memory files, or
 matching `lark_search_history` (historically `feishu_search_history`) message text. A tool name, save acknowledgement,
 empty search, Bash output alone or guessed answer is not a source. Recall-topic
 disk-tool references to raw sessions, the eval artifact tree or another attempt

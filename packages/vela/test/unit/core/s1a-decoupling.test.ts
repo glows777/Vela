@@ -14,10 +14,7 @@ import type {
   RuntimeEvent,
   StreamDeltaEvent,
 } from '../../../src/runtime/events.ts'
-import {
-  normalizeVelaMessage,
-  type VelaMessage,
-} from '../../../src/shared/messages.ts'
+import type { VelaMessage } from '../../../src/shared/messages.ts'
 import {
   createJsonSchema,
   toJsonSchema,
@@ -40,7 +37,7 @@ test('VelaMessage converts to AI SDK wire format and back cleanly', () => {
         {
           type: 'tool_call',
           toolCallId: 'c1',
-          toolName: 'read_file',
+          toolName: 'read',
           input: { path: 'a.ts' },
         },
       ],
@@ -51,7 +48,7 @@ test('VelaMessage converts to AI SDK wire format and back cleanly', () => {
         {
           type: 'tool_result',
           toolCallId: 'c1',
-          toolName: 'read_file',
+          toolName: 'read',
           output: { type: 'text', value: 'const x = 1' },
         },
       ],
@@ -67,7 +64,7 @@ test('VelaMessage converts to AI SDK wire format and back cleanly', () => {
       {
         type: 'tool-call',
         toolCallId: 'c1',
-        toolName: 'read_file',
+        toolName: 'read',
         input: { path: 'a.ts' },
       },
     ],
@@ -78,7 +75,7 @@ test('VelaMessage converts to AI SDK wire format and back cleanly', () => {
       {
         type: 'tool-result',
         toolCallId: 'c1',
-        toolName: 'read_file',
+        toolName: 'read',
         output: { type: 'text', value: 'const x = 1' },
       },
     ],
@@ -90,45 +87,6 @@ test('VelaMessage converts to AI SDK wire format and back cleanly', () => {
   expect<VelaMessage>(fromAiResponseMessage(aiMessages[2]!)).toEqual(
     history[2]!,
   )
-})
-
-test('normalizeVelaMessage migrates legacy AI SDK JSONL part names to canonical VelaPart names', () => {
-  const legacyAssistant = {
-    role: 'assistant',
-    content: [
-      { type: 'reasoning', text: 'thought' },
-      { type: 'tool-call', toolCallId: 'c1', toolName: 'bash', input: {} },
-    ],
-  }
-  const legacyTool = {
-    role: 'tool',
-    content: [
-      {
-        type: 'tool-result',
-        toolCallId: 'c1',
-        toolName: 'bash',
-        output: { type: 'text', value: 'ok' },
-      },
-    ],
-  }
-  expect(normalizeVelaMessage(legacyAssistant)).toEqual({
-    role: 'assistant',
-    content: [
-      { type: 'thinking', text: 'thought' },
-      { type: 'tool_call', toolCallId: 'c1', toolName: 'bash', input: {} },
-    ],
-  })
-  expect(normalizeVelaMessage(legacyTool)).toEqual({
-    role: 'tool',
-    content: [
-      {
-        type: 'tool_result',
-        toolCallId: 'c1',
-        toolName: 'bash',
-        output: { type: 'text', value: 'ok' },
-      },
-    ],
-  })
 })
 
 test('ToolInputSchema converts and validates Zod and JSON Schema without AI SDK', async () => {
@@ -227,7 +185,7 @@ test('resuming a legacy v0.8 transcript with an interrupted tool-call reconciles
             role: 'assistant',
             content: [
               {
-                type: 'tool-call',
+                type: 'tool_call',
                 toolCallId: 'call-1',
                 toolName: 'bash',
                 input: { command: 'echo hi' },
@@ -302,7 +260,7 @@ test('resuming a legacy v0.8 transcript preserves previously discovered deferred
             role: 'assistant',
             content: [
               {
-                type: 'tool-call',
+                type: 'tool_call',
                 toolCallId: 'ts-1',
                 toolName: 'tool_search',
                 input: { query: 'lookup' },
@@ -319,7 +277,7 @@ test('resuming a legacy v0.8 transcript preserves previously discovered deferred
             role: 'tool',
             content: [
               {
-                type: 'tool-result',
+                type: 'tool_result',
                 toolCallId: 'ts-1',
                 toolName: 'tool_search',
                 output: {
@@ -399,7 +357,7 @@ test('resuming a legacy v0.8 transcript with {type:"image", image, mediaType} pr
             role: 'user',
             content: [
               { type: 'text', text: 'Look at this' },
-              { type: 'image', image: pngBase64, mediaType: 'image/png' },
+              { type: 'image', data: pngBase64, mimeType: 'image/png' },
             ],
           },
         }),
@@ -574,7 +532,7 @@ test('resuming a transcript with tool-approval-request preserves approval parts 
             role: 'assistant',
             content: [
               {
-                type: 'tool-call',
+                type: 'tool_call',
                 toolCallId: 'c1',
                 toolName: 'mcp.read',
                 input: {},
@@ -701,8 +659,8 @@ test('resuming a legacy image with provider file reference object preserves stru
             content: [
               { type: 'text', text: 'check ref' },
               {
-                type: 'image',
-                image: { openai: 'file-abc' },
+                type: 'file',
+                data: { type: 'reference', reference: { openai: 'file-abc' } },
                 mediaType: 'image/png',
               },
             ],
