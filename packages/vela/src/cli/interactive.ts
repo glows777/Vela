@@ -537,7 +537,7 @@ export class InteractiveMode {
         )
         break
       case 'audit':
-        this.addNotice(`[audit] ${event.toolName} → ${event.path}`, 'dim')
+        // An SDK record, not chat: the tool block and the fold line already show the write (#553).
         break
       case 'notify':
         this.addNotice(event.message, event.level)

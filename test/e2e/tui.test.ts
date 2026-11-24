@@ -1377,6 +1377,33 @@ test('edit_file shows the diff of its change', async () => {
   expect(screen).not.toContain('Successfully replaced')
 })
 
+test('a write and an edit are counted in the fold, never announced as [audit] notices', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'one\n' },
+    responses: [
+      fauxToolCall('write_file', { path: 'b.txt', content: 'two' }),
+      fauxToolCall('edit_file', {
+        path: 'a.txt',
+        edits: [{ oldText: 'one', newText: 'ONE' }],
+      }),
+      fauxText('written'),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('write then edit')
+  await tui.until('written')
+  expect(tui.screen()).toContain('▸ edited 2 files')
+  expect(tui.screen()).not.toContain('[audit]')
+
+  tui.terminal.press(KEYS.ctrlO)
+  const screen = tui.screen()
+  expect(screen).toContain('write_file b.txt')
+  expect(screen).toContain('edit_file a.txt')
+  expect(screen).not.toContain('[audit]')
+})
+
 test('calls a tool makes through ctx.executeTool are listed inside its block', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'hello' },
