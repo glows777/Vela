@@ -604,6 +604,20 @@ test('a steer typed while the model streams is answered in the same run', async 
   ])
 })
 
+test('the startup header leaves the extension list to /extensions', async () => {
+  const t = createTestVela({ extensions: [todo] })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  const header = tui.screen()
+  expect(header).toContain('Vela v')
+  expect(header).not.toContain('Extensions:')
+
+  tui.submit('/extensions')
+  // The same list is one command away
+  await tui.until('[extensions]\n   memory\n     Tools: memory')
+})
+
 test('slash commands: CLI command output, extension commands and /hotkeys go to the chat', async () => {
   const t = createTestVela({ extensions: [todo] })
   const tui = await startTui(t.vela)
