@@ -1895,7 +1895,8 @@ test.concurrent.if(hasScript)(
         'CLAUDE.md': 'same directory, not loaded\n',
       },
       terminal: [
-        ['Extensions:', '/status\r'],
+        // The header no longer lists extensions; the [context] line proves the TUI is up.
+        ['[context]', '/status\r'],
         ['[status]', '\x04'],
       ],
     })

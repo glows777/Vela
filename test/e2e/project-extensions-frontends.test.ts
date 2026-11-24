@@ -87,7 +87,7 @@ test('/extensions prepares and lists only the active project, preserving host ch
   }
 })
 
-test('TUI resumed project header, completion and slash command use the active session extensions', async () => {
+test('TUI resumed project lists, completes and runs the active session extensions', async () => {
   const t = setup()
   try {
     await t.vela.ready()
@@ -99,8 +99,6 @@ test('TUI resumed project header, completion and slash command use the active se
     await b.close()
     const tui = await startTui(t.vela, { sessionId: 'B', resume: true })
     await tui.started
-    expect(tui.screen()).toContain('beta')
-    expect(tui.screen()).not.toContain('alpha')
     tui.terminal.type('/beta-')
     await tui.until('beta project command')
     // Clear the completion input before issuing the full command.
@@ -108,8 +106,11 @@ test('TUI resumed project header, completion and slash command use the active se
     tui.submit('/beta-only')
     await tui.until('beta command ran')
     tui.submit('/extensions')
-    await tui.until('Commands: /beta-only')
-    expect(tui.screen()).not.toContain('/alpha-only')
+    await tui.until('   beta\n     Commands: /beta-only')
+    // The resumed session lists the project's own extension and nothing from the other project.
+    const listing = tui.screen().slice(tui.screen().indexOf('[extensions]'))
+    expect(listing).toContain('   beta\n     Commands: /beta-only')
+    expect(listing).not.toContain('alpha')
     expect(t.model.calls).toHaveLength(1)
   } finally {
     await stopTuis()
