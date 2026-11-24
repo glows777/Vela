@@ -395,6 +395,86 @@ test('an empty image clipboard leaves the editor text intact', async () => {
   expect(t.model.calls[0]!.lastUserText).toBe('keep this')
 })
 
+test('clipboard file paths are pasted as their paths and skip the image and text branches', async () => {
+  const reads: string[] = []
+  const t = createTestVela({
+    responses: [(req) => fauxText(`Received: ${req.lastUserText}`)],
+  })
+  const tui = await startTui(t.vela, {
+    readClipboardFilePaths: async () => [
+      '/tmp/report.pdf',
+      '/tmp/two words.png',
+    ],
+    readClipboardImage: async () => {
+      reads.push('image')
+      return blueImage()
+    },
+    readClipboardText: async () => {
+      reads.push('text')
+      return 'clipboard text'
+    },
+  })
+  await tui.started
+  tui.terminal.type('read ')
+  tui.terminal.press(pasteImageKey)
+  await tui.until(() =>
+    Reflect.get(tui.mode, 'editor').getText().includes('/tmp/two words.png'),
+  )
+  expect(reads).toEqual([])
+  expect(tui.screen()).toContain('/tmp/report.pdf')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Received: read')
+  expect(t.model.calls[0]!.lastUserText).toBe(
+    'read /tmp/report.pdf\n/tmp/two words.png',
+  )
+})
+
+test('a clipboard file path with a control character is refused with the paste notice', async () => {
+  const reads: string[] = []
+  const t = createTestVela({
+    responses: [(req) => fauxText(`Received: ${req.lastUserText}`)],
+  })
+  const tui = await startTui(t.vela, {
+    readClipboardFilePaths: async () => ['/tmp/\x1b[31mred.png'],
+    readClipboardImage: async () => {
+      reads.push('image')
+      return undefined
+    },
+    readClipboardText: async () => {
+      reads.push('text')
+      return 'clipboard text'
+    },
+  })
+  await tui.started
+  tui.terminal.type('keep this')
+  tui.terminal.press(pasteImageKey)
+  await tui.until(
+    'Clipboard paste failed: Clipboard file path contains control characters',
+  )
+  expect(reads).toEqual([])
+  expect(Reflect.get(tui.mode, 'editor').getText()).toBe('keep this')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Received: keep this')
+  expect(t.model.calls[0]!.lastUserText).toBe('keep this')
+})
+
+test('in bash mode clipboard files are shell-quoted and space-separated', async () => {
+  const t = createTestVela()
+  const tui = await startTui(t.vela, {
+    readClipboardFilePaths: async () => ['/tmp/two words.png', "/tmp/it's.png"],
+  })
+  await tui.started
+  tui.terminal.type('!ls ')
+  tui.terminal.press(pasteImageKey)
+  await tui.until(() =>
+    Reflect.get(tui.mode, 'editor').getText().includes('two words.png'),
+  )
+  expect(Reflect.get(tui.mode, 'editor').getText()).toBe(
+    `!ls '/tmp/two words.png' '/tmp/it'\\''s.png'`,
+  )
+  expect(t.model.calls).toHaveLength(0)
+})
+
 test('clipboard text fallback inserts literal text at the cursor and waits for Enter', async () => {
   const t = createTestVela({ responses: [fauxText('Clipboard text received')] })
   const tui = await startTui(t.vela, {

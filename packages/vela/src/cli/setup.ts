@@ -158,8 +158,9 @@ Prompts are sent in order. In interactive mode, text starting with / is a comman
 anything else goes to the model.
 
 Command-line @file arguments attach images (detected by header) or inline text in <file name="…">…</file>
-on the first prompt. Missing files exit 1. In the TUI, Ctrl+V (Windows: Alt+V) pastes a clipboard image
-as a temporary file path for read_file. Images in history show a short placeholder.
+on the first prompt. Missing files exit 1. In the TUI, Ctrl+V (Windows: Alt+V) pastes clipboard files
+as their paths, an image as a temporary file path for read_file, or clipboard text. Images in history
+show a short placeholder.
 
 Examples:
   # Interactive mode

@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -28,10 +27,12 @@ import type {
   VelaSession,
 } from '../driver/index.ts'
 import { resolveBinary, type SessionEntry } from '../driver/index.ts'
-import { imageMimeType } from '../shared/images/index.ts'
 import type { Vela } from '../vela.ts'
 import {
+  clipboardFilesText,
+  clipboardImageText,
   copyToClipboard,
+  readClipboardFilePaths,
   readClipboardImage,
   readClipboardText,
 } from './clipboard.ts'
@@ -764,35 +765,27 @@ export class InteractiveMode {
   private async pasteClipboard(): Promise<void> {
     if (this.shuttingDown) return
     try {
-      const bytes = await (
-        this.options.readClipboardImage ?? readClipboardImage
+      const files = await (
+        this.options.readClipboardFilePaths ?? readClipboardFilePaths
       )()
-      if (this.shuttingDown) return
-      const text = bytes?.length
+      const bytes = files?.length
         ? undefined
-        : await (this.options.readClipboardText ?? readClipboardText)()
+        : await (this.options.readClipboardImage ?? readClipboardImage)()
       if (this.shuttingDown) return
-      if (!bytes?.length) {
-        if (text) {
-          this.editor.insertTextAtCursor(text)
-          this.tui.requestRender()
-        }
-        return
-      }
-      const mimeType = imageMimeType(Buffer.from(bytes))
-      if (!mimeType) throw new Error('Unsupported clipboard image format')
-      this.clipboardDir ??= mkdtempSync(join(tmpdir(), 'vela-clipboard-'))
-      const file = join(
-        this.clipboardDir,
-        `${randomUUID()}.${mimeType.slice('image/'.length)}`,
-      )
-      writeFileSync(file, bytes, { mode: 0o600 })
-      const cursor = this.editor.getCursor()
-      const before =
-        this.editor.getLines()[cursor.line]?.slice(0, cursor.col) ?? ''
-      this.editor.insertTextAtCursor(
-        `${before && !/\s$/.test(before) ? ' ' : ''}${file} `,
-      )
+      const { line, col } = this.editor.getCursor()
+      const current = this.editor.getLines()[line] ?? ''
+      const before = current.slice(0, col)
+      const pasted = files?.length
+        ? clipboardFilesText(files, {
+            bash: this.editor.getText().trimStart().startsWith('!'),
+            before,
+            after: current.slice(col),
+          })
+        : bytes?.length
+          ? clipboardImageText(bytes, this.clipboardImageDir(), before)
+          : await (this.options.readClipboardText ?? readClipboardText)()
+      if (!pasted) return
+      this.editor.insertTextAtCursor(pasted)
       this.tui.requestRender()
     } catch (error) {
       if (this.shuttingDown) return
@@ -801,6 +794,12 @@ export class InteractiveMode {
         'warning',
       )
     }
+  }
+
+  /** One private temporary directory for pasted images, removed when the TUI exits */
+  private clipboardImageDir(): string {
+    this.clipboardDir ??= mkdtempSync(join(tmpdir(), 'vela-clipboard-'))
+    return this.clipboardDir
   }
 
   async submit(raw: string, images?: ImageContent[]): Promise<void> {

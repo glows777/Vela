@@ -147,7 +147,7 @@ Vela's own keys:
 |---|---|
 | Enter | Send. While running: steer (insert after the current step). |
 | Alt+Enter | While running: queue a follow-up for after the task. When idle: send. |
-| Ctrl+V (Windows: Alt+V) | Paste a clipboard image as a temporary file path for the model to read with `read_file`. |
+| Ctrl+V (Windows: Alt+V) | Paste clipboard files as their original paths, an image as a temporary file path for the model to read with `read_file`, or clipboard text. |
 | Alt+Up | Move queued messages back into the editor. |
 | Esc | Cancel a running `!` command; otherwise interrupt the running task (queued messages go back into the editor), or clear a `!` input. Closes the autocomplete menu first if it is open. |
 | Ctrl+B | Move the running shell command to the background, whether the model started it or you did with `!`. The row settles with the job's id and the run keeps going. With nothing running it says `No foreground command to background`. In tmux, press it twice: the tmux prefix consumes the first press. This key replaces the editor's Ctrl+B cursor-left (see the editor table); use Left. |
@@ -200,7 +200,7 @@ On the command line, pass each attachment as its own `@file` argument: `vela @sh
 
 Non-image attachments are rejected before a model request if they start with `%PDF-`, contain NUL bytes or are not valid UTF-8. Convert documents with an external tool (for example `pdftotext`) before attaching their text. Supported images and valid UTF-8 text, including Chinese and emoji, are preserved.
 
-In the TUI, Ctrl+V (Alt+V on Windows) reads an image from the local system clipboard. Vela writes it to a private temporary file and inserts its path at the cursor; submit a prompt asking the model to read it with `read_file`. When there is no image, the shortcut inserts clipboard text at the cursor. Clipboard reading only inserts content: Enter and Alt+Enter keep their normal behavior and do not wait for the read. Clipboard reads use pi-tui's native clipboard on macOS, Windows and X11, or `wl-paste` from `wl-clipboard` on Wayland. Ordinary terminal text paste works as before. Temporary clipboard files are removed when Vela exits normally. Live and resumed history show short placeholders such as `[image png 340KB]` for user and tool images.
+In the TUI, Ctrl+V (Alt+V on Windows) pastes what the local system clipboard holds. Copied files, such as a Finder file copy, are inserted as their original paths: one per line, or shell-quoted and space-separated in a `!` bash command. A path containing a control character is refused with a notice instead of being inserted. With no files, a copied image is written to a private temporary file and its path is inserted; submit a prompt asking the model to read it with `read_file`. With neither, the shortcut inserts clipboard text at the cursor. A pasted path is plain text for the model to `read_file`, never an image attachment. Clipboard reading only inserts content: Enter and Alt+Enter keep their normal behavior and do not wait for the read. Clipboard reads use pi-tui's native clipboard on macOS, Windows and X11, or `wl-paste` from `wl-clipboard` on Wayland; file paths come from pi-tui's native clipboard where it reports them, so Wayland keeps the image and text branches. Ordinary terminal text paste works as before. Temporary clipboard files are removed when Vela exits normally. Live and resumed history show short placeholders such as `[image png 340KB]` for user and tool images.
 
 ## Slash commands
 

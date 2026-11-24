@@ -45,6 +45,8 @@ export interface InteractiveOptions {
   copyToClipboard?: (text: string) => Promise<void>
   /** Defaults to pi-tui's native clipboard or wl-paste on Wayland. */
   readClipboardImage?: () => Promise<Uint8Array | undefined>
+  /** Files on the clipboard (a Finder copy) win over images and text; tests pass a fake. */
+  readClipboardFilePaths?: () => Promise<string[] | undefined>
   /** Text fallback for the explicit paste shortcut when there is no image. */
   readClipboardText?: () => Promise<string | undefined>
   /** Passed to `vela.login()` by `/login` (the CLI's installation id for Sign in with ChatGPT) */

@@ -74,6 +74,7 @@ export async function startTui(
     newSessionId?: () => string
     copyToClipboard?: (text: string) => Promise<void>
     readClipboardImage?: () => Promise<Uint8Array | undefined>
+    readClipboardFilePaths?: () => Promise<string[] | undefined>
     readClipboardText?: () => Promise<string | undefined>
     openBrowser?: (url: string) => void
     enabledModels?: string[]
@@ -95,6 +96,7 @@ export async function startTui(
     configure: options.configure ?? (() => true),
     copyToClipboard: options.copyToClipboard,
     readClipboardImage: options.readClipboardImage,
+    readClipboardFilePaths: options.readClipboardFilePaths,
     readClipboardText: options.readClipboardText,
     openBrowser: options.openBrowser ?? (() => {}),
     enabledModels: options.enabledModels,
