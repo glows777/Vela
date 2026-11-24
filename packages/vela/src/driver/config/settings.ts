@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import {
-  detectLegacyConfigFiles,
+  assertNoLegacyConfigFiles,
   interpolateConfigLayer,
+  LEGACY_CONFIG_FILES,
   mergeConfig,
   parseConfig,
   stripProjectPrivilegedKeys,
@@ -90,6 +91,7 @@ export interface VelaConfig {
 
 const TRUSTED_PROJECT_RESOURCES = [
   'config.json',
+  ...LEGACY_CONFIG_FILES,
   'extensions',
   'skills',
   'prompts',
@@ -142,24 +144,25 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const trusted = options.trusted === true && projectDir !== agentDir
 
   const userFile = join(agentDir, 'config.json')
-  const legacy = detectLegacyConfigFiles(agentDir)
-  if (legacy.length > 0) {
-    throw new Error(
-      `${agentDir}: found legacy config file(s) (${legacy.join(', ')}) without config.json; v0.9 uses unified config.json`,
-    )
-  }
+  assertNoLegacyConfigFiles(agentDir)
+  if (trusted) assertNoLegacyConfigFiles(projectDir)
 
   const files: string[] = []
   const layers: VelaSettings[] = []
-  const projectFile = join(projectDir, 'config.json')
+  const layerSpecs: { role: 'user' | 'project'; file: string }[] = [
+    { role: 'user', file: userFile },
+    ...(trusted
+      ? [{ role: 'project' as const, file: join(projectDir, 'config.json') }]
+      : []),
+  ]
   let userSettings: VelaSettings = {}
   let userExtensionConfig: Record<string, Record<string, unknown>> = {}
-  for (const file of trusted ? [userFile, projectFile] : [userFile]) {
-    const raw = readLayer(file)
+  for (const { role, file } of layerSpecs) {
+    const raw = readLayer(file, role)
     if (!raw) continue
-    if (file === projectFile) stripProjectPrivilegedKeys(raw)
+    if (role === 'project') stripProjectPrivilegedKeys(raw)
     const layer = interpolateConfigLayer(raw, env)
-    if (file === userFile) {
+    if (role === 'user') {
       userSettings = layer
       userExtensionConfig = toExtensionConfigView(layer)
     }
@@ -318,9 +321,15 @@ function findGitRoot(start: string): string | undefined {
 }
 
 /** Reads one config file: undefined if missing, throws if malformed. Resource paths become absolute. */
-function readLayer(file: string): VelaSettings | undefined {
+function readLayer(
+  file: string,
+  layer: 'user' | 'project',
+): VelaSettings | undefined {
   if (!existsSync(file)) return
-  return parseConfig(readFileSync(file, 'utf-8'), file, (item) =>
-    resolveConfigPath(dirname(file), item),
+  return parseConfig(
+    readFileSync(file, 'utf-8'),
+    file,
+    (item) => resolveConfigPath(dirname(file), item),
+    { layer },
   )
 }

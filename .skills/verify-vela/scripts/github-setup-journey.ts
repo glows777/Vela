@@ -131,7 +131,7 @@ const env = {
   PATH: `${bin}:${process.env.PATH}`,
   GH_SETUP_STATE: state,
 }
-const settingsPath = join(home, 'settings.json')
+const settingsPath = join(home, 'config.json')
 assert.equal(
   existsSync(settingsPath),
   false,
@@ -149,13 +149,13 @@ assert.equal(first.code, 0)
 assert.match(first.out + first.err, /owner\/repo: created webhook/)
 assert((first.out + first.err).includes(settingsPath))
 const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
-assert.equal(settings.extensionConfig.channel.eventReceiver.port, 8787)
+assert.equal(settings.webhooks.port, 8787)
 writeFileSync(
-  join(evidence, 'settings-first.json'),
+  join(evidence, 'config-first.json'),
   JSON.stringify(settings, null, 2),
   { mode: 0o600 },
 )
-const secret = settings.extensionConfig.channel.eventReceiver.github.secret
+const secret = settings.webhooks.github.secret
 assert.match(secret, /^[a-f0-9]{64}$/)
 assert.equal(statSync(settingsPath).mode & 0o777, 0o600)
 assert.equal(existsSync(join(home, 'auth.json')), false)
@@ -163,8 +163,7 @@ const second = await run('setup-second', [...cli, ...args], env)
 assert.equal(second.code, 0)
 assert.match(second.out + second.err, /owner\/repo: updated webhook/)
 assert.equal(
-  JSON.parse(readFileSync(settingsPath, 'utf8')).extensionConfig.channel
-    .eventReceiver.github.secret,
+  JSON.parse(readFileSync(settingsPath, 'utf8')).webhooks.github.secret,
   secret,
 )
 assert(!(first.out + first.err + second.out + second.err).includes(secret))
@@ -173,15 +172,8 @@ assert.equal(remote.hooks['owner/repo'].length, 1)
 assert.equal(remote.hooks['owner/repo'][0].config.secret, secret)
 assert(remote.calls.length > 0)
 for (const call of remote.calls) {
-  assert.equal(
-    call.settings.extensionConfig.channel.eventReceiver.github.secret,
-    secret,
-  )
-  assert(
-    call.settings.extensionConfig.channel.eventReceiver.github.repositories.includes(
-      'owner/repo',
-    ),
-  )
+  assert.equal(call.settings.webhooks.github.secret, secret)
+  assert(call.settings.webhooks.github.repositories.includes('owner/repo'))
 }
 assert.equal(
   (await run('missing-input', [...cli, 'setup', 'github'], env)).code,
@@ -194,7 +186,7 @@ console.log(
 // Only after empty-user setup/repeat acceptance, select a fixture-local fixed port.
 // Never rewrite a real user's configuration. Preserve the initial settings evidence.
 writeFileSync(
-  join(evidence, 'settings-second.json'),
+  join(evidence, 'config-second.json'),
   readFileSync(settingsPath),
   { mode: 0o600 },
 )
@@ -205,14 +197,12 @@ const probe = Bun.serve({
 })
 const port = probe.port
 probe.stop(true)
-settings.extensionConfig.channel.eventReceiver.port = port
+settings.webhooks.port = port
 writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
 assert.equal(statSync(settingsPath).mode & 0o777, 0o600)
-writeFileSync(
-  join(evidence, 'settings-serve.json'),
-  readFileSync(settingsPath),
-  { mode: 0o600 },
-)
+writeFileSync(join(evidence, 'config-serve.json'), readFileSync(settingsPath), {
+  mode: 0o600,
+})
 
 const replyFile = join(evidence, 'replies.txt')
 const extension = join(work, 'fixture-channel.ts')

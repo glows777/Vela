@@ -114,10 +114,10 @@ for (const api of [
         writeFileSync(
           join(dir, files[0]!),
           JSON.stringify({
-            note: 'keep',
+            autoCompaction: false,
             model: 'custom/custom-model',
             thinkingLevel: 'high',
-            theme: 'dark',
+            extensionConfig: { ui: { note: 'keep', theme: 'dark' } },
             providers: {
               custom: {
                 api: 'openai-completions',
@@ -294,7 +294,7 @@ for (const api of [
             reasoning: false,
           })
         if (outcome !== 'save') {
-          expect(config.note).toBe('keep')
+          expect(config.autoCompaction).toBe(false)
           expect(config.providers.custom.models[0]).toMatchObject({
             name: 'Preserved name',
             maxTokens: 4096,
@@ -304,7 +304,9 @@ for (const api of [
             id: 'other-model',
           })
           expect(config.providers.unrelated.models).toEqual([{ id: 'other' }])
-          expect(config.theme).toBe('dark')
+          expect(config.extensionConfig).toEqual({
+            ui: { note: 'keep', theme: 'dark' },
+          })
         }
         expect(session.modelInfo.ref).toBe('custom/custom-model')
         expect(session.thinkingLevel).toBe('off')

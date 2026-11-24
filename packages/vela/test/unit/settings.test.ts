@@ -156,24 +156,30 @@ test('an enabled chat saved as an environment expression is not rewritten', asyn
 
 test('a failed save names the files it already wrote', async () => {
   const dir = tempDir()
-  // Not an object: the config write fails after auth.json is on disk.
-  writeFileSync(join(dir, 'config.json'), '[]')
   const preset = {
     api: 'openai-completions' as const,
     baseUrl: 'https://example.invalid/v1',
     models: [{ id: 'custom-model' }],
   }
+  const providers = loadModels({
+    agentDir: dir,
+    env: {},
+    overrides: { custom: preset },
+  })
+  // Fail config persistence after auth.json is written.
+  const failingPreset = {
+    ...preset,
+    toJSON() {
+      throw new Error('simulated config write error')
+    },
+  } as unknown as typeof preset
   await expect(
     saveModelSetup({
       agentDir: dir,
       ref: 'custom/custom-model',
-      providers: loadModels({
-        agentDir: dir,
-        env: {},
-        overrides: { custom: preset },
-      }),
+      providers,
       credential: { type: 'api_key', key: 'secret-key' },
-      preset,
+      preset: failingPreset,
     }),
   ).rejects.toThrow(`${join(dir, 'auth.json')}`)
   expect(

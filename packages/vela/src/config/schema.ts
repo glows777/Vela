@@ -35,7 +35,7 @@ export interface VelaSettings {
   mcpServers?: Record<string, unknown>
   /** Host-owned execution environment definitions (e.g. Docker containers). */
   environments?: Record<string, unknown>
-  /** Host-owned default execution location. */
+  /** Host-owned default execution location (reserved for future CLI default placement; not yet applied at startup). */
   location?: { environment: string; cwd?: string }
   /** Built-in Lark channel configuration; strings support `$VAR` / `${VAR}`. */
   lark?: Record<string, unknown>
@@ -80,14 +80,16 @@ export const PROJECT_PRIVILEGED_KEYS = [
   'eventDefaultTarget',
 ] as const
 
-const RESERVED_EXTENSION_SECTIONS: Record<string, string> = {
-  lark: 'lark',
-  web: 'web',
-  mcp: 'mcpServers',
-  memory: 'memory',
-  channel: 'webhooks',
-  local: 'local',
-}
+const RESERVED_EXTENSION_SECTIONS = new Map<string, string | null>([
+  ['lark', 'lark'],
+  ['web', 'web'],
+  ['mcp', 'mcpServers'],
+  ['memory', 'memory'],
+  ['channel', 'webhooks'],
+  ['local', 'local'],
+  ['background', null],
+  ['todo', null],
+])
 
 const INTERPOLATED_SECTIONS = [
   'lark',
@@ -97,6 +99,38 @@ const INTERPOLATED_SECTIONS = [
   'local',
   'extensionConfig',
 ] as const
+
+/**
+ * Formats a JSON syntax failure without echoing raw source snippets or attaching the native
+ * error cause, which may contain pasted credentials in Node or Bun.
+ */
+export function formatJsonParseError(
+  file: string,
+  text: string,
+  error: unknown,
+): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const lineCol = /line\s+(\d+)\s*(?:,|\s)\s*(?:column|col)\s+(\d+)/i.exec(
+    message,
+  )
+  if (lineCol) {
+    return `${file} is not valid JSON (line ${lineCol[1]}, column ${lineCol[2]})`
+  }
+  const posMatch = /\bposition\s+(\d+)/i.exec(message)
+  if (posMatch) {
+    const pos = Math.min(Number(posMatch[1]), text.length)
+    let line = 1
+    let col = 1
+    for (let i = 0; i < pos; i++) {
+      if (text.charCodeAt(i) === 10) {
+        line++
+        col = 1
+      } else col++
+    }
+    return `${file} is not valid JSON (line ${line}, column ${col})`
+  }
+  return `${file} is not valid JSON`
+}
 
 function validateCompat(value: unknown, label: string): void {
   if (value === undefined) return
@@ -119,8 +153,84 @@ function validateCompat(value: unknown, label: string): void {
       throw new Error(`${label}.${key} must be a boolean`)
 }
 
+const COST_KEYS = ['input', 'output', 'cacheWrite', 'cacheRead'] as const
+
+function validateModelSpec(
+  model: unknown,
+  label: string,
+  requireId = true,
+): void {
+  if (!isPlainObject(model) || (requireId && typeof model.id !== 'string'))
+    throw new Error(`${label} must be an object with a string id`)
+  if (model.id !== undefined && typeof model.id !== 'string')
+    throw new Error(`${label}.id must be a string`)
+  if (model.name !== undefined && typeof model.name !== 'string')
+    throw new Error(`${label}.name must be a string`)
+  for (const key of ['contextWindow', 'maxTokens'] as const) {
+    const v = model[key]
+    if (
+      v !== undefined &&
+      (typeof v !== 'number' || !Number.isFinite(v) || v <= 0)
+    )
+      throw new Error(`${label}.${key} must be a positive number`)
+  }
+  if (model.reasoning !== undefined && typeof model.reasoning !== 'boolean')
+    throw new Error(`${label}.reasoning must be a boolean`)
+  if (
+    model.input !== undefined &&
+    (!Array.isArray(model.input) ||
+      model.input.some((item) => typeof item !== 'string'))
+  )
+    throw new Error(`${label}.input must be an array of strings`)
+  if (model.thinkingLevelMap !== undefined) {
+    if (!isPlainObject(model.thinkingLevelMap))
+      throw new Error(`${label}.thinkingLevelMap must be an object`)
+    for (const [level, mapped] of Object.entries(model.thinkingLevelMap)) {
+      if (!(THINKING_LEVELS as readonly string[]).includes(level))
+        throw new Error(
+          `${label}.thinkingLevelMap has unknown level "${level}"`,
+        )
+      if (mapped !== null && typeof mapped !== 'string')
+        throw new Error(
+          `${label}.thinkingLevelMap.${level} must be a string or null`,
+        )
+    }
+  }
+  if (model.cost !== undefined) {
+    if (!isPlainObject(model.cost))
+      throw new Error(`${label}.cost must be an object`)
+    for (const key of Object.keys(model.cost))
+      if (!(COST_KEYS as readonly string[]).includes(key))
+        throw new Error(`${label}.cost has unknown key "${key}"`)
+    for (const key of COST_KEYS) {
+      const v = model.cost[key]
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+        throw new Error(
+          `${label}.cost.${key} must be a non-negative finite number`,
+        )
+    }
+  }
+  validateCompat(model.compat, `${label}.compat`)
+}
+
+function validateLimits(limits: Record<string, unknown>, label: string): void {
+  assertLimitKeys(limits, label)
+  for (const [key, value] of Object.entries(limits)) {
+    if (key === 'microcompact') {
+      if (typeof value !== 'boolean')
+        throw new Error(`${label}.${key} must be a boolean`)
+    } else if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      value < 0
+    ) {
+      throw new Error(`${label}.${key} must be a non-negative finite number`)
+    }
+  }
+}
+
 /** Validate a `providers` record from `config.json` with clear file-prefixed messages. */
-export function validateProvidersRecord(
+function validateProvidersRecord(
   providers: unknown,
   file: string,
 ): Record<string, ProviderConfig> {
@@ -161,10 +271,7 @@ export function validateProvidersRecord(
       )
     if (Array.isArray(models))
       for (const [index, model] of models.entries())
-        validateCompat(
-          model.compat,
-          `${file}: providers.${name}.models[${index}].compat`,
-        )
+        validateModelSpec(model, `${file}: providers.${name}.models[${index}]`)
   }
   return providers as Record<string, ProviderConfig>
 }
@@ -210,14 +317,23 @@ export function parseConfig(
   text: string,
   file: string,
   resolvePath: (path: string) => string = (path) => path,
+  options: { layer?: 'user' | 'project' } = {},
 ): VelaSettings {
-  let raw: unknown
+  let parsedJson: unknown
   try {
-    raw = JSON.parse(text)
+    parsedJson = JSON.parse(text)
   } catch (error) {
-    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`)
+    throw new Error(formatJsonParseError(file, text, error))
   }
-  if (!isPlainObject(raw)) throw new Error(`${file} must be a JSON object`)
+  if (!isPlainObject(parsedJson))
+    throw new Error(`${file} must be a JSON object`)
+
+  // Drop owner-only keys before validation on project layers so ignored host fields never break startup.
+  const raw: Record<string, unknown> =
+    options.layer === 'project' ? { ...parsedJson } : parsedJson
+  if (options.layer === 'project') {
+    for (const key of PROJECT_PRIVILEGED_KEYS) delete raw[key]
+  }
 
   // Check common array/object/scalar fields with clear file-scoped diagnostics before/alongside Zod strict check.
   for (const key of RESOURCE_KEYS) {
@@ -289,7 +405,7 @@ export function parseConfig(
 
   const settings = { ...parsed.data } as VelaSettings
   if (settings.limits !== undefined)
-    assertLimitKeys(settings.limits, `${file}: limits`)
+    validateLimits(settings.limits, `${file}: limits`)
   if (settings.providers !== undefined)
     validateProvidersRecord(settings.providers, file)
 
@@ -324,11 +440,14 @@ export function parseConfig(
 
   if (settings.extensionConfig !== undefined) {
     for (const [name, section] of Object.entries(settings.extensionConfig)) {
-      const topLevel = RESERVED_EXTENSION_SECTIONS[name]
-      if (topLevel)
+      if (RESERVED_EXTENSION_SECTIONS.has(name)) {
+        const topLevel = RESERVED_EXTENSION_SECTIONS.get(name)
         throw new Error(
-          `${file}: extensionConfig.${name} is a built-in section; move it to top-level "${topLevel}"`,
+          topLevel
+            ? `${file}: extensionConfig.${name} is a built-in section; move it to top-level "${topLevel}"`
+            : `${file}: extensionConfig.${name} is a built-in extension with no config section; remove it from extensionConfig`,
         )
+      }
       if (!isPlainObject(section))
         throw new Error(`${file}: extensionConfig.${name} must be an object`)
     }

@@ -130,7 +130,6 @@ export async function larkSetup(host: Host): Promise<boolean> {
       host.setSummary(summary)
       return false
     }
-    let override = ''
     let enabled = true
     const updateEnabled = (value: unknown) => {
       if (!Array.isArray(value)) return
@@ -146,17 +145,11 @@ export async function larkSetup(host: Host): Promise<boolean> {
         JSON.parse(readFileSync(host.projectSettingsPath, 'utf8')),
       )
       updateEnabled(project.extensions)
-      const projectLark = object(project.lark)
-      const keys = ['appId', 'appSecret', 'chats'].filter(
-        (key) => key in projectLark,
-      )
-      if (keys.length)
-        override = ` Project settings ${host.projectSettingsPath} override user-level ${keys.join(', ')}; check the effective settings before starting.`
     }
     const disabled = enabled
       ? ''
       : ' Lark is disabled by extensions settings; remove -builtin:lark or add +builtin:lark before starting.'
-    const summary = `Lark configured in ${path}. Connection message sent. Run vela serve, then mention the bot in the group. Card callback and other scopes were not checked.${override}${disabled}`
+    const summary = `Lark configured in ${path}. Connection message sent. Run vela serve, then mention the bot in the group. Card callback and other scopes were not checked.${disabled}`
     host.addNotice(summary)
     host.setSummary(summary)
     return true

@@ -11,19 +11,30 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
-import { PROJECT_PRIVILEGED_KEYS } from '../../../src/config/index.ts'
+import { githubSetup } from '../../../src/cli/github-setup.ts'
+import { BUILTIN_EXTENSIONS } from '../../../src/cli/setup.ts'
+import {
+  PROJECT_PRIVILEGED_KEYS,
+  parseConfig,
+  readRawConfigFile,
+} from '../../../src/config/index.ts'
 import { discoverExtensions } from '../../../src/driver/config/extension-discovery.ts'
 import { importExtension } from '../../../src/driver/config/extensions.ts'
+import { loadProjectSettings } from '../../../src/driver/config/project-settings.ts'
+import { projectTrustRequired } from '../../../src/driver/config/settings.ts'
 import {
+  createLocalExecutionEnv,
   fileCredentialStore,
   memoryCredentialStore,
 } from '../../../src/driver/index.ts'
 import { loadConfig, loadModels } from '../../../src/load-config.ts'
+import { loadMcpServers } from '../../../src/mcp/config.ts'
 import type { CallbackServer } from '../../../src/providers/auth/oauth/callback-server.ts'
 import { waitForCallbackOrPaste } from '../../../src/providers/auth/oauth/callback-server.ts'
 import { openaiChatGPTLogin } from '../../../src/providers/auth/oauth/openai-chatgpt.ts'
 import { ModelRegistry } from '../../../src/providers/models/index.ts'
 import { writeProviderPreset } from '../../../src/providers/models/setup.ts'
+import { saveLarkSection, saveModelSetup } from '../../../src/settings.ts'
 
 const dirs: { cleanup(): void }[] = []
 const realFetch = globalThis.fetch
@@ -245,7 +256,7 @@ test('Fix #2: expired ChatGPT OAuth falls back to API key in channel sessions wi
   ).rejects.toThrow('only for the local terminal, not for lark')
 })
 
-test('Fix #3: auth.json.lock respects ownership token on stale takeover and writeProviderPreset writes 0600 config.json', async () => {
+test('Fix #3: auth.json.lock recovers stale locks, blocks superseded commits, and writeProviderPreset writes 0600 config.json', async () => {
   const { agentDir } = setupProject()
   const authPath = join(agentDir, 'auth.json')
   const lockPath = `${authPath}.lock`
@@ -254,14 +265,22 @@ test('Fix #3: auth.json.lock respects ownership token on stale takeover and writ
   utimesSync(lockPath, old, old)
 
   const store = fileCredentialStore(authPath)
-  await store.modify('openai', async () => {
-    // Simulate a second process legitimately taking over after lock replacement.
-    writeFileSync(lockPath, 'other-pid:foreign-token')
-    return { type: 'api_key', key: 'k1' }
-  })
-  expect(existsSync(lockPath)).toBe(true)
-  expect(readFileSync(lockPath, 'utf8')).toBe('other-pid:foreign-token')
+  await store.modify('openai', async () => ({
+    type: 'api_key',
+    key: 'fresh-key',
+  }))
+  expect(existsSync(lockPath)).toBe(false)
   expect(statSync(authPath).mode & 0o777).toBe(0o600)
+
+  // A superseded holder whose lock was replaced mid-modify must not overwrite auth.json.
+  await expect(
+    store.modify('openai', async () => {
+      writeFileSync(lockPath, 'other-pid:foreign-token')
+      return { type: 'api_key', key: 'stale-overwrite' }
+    }),
+  ).rejects.toThrow('ownership before committing auth update')
+  expect(readFileSync(lockPath, 'utf8')).toBe('other-pid:foreign-token')
+  expect(store.get('openai')).toEqual({ type: 'api_key', key: 'fresh-key' })
 
   const presetPath = writeProviderPreset(agentDir, 'custom', {
     api: 'openai-completions',
@@ -330,15 +349,17 @@ test('Fix #4: discoverExtensions follows valid symlinks, skips broken symlinks, 
   writeFileSync(
     directTarget,
     `import { z } from 'zod'
-import { createJsonSchema, defineJsonSchemaTool } from '@glows777/vela'
-import type { ExtensionAPI } from '@glows777/vela/extension-api'
+import { createJsonSchema } from '@glows777/vela'
+import { silentLogger, type ExtensionAPI } from '@glows777/vela/extension-api'
 export default function (api: ExtensionAPI) {
-  api.registerTool(defineJsonSchemaTool({
+  silentLogger.debug('loaded')
+  void createJsonSchema({ type: 'object' })
+  api.registerTool({
     name: 'probe',
     description: 'probe',
-    inputSchema: createJsonSchema(z.object({ ok: z.boolean() })),
+    inputSchema: z.object({ ok: z.boolean() }),
     execute: async () => 'ok',
-  }))
+  })
 }
 `,
   )
@@ -365,4 +386,332 @@ export default function (api: ExtensionAPI) {
     },
   } as Parameters<typeof factory>[0])
   expect(registered).toEqual(['probe'])
+})
+
+test('R1 #1: home directory retains owner privileged keys and custom providers', () => {
+  const root = tempDir('vela-home-coincident-')
+  dirs.push(root)
+  const home = root.path
+  const agentDir = join(home, '.vela')
+  mkdirSync(agentDir, { recursive: true })
+  writeFileSync(
+    join(agentDir, 'config.json'),
+    JSON.stringify({
+      model: 'custom/m1',
+      providers: {
+        custom: {
+          api: 'openai-completions',
+          baseUrl: 'https://example.invalid/v1',
+          models: [{ id: 'm1' }],
+        },
+      },
+      environments: { dev: { image: 'ubuntu:24.04' } },
+      location: { environment: 'dev' },
+      lark: { appId: 'owner-app' },
+      local: { enabled: true },
+      webhooks: { port: 8787 },
+      eventDefaultTarget: { channel: 'lark', chatId: 'oc_1' },
+    }),
+  )
+  const loaded = loadConfig({ cwd: home, agentDir, trusted: true })
+  expect(loaded.settings.environments).toEqual({
+    dev: { image: 'ubuntu:24.04' },
+  })
+  expect(loaded.settings.location).toEqual({ environment: 'dev' })
+  expect(loaded.settings.lark).toEqual({ appId: 'owner-app' })
+  expect(loaded.settings.local).toEqual({ enabled: true })
+  expect(loaded.settings.webhooks).toEqual({ port: 8787 })
+  expect(loaded.settings.eventDefaultTarget).toEqual({
+    channel: 'lark',
+    chatId: 'oc_1',
+  })
+  expect(loaded.providers.custom?.models?.map((m) => m.id)).toEqual(['m1'])
+})
+
+test('R1 #2: setup writers and standalone loadModels enforce legacy preflight and strict parsing', async () => {
+  const { agentDir } = setupProject()
+  writeFileSync(join(agentDir, 'settings.json'), '{"model":"openai/gpt-5.5"}')
+  const providers = {
+    openai: {
+      createModel: () => {
+        throw new Error('unused')
+      },
+    },
+  }
+  await expect(saveLarkSection({ agentDir, runInApp: true })).rejects.toThrow(
+    'found legacy config file(s)',
+  )
+  await expect(
+    saveModelSetup({
+      agentDir,
+      ref: 'openai/gpt-5.5',
+      providers,
+      credential: { type: 'api_key', key: 'secret-key' },
+    }),
+  ).rejects.toThrow('found legacy config file(s)')
+  expect(existsSync(join(agentDir, 'auth.json'))).toBe(false)
+  expect(existsSync(join(agentDir, 'config.json'))).toBe(false)
+  expect(() =>
+    writeProviderPreset(agentDir, 'custom', { api: 'openai-completions' }),
+  ).toThrow('found legacy config file(s)')
+  expect(() => loadModels({ agentDir })).toThrow('found legacy config file(s)')
+
+  const outputs: string[] = []
+  const ghCode = await githubSetup({
+    agentDir,
+    repositories: ['glows777/Vela'],
+    url: 'https://hooks.example.com',
+    interactive: false,
+    write: (line) => outputs.push(line),
+  })
+  expect(ghCode).toBe(1)
+  expect(outputs.join('\n')).toContain('found legacy config file(s)')
+  expect(existsSync(join(agentDir, 'config.json'))).toBe(false)
+
+  const strictDir = setupProject({ unknownTopLevel: 1 }).agentDir
+  expect(() => loadModels({ agentDir: strictDir })).toThrow(
+    'unknown key "unknownTopLevel"',
+  )
+})
+
+test('R1 #3: concurrent cross-process saves preserve all sections', async () => {
+  const { agentDir } = setupProject()
+  const settingsModule = join(import.meta.dir, '../../../src/settings.ts')
+  const setupModule = join(
+    import.meta.dir,
+    '../../../src/providers/models/setup.ts',
+  )
+  for (let i = 0; i < 6; i++) {
+    const dir = join(agentDir, `run-${i}`)
+    mkdirSync(dir, { recursive: true })
+    const p1 = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `import { saveLarkSection } from ${JSON.stringify(settingsModule)}; await saveLarkSection({ agentDir: ${JSON.stringify(dir)}, runInApp: false, appId: 'app_${i}' });`,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    const p2 = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `import { writeProviderPreset } from ${JSON.stringify(setupModule)}; writeProviderPreset(${JSON.stringify(dir)}, 'example', { api: 'openai-completions', models: [{ id: 'm' }] });`,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    expect(await p1.exited).toBe(0)
+    expect(await p2.exited).toBe(0)
+    const saved = readRawConfigFile(dir)
+    expect(saved.lark).toEqual({ appId: `app_${i}`, runInApp: false })
+    expect(
+      (saved.providers as Record<string, unknown> | undefined)?.example,
+    ).toBeDefined()
+  }
+})
+
+test('R1 #5: project MCP exposure-only override does not re-expand user variables', () => {
+  const { agentDir, cwd } = setupProject(
+    {
+      mcpServers: {
+        echo: {
+          command: 'node',
+          args: ['$FIRST'],
+          headers: { Authorization: 'Bearer $TOKEN' },
+        },
+      },
+    },
+    {
+      mcpServers: {
+        echo: { enabled: true, exposure: 'direct' },
+      },
+    },
+  )
+  const loaded = loadConfig({
+    cwd,
+    agentDir,
+    trusted: true,
+    env: {
+      FIRST: 'val-$SECOND',
+      TOKEN: 'tok-$SECOND',
+      SECOND: 'MUST_NOT_EXPAND',
+    },
+  })
+  const echo = loaded.mcp.servers.echo as {
+    args?: string[]
+    headers?: Record<string, string>
+    enabled?: boolean
+    exposure?: string
+  }
+  expect(echo.args).toEqual(['val-$SECOND'])
+  expect(echo.headers).toEqual({ Authorization: 'Bearer tok-$SECOND' })
+  expect(echo.enabled).toBe(true)
+  expect(echo.exposure).toBe('direct')
+})
+
+test('R1 #6: malformed JSON errors redact pasted secret tokens across loaders and writers', () => {
+  const { agentDir, cwd } = setupProject()
+  const configFile = join(agentDir, 'config.json')
+  const broken = '{"providers":{"openai":{"apiKey":SECRET_LEAK_TOKEN}}}'
+  writeFileSync(configFile, broken)
+  for (const run of [
+    () => parseConfig(broken, configFile),
+    () => readRawConfigFile(agentDir),
+    () => loadModels({ agentDir }),
+  ]) {
+    try {
+      run()
+      throw new Error('expected parse failure')
+    } catch (error) {
+      expect((error as Error).message).toContain('is not valid JSON')
+      expect((error as Error).message).not.toContain('SECRET_LEAK_TOKEN')
+      expect((error as Error).cause).toBeUndefined()
+    }
+  }
+  const mcp = loadMcpServers({
+    agentDir,
+    projectDir: join(cwd, '.vela'),
+    trusted: false,
+    env: {},
+  })
+  expect(mcp.errors[0]).toContain('is not valid JSON')
+  expect(mcp.errors[0]).not.toContain('SECRET_LEAK_TOKEN')
+})
+
+test('R1 #7: custom SDK provider marked localOnly receives undefined on channel OAuth', async () => {
+  let receivedCredential: unknown = 'unset'
+  const registry = new ModelRegistry(
+    {
+      custom: {
+        oauth: {
+          name: 'Local OAuth',
+          localOnly: true,
+          login: async () => {
+            throw new Error('unused')
+          },
+        },
+        createModel: (id, ctx) => ({
+          specificationVersion: 'v4',
+          provider: 'custom',
+          modelId: id,
+          async doGenerate() {
+            receivedCredential = await ctx.credential()
+            return {}
+          },
+          async doStream() {
+            return {}
+          },
+        }),
+      },
+    },
+    memoryCredentialStore({
+      custom: {
+        type: 'oauth',
+        access: 'secret-oauth-token',
+        refresh: 'r',
+        expires: Date.now() + 600_000,
+      },
+    }),
+  )
+  await (
+    registry.resolve('custom/m1', { channel: () => 'lark' })
+      .model as unknown as {
+      doGenerate(options?: unknown): Promise<unknown>
+    }
+  ).doGenerate({})
+  expect(receivedCredential).toBeUndefined()
+
+  await (
+    registry.resolve('custom/m1').model as unknown as {
+      doGenerate(options?: unknown): Promise<unknown>
+    }
+  ).doGenerate({})
+  expect(receivedCredential).toMatchObject({
+    type: 'oauth',
+    access: 'secret-oauth-token',
+  })
+})
+
+test('R1 #9: trusted legacy project config triggers trust and errors clearly; denied stays unread', async () => {
+  const { agentDir, cwd } = setupProject()
+  writeFileSync(
+    join(cwd, '.vela', 'settings.json'),
+    '{"model":"openai/gpt-5.5"}',
+  )
+  expect(projectTrustRequired(cwd, agentDir)).toBe(true)
+  expect(() => loadConfig({ cwd, agentDir, trusted: false })).not.toThrow()
+  expect(() => loadConfig({ cwd, agentDir, trusted: true })).toThrow(
+    'found legacy config file(s)',
+  )
+  await expect(
+    loadProjectSettings(createLocalExecutionEnv({ cwd }), {
+      cwd,
+      trusted: true,
+      agentDir,
+    }),
+  ).rejects.toThrow('found legacy config file(s)')
+
+  writeFileSync(
+    join(cwd, '.vela', 'config.json'),
+    JSON.stringify({ model: 'openai/gpt-5.5' }),
+  )
+  expect(loadConfig({ cwd, agentDir, trusted: true }).settings.model).toBe(
+    'openai/gpt-5.5',
+  )
+})
+
+test('R1 #12, #13, #14: strict limits/models validation, strip-before-validate on projects, and reserved namespace', async () => {
+  const { agentDir, cwd } = setupProject(
+    {},
+    {
+      location: {},
+      providers: 'not-an-object',
+      tools: ['+grep'],
+    },
+  )
+  const loaded = loadConfig({ cwd, agentDir, trusted: true })
+  expect(loaded.settings.tools).toEqual(['+grep'])
+  const proj = await loadProjectSettings(createLocalExecutionEnv({ cwd }), {
+    cwd,
+    trusted: true,
+    agentDir,
+  })
+  expect(proj.settings.tools).toEqual(['+grep'])
+
+  const badLimits = setupProject({
+    limits: { microcompact: 'false' },
+  }).agentDir
+  expect(() => loadConfig({ cwd, agentDir: badLimits })).toThrow(
+    'limits.microcompact must be a boolean',
+  )
+  const badRetry = setupProject({
+    limits: { maxRetries: 'typo' },
+  }).agentDir
+  expect(() => loadConfig({ cwd, agentDir: badRetry })).toThrow(
+    'limits.maxRetries must be a non-negative finite number',
+  )
+  const badModelSpec = setupProject({
+    providers: {
+      p: { models: [{ id: 'm', contextWindow: 'typo' }] },
+    },
+  }).agentDir
+  expect(() => loadConfig({ cwd, agentDir: badModelSpec })).toThrow(
+    'providers.p.models[0].contextWindow must be a positive number',
+  )
+
+  for (const builtin of Object.keys(BUILTIN_EXTENSIONS)) {
+    expect(() =>
+      parseConfig(
+        JSON.stringify({ extensionConfig: { [builtin]: {} } }),
+        'config.json',
+      ),
+    ).toThrow(`extensionConfig.${builtin} is a built-in`)
+  }
+  const ctor = parseConfig(
+    JSON.stringify({ extensionConfig: { constructor: { custom: true } } }),
+    'config.json',
+  )
+  expect(
+    Object.getOwnPropertyDescriptor(ctor.extensionConfig, 'constructor')?.value,
+  ).toEqual({ custom: true })
 })

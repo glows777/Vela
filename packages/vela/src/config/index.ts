@@ -1,4 +1,5 @@
 export {
+  formatJsonParseError,
   interpolateConfigLayer,
   mergeConfig,
   PROJECT_PRIVILEGED_KEYS,
@@ -7,11 +8,11 @@ export {
   stripProjectPrivilegedKeys,
   toExtensionConfigView,
   type VelaSettings,
-  validateProvidersRecord,
 } from './schema.ts'
 export { savedTrust, saveTrust } from './trust.ts'
 export {
-  detectLegacyConfigFiles,
+  assertNoLegacyConfigFiles,
+  LEGACY_CONFIG_FILES,
   readRawConfigFile,
   updateConfigFile,
   writeRawConfigFile,

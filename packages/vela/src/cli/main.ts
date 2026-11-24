@@ -5,6 +5,7 @@ import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { savedTrust } from '../config/index.ts'
+import { registerExtensionHostModules } from '../driver/config/extensions.ts'
 import {
   buildSessionPath,
   isSessionV1,
@@ -95,6 +96,21 @@ if (args.setupTarget === 'github') {
 }
 const env = process.env
 const cwd = process.cwd()
+registerExtensionHostModules({
+  '@glows777/vela/extension-api': () => import('../extension-api.ts'),
+  '@glows777/vela': () =>
+    Promise.all([
+      import('../driver/index.ts'),
+      import('../driver/diagnostics.ts'),
+      import('../extension-api.ts'),
+      import('../lark/index.ts'),
+      import('../legacy-channels/index.ts'),
+      import('../load-config.ts'),
+      import('../mcp/index.ts'),
+      import('../settings.ts'),
+      import('../vela.ts'),
+    ]).then((mods) => Object.assign({}, ...mods)),
+})
 
 /**
  * Run mode (like pi): `serve` runs channels only; `--mode rpc` / `--mode json` pick explicitly; `-p`, `--mode text`

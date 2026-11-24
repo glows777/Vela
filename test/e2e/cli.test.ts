@@ -248,7 +248,7 @@ test.concurrent.if(hasScript)(
       dirs.push(home)
       await Bun.write(
         join(home.path, 'config.json'),
-        JSON.stringify({ hideThinking: true }),
+        JSON.stringify({ autoCompaction: false }),
       )
       const result = await cli(['setup'], {
         agentDir: home.path,
@@ -276,7 +276,7 @@ test.concurrent.if(hasScript)(
       expect(
         JSON.parse(readFileSync(join(home.path, 'config.json'), 'utf8')),
       ).toMatchObject({
-        hideThinking: true,
+        autoCompaction: false,
         model: 'local/test-model',
         providers: {
           local: { baseUrl: `http://127.0.0.1:${server.port}/v1` },
@@ -327,7 +327,7 @@ test.concurrent.if(hasScript)(
         readFileSync(join(home.path, 'config.json'), 'utf8'),
       )
       expect(changedSettings).toMatchObject({
-        hideThinking: true,
+        autoCompaction: false,
         model: 'local/test-model',
         thinkingLevel: 'high',
       })
@@ -2377,4 +2377,51 @@ test.concurrent('a failed project factory reports its location and cause without
   )
   expect(result.stderr).toContain('project setup failed')
   expect(result.stderr).not.toContain('Bun v')
+})
+
+test.concurrent('bundled CLI loads external TS extensions with runtime host imports outside node_modules', async () => {
+  const extDir = tempDir('vela-external-ext-')
+  dirs.push(extDir)
+  const extPath = join(extDir.path, 'runtime-host.ts')
+  await Bun.write(
+    extPath,
+    `import { z } from 'zod'
+import { createJsonSchema } from '@glows777/vela'
+import { silentLogger, type ExtensionAPI } from '@glows777/vela/extension-api'
+export default function runtimeHost(vela: ExtensionAPI) {
+  silentLogger.debug('loaded')
+  void createJsonSchema({ type: 'object' })
+  vela.registerTool({
+    name: 'bundle_probe',
+    description: 'bundle host import probe',
+    inputSchema: z.object({ label: z.string() }),
+    execute: async ({ label }) => ({
+      content: [{ type: 'text', text: \`EXT_OK:\${label}\` }],
+    }),
+  })
+}
+`,
+  )
+  const result = await cli(
+    ['--no-extensions', '-e', extPath, '--mode', 'json', 'run bundle probe'],
+    {
+      model: 'faux:probe.json',
+      files: {
+        'probe.json': JSON.stringify({
+          responses: [
+            {
+              toolCalls: [
+                { name: 'runtime-host_bundle_probe', input: { label: 's1b' } },
+              ],
+            },
+            { text: 'bundled ok' },
+          ],
+        }),
+      },
+    },
+  )
+  expect(result.code).toBe(0)
+  expect(result.stderr).not.toContain('Failed to load')
+  expect(result.stderr).not.toContain('Cannot find module')
+  expect(result.stdout).toContain('EXT_OK:s1b')
 })

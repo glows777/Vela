@@ -154,5 +154,7 @@ test('an unset variable or a broken file is an error, not an empty value', () =>
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the expected message quotes the ${TOKEN} placeholder
     'MCP server "docs" headers "Authorization" uses ${TOKEN}, which is not set',
   )
-  expect(result.errors[1]).toStartWith(`${join(projectDir, 'config.json')}: `)
+  expect(result.errors[1]).toStartWith(
+    `${join(projectDir, 'config.json')} is not valid JSON`,
+  )
 })

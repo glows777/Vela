@@ -60,6 +60,13 @@ export interface ProviderContext {
   channel(): string | undefined
 }
 
+const localOnlyOAuthChecks = new WeakMap<ProviderContext, () => boolean>()
+
+/** @internal True when this request's channel session withheld a `localOnly` OAuth token. */
+export function isLocalOnlyOAuthBlocked(ctx: ProviderContext): boolean {
+  return localOnlyOAuthChecks.get(ctx)?.() ?? false
+}
+
 /** Optional provider-hosted equivalents for Vela tools, resolved for each request. */
 export type HostedToolModel = ModelHandle & {
   hostedTools?: (options?: {
@@ -255,16 +262,23 @@ export class ModelRegistry {
       )
     const { api: _, ...catalog } = catalogLookup(provider, id) ?? { id }
     const spec = def.models?.find((m) => m.id === id) ?? catalog
+    const blockedLocalOAuth = () =>
+      Boolean(
+        def.oauth?.localOnly &&
+          options.channel?.() &&
+          this.credentials.get(provider)?.type === 'oauth',
+      )
+    const ctx: ProviderContext = {
+      provider,
+      credential: async () => {
+        if (blockedLocalOAuth()) return undefined
+        return resolveCredential(this.credentials, provider, def.oauth)
+      },
+      channel: () => options.channel?.(),
+    }
+    localOnlyOAuthChecks.set(ctx, blockedLocalOAuth)
     return {
-      model: def.createModel(id, {
-        provider,
-        credential: async () => {
-          if (def.oauth?.localOnly && options.channel?.())
-            return this.credentials.get(provider)
-          return resolveCredential(this.credentials, provider, def.oauth)
-        },
-        channel: () => options.channel?.(),
-      }),
+      model: def.createModel(id, ctx),
       info: { ...spec, provider, ref: `${provider}/${id}` },
     }
   }

@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 type ObjectValue = Record<string, unknown>
@@ -78,23 +77,12 @@ function secretValue(raw: string, env: NodeJS.ProcessEnv): string {
   return value
 }
 
-export function prepareGithubSettings(
-  agentDir: string,
+export function mergeGithubSettings(
+  current: Record<string, unknown>,
   repositories: string[],
   env: NodeJS.ProcessEnv,
 ) {
-  const path = join(agentDir, 'config.json')
-  let raw: unknown = {}
-  if (existsSync(path)) {
-    const content = readFileSync(path, 'utf8')
-    // JSON parse errors can include source snippets containing credentials.
-    try {
-      raw = JSON.parse(content)
-    } catch {
-      throw new Error(`Invalid JSON in ${path}; correct the file before setup`)
-    }
-  }
-  const settings = object(raw, 'config.json')
+  const settings = object(current, 'config.json')
   const webhooks = object(settings.webhooks, 'webhooks')
   const github = object(webhooks.github, 'webhooks.github')
   const port = webhooks.port === undefined ? 8787 : webhooks.port
@@ -132,5 +120,9 @@ export function prepareGithubSettings(
       github: { ...github, secret: stored, repositories: merged },
     },
   }
-  return { path, secret, settings: updated }
+  return { secret, settings: updated }
+}
+
+export function githubSettingsPath(agentDir: string): string {
+  return join(agentDir, 'config.json')
 }

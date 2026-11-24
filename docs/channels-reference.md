@@ -309,27 +309,23 @@ External top-level inputs never borrow a previous human reply ID. Lark establish
 
 For the operator setup command, see [GitHub webhook setup](channels.md#github-webhook-setup). `vela setup github owner/repo --url https://your-tunnel-host` writes user settings and configures matching repository hooks through GitHub CLI.
 
-The channel runtime owns `extensionConfig.channel.eventReceiver`. It is absent by default. To configure it manually, add this section to user settings, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and run `vela serve` with at least one enabled, connected channel:
+The CLI reads `webhooks` from user-level `~/.vela/config.json` (project `webhooks` settings are stripped). It is absent by default. To configure it manually, add top-level `webhooks` to `~/.vela/config.json`, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and run `vela serve` with at least one enabled, connected channel:
 
 ```json
 {
-  "extensionConfig": {
-    "channel": {
-      "eventReceiver": {
-        "port": 8787,
-        "github": {
-          "secret": "$VELA_GITHUB_WEBHOOK_SECRET",
-          "repositories": ["glows777/Vela"],
-          "apps": ["github-actions"],
-          "issueLabels": ["to:vela"]
-        }
-      }
+  "webhooks": {
+    "port": 8787,
+    "github": {
+      "secret": "$VELA_GITHUB_WEBHOOK_SECRET",
+      "repositories": ["glows777/Vela"],
+      "apps": ["github-actions"],
+      "issueLabels": ["to:vela"]
     }
   }
 }
 ```
 
-The SDK passes the same section in `createChannelVela({ extensionConfig: ... })` / `createVela(...)`, with a literal secret supplied by the host; the SDK never reads environment variables. Project sections require trust and merge through the existing settings rules. Repository names must be explicit `owner/repo` values; no wildcard. `apps` defaults to `github-actions`; an explicit list replaces it. The port defaults to 8787 (`0` selects an ephemeral local port for fixture/embedded use). The host is fixed to **127.0.0.1** and has no override.
+When using the SDK (`createChannelVela(...)` / `createVela(...)`), pass the same receiver object via the in-memory `extensionConfig: { channel: { eventReceiver: ... } }` option, with a literal secret supplied by the host; the SDK never reads environment variables. Repository names must be explicit `owner/repo` values; no wildcard. `apps` defaults to `github-actions`; an explicit list replaces it. The port defaults to 8787 (`0` selects an ephemeral local port for fixture/embedded use). The host is fixed to **127.0.0.1** and has no override.
 
 `issueLabels` filters the repository Issue feed, not PR subscriptions. The existing array matches any listed label. For example, use `{ "all": ["to:vela", "status:ready"] }` to require both labels. In the object form every label in `all` is required, and at least one in `any` is also required when `any` is nonempty. Both lists are optional; if neither names a label, including the default `[]` and `{}`, the feed stays silent. Labels are trimmed and must not be empty; the object accepts only `all` and `any`.
 

@@ -91,7 +91,6 @@ test.concurrent('fresh model-free CLI saves privately, creates once and updates 
     'Recent deliveries',
     'tunnel',
     'old',
-    'project',
   ])
     expect(first.output.toLowerCase()).toContain(text.toLowerCase())
   expect(readFileSync(join(f.cwd, '.vela', 'config.json'), 'utf8')).toBe(

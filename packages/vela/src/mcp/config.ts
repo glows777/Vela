@@ -6,6 +6,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { formatJsonParseError } from '../config/index.ts'
 import type { ExtensionConfigDefinition } from '../extension-api.ts'
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -271,22 +272,24 @@ export function loadMcpServers(options: {
   for (const file of files) {
     if (!existsSync(file)) continue
     let servers: unknown
+    const rawText = readFileSync(file, 'utf-8')
     try {
-      servers = (
-        JSON.parse(readFileSync(file, 'utf-8')) as { mcpServers?: unknown }
-      ).mcpServers
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(rawText)
+      } catch (error) {
+        throw new Error(formatJsonParseError(file, rawText, error))
+      }
+      servers = (parsed as { mcpServers?: unknown }).mcpServers
       if (servers === undefined) continue
       if (!isPlainObject(servers))
-        throw new Error('mcpServers must be an object')
+        throw new Error(`${file}: mcpServers must be an object`)
     } catch (error) {
-      result.errors.push(
-        `${file}: ${error instanceof Error ? error.message : String(error)}`,
-      )
+      result.errors.push(error instanceof Error ? error.message : String(error))
       continue
     }
     for (const [name, raw] of Object.entries(servers)) {
       const existing = result.servers[name]
-      let entry: unknown = raw
       if (
         isPlainObject(raw) &&
         isPlainObject(existing) &&
@@ -309,10 +312,13 @@ export function loadMcpServers(options: {
             raw[key],
           ]),
         )
-        entry = { ...existing, ...overrides }
+        // `existing` is already interpolated; apply exposure overrides without re-expanding user strings.
+        result.servers[name] = { ...existing, ...overrides }
+        result.sources[name] = file
+        continue
       }
       try {
-        result.servers[name] = interpolateServer(name, entry, options.env)
+        result.servers[name] = interpolateServer(name, raw, options.env)
         result.sources[name] = file
       } catch (error) {
         delete result.servers[name]

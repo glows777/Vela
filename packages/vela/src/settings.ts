@@ -1,5 +1,9 @@
 import { join } from 'node:path'
-import { readRawConfigFile, updateConfigFile } from './config/index.ts'
+import {
+  assertNoLegacyConfigFiles,
+  readRawConfigFile,
+  updateConfigFile,
+} from './config/index.ts'
 import {
   type Credential,
   type CredentialStore,
@@ -7,7 +11,6 @@ import {
   type ProviderConfig,
   type ProviderDefinition,
   type ThinkingLevel,
-  writeProviderPreset,
 } from './driver/index.ts'
 
 /**
@@ -67,6 +70,10 @@ export async function saveModelSetup(options: {
   if (!definition) throw new Error(`No provider named ${provider}`)
   const written: string[] = []
   try {
+    // Reject legacy-only profiles and corrupt config before touching auth.json.
+    assertNoLegacyConfigFiles(agentDir)
+    readRawConfigFile(agentDir)
+
     const authPath = join(agentDir, 'auth.json')
     if (options.credential) {
       await fileCredentialStore(authPath).modify(
@@ -75,17 +82,26 @@ export async function saveModelSetup(options: {
       )
       written.push(authPath)
     }
-    const configPath = join(agentDir, 'config.json')
-    if (options.preset) {
-      writeProviderPreset(agentDir, provider, options.preset)
-      written.push(configPath)
-    }
-    updateConfigFile(agentDir, (current) => {
+    const configPath = updateConfigFile(agentDir, (current) => {
+      let providersRecord = current.providers
+      if (options.preset) {
+        const existingProviders =
+          current.providers &&
+          typeof current.providers === 'object' &&
+          !Array.isArray(current.providers)
+            ? (current.providers as Record<string, Record<string, unknown>>)
+            : {}
+        providersRecord = {
+          ...existingProviders,
+          [provider]: { ...existingProviders[provider], ...options.preset },
+        }
+      }
       const next: Record<string, unknown> = { ...current, model: ref }
+      if (providersRecord !== undefined) next.providers = providersRecord
       if (options.thinkingLevel) next.thinkingLevel = options.thinkingLevel
       return next
     })
-    if (!written.includes(configPath)) written.push(configPath)
+    written.push(configPath)
   } catch (error) {
     // A credential file may already be on disk; saying only "failed" would hide that.
     if (written.length === 0) throw error
@@ -119,43 +135,44 @@ export async function saveLarkSection(options: {
   if (options.addChat !== undefined && options.removeChat !== undefined)
     throw new Error('Pass either addChat or removeChat, not both')
   const env = options.env ?? {}
-  const path = join(options.agentDir, 'config.json')
-  const current = readRawConfigFile(options.agentDir)
-  const lark = objectOf(current.lark)
-  const next: Record<string, unknown> = { ...lark }
-  if (options.addChat !== undefined || options.removeChat !== undefined) {
-    if (typeof lark.chats === 'string' && lark.chats.includes('$'))
-      throw new Error(
-        'Existing chats use an environment expression. Add the group manually to preserve that setting.',
-      )
-    const chats: unknown[] = Array.isArray(lark.chats)
-      ? [...lark.chats]
-      : typeof lark.chats === 'string'
-        ? lark.chats
-            .split(',')
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : []
-    const idOf = (entry: unknown): string | undefined =>
-      typeof entry === 'string'
-        ? expandExpression(entry, env).trim()
-        : typeof objectOf(entry).id === 'string'
-          ? expandExpression(objectOf(entry).id as string, env).trim()
-          : undefined
-    if (options.removeChat !== undefined)
-      next.chats = chats.filter((entry) => idOf(entry) !== options.removeChat)
-    else if (!chats.some((entry) => idOf(entry) === options.addChat))
-      next.chats = [...chats, options.addChat]
-    else next.chats = chats
-  }
-  if (options.appId !== undefined) next.appId = escapeExpression(options.appId)
-  if (options.appSecret !== undefined)
-    next.appSecret = escapeExpression(options.appSecret)
-  if (options.runInApp !== undefined) next.runInApp = options.runInApp
-  updateConfigFile(options.agentDir, (latest) => ({
-    ...latest,
-    lark: next,
-  }))
+  const path = updateConfigFile(options.agentDir, (current) => {
+    const lark = objectOf(current.lark)
+    const next: Record<string, unknown> = { ...lark }
+    if (options.addChat !== undefined || options.removeChat !== undefined) {
+      if (typeof lark.chats === 'string' && lark.chats.includes('$'))
+        throw new Error(
+          'Existing chats use an environment expression. Add the group manually to preserve that setting.',
+        )
+      const chats: unknown[] = Array.isArray(lark.chats)
+        ? [...lark.chats]
+        : typeof lark.chats === 'string'
+          ? lark.chats
+              .split(',')
+              .map((value) => value.trim())
+              .filter(Boolean)
+          : []
+      const idOf = (entry: unknown): string | undefined =>
+        typeof entry === 'string'
+          ? expandExpression(entry, env).trim()
+          : typeof objectOf(entry).id === 'string'
+            ? expandExpression(objectOf(entry).id as string, env).trim()
+            : undefined
+      if (options.removeChat !== undefined)
+        next.chats = chats.filter((entry) => idOf(entry) !== options.removeChat)
+      else if (!chats.some((entry) => idOf(entry) === options.addChat))
+        next.chats = [...chats, options.addChat]
+      else next.chats = chats
+    }
+    if (options.appId !== undefined)
+      next.appId = escapeExpression(options.appId)
+    if (options.appSecret !== undefined)
+      next.appSecret = escapeExpression(options.appSecret)
+    if (options.runInApp !== undefined) next.runInApp = options.runInApp
+    return {
+      ...current,
+      lark: next,
+    }
+  })
   return { written: [path] }
 }
 

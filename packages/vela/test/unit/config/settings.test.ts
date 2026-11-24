@@ -287,6 +287,16 @@ test('mistakes in config.json are reported with the file name and strict schema 
       `extensionConfig.${reserved} is a built-in section; move it to top-level`,
     )
   }
+  for (const reservedNoSection of ['background', 'todo']) {
+    const nestedNoSection = setup({
+      'home/config.json': json({
+        extensionConfig: { [reservedNoSection]: {} },
+      }),
+    })
+    expect(() => loadConfig(nestedNoSection)).toThrow(
+      `extensionConfig.${reservedNoSection} is a built-in extension with no config section; remove it from extensionConfig`,
+    )
+  }
 })
 
 // biome-ignore lint/suspicious/noTemplateCurlyInString: ${VAR} names the interpolation syntax under test

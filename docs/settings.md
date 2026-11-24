@@ -92,7 +92,7 @@ An opened Local project's canonical cwd selects its tool directory and trusted p
 | `tools` | string[] | `read_file`, `write_file`, `edit_file`, `bash` | Tools a new CLI session starts with. Plain names (or `*` patterns) select exactly those; `+name` / `-name` entries turn default tools on or off. See [tools](#tools). |
 | `providers` | object | `{}` | Host-only custom model providers and overrides (see [Models](models.md#providers)). |
 | `mcpServers` | object | `{}` | MCP server definitions (see [MCP servers](mcp.md)). |
-| `environments`, `location` | object | none | Host-only execution environments (such as Docker containers) and default location. |
+| `environments`, `location` | object | none | Host-only execution environments (such as Docker containers) and reserved default location (not yet applied by CLI startup). |
 | `lark` | object | `{}` | Host-only built-in Lark channel settings (`appId`, `appSecret`, `owners`, `chats`, `timezone`). |
 | `web` | object | `{}` | Built-in web search configuration (`tavilyKey`, `serperKey`). |
 | `memory` | object | `{}` | Built-in memory extension settings (`dream`). |

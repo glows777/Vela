@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { formatJsonParseError } from './schema.ts'
 
 /** `~/.vela/trust.json`: directory → trusted (like pi's trust.json; a parent's decision applies to its children). */
 function trustFile(agentDir: string): string {
@@ -10,11 +11,12 @@ function readDecisions(agentDir: string): Record<string, boolean> {
   const file = trustFile(agentDir)
   if (!existsSync(file)) return {}
   // Fail loudly: treating a broken file as empty would ask again and then overwrite every saved decision
+  const text = readFileSync(file, 'utf-8')
   let parsed: unknown
   try {
-    parsed = JSON.parse(readFileSync(file, 'utf-8'))
+    parsed = JSON.parse(text)
   } catch (error) {
-    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`)
+    throw new Error(formatJsonParseError(file, text, error))
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
     throw new Error(

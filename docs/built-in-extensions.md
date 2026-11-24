@@ -129,7 +129,7 @@ reply. Only one dream runs per store. After a failed or conflict-skipped pass,
 automatic retry waits for 20 new turns since that pass started or 24 hours since
 it finished, even if the retained inbox is already old or full. `/dream` retries
 immediately without waiting for that threshold.
-Set `extensionConfig.memory.dream` to `false` to disable automatic runs; manual
+Set `memory.dream` to `false` in `config.json` to disable automatic runs; manual
 `/dream` remains available. The default is enabled, including groups. Both automatic
 and manual dream require the `memory` tool to be available.
 
@@ -236,10 +236,10 @@ Connects a Lark (Lark) bot to Vela over Lark's long connection. Each enabled cha
 
 | Option | Config key | Description |
 |---|---|---|
-| `appId` | `extensionConfig.lark.appId` | Lark app id |
-| `appSecret` | `extensionConfig.lark.appSecret` | Lark app secret |
-| `owners` | `extensionConfig.lark.owners` | `open_id`s whose direct chats are always enabled; array or comma-separated string |
-| `chats` | `extensionConfig.lark.chats` | Enabled chat_ids; array or comma-separated string. All members get full access |
+| `appId` | `lark.appId` | Lark app id |
+| `appSecret` | `lark.appSecret` | Lark app secret |
+| `owners` | `lark.owners` | `open_id`s whose direct chats are always enabled; array or comma-separated string |
+| `chats` | `lark.chats` | Enabled chat_ids; array or comma-separated string. All members get full access |
 | `transport` | | SDK only: the connection to Lark (`LarkTransport`); default Lark's long connection. Tests pass a fake |
 
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#lark).

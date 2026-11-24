@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { anthropic, createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI, openai } from '@ai-sdk/openai'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
-import { validateProvidersRecord } from '../config/index.ts'
-import { interpolate, isPlainObject } from '../shared/interpolate.ts'
+import { assertNoLegacyConfigFiles, parseConfig } from '../config/index.ts'
+import { interpolate } from '../shared/interpolate.ts'
 import type { ModelSpec, ProviderConfig } from '../shared/provider-types.ts'
 import {
   chatGPTRequests,
@@ -17,6 +17,7 @@ import { deepseekReasoningStream } from './deepseek-responses.ts'
 import {
   catalogLookup,
   catalogModels,
+  isLocalOnlyOAuthBlocked,
   type ProviderContext,
   type ProviderDefinition,
 } from './models/index.ts'
@@ -183,15 +184,9 @@ function mergeModels(
 }
 
 function readProvidersFromConfig(file: string): Record<string, ProviderConfig> {
+  assertNoLegacyConfigFiles(dirname(file))
   if (!existsSync(file)) return {}
-  let raw: unknown
-  try {
-    raw = JSON.parse(readFileSync(file, 'utf-8'))
-  } catch (error) {
-    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`)
-  }
-  const providers = isPlainObject(raw) ? raw.providers : undefined
-  return validateProvidersRecord(providers, file)
+  return parseConfig(readFileSync(file, 'utf-8'), file).providers ?? {}
 }
 
 /** Placeholder the AI SDK sends until the auth fetch replaces it with the key of this request */
@@ -253,6 +248,12 @@ function createProvider(
     }
     const key = configured() ?? (envKey ? env[envKey] : undefined)
     if (key) return { key, oauth: false }
+    if (oauth && isLocalOnlyOAuthBlocked(ctx)) {
+      const channel = ctx.channel() ?? 'this channel'
+      throw new Error(
+        `${oauth.name} is only for the local terminal, not for ${channel}; give ${name} an API key (/login ${name} → Enter an API key, or the ${envKey} environment variable) or have this channel use another model`,
+      )
+    }
     const ways = [
       ...(oauth || builtin ? [`run /login ${name}`] : []),
       ...(config.apiKey?.startsWith('$')

@@ -1,5 +1,6 @@
 import {
   interpolateConfigLayer,
+  LEGACY_CONFIG_FILES,
   parseConfig,
   RESOURCE_KEYS,
   stripProjectPrivilegedKeys,
@@ -46,10 +47,28 @@ export async function loadProjectSettings(
   const file = await join(projectDir, 'config.json')
   const content = await environment.readTextFile(file, signal)
   if (!content.ok) {
-    if (content.error.code === 'not_found') return empty
+    if (content.error.code === 'not_found') {
+      if (typeof environment.exists === 'function') {
+        const legacy: string[] = []
+        for (const name of LEGACY_CONFIG_FILES) {
+          const present = value(
+            await environment.exists(await join(projectDir, name), signal),
+          )
+          if (present) legacy.push(name)
+        }
+        if (legacy.length > 0) {
+          throw new Error(
+            `${projectDir}: found legacy config file(s) (${legacy.join(', ')}) without config.json; v0.9 uses unified config.json`,
+          )
+        }
+      }
+      return empty
+    }
     throw content.error
   }
-  const settings = parseConfig(content.value, file)
+  const settings = parseConfig(content.value, file, undefined, {
+    layer: 'project',
+  })
   stripProjectPrivilegedKeys(settings)
   for (const key of RESOURCE_KEYS) {
     const entries = settings[key]
