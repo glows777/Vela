@@ -69,6 +69,7 @@ import { prepareInteractiveSession } from './tui/session-open.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
 import { setupWizard } from './tui/setup-wizard.ts'
 import { editorTheme, theme } from './tui/theme.ts'
+import { TurnFold } from './tui/turn-fold.ts'
 import type { InteractiveOptions, LogLevel } from './tui/types.ts'
 
 export type { InteractiveOptions } from './tui/types.ts'
@@ -123,12 +124,22 @@ export class InteractiveMode {
   private readonly dispatch: ReturnType<typeof createCliDispatcher>
   private loader?: Loader
 
-  private current?: AssistantMessage
+  /** The turn's process so far; created by its first thinking or tool call */
+  private turn?: TurnFold
+  /** Answer text streaming outside the fold; a tool call makes it part of the process */
+  private answer?: AssistantMessage
+  /** The last text that stayed outside the fold: a turn that ends with one keeps its fold closed */
+  private lastAnswer?: AssistantMessage
+  /** Thinking of the assistant message being written, inside the fold */
+  private thinking?: AssistantMessage
+  private readonly turns: TurnFold[] = []
   private readonly tools = new Map<string, ToolBlock>()
   private readonly allTools: ToolBlock[] = []
   private readonly allAssistant: AssistantMessage[] = []
   private readonly allBash: BashExecution[] = []
-  private toolsExpanded = false
+  private turnsExpanded = false
+  /** `!` output the user can expand on its own, outside any turn's fold */
+  private bashExpanded = false
   private hideThinking = false
   private lastCtrlC = 0
   private shownError?: unknown
@@ -336,13 +347,18 @@ export class InteractiveMode {
 
   private resetChat(): void {
     for (const block of this.allTools) block.stop()
+    for (const turn of this.turns) turn.stop()
     this.chat.clear()
     this.pendingBash.clear()
     this.tools.clear()
     this.allTools.length = 0
     this.allAssistant.length = 0
     this.allBash.length = 0
-    this.current = undefined
+    this.turns.length = 0
+    this.turn = undefined
+    this.answer = undefined
+    this.lastAnswer = undefined
+    this.thinking = undefined
     this.stopLoader()
   }
 
@@ -383,8 +399,8 @@ export class InteractiveMode {
       })
     for (const entry of shown) {
       if (entry.type === 'bash_execution') {
+        this.endTurn()
         this.addBash(entry.command, !!entry.excludeFromContext).setResult(entry)
-        this.current = undefined
         continue
       }
       if (entry.type === 'branch_summary') {
@@ -420,14 +436,15 @@ export class InteractiveMode {
               call.durationMs,
             )
         }
-        block.setResult(
+        this.settleTool(
+          block,
           part.output,
           part.output.type.startsWith('error'),
           entry.details?.[part.toolCallId],
         )
       }
     }
-    this.current = undefined
+    this.endTurn()
   }
 
   // ---------------------------------------------------------------- Events
@@ -436,6 +453,7 @@ export class InteractiveMode {
     if (sessionId !== this.session.id) return
     switch (event.type) {
       case 'agent_start':
+        this.endTurn()
         this.shownError = undefined
         this.startLoader('Thinking…')
         break
@@ -444,19 +462,21 @@ export class InteractiveMode {
           this.renderMessage(event.message, false, event.custom)
         break
       case 'turn_start':
-        this.current = undefined
+        this.nextMessage()
         this.startLoader('Thinking…')
         break
       case 'message_update': {
         const update = event.assistantMessageEvent
-        if (update.type === 'thinking_delta')
-          this.assistant().appendThinking(update.delta)
-        else if (update.type === 'text_delta') {
-          this.assistant().appendText(update.delta)
+        if (update.type === 'thinking_delta') {
+          this.currentTurn().startThinking()
+          this.thinkingText().appendThinking(update.delta)
+        } else if (update.type === 'text_delta') {
+          this.turn?.stopThinking()
+          this.answerText().appendText(update.delta)
           this.setLoader('Answering…')
         } else if (update.type === 'toolcall_end') {
           // Like pi: the tool block appears once the call is written; its result arrives with tool_execution_end
-          this.current = undefined
+          this.turn?.stopThinking()
           this.addTool(
             update.toolCall.toolCallId,
             update.toolCall.toolName,
@@ -468,9 +488,11 @@ export class InteractiveMode {
       case 'message_end':
         if (event.message.role !== 'assistant') break
         // Like pi: a failed attempt keeps its partial text, marked as failed; a retry starts a new message
-        if (event.stopReason === 'error' && this.current?.hasContent)
-          this.current.markFailed()
-        this.current = undefined
+        if (event.stopReason === 'error' && this.answer?.hasContent)
+          this.answer.markFailed()
+        this.turn?.stopThinking()
+        this.answer = undefined
+        this.thinking = undefined
         break
       case 'tool_execution_start':
         // Calls made through ctx.executeTool() are listed inside the top-level call's block (like pi)
@@ -500,14 +522,13 @@ export class InteractiveMode {
           )
           break
         }
-        this.tools
-          .get(event.toolCallId)
-          ?.setResult(
-            event.result,
-            event.isError,
-            event.details,
-            event.durationMs,
-          )
+        this.settleTool(
+          this.tools.get(event.toolCallId),
+          event.result,
+          event.isError,
+          event.details,
+          event.durationMs,
+        )
         break
       case 'auto_retry_start':
         this.addNotice(
@@ -522,7 +543,7 @@ export class InteractiveMode {
         )
         break
       case 'agent_end': {
-        this.current = undefined
+        this.endTurn()
         for (const block of this.allTools) block.stop()
         if (event.reason === 'error') this.shownError = event.error
         const ended = agentEndNotice(event)
@@ -589,43 +610,126 @@ export class InteractiveMode {
         if (custom.display)
           this.chat.addChild(new CustomMessageBlock(custom.customType, text))
       } else if (text.trim()) this.chat.addChild(new UserMessage(text))
-      this.current = undefined
+      // A message that arrives mid-run is a steer: the turn goes on and keeps its fold
+      if (history) this.endTurn()
+      else this.nextMessage()
       return
     }
     if (!history) return
     if (message.role === 'assistant') {
+      this.nextMessage()
       if (typeof message.content === 'string') {
-        this.assistant().appendText(message.content)
+        this.answerText().appendText(message.content)
         return
       }
       for (const part of message.content) {
-        if (part.type === 'text') this.assistant().appendText(part.text)
+        if (part.type === 'text') this.answerText().appendText(part.text)
         else if (part.type === 'thinking')
-          this.assistant().appendThinking(part.text)
-        else if (part.type === 'tool_call') {
-          this.current = undefined
+          this.thinkingText().appendThinking(part.text)
+        else if (part.type === 'tool_call')
           this.addTool(part.toolCallId, part.toolName, part.input)
-        }
       }
     }
   }
 
-  private assistant(): AssistantMessage {
-    if (!this.current) {
-      this.current = new AssistantMessage(this.hideThinking)
-      this.allAssistant.push(this.current)
-      this.chat.addChild(this.current)
+  /** The turn's fold, created by its first thinking or tool call. */
+  private currentTurn(): TurnFold {
+    if (this.turn) return this.turn
+    const turn = new TurnFold(
+      () => this.tui.requestRender(),
+      this.turnsExpanded,
+    )
+    this.turns.push(turn)
+    this.chat.addChild(turn)
+    this.turn = turn
+    return turn
+  }
+
+  /**
+   * Answer text streams outside the fold: until a tool call shows it was only a preamble, the reader sees
+   * the model's words as they arrive rather than a blank fold line.
+   */
+  private answerText(): AssistantMessage {
+    if (!this.answer) {
+      this.answer = new AssistantMessage(this.hideThinking)
+      this.lastAnswer = this.answer
+      this.allAssistant.push(this.answer)
+      this.chat.addChild(this.answer)
     }
-    return this.current
+    return this.answer
+  }
+
+  /** Thinking belongs to the process, so it streams inside the fold. */
+  private thinkingText(): AssistantMessage {
+    if (!this.thinking) {
+      this.thinking = new AssistantMessage(this.hideThinking)
+      this.allAssistant.push(this.thinking)
+      this.currentTurn().add(this.thinking)
+    }
+    return this.thinking
+  }
+
+  /** The text before a tool call was a preamble: it joins the process instead of staying on screen. */
+  private foldAnswer(): void {
+    const answer = this.answer
+    this.answer = undefined
+    if (!answer) return
+    if (this.lastAnswer === answer) this.lastAnswer = undefined
+    this.chat.removeChild(answer)
+    if (answer.hasText) this.currentTurn().add(answer)
+    else this.allAssistant.splice(this.allAssistant.indexOf(answer), 1)
+  }
+
+  /** A new assistant message: the previous one's thinking and answer references end here. */
+  private nextMessage(): void {
+    this.turn?.stopThinking()
+    this.thinking = undefined
+    this.answer = undefined
+  }
+
+  /** The prompt's run is over: settle its fold. A turn that left no answer stays open. */
+  private endTurn(): void {
+    const turn = this.turn
+    this.turn = undefined
+    const answered = this.lastAnswer?.hasText ?? false
+    this.answer = undefined
+    this.lastAnswer = undefined
+    this.thinking = undefined
+    turn?.settle(answered)
   }
 
   private addTool(id: string, name: string, input: unknown): void {
-    const block = new ToolBlock(name, input, this.toolsExpanded, () =>
-      this.tui.requestRender(),
-    )
+    this.foldAnswer()
+    const turn = this.currentTurn()
+    const block = new ToolBlock(name, input, () => this.tui.requestRender())
     this.tools.set(id, block)
     this.allTools.push(block)
-    this.chat.addChild(block)
+    turn.add(block)
+    turn.noteTool(name)
+  }
+
+  /**
+   * A tool call ended. A failure moves out of the fold: folding it would hide the one line the reader has
+   * to see (Claude Code pops out failed calls the same way).
+   */
+  private settleTool(
+    block: ToolBlock | undefined,
+    output: unknown,
+    isError: boolean,
+    details?: unknown,
+    durationMs?: number,
+  ): void {
+    if (!block) return
+    block.setResult(output, isError, details, durationMs)
+    if (!isError) return
+    const turn = this.turn
+    if (!turn) return
+    turn.remove(block)
+    // Keep it where it happened: right after the fold, not at the end of the transcript
+    const children = this.chat.children
+    const index = children.indexOf(turn)
+    if (index === -1) children.push(block)
+    else children.splice(index + 1, 0, block)
   }
 
   private addBash(
@@ -636,7 +740,7 @@ export class InteractiveMode {
     const block = new BashExecution(
       command,
       excludeFromContext,
-      this.toolsExpanded,
+      this.bashExpanded,
     )
     this.allBash.push(block)
     container.addChild(block)
@@ -658,7 +762,7 @@ export class InteractiveMode {
       excludeFromContext,
       session.isRunning ? this.pendingBash : this.chat,
     )
-    this.current = undefined
+    this.endTurn()
     this.tui.requestRender()
     try {
       const result = await session.executeBash(command, {
@@ -821,9 +925,9 @@ export class InteractiveMode {
     actions.set('cycleModelForward', () => this.cycleModel(1))
     actions.set('cycleModelBackward', () => this.cycleModel(-1))
     actions.set('expandTools', () => {
-      this.toolsExpanded = !this.toolsExpanded
-      for (const block of [...this.allTools, ...this.allBash])
-        block.setExpanded(this.toolsExpanded)
+      this.turnsExpanded = !this.turnsExpanded
+      for (const turn of this.turns) turn.setExpanded(this.turnsExpanded)
+      for (const block of this.allBash) block.setExpanded(this.turnsExpanded)
       this.chat.invalidate()
       this.tui.requestRender()
     })

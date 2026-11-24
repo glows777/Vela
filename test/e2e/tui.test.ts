@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
+import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import z from 'zod'
 import todo from '../../examples/extensions/todo-command.ts'
 import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
@@ -347,6 +348,7 @@ test('clipboard image paste inserts a private temp path, read_file sends the ima
   )
   tui.terminal.press(KEYS.enter)
   await tui.until('Clipboard image read')
+  tui.terminal.press(KEYS.ctrlO)
   expect(tui.screen()).toContain('[image png ')
   expect(tui.screen()).not.toContain(image.toString('base64'))
   tui.submit('/hotkeys')
@@ -462,6 +464,8 @@ test('a prompt shows the user message, tool calls with results and the streamed 
   tui.submit('read a.txt')
   await tui.until('The file says hello')
 
+  expect(tui.screen()).toContain('▸ read 1 file')
+  tui.terminal.press(KEYS.ctrlO)
   const screen = tui.screen()
   expect(screen).toContain('read a.txt')
   expect(screen).toContain('read_file a.txt')
@@ -647,6 +651,7 @@ test('terminal control sequences in tool output are not written to the terminal'
   await tui.started
   tui.submit('read a.txt')
   await tui.until('done')
+  tui.terminal.press(KEYS.ctrlO)
   const raw = tui.mode.tui.render(100).join('\n')
   expect(raw).not.toContain(']0;PWNED')
   expect(raw).not.toContain(']52;')
@@ -1074,7 +1079,7 @@ test('a resumed session shows custom messages the same way', async () => {
   expect(screen).not.toContain('Hidden context')
 })
 
-test('bash output streams into its block while it runs; the block keeps the last lines and the time taken (like pi)', async () => {
+test('a running turn keeps its bash output folded; opening the turn shows it streaming with a live clock', async () => {
   const t = createTestVela({
     responses: [
       fauxToolCall('bash', {
@@ -1087,8 +1092,13 @@ test('bash output streams into its block while it runs; the block keeps the last
   await tui.started
 
   tui.submit('count')
-  // Still running: the partial output is already on screen with a live clock
-  // (the command line itself reads `out$((1+1))`, so `out2` can only come from the output)
+  // While it runs the turn is one line and no output shows (the command line itself reads
+  // `out$((1+1))`, so `out2` and `4` can only come from the output)
+  await tui.until('running 1 shell command')
+  expect(tui.screen()).not.toContain('out2')
+  expect(tui.screen()).not.toContain('end4')
+  // Opening the turn streams the partial output and a live clock
+  tui.terminal.press(KEYS.ctrlO)
   await tui.until('out2')
   expect(tui.screen()).not.toContain('end4')
   await tui.until('Elapsed')
@@ -1096,11 +1106,190 @@ test('bash output streams into its block while it runs; the block keeps the last
 
   const screen = tui.screen()
   expect(screen).toContain('$ seq 1 12')
-  // Collapsed: only the last 5 lines
-  expect(screen).toContain('… 9 earlier lines (Ctrl+O to expand)')
   expect(screen).toContain('end4')
-  expect(screen).not.toMatch(/^\s*3\s*$/m)
   expect(screen).toMatch(/Took \d+\.\ds/)
+})
+
+/** Click a screen row the way a terminal sends it (SGR press + release on the same cell). */
+function clickRow(
+  tui: Awaited<ReturnType<typeof startTui>>,
+  row: number,
+): void {
+  tui.mode.tui.renderNow(true)
+  tui.terminal.press(`\x1b[<0;2;${row + 1}M`)
+  tui.terminal.press(`\x1b[<0;2;${row + 1}m`)
+}
+
+/** The 0-based screen row holding `text`, after flushing the current frame */
+function screenRow(
+  tui: Awaited<ReturnType<typeof startTui>>,
+  text: string,
+): number {
+  tui.mode.tui.renderNow(true)
+  const row = tui.mode.tui
+    .getScreenLines()
+    .map((line) => stripTerminalSequences(line))
+    .findIndex((line) => line.includes(text))
+  if (row === -1) throw new Error(`No screen row for: ${text}`)
+  return row
+}
+
+test('a turn folds its thinking and tool calls into one line above the answer', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'needle in the haystack\n' },
+    responses: [
+      fauxToolCall(
+        'grep',
+        { pattern: 'needle', path: 'a.txt' },
+        { reasoning: 'Search for the needle' },
+      ),
+      fauxToolCall(
+        'read_file',
+        { path: 'a.txt' },
+        { reasoning: 'Read the haystack' },
+      ),
+      fauxToolCall('bash', { command: 'echo done' }, { reasoning: 'Check it' }),
+      fauxText('Found it', { reasoning: 'Wrap up' }),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('find the needle')
+  await tui.until('Found it')
+  const screen = tui.screen()
+  expect(screen).toMatch(
+    /▸ Thought for \d+s, searched for 1 pattern, read 1 file, ran 1 shell command/,
+  )
+  expect(screen).toContain('Found it')
+  expect(screen).not.toContain('Search for the needle')
+  expect(screen).not.toContain('needle in the haystack')
+  expect(screen).not.toContain('$ echo done')
+
+  // Ctrl+O opens every turn, and closes it again
+  tui.terminal.press(KEYS.ctrlO)
+  expect(tui.screen()).toContain('Search for the needle')
+  expect(tui.screen()).toContain('$ echo done')
+  expect(tui.screen()).toContain('needle in the haystack')
+  tui.terminal.press(KEYS.ctrlO)
+  expect(tui.screen()).not.toContain('Search for the needle')
+  expect(tui.screen()).toContain('Found it')
+})
+
+test('clicking a turn line opens that turn alone; Ctrl+O still opens all of them', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall(
+        'bash',
+        { command: 'echo first' },
+        { reasoning: 'First turn thinking' },
+      ),
+      fauxText('First answer'),
+      fauxToolCall(
+        'bash',
+        { command: 'echo second' },
+        { reasoning: 'Second turn thinking' },
+      ),
+      fauxText('Second answer'),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('one')
+  await tui.until('First answer')
+  tui.submit('two')
+  await tui.until('Second answer')
+  expect(tui.screen()).not.toContain('First turn thinking')
+
+  clickRow(tui, screenRow(tui, 'ran 1 shell command'))
+  expect(tui.screen()).toContain('First turn thinking')
+  expect(tui.screen()).toContain('$ echo first')
+  expect(tui.screen()).not.toContain('Second turn thinking')
+
+  tui.terminal.press(KEYS.ctrlO)
+  expect(tui.screen()).toContain('Second turn thinking')
+})
+
+test('text before a tool call folds away; the turn keeps its last text', async () => {
+  const t = createTestVela({
+    responses: [
+      {
+        reasoning: 'Plan it',
+        text: 'Let me look first',
+        toolCalls: [{ name: 'bash', input: { command: 'echo took' } }],
+      },
+      fauxText('All done'),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('go')
+  await tui.until('All done')
+  expect(tui.screen()).not.toContain('Let me look first')
+  expect(tui.screen()).toContain('All done')
+  tui.terminal.press(KEYS.ctrlO)
+  expect(tui.screen()).toContain('Let me look first')
+})
+
+test('Ctrl+T hides thinking inside an open turn, and the fold stays open', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall(
+        'bash',
+        { command: 'echo hi' },
+        { reasoning: 'Think about it' },
+      ),
+      fauxText('Answered'),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('go')
+  await tui.until('Answered')
+  tui.terminal.press(KEYS.ctrlO)
+  expect(tui.screen()).toContain('Think about it')
+  tui.terminal.press('\x14')
+  expect(tui.screen()).not.toContain('Think about it')
+  expect(tui.screen()).toContain('$ echo hi')
+  tui.terminal.press('\x14')
+  expect(tui.screen()).toContain('Think about it')
+})
+
+test('a failed tool call stays visible while its turn is folded', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall(
+        'read_file',
+        { path: '/nope/missing.txt' },
+        { reasoning: 'Read the missing file' },
+      ),
+      fauxText('It is not there'),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('read it')
+  await tui.until('It is not there')
+  const screen = tui.screen()
+  expect(screen).toContain('read_file /nope/missing.txt')
+  expect(screen).toContain('It is not there')
+  expect(screen).not.toContain('Read the missing file')
+})
+
+test('a turn that leaves no answer stays open so its process shows', async () => {
+  const t = createTestVela({
+    responses: [{ reasoning: 'Only thinking here' }],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('just think')
+  await tui.until('Only thinking here')
+  expect(tui.screen()).toContain('Thought for')
 })
 
 test('edit_file shows the diff of its change', async () => {
@@ -1119,7 +1308,9 @@ test('edit_file shows the diff of its change', async () => {
 
   tui.submit('edit it')
   await tui.until('edited')
+  expect(tui.screen()).toContain('▸ edited 1 file')
 
+  tui.terminal.press(KEYS.ctrlO)
   const screen = tui.screen()
   expect(screen).toContain('edit_file a.txt')
   expect(screen).toContain('-2 two')
@@ -1149,6 +1340,7 @@ test('calls a tool makes through ctx.executeTool are listed inside its block', a
 
   tui.submit('run')
   await tui.until('ran')
+  tui.terminal.press(KEYS.ctrlO)
 
   const screen = tui.screen()
   expect(screen).toMatch(/↳ ✓ read_file a\.txt \d+\.\ds/)
@@ -1257,6 +1449,7 @@ test('a resumed session shows edit diffs, nested calls and ! commands again', as
   const tui = await startTui(t.vela, { sessionId: 'saved', resume: true })
   await tui.started
   await tui.until('Resumed session')
+  tui.terminal.press(KEYS.ctrlO)
   const screen = tui.screen()
   expect(screen).toContain('+2 TWO')
   expect(screen).toMatch(/↳ ✓ read_file a\.txt/)
@@ -1310,6 +1503,8 @@ test('Ctrl+B moves the running bash call to the background; the footer counts it
   await tui.started
   tui.terminal.type('start a slow check')
   tui.terminal.press(KEYS.enter)
+  // The turn folds its process: open it to watch the command's output
+  tui.terminal.press(KEYS.ctrlO)
   await tui.until('READY-OUT')
   tui.terminal.press(KEYS.ctrlB)
   // The row settles with the job's id, the footer counts it, and the run keeps going.
