@@ -1434,10 +1434,11 @@ const journeyFive = async (page: Page) => {
   const index = (await options.allTextContents()).indexOf(target)
   assert(index >= 0)
   for (let step = 0; step < index; step += 1) await where.press('ArrowDown')
-  assert.equal(
-    await where.getAttribute('aria-activedescendant'),
-    await options.nth(index).getAttribute('id'),
-  )
+  const targetId = await options.nth(index).getAttribute('id')
+  assert(targetId)
+  await where
+    .and(page.locator(`[aria-activedescendant="${targetId}"]`))
+    .waitFor()
   await where.press('Enter')
   await listbox.waitFor({ state: 'hidden' })
   assert(

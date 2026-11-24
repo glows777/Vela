@@ -22,6 +22,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- Desktop: Arrow keys and typing immediately after opening a picker keep it open, so Enter selects the highlighted option ([#547](https://github.com/glows777/Vela/issues/547)).
 - Desktop: In the New routine dialog, Escape closes the Where menu first without discarding the draft. A second Escape closes the dialog ([#541](https://github.com/glows777/Vela/issues/541)).
 
 ## [0.8.1] - 2026-11-23
