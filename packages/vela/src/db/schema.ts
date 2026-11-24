@@ -19,23 +19,23 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 CREATE TABLE IF NOT EXISTS kv_meta (
-  key TEXT PRIMARY KEY,
+  key TEXT PRIMARY KEY NOT NULL,
   value_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS trusted_paths (
-  path TEXT PRIMARY KEY,
+  path TEXT PRIMARY KEY NOT NULL,
   trusted INTEGER NOT NULL CHECK (trusted IN (0, 1)),
   updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL,
   cwd TEXT,
   data_dir TEXT,
-  hub_session_id TEXT,
+  hub_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
   default_driver TEXT NOT NULL DEFAULT 'vela',
   default_location_json TEXT,
   default_model TEXT,
@@ -54,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_projects_archived_updated
   ON projects (archived, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'hub', 'topic', 'work')),
   driver TEXT NOT NULL DEFAULT 'vela',
@@ -81,11 +81,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_state
   ON sessions (state);
 
 CREATE TABLE IF NOT EXISTS channel_bindings (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   channel TEXT NOT NULL,
   external_id TEXT NOT NULL,
   thread_id TEXT,
-  kind TEXT NOT NULL CHECK (kind IN ('group', 'direct', 'topic')),
+  kind TEXT NOT NULL CHECK (kind IN ('group', 'direct')),
   project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
@@ -102,7 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_channel_bindings_session
   ON channel_bindings (session_id);
 
 CREATE TABLE IF NOT EXISTS inbox_events (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
   project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
   source TEXT NOT NULL,
@@ -124,7 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_inbox_session_status
   ON inbox_events (session_id, status, created_at);
 
 CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   driver TEXT NOT NULL DEFAULT 'vela',
@@ -162,7 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_events_project_seq
   ON events (project_id, seq);
 
 CREATE TABLE IF NOT EXISTS approvals (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
   tool_call_id TEXT,
@@ -180,7 +180,7 @@ CREATE INDEX IF NOT EXISTS idx_approvals_session_status
   ON approvals (session_id, status);
 
 CREATE TABLE IF NOT EXISTS outbox (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   run_id TEXT,
   channel TEXT NOT NULL,
@@ -203,7 +203,7 @@ CREATE INDEX IF NOT EXISTS idx_outbox_status_retry
   ON outbox (status, next_retry_at);
 
 CREATE TABLE IF NOT EXISTS timers (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('routine', 'followup')),
   project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
@@ -228,7 +228,7 @@ CREATE INDEX IF NOT EXISTS idx_timers_project
   ON timers (project_id);
 
 CREATE TABLE IF NOT EXISTS subscriptions (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   source TEXT NOT NULL,
   event_key TEXT NOT NULL,
   project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
@@ -245,7 +245,7 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_session
   ON subscriptions (session_id);
 
 CREATE TABLE IF NOT EXISTS background_jobs (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   run_id TEXT,
   command TEXT NOT NULL,
@@ -263,7 +263,7 @@ CREATE INDEX IF NOT EXISTS idx_bg_jobs_session_status
   ON background_jobs (session_id, status);
 
 CREATE TABLE IF NOT EXISTS blobs (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   message_id TEXT,
@@ -283,7 +283,7 @@ CREATE INDEX IF NOT EXISTS idx_blobs_sha256
   ON blobs (sha256);
 
 CREATE TABLE IF NOT EXISTS usage_records (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   run_id TEXT,
@@ -336,7 +336,7 @@ CREATE INDEX IF NOT EXISTS idx_vela_messages_parent
   ON vela_messages (session_id, parent_id);
 
 CREATE TABLE IF NOT EXISTS vela_tool_calls (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
   assistant_message_id TEXT NOT NULL,

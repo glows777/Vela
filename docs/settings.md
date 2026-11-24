@@ -17,7 +17,7 @@ Vela reads its configuration from `~/.vela/config.json` (or `$VELA_DIR/config.js
 | `~/.vela/SYSTEM.md`, `<project>/.vela/SYSTEM.md` | Replaces the default system prompt. The project file needs trust. See [The system prompt](#the-system-prompt). |
 | `~/.vela/APPEND_SYSTEM.md`, `<project>/.vela/APPEND_SYSTEM.md` | Text appended to the system prompt. The project file needs trust. See [The system prompt](#the-system-prompt). |
 
-All files are optional. A file that is not valid JSON, an unrecognized top-level key, a built-in extension section nested under `extensionConfig`, or a key with the wrong type stops the CLI with a `[config]` error and exit code 2. Legacy `settings.json`, `models.json`, or `mcp.json` files without `config.json` fail fast with a migration notice.
+All files are optional. A file that is not valid JSON, an unrecognized top-level key, a built-in extension section nested under `extensionConfig`, or a key with the wrong type stops the CLI with a `[config]` error and exit code 2. On CLI or Desktop startup, legacy user-level `settings.json`, `models.json`, or `mcp.json` files without `config.json` are automatically flattened into `~/.vela/config.json` in read-only mode (originals stay untouched); direct SDK loaders (`loadConfig()`, `loadModels()`) and trusted project `.vela/` directories still fail fast until `config.json` exists.
 
 When you start Vela from your home directory, `<project>/.vela` is `~/.vela` itself; it is read once, as user configuration, and no trust question is asked.
 

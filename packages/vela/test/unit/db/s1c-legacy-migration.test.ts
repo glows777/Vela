@@ -39,6 +39,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
   const agentDir = join(root.path, 'agent')
   const repoCwd = join(root.path, 'repo-a')
   const projectDataDir = join(agentDir, 'projects', '--repo-a--11223344')
+  const projectDataDirB = join(agentDir, 'projects', '--repo-b--55667788')
   const larkAssetDir = join(projectDataDir, 'channels', 'feishu-oc_team1')
 
   mkdirSync(join(agentDir, 'sessions'), { recursive: true })
@@ -46,10 +47,14 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
   mkdirSync(join(projectDataDir, 'local', 'proj-1', 'local-only-session'), {
     recursive: true,
   })
+  mkdirSync(join(projectDataDir, 'local', 'proj-1', 's-v2'), {
+    recursive: true,
+  })
   mkdirSync(join(projectDataDir, 'channels'), { recursive: true })
   mkdirSync(larkAssetDir, { recursive: true })
   mkdirSync(join(projectDataDir, 'sessions', 's-v2'), { recursive: true })
   mkdirSync(join(projectDataDir, 'sessions', 's-dup'), { recursive: true })
+  mkdirSync(join(projectDataDirB, 'sessions', 's-dup'), { recursive: true })
   mkdirSync(join(projectDataDir, 'tool-results'), { recursive: true })
   mkdirSync(join(projectDataDir, 'usage'), { recursive: true })
 
@@ -66,6 +71,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       lark: {
         appId: 'cli_legacy',
         appSecret: '$LARK_SECRET',
+        timezone: 'Asia/Shanghai',
         chats: [
           {
             id: 'oc_team1',
@@ -73,6 +79,9 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
             topicModel: 'deepseek/deepseek-flash',
             tools: ['read', 'bash'],
             readUntagged: true,
+          },
+          {
+            id: '$UNSET_CHAT_VAR',
           },
         ],
       },
@@ -121,6 +130,13 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         sessionId: 'local-proj_1',
         channel: 'local',
       },
+      {
+        id: '../unsafe-escape',
+        cwd: '/tmp/escape',
+        name: 'bad',
+        sessionId: 'bad',
+        channel: 'local',
+      },
     ],
   }
   const localMessages = [
@@ -132,13 +148,41 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       createdAt: '2026-11-20T10:00:00Z',
       file: { name: 'spec.txt', size: 11 },
     },
+    {
+      id: 'lmsg-out',
+      sessionId: 's-v2',
+      role: 'assistant',
+      text: 'report.pdf',
+      createdAt: '2026-11-20T10:05:00Z',
+      file: { name: 'report.pdf', size: 12 },
+    },
   ]
+
+  // Note: hub record appears BEFORE any topic record (tests #2 FK ordering)
+  // plus a Local channel record matching proj-1 (tests #3 no duplicate project)
+  // plus a removed Lark chat oc_removed not in lark.chats (tests #4 enabled=0)
+  // plus pendingMessageIds and legacyKey (tests #14 and #24)
   const channelIndex = {
     version: 1,
     createdAt: '2026-11-20T09:00:00Z',
     records: [
       {
-        key: 'lark-oc_team1',
+        key: 'local-proj_1',
+        channel: 'local',
+        chatId: 'proj-1',
+        chatKind: 'group',
+        requester: { id: 'local-user', name: 'You' },
+        task: 'Local work',
+        activeSessionId: 'local-proj_1',
+        previousSessionIds: [],
+        state: 'done',
+        pendingMessageIds: [],
+        createdAt: '2026-11-20T08:50:00Z',
+        updatedAt: '2026-11-20T08:55:00Z',
+      },
+      {
+        key: 'lark-oc_hub_first',
+        legacyKey: 'legacy-hub-alias',
         channel: 'lark',
         storageKey: 'feishu-oc_team1',
         chatId: 'oc_team1',
@@ -148,7 +192,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         activeSessionId: 'lark-oc_team1',
         previousSessionIds: ['lark-oc_team1-old'],
         state: 'done',
-        pendingMessageIds: [],
+        pendingMessageIds: [{ id: 'om_pending_1', passive: true }],
         createdAt: '2026-11-20T09:00:00Z',
         updatedAt: '2026-11-20T09:05:00Z',
       },
@@ -171,6 +215,23 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         updatedAt: '2026-11-20T09:15:00Z',
       },
       {
+        key: 'lark-oc_removed-om_old',
+        channel: 'lark',
+        storageKey: '../bad-escape',
+        chatId: 'oc_removed',
+        chatKind: 'group',
+        rootId: 'om_old',
+        threadId: 'omt_old',
+        requester: { id: 'ou_1', name: 'Alice' },
+        task: 'Old removed group topic',
+        activeSessionId: 'removed-topic-sess',
+        previousSessionIds: [],
+        state: 'done',
+        pendingMessageIds: [],
+        createdAt: '2026-11-20T09:18:00Z',
+        updatedAt: '2026-11-20T09:19:00Z',
+      },
+      {
         key: 'lark-ou_dm',
         channel: 'lark',
         chatId: 'ou_dm',
@@ -186,7 +247,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       },
     ],
     notes: {
-      'lark-oc_team1': ['Topic om_root1 waiting for approval'],
+      'lark-oc_hub_first': ['Topic om_root1 waiting for approval'],
     },
   }
   const legacyRoutines = {
@@ -196,11 +257,22 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         id: 'rt-1',
         channel: 'lark',
         chatId: 'oc_team1',
-        targetKey: 'lark-oc_team1',
+        targetKey: 'legacy-hub-alias',
         creator: { id: 'ou_1', name: 'Alice' },
         message: 'Daily standup check',
         schedule: { time: '09:30', days: ['mon', 'wed'] },
         createdAt: '2026-11-20T08:00:00Z',
+        lastFiredAt: null,
+      },
+      {
+        id: 'rt-past',
+        channel: 'lark',
+        chatId: 'oc_team1',
+        targetKey: 'legacy-hub-alias',
+        creator: { id: 'ou_1', name: 'Alice' },
+        message: 'Expired one-off',
+        schedule: { at: '2020-01-01T00:00:00Z' },
+        createdAt: '2020-01-01T00:00:00Z',
         lastFiredAt: null,
       },
     ],
@@ -220,9 +292,12 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     ],
   }
 
-  // V2 transcript testing: control entries interleaved with kept entries, label, context_edit,
-  // AI SDK legacy part tags, compaction.firstKeptEntryId pointing to a stripped control entry,
-  // and a damaged trailing line.
+  // V2 transcript testing:
+  // - vela.session.location marker folded into sessions.location_json & omitted from tree
+  // - branch-scoped context_edit (sibling branch edit does NOT touch m1 on active branch!)
+  // - tool_search result populates discovered_tools_json
+  // - malformed message: null skipped safely
+  // - damaged trailing line containing a secret is redacted
   const v2Transcript = [
     JSON.stringify({
       type: 'session',
@@ -230,6 +305,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       id: 's-v2',
       timestamp: '2026-11-20T10:00:00Z',
       cwd: repoCwd,
+      location: { environment: 'local', cwd: repoCwd },
     }),
     JSON.stringify({
       type: 'model_change',
@@ -244,6 +320,15 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       parentId: 'c1',
       timestamp: '2026-11-20T10:00:02Z',
       message: { role: 'user', content: 'hello' },
+    }),
+    // Sibling branch off m1 with a context_edit targeting m1 (must NOT affect active branch)
+    JSON.stringify({
+      type: 'context_edit',
+      id: 'ce_sib',
+      parentId: 'm1',
+      timestamp: '2026-11-20T10:00:02.500Z',
+      targetId: 'm1',
+      replacement: null,
     }),
     JSON.stringify({
       type: 'thinking_level_change',
@@ -265,8 +350,29 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
           {
             type: 'tool-call',
             toolCallId: 'tc1',
-            toolName: 'read',
-            input: { path: 'a.ts' },
+            toolName: 'tool_search',
+            input: { query: 'mcp' },
+          },
+        ],
+      },
+    }),
+    JSON.stringify({
+      type: 'message',
+      id: 'm2_res',
+      parentId: 'm2',
+      timestamp: '2026-11-20T10:00:04.500Z',
+      message: {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tc1',
+            toolName: 'tool_search',
+            output: {
+              type: 'text',
+              value:
+                'Loaded 1 tool. They are available from your next call:\n- mcp__demo__echo: Echo tool',
+            },
           },
         ],
       },
@@ -274,7 +380,7 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     JSON.stringify({
       type: 'label',
       id: 'l1',
-      parentId: 'm2',
+      parentId: 'm2_res',
       timestamp: '2026-11-20T10:00:05Z',
       targetId: 'm1',
       label: 'checkpoint-1',
@@ -301,9 +407,17 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       excludeFromContext: true,
     }),
     JSON.stringify({
+      type: 'custom',
+      customType: 'vela.session.location',
+      id: 'location:1',
+      parentId: 'b1',
+      timestamp: '2026-11-20T10:00:07.500Z',
+      data: { environment: 'docker-box', cwd: '/workspace' },
+    }),
+    JSON.stringify({
       type: 'session_info',
       id: 'info1',
-      parentId: 'b1',
+      parentId: 'location:1',
       timestamp: '2026-11-20T10:00:08Z',
       name: 'Renamed V2 Session',
     }),
@@ -315,10 +429,16 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       targetId: 'm1',
       replacement: { content: 'edited hello' },
     }),
-    '{"type":"message","id":"truncated',
+    JSON.stringify({
+      type: 'message',
+      id: 'bad_null_msg',
+      parentId: 'ce1',
+      timestamp: '2026-11-20T10:00:09.500Z',
+      message: null,
+    }),
+    '{"type":"message","id":"sk-jsonl-secret-value',
   ].join('\n')
 
-  // V1 checkpoint transcript
   const v1Transcript = [
     JSON.stringify({
       type: 'checkpoint',
@@ -335,53 +455,69 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     }),
   ].join('\n')
 
-  // 0.5.0 flat file vs directory precedence
-  const flatOnly =
+  const flatOnly = `${[
     JSON.stringify({
       type: 'session',
       version: 2,
       id: 's-flat',
       timestamp: '2026-11-19T07:00:00Z',
-    }) +
-    '\n' +
+    }),
     JSON.stringify({
       type: 'message',
       id: 'fm1',
       parentId: null,
       timestamp: '2026-11-19T07:00:01Z',
       message: { role: 'user', content: 'flat' },
-    })
+    }),
+  ].join('\n')}\n`
 
-  const dirWinner =
+  const dirWinner = `${[
     JSON.stringify({
       type: 'session',
       version: 2,
       id: 's-dup',
       timestamp: '2026-11-19T07:00:00Z',
-    }) +
-    '\n' +
+    }),
     JSON.stringify({
       type: 'message',
       id: 'dm1',
       parentId: null,
       timestamp: '2026-11-19T07:00:01Z',
       message: { role: 'user', content: 'from-dir' },
-    })
-  const flatLoser =
+    }),
+  ].join('\n')}\n`
+
+  const dirProjectB = `${[
+    JSON.stringify({
+      type: 'session',
+      version: 2,
+      id: 's-dup',
+      timestamp: '2026-11-19T07:30:00Z',
+    }),
+    JSON.stringify({
+      type: 'message',
+      id: 'dm2',
+      parentId: null,
+      timestamp: '2026-11-19T07:30:01Z',
+      message: { role: 'user', content: 'from-project-b' },
+    }),
+  ].join('\n')}\n`
+
+  const flatLoser = `${[
     JSON.stringify({
       type: 'session',
       version: 2,
       id: 's-dup',
       timestamp: '2026-11-19T07:00:00Z',
-    }) +
-    '\n' +
+    }),
     JSON.stringify({
       type: 'message',
       id: 'fl1',
       parentId: null,
       timestamp: '2026-11-19T07:00:01Z',
       message: { role: 'user', content: 'from-flat-stale' },
-    })
+    }),
+  ].join('\n')}\n`
 
   const trackedFiles = [
     join(agentDir, 'settings.json'),
@@ -395,12 +531,14 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     join(projectDataDir, 'local', 'projects.json'),
     join(projectDataDir, 'local', 'proj-1.json'),
     join(projectDataDir, 'local', 'proj-1', 'local-only-session', 'lmsg-1'),
+    join(projectDataDir, 'local', 'proj-1', 's-v2', 'lmsg-out'),
     join(projectDataDir, 'channels', 'index.json'),
     join(projectDataDir, 'channels', 'routines.json'),
     join(projectDataDir, 'channels', 'subscriptions.json'),
     join(larkAssetDir, 'AGENTS.md'),
     join(projectDataDir, 'sessions', 's-v2', 'transcript.jsonl'),
     join(projectDataDir, 'sessions', 's-dup', 'transcript.jsonl'),
+    join(projectDataDirB, 'sessions', 's-dup', 'transcript.jsonl'),
     join(projectDataDir, 'sessions', 's-dup.jsonl'),
     join(projectDataDir, 'sessions', 's-flat.jsonl'),
     join(agentDir, 'sessions', 's-v1.jsonl'),
@@ -435,6 +573,10 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     'hello-world',
   )
   writeFileSync(
+    join(projectDataDir, 'local', 'proj-1', 's-v2', 'lmsg-out'),
+    'outbound-pdf-bytes',
+  )
+  writeFileSync(
     join(projectDataDir, 'channels', 'index.json'),
     JSON.stringify(channelIndex),
   )
@@ -454,6 +596,10 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
   writeFileSync(
     join(projectDataDir, 'sessions', 's-dup', 'transcript.jsonl'),
     dirWinner,
+  )
+  writeFileSync(
+    join(projectDataDirB, 'sessions', 's-dup', 'transcript.jsonl'),
+    dirProjectB,
   )
   writeFileSync(join(projectDataDir, 'sessions', 's-dup.jsonl'), flatLoser)
   writeFileSync(join(projectDataDir, 'sessions', 's-flat.jsonl'), flatOnly)
@@ -475,14 +621,23 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     expect(res1.skipped).toBe(false)
     expect(res1.summary.configMigrated).toBe(true)
     expect(res1.summary.trustedPaths).toBe(2)
-    expect(res1.summary.projects).toBe(2) // proj-1 + lark-group:oc_team1
-    expect(res1.summary.blobs).toBe(1)
-    expect(res1.summary.timers).toBe(1)
+    expect(res1.summary.projects).toBe(3) // proj-1 + lark-group:oc_team1 + lark-group:oc_removed
+    expect(res1.summary.blobs).toBe(2)
+    expect(res1.summary.timers).toBe(2)
     expect(res1.summary.subscriptions).toBe(1)
-    expect(res1.summary.inboxEvents).toBe(1)
+    expect(res1.summary.inboxEvents).toBe(2) // 1 handoff note + 1 pendingMessageId
+
+    // Redacted JSONL warnings never leak raw line contents
     expect(
       res1.warnings.some((w) => w.includes('Skipped unparsable line')),
     ).toBe(true)
+    expect(res1.warnings.some((w) => w.includes('sk-jsonl-secret-value'))).toBe(
+      false,
+    )
+    expect(res1.warnings.some((w) => w.includes('$UNSET_CHAT_VAR'))).toBe(true)
+    expect(res1.warnings.some((w) => w.includes('unsafe storageKey'))).toBe(
+      true,
+    )
 
     // Generated config.json passes strict schema + precedence checks
     const configPath = join(agentDir, 'config.json')
@@ -503,7 +658,6 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     })
     expect(flattened.extensionConfig).toEqual({ customExt: { flag: 42 } })
 
-    // Verify loadConfig reads migrated config.json cleanly
     const loaded = loadConfig({
       agentDir,
       cwd: root.path,
@@ -511,60 +665,81 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     })
     expect(loaded.settings.model).toBe('deepseek/deepseek-flash')
 
-    // Verify projects & data_dir anchor
-    const larkProject = db.get<{
-      data_dir: string | null
-      hub_session_id: string | null
-    }>(
-      "SELECT data_dir, hub_session_id FROM projects WHERE id = 'lark-group:oc_team1'",
-    )
-    expect(larkProject?.data_dir).toBe(larkAssetDir)
-    expect(larkProject?.hub_session_id).toBe('lark-oc_team1')
-
+    // Local project had no duplicate channel-group:local:proj-1 & kept hub_session_id null
+    expect(
+      db.get<{ id: string }>(
+        "SELECT id FROM projects WHERE id = 'channel-group:local:proj-1'",
+      ),
+    ).toBeUndefined()
     const localProject = db.get<{
       data_dir: string | null
       hub_session_id: string | null
     }>("SELECT data_dir, hub_session_id FROM projects WHERE id = 'proj-1'")
-    expect(localProject?.data_dir).toBe(projectDataDir)
-    expect(localProject?.hub_session_id).toBeNull()
+    expect(localProject).toEqual({
+      data_dir: projectDataDir,
+      hub_session_id: null,
+    })
 
-    // Verify tree re-chaining + label + context_edit + AI SDK part normalization + compaction.first_kept_id
+    // Removed Lark group binding stays disabled (enabled = 0), active group stays enabled = 1
+    expect(
+      db.get<{ enabled: number }>(
+        "SELECT enabled FROM channel_bindings WHERE external_id = 'oc_team1'",
+      )?.enabled,
+    ).toBe(1)
+    expect(
+      db.get<{ enabled: number; kind: string }>(
+        "SELECT enabled, kind FROM channel_bindings WHERE external_id = 'oc_team1:om_root1'",
+      ),
+    ).toEqual({ enabled: 1, kind: 'group' })
+    expect(
+      db.get<{ enabled: number }>(
+        "SELECT enabled FROM channel_bindings WHERE external_id = 'oc_removed:om_old'",
+      )?.enabled,
+    ).toBe(0)
+    expect(
+      db.get<{ data_dir: string | null }>(
+        "SELECT data_dir FROM projects WHERE id = 'lark-group:oc_removed'",
+      )?.data_dir,
+    ).toBeNull()
+
+    // Verify V2 session metadata: folded vela.session.location, discovered_tools_json, leaf_message_id
     const v2Sess = db.get<{
       name: string
       model: string
       thinking_level: string
+      location_json: string
+      discovered_tools_json: string | null
       leaf_message_id: string
     }>(
-      "SELECT name, model, thinking_level, leaf_message_id FROM sessions WHERE id = 's-v2'",
+      "SELECT name, model, thinking_level, location_json, discovered_tools_json, leaf_message_id FROM sessions WHERE id = 's-v2'",
     )
     expect(v2Sess).toEqual({
       name: 'Renamed V2 Session',
       model: 'deepseek/deepseek-flash',
       thinking_level: 'high',
+      location_json: JSON.stringify({
+        environment: 'docker-box',
+        cwd: '/workspace',
+      }),
+      discovered_tools_json: JSON.stringify(['mcp__demo__echo']),
       leaf_message_id: 'b1',
     })
 
     const m1 = db.get<{
       parent_id: string | null
       label: string | null
+      include_in_context: number
       content_json: string
     }>(
-      "SELECT parent_id, label, content_json FROM vela_messages WHERE session_id = 's-v2' AND id = 'm1'",
+      "SELECT parent_id, label, include_in_context, content_json FROM vela_messages WHERE session_id = 's-v2' AND id = 'm1'",
     )
-    expect(m1?.parent_id).toBeNull() // skipped c1
+    expect(m1?.parent_id).toBeNull()
     expect(m1?.label).toBe('checkpoint-1')
+    expect(m1?.include_in_context).toBe(1) // sibling ce_sib did NOT hide m1
     expect(JSON.parse(m1!.content_json)).toEqual({
       role: 'user',
       content: 'edited hello',
     })
-
-    const m2 = db.get<{ parent_id: string | null; content_json: string }>(
-      "SELECT parent_id, content_json FROM vela_messages WHERE session_id = 's-v2' AND id = 'm2'",
-    )
-    expect(m2?.parent_id).toBe('m1') // skipped c2
-    const m2Parsed = JSON.parse(m2!.content_json)
-    expect(m2Parsed.content[0].type).toBe('thinking')
-    expect(m2Parsed.content[1].type).toBe('tool_call')
 
     const cmp1 = db.get<{
       parent_id: string | null
@@ -572,16 +747,9 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
     }>(
       "SELECT parent_id, first_kept_id FROM vela_messages WHERE session_id = 's-v2' AND id = 'cmp1'",
     )
-    expect(cmp1?.parent_id).toBe('m2') // skipped l1
-    expect(cmp1?.first_kept_id).toBe('m2') // c2 remapped to next kept node m2!
+    expect(cmp1?.parent_id).toBe('m2_res')
+    expect(cmp1?.first_kept_id).toBe('m2')
 
-    const b1 = db.get<{ parent_id: string | null; include_in_context: number }>(
-      "SELECT parent_id, include_in_context FROM vela_messages WHERE session_id = 's-v2' AND id = 'b1'",
-    )
-    expect(b1?.parent_id).toBe('cmp1')
-    expect(b1?.include_in_context).toBe(0) // !! / excludeFromContext
-
-    // Verify recursive CTE from leaf_message_id is unbroken
     const cteIds = db
       .all<{ id: string }>(
         `WITH RECURSIVE tree(id, parent_id, seq) AS (
@@ -594,45 +762,47 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
         v2Sess!.leaf_message_id,
       )
       .map((r) => r.id)
-    expect(cteIds).toEqual(['m1', 'm2', 'cmp1', 'b1'])
+    expect(cteIds).toEqual(['m1', 'm2', 'm2_res', 'cmp1', 'b1'])
 
-    // Verify directory transcript won over stale flat .jsonl
-    const dupMsg = db.get<{ content_json: string }>(
-      "SELECT content_json FROM vela_messages WHERE session_id = 's-dup'",
+    // Verify colliding session id across distinct project dataDirs was disambiguated, not dropped
+    const dupSessions = db.all<{ id: string }>(
+      "SELECT id FROM sessions WHERE id LIKE 's-dup%' ORDER BY id",
     )
-    expect(JSON.parse(dupMsg!.content_json).content).toBe('from-dir')
+    expect(dupSessions.length).toBe(2)
 
-    // Verify V1 checkpoint & fallback local message + blob linkage
-    expect(
-      db.get<{ name: string }>("SELECT name FROM sessions WHERE id = 's-v1'")
-        ?.name,
-    ).toBe('V1 Session')
-    const blob = db.get<{ session_id: string | null; storage_path: string }>(
-      'SELECT session_id, storage_path FROM blobs',
-    )
-    expect(blob?.session_id).toBe('local-only-session')
-    expect(blob?.storage_path).toMatch(/^[0-9a-f-]+\.txt$/)
-    expect(
-      readFileSync(join(agentDir, 'blobs', blob!.storage_path), 'utf8'),
-    ).toBe('hello-world')
-
-    // Verify topic & DM bindings + waiting state
-    const topicSess = db.get<{
-      kind: string
-      state: string
-      waiting_reason: string | null
+    // Verify timers materialized timezone & next_fire_at (and expired one-off disabled)
+    const rt1 = db.get<{
+      timezone: string | null
+      next_fire_at: string | null
+      enabled: number
+      session_id: string | null
     }>(
-      "SELECT kind, state, waiting_reason FROM sessions WHERE id = 'topic-sess-1'",
+      "SELECT timezone, next_fire_at, enabled, session_id FROM timers WHERE id = 'rt-1'",
     )
-    expect(topicSess).toEqual({
-      kind: 'topic',
-      state: 'waiting_human',
-      waiting_reason: 'Need approval',
-    })
-    const dmSess = db.get<{ kind: string; state: string }>(
-      "SELECT kind, state FROM sessions WHERE id = 'dm-sess-1'",
+    expect(rt1?.timezone).toBe('Asia/Shanghai')
+    expect(rt1?.next_fire_at).toBeTruthy()
+    expect(rt1?.enabled).toBe(1)
+    expect(rt1?.session_id).toBe('lark-oc_team1')
+
+    const rtPast = db.get<{ next_fire_at: string | null; enabled: number }>(
+      "SELECT next_fire_at, enabled FROM timers WHERE id = 'rt-past'",
     )
-    expect(dmSess).toEqual({ kind: 'chat', state: 'idle' })
+    expect(rtPast).toEqual({ next_fire_at: null, enabled: 0 })
+
+    // Verify inbound + outbound blobs
+    const blobs = db.all<{
+      session_id: string | null
+      direction: string
+      storage_path: string
+      filename: string
+    }>(
+      'SELECT session_id, direction, storage_path, filename FROM blobs ORDER BY filename',
+    )
+    expect(blobs).toHaveLength(2)
+    expect(blobs[0]?.direction).toBe('outbound')
+    expect(blobs[0]?.session_id).toBe('s-v2')
+    expect(blobs[1]?.direction).toBe('inbound')
+    expect(blobs[1]?.session_id).toBe('local-only-session')
 
     // Re-running is idempotent no-op
     const res2 = migrateLegacyVelaDir({ agentDir, db })
@@ -641,7 +811,6 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
       res1.summary.sessions,
     )
 
-    // Verify every single legacy source file & project .vela/settings.json is byte-identical & mtime-unchanged
     const afterSnap = snapshotFiles(trackedFiles)
     for (const file of trackedFiles) {
       expect(afterSnap.get(file)).toEqual(beforeSnap.get(file))
@@ -651,7 +820,78 @@ test('migrateLegacyVelaDir performs complete idempotent read-only migration with
   }
 })
 
-test('failed migration rolls back DB and copied blobs, and redacts JSON parse secrets', () => {
+test('clamps sibling-branch compaction firstKeptEntryId and breaks cyclic parent references cleanly', () => {
+  const root = tempDir('vela-s1c-tree-guards-')
+  dirs.push(root)
+  const agentDir = join(root.path, 'agent')
+  const sessionsDir = join(agentDir, 'sessions', 's-guard')
+  mkdirSync(sessionsDir, { recursive: true })
+  writeFileSync(join(agentDir, 'config.json'), '{}')
+
+  const transcript = [
+    JSON.stringify({
+      type: 'session',
+      version: 2,
+      id: 's-guard',
+      timestamp: '2026-11-24T00:00:00Z',
+    }),
+    JSON.stringify({
+      type: 'message',
+      id: 'root',
+      parentId: null,
+      timestamp: '2026-11-24T00:00:01Z',
+      message: { role: 'user', content: 'root' },
+    }),
+    JSON.stringify({
+      type: 'message',
+      id: 'sib',
+      parentId: 'root',
+      timestamp: '2026-11-24T00:00:02Z',
+      message: { role: 'assistant', content: 'sibling' },
+    }),
+    JSON.stringify({
+      type: 'compaction',
+      id: 'cmp_bad',
+      parentId: 'root',
+      timestamp: '2026-11-24T00:00:03Z',
+      summary: 'sum',
+      firstKeptEntryId: 'sib',
+      tokensBefore: 100,
+    }),
+    JSON.stringify({
+      type: 'message',
+      id: 'cyc_a',
+      parentId: 'cyc_b',
+      timestamp: '2026-11-24T00:00:04Z',
+      message: { role: 'user', content: 'a' },
+    }),
+    JSON.stringify({
+      type: 'message',
+      id: 'cyc_b',
+      parentId: 'cyc_a',
+      timestamp: '2026-11-24T00:00:05Z',
+      message: { role: 'assistant', content: 'b' },
+    }),
+  ].join('\n')
+
+  writeFileSync(join(sessionsDir, 'transcript.jsonl'), transcript)
+  const db = openDatabase({ path: join(agentDir, 'vela.db') })
+  try {
+    const res = migrateLegacyVelaDir({ agentDir, db })
+    expect(
+      res.warnings.some((w) => w.includes('out-of-branch compaction')),
+    ).toBe(true)
+    expect(res.warnings.some((w) => w.includes('cyclic parent'))).toBe(true)
+    const cmp = db.get<{ first_kept_id: string | null }>(
+      "SELECT first_kept_id FROM vela_messages WHERE session_id = 's-guard' AND id = 'cmp_bad'",
+    )
+    expect(cmp?.first_kept_id).toBe('cmp_bad')
+  } finally {
+    db.close()
+  }
+})
+
+test('failed migration rolls back DB, newly created config.json, and copied blobs, and redacts JSON parse secrets', () => {
   const root = tempDir('vela-s1c-rollback-')
   dirs.push(root)
   const agentDir = join(root.path, 'agent')
@@ -659,7 +899,11 @@ test('failed migration rolls back DB and copied blobs, and redacts JSON parse se
   mkdirSync(join(projectDataDir, 'local', 'p1', 's1'), { recursive: true })
   mkdirSync(join(projectDataDir, 'channels'), { recursive: true })
 
-  writeFileSync(join(agentDir, 'config.json'), '{}')
+  // Start without config.json so migration creates it and must roll it back on DB failure
+  writeFileSync(
+    join(agentDir, 'settings.json'),
+    '{"defaultModel":"openai/gpt-5.5"}',
+  )
   writeFileSync(
     join(projectDataDir, 'local', 'projects.json'),
     JSON.stringify({
@@ -690,7 +934,6 @@ test('failed migration rolls back DB and copied blobs, and redacts JSON parse se
     ]),
   )
   writeFileSync(join(projectDataDir, 'local', 'p1', 's1', 'm1'), 'ok')
-  // Corrupt channels/index.json containing a secret-like token
   writeFileSync(
     join(projectDataDir, 'channels', 'index.json'),
     '{ "secret": "sk-super-secret-value", badJson }',
@@ -708,11 +951,11 @@ test('failed migration rolls back DB and copied blobs, and redacts JSON parse se
     const msg = (caught as Error).message
     expect(msg).toContain('is not valid JSON')
     expect(msg).not.toContain('sk-super-secret-value')
+    expect(existsSync(join(agentDir, 'config.json'))).toBe(false)
     expect(db.get<{ n: number }>('SELECT count(*) AS n FROM projects')?.n).toBe(
       0,
     )
     expect(db.get<{ n: number }>('SELECT count(*) AS n FROM blobs')?.n).toBe(0)
-    // Copied blob cleaned up on rollback
     expect(
       existsSync(join(agentDir, 'blobs'))
         ? readdirSync(join(agentDir, 'blobs')).length
@@ -756,7 +999,6 @@ test('CLI startup automatically migrates legacy settings.json/models.json/mcp.js
     JSON.stringify({ mcpServers: { echo: { command: 'echo', args: ['1'] } } }),
   )
 
-  // Direct loadConfig still fails fast before startup migration runs
   expect(() => loadConfig({ agentDir, cwd })).toThrow(
     'found legacy config file(s)',
   )

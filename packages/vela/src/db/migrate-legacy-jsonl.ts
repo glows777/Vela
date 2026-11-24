@@ -38,6 +38,7 @@ export interface ParsedLegacyTranscript {
   archived?: boolean
   model?: string
   thinkingLevel?: string
+  discoveredTools?: string[]
   leafMessageId: string | null
   messages: ParsedLegacyMessageRow[]
   warnings: string[]
@@ -60,8 +61,60 @@ const KEPT_ENTRY_TYPES = new Set<MigratedMessageKind>([
   'custom',
 ])
 
+const LOCATION_MARKER_TYPE = 'vela.session.location'
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isValidExecutionLocation(
+  value: unknown,
+): value is { environment: string; cwd: string } {
+  return (
+    isPlainObject(value) &&
+    typeof value.environment === 'string' &&
+    value.environment.length > 0 &&
+    typeof value.cwd === 'string' &&
+    value.cwd.length > 0
+  )
+}
+
+function extractLoadedToolNames(text: string): string[] {
+  const names: string[] = []
+  for (const line of text.split('\n')) {
+    const end = line.indexOf(': ')
+    if (!line.startsWith('- ') || end < 0) {
+      if (names.length) break
+      continue
+    }
+    names.push(line.slice(2, end))
+  }
+  return names
+}
+
+function extractDiscoveredToolsFromMessage(message: VelaMessage): string[] {
+  if (message.role !== 'tool' || !Array.isArray(message.content)) return []
+  const names: string[] = []
+  for (const part of message.content) {
+    if (
+      !isPlainObject(part) ||
+      part.type !== 'tool_result' ||
+      part.toolName !== 'tool_search' ||
+      !isPlainObject(part.output)
+    ) {
+      continue
+    }
+    if (part.output.type === 'text' && typeof part.output.value === 'string') {
+      names.push(...extractLoadedToolNames(part.output.value))
+    } else if (
+      part.output.type === 'json' &&
+      isPlainObject(part.output.value) &&
+      typeof part.output.value.preview === 'string'
+    ) {
+      names.push(...extractLoadedToolNames(part.output.value.preview))
+    }
+  }
+  return names
 }
 
 function createSyntheticId(taken: Set<string>): string {
@@ -215,8 +268,9 @@ function convertV1ToEntries(
 
 /**
  * Pure read-only parser for legacy JSONL session transcripts (supports V2 tree logs,
- * V1 checkpoints, and 0.5.0 flat files while skipping damaged lines with warnings).
- * Re-chains `parentId` and `compaction.firstKeptEntryId` across stripped control entries.
+ * V1 checkpoints, and 0.5.0 flat files while skipping damaged lines with redacted warnings).
+ * Folds `vela.session.location`, scopes `context_edit` to the active branch, validates
+ * `compaction.firstKeptEntryId` against the compaction branch, and re-chains `parentId`.
  */
 export function parseLegacyTranscript(
   text: string,
@@ -224,39 +278,68 @@ export function parseLegacyTranscript(
   filePath: string,
 ): ParsedLegacyTranscript {
   const warnings: string[] = []
-  const parsedLines: unknown[] = []
+  const parsedLines: { lineNum: number; value: unknown }[] = []
   const lines = text.split('\n')
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!.trim()
     if (!raw) continue
     try {
-      parsedLines.push(JSON.parse(raw))
-    } catch (error) {
-      warnings.push(
-        `Skipped unparsable line ${i + 1} in ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
-      )
+      parsedLines.push({ lineNum: i + 1, value: JSON.parse(raw) })
+    } catch {
+      warnings.push(`Skipped unparsable line ${i + 1} in ${filePath}`)
     }
   }
 
   let header: Record<string, unknown> | undefined
   const entries: RawEntry[] = []
 
-  if (parsedLines.length > 0 && isV1Transcript(parsedLines)) {
-    const converted = convertV1ToEntries(sessionId, parsedLines)
+  if (
+    parsedLines.length > 0 &&
+    isV1Transcript(parsedLines.map((item) => item.value))
+  ) {
+    const converted = convertV1ToEntries(
+      sessionId,
+      parsedLines.map((item) => item.value),
+    )
     header = converted.header
     entries.push(...converted.entries)
   } else {
     const seenIds = new Set<string>()
-    for (const item of parsedLines) {
-      if (!isPlainObject(item) || typeof item.type !== 'string') continue
+    for (const { lineNum, value: item } of parsedLines) {
+      if (!isPlainObject(item) || typeof item.type !== 'string') {
+        warnings.push(`Skipped invalid entry at line ${lineNum} in ${filePath}`)
+        continue
+      }
       if (item.type === 'session' && !header) {
+        if (
+          item.version !== undefined &&
+          (typeof item.version !== 'number' || item.version > 2)
+        ) {
+          throw new Error(
+            `Unsupported transcript version ${String(item.version)} in ${filePath}`,
+          )
+        }
         header = item
         continue
       }
-      if (typeof item.id !== 'string') continue
+      if (typeof item.id !== 'string') {
+        warnings.push(
+          `Skipped entry without id at line ${lineNum} in ${filePath}`,
+        )
+        continue
+      }
       if (seenIds.has(item.id)) {
         warnings.push(`Skipped duplicate entry id "${item.id}" in ${filePath}`)
+        continue
+      }
+      if (
+        item.type === 'message' &&
+        (!isPlainObject(item.message) || typeof item.message.role !== 'string')
+      ) {
+        warnings.push(
+          `Skipped malformed message entry at line ${lineNum} in ${filePath}`,
+        )
         continue
       }
       seenIds.add(item.id)
@@ -274,18 +357,29 @@ export function parseLegacyTranscript(
   }
 
   const rawById = new Map(entries.map((entry) => [entry.id, entry]))
-  const keptIds = new Set(
-    entries
-      .filter((entry) =>
-        KEPT_ENTRY_TYPES.has(entry.type as MigratedMessageKind),
-      )
-      .map((entry) => entry.id),
-  )
+  const isKeptEntry = (entry: RawEntry): boolean => {
+    if (!KEPT_ENTRY_TYPES.has(entry.type as MigratedMessageKind)) return false
+    if (entry.type === 'custom' && entry.customType === LOCATION_MARKER_TYPE) {
+      return false
+    }
+    return true
+  }
+  const keptIds = new Set(entries.filter(isKeptEntry).map((entry) => entry.id))
 
-  const resolveKeptAncestor = (startId: string | null): string | null => {
+  const resolveKeptAncestor = (
+    startId: string | null,
+    selfId?: string,
+  ): string | null => {
     let cur = startId
     const visited = new Set<string>()
-    while (cur && !visited.has(cur)) {
+    if (selfId) visited.add(selfId)
+    while (cur) {
+      if (visited.has(cur)) {
+        warnings.push(
+          `Broke cyclic parent reference near entry "${cur}" in ${filePath}`,
+        )
+        return null
+      }
       if (keptIds.has(cur)) return cur
       visited.add(cur)
       cur = rawById.get(cur)?.parentId ?? null
@@ -312,11 +406,14 @@ export function parseLegacyTranscript(
   let name: string | undefined
   let archived: boolean | undefined
   let channel = typeof header?.channel === 'string' ? header.channel : undefined
+  let location: unknown = isValidExecutionLocation(header?.location)
+    ? header.location
+    : header?.location
   let model: string | undefined
   let thinkingLevel: string | undefined
 
   const labels = new Map<string, string | undefined>()
-  const edits = new Map<string, { content: unknown } | null>()
+  const activeEdits = new Map<string, { content: unknown } | null>()
 
   for (const entry of entries) {
     if (entry.type === 'session_info') {
@@ -342,14 +439,11 @@ export function parseLegacyTranscript(
           : undefined,
       )
     } else if (
-      entry.type === 'context_edit' &&
-      typeof entry.targetId === 'string'
+      entry.type === 'custom' &&
+      entry.customType === LOCATION_MARKER_TYPE &&
+      isValidExecutionLocation(entry.data)
     ) {
-      if (entry.replacement === null) {
-        edits.set(entry.targetId, null)
-      } else if (isPlainObject(entry.replacement)) {
-        edits.set(entry.targetId, { content: entry.replacement.content })
-      }
+      location = entry.data
     }
   }
 
@@ -361,6 +455,15 @@ export function parseLegacyTranscript(
       typeof entry.thinkingLevel === 'string'
     ) {
       thinkingLevel = entry.thinkingLevel
+    } else if (
+      entry.type === 'context_edit' &&
+      typeof entry.targetId === 'string'
+    ) {
+      if (entry.replacement === null) {
+        activeEdits.set(entry.targetId, null)
+      } else if (isPlainObject(entry.replacement)) {
+        activeEdits.set(entry.targetId, { content: entry.replacement.content })
+      }
     }
   }
 
@@ -369,7 +472,6 @@ export function parseLegacyTranscript(
       typeof compaction.firstKeptEntryId === 'string'
         ? compaction.firstKeptEntryId
         : ''
-    if (rawFirstKept && keptIds.has(rawFirstKept)) return rawFirstKept
     const path = branchEntries(compaction.id)
     const startIdx = rawFirstKept
       ? path.findIndex((item) => item.id === rawFirstKept)
@@ -378,22 +480,67 @@ export function parseLegacyTranscript(
       for (let i = startIdx; i < path.length; i++) {
         if (keptIds.has(path[i]!.id)) return path[i]!.id
       }
+      return compaction.id
+    }
+    if (rawFirstKept) {
+      warnings.push(
+        `Clamped out-of-branch compaction boundary "${rawFirstKept}" to "${compaction.id}" in ${filePath}`,
+      )
     }
     return compaction.id
   }
 
   const messages: ParsedLegacyMessageRow[] = []
+  const discoveredTools: string[] = []
+  const seenTools = new Set<string>()
+  const activeBranchIds = new Set(activeBranch.map((entry) => entry.id))
+  const resolvedParentByKeptId = new Map<string, string | null>()
   let seq = 0
+
+  const resolveAcyclicParentId = (
+    rawParentId: string | null,
+    selfId: string,
+  ): string | null => {
+    const candidate = resolveKeptAncestor(rawParentId, selfId)
+    if (!candidate) {
+      resolvedParentByKeptId.set(selfId, null)
+      return null
+    }
+    const seen = new Set<string>([selfId])
+    let cur: string | null = candidate
+    while (cur) {
+      if (seen.has(cur)) {
+        warnings.push(
+          `Broke cyclic parent reference near entry "${selfId}" in ${filePath}`,
+        )
+        resolvedParentByKeptId.set(selfId, null)
+        return null
+      }
+      seen.add(cur)
+      cur = resolvedParentByKeptId.get(cur) ?? null
+    }
+    resolvedParentByKeptId.set(selfId, candidate)
+    return candidate
+  }
+
   for (const entry of entries) {
     if (!keptIds.has(entry.id)) continue
     const kind = entry.type as MigratedMessageKind
     seq += 1
-    const parentId = resolveKeptAncestor(entry.parentId)
+    const parentId = resolveAcyclicParentId(entry.parentId, entry.id)
     const label = labels.get(entry.id) ?? null
-    const edit = edits.get(entry.id)
+    const edit = activeEdits.get(entry.id)
 
     if (kind === 'message') {
       const normalized = normalizeVelaMessage(entry.message)
+      if (activeBranchIds.has(entry.id)) {
+        for (const toolName of extractDiscoveredToolsFromMessage(normalized)) {
+          if (!seenTools.has(toolName)) {
+            seenTools.add(toolName)
+            discoveredTools.push(toolName)
+          }
+        }
+      }
       const editedMessage =
         edit && edit !== null
           ? normalizeVelaMessage({ ...normalized, content: edit.content })
@@ -537,7 +684,6 @@ export function parseLegacyTranscript(
       continue
     }
 
-    // kind === 'custom'
     messages.push({
       id: entry.id,
       parentId,
@@ -574,7 +720,7 @@ export function parseLegacyTranscript(
     createdAt,
     updatedAt,
     ...(typeof header?.cwd === 'string' ? { cwd: header.cwd } : {}),
-    ...(header?.location !== undefined ? { location: header.location } : {}),
+    ...(location !== undefined ? { location } : {}),
     ...(channel !== undefined ? { channel } : {}),
     ...(typeof header?.parentSession === 'string'
       ? { parentSession: header.parentSession }
@@ -583,6 +729,7 @@ export function parseLegacyTranscript(
     ...(archived !== undefined ? { archived } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+    ...(discoveredTools.length > 0 ? { discoveredTools } : {}),
     leafMessageId: entries.length
       ? resolveKeptAncestor(entries.at(-1)!.id)
       : null,

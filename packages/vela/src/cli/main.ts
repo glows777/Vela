@@ -79,6 +79,13 @@ if (args.help || args.version) {
   process.exit(0)
 }
 if (args.setupTarget === 'github') {
+  const setupAgentDir = defaultAgentDir(process.env)
+  try {
+    migrateLegacyConfigFiles(setupAgentDir)
+  } catch (error) {
+    console.error(`[config] ${error instanceof Error ? error.message : error}`)
+    process.exit(1)
+  }
   const { githubSetup } = await import('./github-setup.ts')
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
   const input = interactive
@@ -86,7 +93,7 @@ if (args.setupTarget === 'github') {
     : undefined
   process.exit(
     await githubSetup({
-      agentDir: defaultAgentDir(process.env),
+      agentDir: setupAgentDir,
       repositories: args.setupRepositories ?? [],
       url: args.setupUrl,
       interactive,

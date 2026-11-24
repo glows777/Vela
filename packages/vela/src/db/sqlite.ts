@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { applyMigrations } from './migrations.ts'
 
@@ -25,6 +25,37 @@ function normalizeRow<T extends Record<string, unknown>>(
 
 function quoteSavepoint(name: string): string {
   return `"${name.replaceAll('"', '""')}"`
+}
+
+function assertSyncResult<T>(value: T): T {
+  if (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
+  ) {
+    throw new Error('SQLite transactions must be synchronous')
+  }
+  return value
+}
+
+function ensurePrivateDir(dir: string): void {
+  const missing: string[] = []
+  let cur = resolve(dir)
+  while (!existsSync(cur)) {
+    missing.push(cur)
+    const parent = dirname(cur)
+    if (parent === cur) break
+    cur = parent
+  }
+  if (missing.length === 0) return
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  for (const created of missing) {
+    chmodSync(created, 0o700)
+  }
+}
+
+function chmodIfExists(path: string, mode: number): void {
+  if (existsSync(path)) chmodSync(path, mode)
 }
 
 /**
@@ -92,8 +123,8 @@ export class VelaDatabase {
   }
 
   /**
-   * Executes `fn` atomically. Outermost call uses `BEGIN IMMEDIATE` by default so write
-   * transactions never fail mid-flight on lock upgrade; nested calls use SQLite `SAVEPOINT`s.
+   * Executes `fn` synchronously and atomically. Outermost call uses `BEGIN IMMEDIATE` by default
+   * so write transactions never fail mid-flight on lock upgrade; nested calls use SQLite `SAVEPOINT`s.
    */
   transaction<T>(
     fn: () => T,
@@ -110,7 +141,7 @@ export class VelaDatabase {
       this.raw.exec(`BEGIN ${mode}`)
       this.txDepth = 1
       try {
-        const result = fn()
+        const result = assertSyncResult(fn())
         this.raw.exec('COMMIT')
         return result
       } catch (error) {
@@ -127,7 +158,7 @@ export class VelaDatabase {
     this.raw.exec(`SAVEPOINT ${sp}`)
     this.txDepth = depth + 1
     try {
-      const result = fn()
+      const result = assertSyncResult(fn())
       this.raw.exec(`RELEASE SAVEPOINT ${sp}`)
       return result
     } catch (error) {
@@ -163,9 +194,12 @@ export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
   const readonly = options.readonly === true
 
   if (!isMemory && !readonly) {
-    const dir = dirname(options.path)
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    chmodSync(dir, 0o700)
+    ensurePrivateDir(dirname(options.path))
+    if (!existsSync(options.path)) {
+      const fd = openSync(options.path, 'wx', 0o600)
+      closeSync(fd)
+    }
+    chmodSync(options.path, 0o600)
   }
 
   const raw = readonly
@@ -186,8 +220,10 @@ export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
 
     applyMigrations(db, { readonly })
 
-    if (!isMemory && !readonly && existsSync(options.path)) {
-      chmodSync(options.path, 0o600)
+    if (!isMemory && !readonly) {
+      chmodIfExists(options.path, 0o600)
+      chmodIfExists(`${options.path}-wal`, 0o600)
+      chmodIfExists(`${options.path}-shm`, 0o600)
     }
     return db
   } catch (error) {
