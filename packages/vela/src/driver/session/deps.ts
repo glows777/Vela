@@ -89,6 +89,8 @@ export interface SessionDeps<Session> {
     model: ModelInput | undefined,
     session: Session,
   ) => ResolvedModel
+  /** The plan a provider's credential is funded by (e.g. `ChatGPT plan`), when it is a subscription sign-in */
+  planLabel?: (provider: string) => string | undefined
   thinkingLevel: ThinkingLevel
   /** Automatic compaction for new sessions */
   autoCompaction: boolean

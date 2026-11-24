@@ -1,4 +1,11 @@
 import { inspectProviderApiError } from '../../providers/index.ts'
+import {
+  isNonRetryableSubscriptionError,
+  isRetryableSubscriptionError,
+  subscriptionErrorCode,
+  subscriptionErrorKind,
+  subscriptionHint,
+} from '../../providers/subscription-errors.ts'
 import type { AgentErrorKind } from './events.ts'
 import { isContextOverflow } from './overflow.ts'
 
@@ -38,6 +45,12 @@ export function classifyAgentError(error: unknown): AgentErrorKind {
     const match = /^(?:HTTP[ :]+)?([45]\d{2})\b/i.exec(message)
     if (match) status = Number(match[1])
   }
+  // A plan code carries its own category (OpenAI's recovery table): an exhausted allowance is billing, a refused
+  // credential or grant is auth, a request the plan route does not serve is a provider error. None of them is a
+  // reason to sign in again with another billing path, and none is retried.
+  const planKind = subscriptionErrorKind(text)
+  if (planKind) return planKind
+  if (isNonRetryableSubscriptionError(text)) return 'billing'
   if (status === 401 || status === 403) return 'auth'
   if (status === 402 || BILLING.test(text)) return 'billing'
   if (contextOverflow) return 'context_overflow'
@@ -64,10 +77,44 @@ export function agentErrorHint(
   return kind === undefined ? undefined : ERROR_HINTS[kind]
 }
 
+/**
+ * The hint for a failed run: the documented plan sentence when the failure carries a plan code (it names what the
+ * user can change and, for a plan limit, where usage is managed), otherwise the hint for its category. Reading the
+ * error text rather than the category is what makes a plan limit that arrives mid-stream read the same as one that
+ * arrives as an HTTP error.
+ */
+export function failureHint(
+  kind: AgentErrorKind | undefined,
+  error: unknown,
+): string | undefined {
+  const code = subscriptionErrorCode(errorText(error))
+  const planHint = code && subscriptionHint(code)
+  if (planHint) return planHint
+  return agentErrorHint(kind)
+}
+
+/** Every message and response body the error and its causes carry, for the hint lookup */
+function errorText(error: unknown): string {
+  let current = error
+  let text = ''
+  for (let depth = 0; depth < 5 && current != null; depth++) {
+    const apiError = inspectProviderApiError(current)
+    if (apiError) text += `\n${apiError.responseBody ?? ''}`
+    text += `\n${current instanceof Error ? current.message : String(current)}`
+    current = current instanceof Error ? current.cause : undefined
+  }
+  return text
+}
+
 export function isRetryable(error: unknown): boolean {
   // Provider HTTP errors: message is the response body text (e.g. "Rate limit reached ...") without
-  // the status code, so use statusCode (AI SDK retries 408/409/429/5xx by default)
+  // the status code, so use statusCode (AI SDK retries 408/409/429/5xx by default). A ChatGPT plan code
+  // decides on its own, because the status would be wrong both ways: a plan limit is a 429 not to retry,
+  // and an unavailable plan check is a 503 to retry.
   const apiError = inspectProviderApiError(error)
+  const text = errorText(error)
+  if (isNonRetryableSubscriptionError(text)) return false
+  if (isRetryableSubscriptionError(text)) return true
   if (apiError) return apiError.isRetryable
   if (!(error instanceof Error)) return false
 

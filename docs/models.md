@@ -65,11 +65,17 @@ OAuth access tokens with less than 5 minutes left are refreshed before the reque
 
 Vela opens the browser and waits for the redirect on `http://127.0.0.1:1455/auth/callback`. When the browser runs on another machine, paste the final redirect URL into Vela instead. Port 1455 is shared with the Codex CLI, so finish or cancel a sign-in there first.
 
+The sign-in verifies the ID token OpenAI returns and keeps it with the account it belongs to. A later sign-in sends that token back, so OpenAI can skip the account selector instead of asking which account to use. `/logout openai` revokes the session at OpenAI before the credential is removed from `auth.json`; when OpenAI does not confirm the revocation, the credential is removed anyway and Vela says so.
+
 OpenAI documents this sign-in for local agents that the signed-in person runs. Use it only in the terminal on your own machine: not for a Lark bot, a server or any agent that other people talk to. Vela enforces part of this: when a channel session (Lark) encounters a ChatGPT OAuth credential, Vela refuses the OAuth token — falling back to `providers.openai.apiKey` or `OPENAI_API_KEY` if configured, or failing with an error when no API key is available.
 
 The token is only sent to `https://api.openai.com`: with `OPENAI_API_BASE_URL` (or an `openai` `baseUrl` in config.json) pointing elsewhere, requests fail instead of sending your ChatGPT token to that server.
 
 The plan route accepts fewer request options than the API: Vela sends requests without stored responses or a system role and drops options such as the output token limit and temperature.
+
+A plan limit is reported as a plan limit. When OpenAI answers `subscription_sharing_usage_limit_exceeded`, Vela adds a sentence with a link to [ChatGPT's usage settings](https://chatgpt.com/settings/usage) and does not retry the request: the limit can be the plan's or one set for this app alone. The other documented plan errors keep their own handling: the ones that say the plan check or your account details are temporarily unavailable are retried, and the rest are shown with what to change, such as an unsupported request option, an endpoint the plan does not cover, a workspace limit an admin sets, or a sign-in that OpenAI no longer accepts (sign in again).
+
+The footer names the plan that pays for a plan-funded session, after the model and thinking level: `openai/gpt-6.2-sol · medium · ChatGPT plan`. A session on an API key shows no plan.
 
 ### OpenRouter
 

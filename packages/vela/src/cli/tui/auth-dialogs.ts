@@ -120,7 +120,8 @@ async function authPrompt(
   return answer
 }
 
-/** `/logout [provider]`: removes the stored credential (environment variables and config.json keys stay) */
+/** `/logout [provider]`: removes the stored credential, revoking the provider's session first where it can
+ * (environment variables and config.json keys stay) */
 export async function logoutCommand(
   host: AuthHost,
   args: string,
@@ -141,8 +142,11 @@ export async function logoutCommand(
     return
   }
   try {
+    const removed = await host.vela.logout(provider, {
+      onNotice: (text) => host.addNotice(text, 'dim'),
+    })
     host.addNotice(
-      (await host.vela.logout(provider))
+      removed
         ? `Removed the stored credential for ${provider}`
         : `No stored credential for ${provider}`,
       'dim',

@@ -8,7 +8,7 @@ export {
   type VelaJsonSchema,
 } from '../shared/tool-schema.ts'
 export type { AgentErrorKind, VelaEvent } from './agent/events.ts'
-export { agentErrorHint } from './agent/retry.ts'
+export { agentErrorHint, failureHint } from './agent/retry.ts'
 export type {
   ExtensionConfigContext,
   ExtensionConfigDefinition,

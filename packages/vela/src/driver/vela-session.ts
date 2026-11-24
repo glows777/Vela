@@ -362,6 +362,18 @@ export class VelaSession {
   }
 
   /**
+   * The plan paying for the current model, e.g. `ChatGPT plan`, or undefined when an API key pays; the footer shows it.
+   * @internal The CLI reads it; it is not part of the SDK's stable surface.
+   */
+  get planLabel(): string | undefined {
+    try {
+      return this.deps.planLabel?.(this.modelInfo.provider)
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
    * Switches the model (like pi's setModel): `provider/id` or `ModelHandle`, effective from the next prompt().
    * Compaction thresholds are recomputed from the new model's context window. Throws and keeps the
    * current model if the name cannot be resolved. A model chosen by name is appended to the session (`model_change`).

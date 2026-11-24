@@ -188,8 +188,14 @@ export interface Vela {
     interaction: AuthInteraction,
     options?: LoginOptions,
   ): Promise<void>
-  /** Removes a provider's stored credential (`/logout`); returns false when none was stored */
-  logout(provider: string): Promise<boolean>
+  /**
+   * Removes a provider's stored credential (`/logout`); returns false when none was stored. A provider whose
+   * sign-in can revoke its session does so first, and `onNotice` hears about it when that could not be confirmed.
+   */
+  logout(
+    provider: string,
+    options?: { signal?: AbortSignal; onNotice?: (text: string) => void },
+  ): Promise<boolean>
   /**
    * Opens a session (or returns it if already open); with file storage the id names the directory `sessions/<id>/`.
    * Options apply on first open, except a first scope/channel routing binding may attach to an existing object. Call `await session.resume()` to restore history.
@@ -387,6 +393,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         model,
         prepareCommands: resourceSplit !== undefined,
         resolveModel,
+        planLabel: (provider) => models.planLabel(provider),
         thinkingLevel: defaultThinkingLevel,
         autoCompaction: options.autoCompaction ?? true,
         openSession: (newId, newOptions) => {
@@ -691,7 +698,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     loginProviders: () => models.loginProviders(),
     login: (provider, method, interaction, loginOptions) =>
       models.login(provider, method, interaction, loginOptions),
-    logout: (provider) => models.logout(provider),
+    logout: (provider, options) => models.logout(provider, options),
     session,
     sessions: () => [...sessions.values()],
     listSessions: async (listOptions) => {

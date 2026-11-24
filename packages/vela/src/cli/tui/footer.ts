@@ -38,7 +38,9 @@ export class Footer implements Component {
     ]
       .filter(Boolean)
       .join(' ')
-    const right = `${model} · ${session.thinkingLevel}`
+    // A plan-funded session says which plan pays, e.g. `openai/gpt-6.2-sol · medium · ChatGPT plan`
+    const plan = session.planLabel
+    const right = `${model} · ${session.thinkingLevel}${plan ? ` · ${plan}` : ''}`
     const gap = Math.max(
       1,
       width - visibleWidth(left) - visibleWidth(right) - 2,

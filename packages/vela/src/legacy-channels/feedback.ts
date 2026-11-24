@@ -3,7 +3,7 @@ import type {
   VelaLogger,
   VelaSession,
 } from '../extension-api.ts'
-import { agentErrorHint, publishChannelEvent } from '../extension-api.ts'
+import { failureHint, publishChannelEvent } from '../extension-api.ts'
 import { materializeAttachments } from './attachments.ts'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { lastAssistantText } from './feedback-message.ts'
@@ -716,7 +716,7 @@ export class RunFeedback {
             `[${channelName}] Passive evaluation failed: ${errorMessage(error)}`,
           )
         else {
-          const hint = agentErrorHint(errorKind)
+          const hint = failureHint(errorKind, error)
           answer = `Task failed: ${errorMessage(error)}${hint ? `\n${hint}` : ''}`
         }
       }

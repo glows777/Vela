@@ -79,6 +79,39 @@ const cases = [
     retries: 1,
   },
   {
+    name: 'ChatGPT plan limit',
+    error: apiError(
+      429,
+      'Plan limit reached',
+      '{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}',
+    ),
+    kind: 'billing',
+    hint: "Check plan usage at https://chatgpt.com/settings/usage; the limit can be the plan's or one set for this app only.",
+    retries: 0,
+  },
+  {
+    name: 'ChatGPT plan limit mid-stream',
+    error: apiError(
+      undefined,
+      'Plan limit reached',
+      '{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}',
+    ),
+    kind: 'billing',
+    hint: "Check plan usage at https://chatgpt.com/settings/usage; the limit can be the plan's or one set for this app only.",
+    retries: 0,
+  },
+  {
+    name: 'ChatGPT sign-in refused',
+    error: apiError(
+      401,
+      'Subscriber context invalid',
+      '{"error":{"code":"subscription_sharing_invalid_user"}}',
+    ),
+    kind: 'auth',
+    hint: 'The ChatGPT sign-in could not be validated, so sign in again.',
+    retries: 0,
+  },
+  {
     name: '429 after retries',
     error: apiError(429, 'Too many requests'),
     kind: 'rate_limit',
@@ -211,8 +244,10 @@ for (const scenario of cases) {
     tui.terminal.type('hello')
     tui.terminal.press(KEYS.enter)
     await tui.until(() => t.eventsOf('agent_settled').length > 0)
-    expect(tui.screen()).toContain(scenario.error.message)
-    expect(tui.screen()).toContain(scenario.hint)
+    // The TUI wraps long lines at the terminal width, so compare with whitespace collapsed
+    const screen = tui.screen().replace(/\s+/g, ' ')
+    expect(screen).toContain(scenario.error.message.replace(/\s+/g, ' '))
+    expect(screen).toContain(scenario.hint.replace(/\s+/g, ' '))
   })
 }
 
