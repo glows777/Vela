@@ -114,6 +114,8 @@ export class TokenTracker {
   private currentToolTokens = 0
   /** Additional token delta introduced by context hooks when preparing a request. */
   private contextHookDeltaTokens = 0
+  /** Context hook token delta already included in the latest calibrated API usage. */
+  private baselineContextHookDeltaTokens = 0
   /** Price from the current model config (cost in models.json); overrides the built-in table and updates on model switch. */
   private pricing?: ModelPricing
   /** Sum of each step's hypothetical no-cache cost, at the price in effect at request time (old requests are not repriced after a model switch). */
@@ -138,7 +140,7 @@ export class TokenTracker {
     this.reportedPromptTokens = total
     this.lastPreciseCount = total
     this.pendingTokens = 0
-    this.contextHookDeltaTokens = 0
+    this.baselineContextHookDeltaTokens = this.contextHookDeltaTokens
     if (toolTokens !== undefined) {
       this.baselineToolTokens = toolTokens
       this.currentToolTokens = toolTokens
@@ -160,9 +162,11 @@ export class TokenTracker {
     this.contextHookDeltaTokens = deltaTokens
   }
 
-  /** Net token delta from extension context hooks. */
+  /** Net token delta from extension context hooks since the last API usage calibration. */
   get contextDelta(): number {
-    return this.contextHookDeltaTokens
+    return this.reportedPromptTokens !== undefined
+      ? this.contextHookDeltaTokens - this.baselineContextHookDeltaTokens
+      : this.contextHookDeltaTokens
   }
 
   /** Builds a local context estimate (e.g. from loaded history); the request estimate is used until a provider reports usage. */
@@ -172,6 +176,7 @@ export class TokenTracker {
     this.pendingTokens = 0
     this.baselineToolTokens = undefined
     this.contextHookDeltaTokens = 0
+    this.baselineContextHookDeltaTokens = 0
   }
 
   /** Adds a new message's estimated tokens to the current context. */
@@ -204,7 +209,7 @@ export class TokenTracker {
       this.lastPreciseCount +
         this.pendingTokens +
         toolDelta +
-        this.contextHookDeltaTokens,
+        this.contextDelta,
     )
   }
 
@@ -228,6 +233,7 @@ export class TokenTracker {
     this.contextWindow = contextWindow
     this.pricing = pricing
     this.reportedPromptTokens = undefined
+    this.baselineContextHookDeltaTokens = 0
   }
 
   /** Current context status relative to the model window (default 200k). */

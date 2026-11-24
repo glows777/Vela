@@ -55,18 +55,16 @@ import {
 import { exportBranch } from './session/export.ts'
 import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
-import type {
-  InternalSessionOptions,
-  PromptOptions,
-  SendMessageOptions,
-  SessionHost,
-  SessionUsage,
-} from './session/options.ts'
 import {
   assertSessionId,
   type ForkOptions,
+  type InternalSessionOptions,
   type NavigateTreeOptions,
+  type PromptOptions,
   type QueueMode,
+  type SendMessageOptions,
+  type SessionHost,
+  type SessionUsage,
 } from './session/options.ts'
 import {
   assertInterruptedTurn,
@@ -531,9 +529,10 @@ export class VelaSession {
   /** @internal Prepares the context before a request (threshold summary). */
   prepareContext(
     request: RequestSnapshot,
-    options?: { allowSummary?: boolean },
+    options?: { allowSummary?: boolean; maxOutputTokens?: number },
   ): Promise<void> {
-    request.maxOutputTokens = this.modelInfo.maxTokens
+    request.maxOutputTokens =
+      options?.maxOutputTokens ?? this.modelInfo.maxTokens
     return this.contextManager.prepare(request, options)
   }
 
@@ -723,7 +722,7 @@ export class VelaSession {
       if (id && ancestorIds.has(id)) start = index + 1
     })
     if (start >= this.messages.length) return
-    const request = await this.buildSnapshot(this.model, signal)
+    const request = await this.buildSnapshot(signal, { model: this.model })
     return this.contextManager.summarizeBranch(request, start, focus)
   }
 
@@ -1175,14 +1174,10 @@ export class VelaSession {
   }
 
   private trackRun(run: Promise<void>): Promise<void> {
-    const running = run.then(
-      () => {
-        if (this.running === running) this.running = undefined
-      },
-      () => {
-        if (this.running === running) this.running = undefined
-      },
-    )
+    const clear = () => {
+      if (this.running === running) this.running = undefined
+    }
+    const running = run.then(clear, clear)
     this.running = running
     return run
   }
@@ -1331,42 +1326,45 @@ export class VelaSession {
     // Recovery notices (including lost background jobs) are their own durable deduplication
     // evidence. Flush them before the resumed request, even when it calls no tools.
     if (!inputs.length) await this.save()
-    await agentLoop({
+    const { info: servingInfo } = this.resolveModel()
+    const serving = {
       model: this.requestModel(),
+      maxOutputTokens: servingInfo.maxTokens,
+    }
+    const takeQueue = (kind: 'steering' | 'followUp') =>
+      Promise.all(
+        this.dequeue(kind).map((m) => this.messageQueue.normalizeInput(m)),
+      )
+    await agentLoop({
+      model: serving.model,
       sessionId: this.id,
-      maxOutputTokens: info.maxTokens,
-      supportsImages: info.input?.includes('image') ?? true,
+      maxOutputTokens: serving.maxOutputTokens,
+      supportsImages: servingInfo.input?.includes('image') ?? true,
       // Like pi, read per request: a level changed during the run applies to the next step. It is
-      // clamped to `info`, the model that serves this loop, like `setModel` waits for the next prompt.
+      // clamped to `servingInfo`, the model that serves this loop, like `setModel` waits for the next prompt.
       reasoning: () =>
-        reasoningOption(this.defaults.thinkingLevelFor(info), info),
+        reasoningOption(
+          this.defaults.thinkingLevelFor(servingInfo),
+          servingInfo,
+        ),
       systemPrompt: () => this.buildSystem(),
       toolRegistry: this.registry,
       messages: this.messages,
       tokenTracker: this.tracker,
-      prepareContext: (request) => this.prepareContext(request),
+      prepareContext: (request) => this.prepareContext(request, serving),
       transformContext: (messages, producer) =>
         this.deps.extensions.transformContext(this, messages, producer),
       // Like pi: with automatic compaction off, a context overflow is reported as is
       compactOnOverflow: this.autoCompaction
-        ? (overflowSignal) => this.compactForOverflow(overflowSignal)
+        ? (overflow) =>
+            this.runCompaction('overflow', undefined, overflow, serving)
         : undefined,
       newMessages,
       abortSignal: signal,
       onEvent: this.emit,
       limits: this.limits,
-      takeSteering: () =>
-        Promise.all(
-          this.dequeue('steering').map((message) =>
-            this.messageQueue.normalizeInput(message),
-          ),
-        ),
-      takeFollowUp: () =>
-        Promise.all(
-          this.dequeue('followUp').map((message) =>
-            this.messageQueue.normalizeInput(message),
-          ),
-        ),
+      takeSteering: () => takeQueue('steering'),
+      takeFollowUp: () => takeQueue('followUp'),
       onMessage: (message, producer) => this.record(message, producer),
       onCheckpoint: () => this.save(),
       isDraining: () => this.draining,
@@ -1376,28 +1374,30 @@ export class VelaSession {
     })
   }
 
-  private buildSnapshot(model: ModelInput, signal?: AbortSignal) {
+  private buildSnapshot(
+    signal?: AbortSignal,
+    opts?: { model?: ModelInput; maxOutputTokens?: number },
+  ) {
     return resolveRequestSnapshot(
-      model,
+      opts?.model ?? this.requestModel(),
       this.buildSystem(),
       this.registry.toProviderTools(),
       this.messages,
       signal,
-      this.modelInfo.maxTokens,
+      opts?.maxOutputTokens ?? this.modelInfo.maxTokens,
     )
   }
 
-  private async compactionRequest(signal?: AbortSignal) {
-    const request = await this.buildSnapshot(this.requestModel(), signal)
+  private async runCompaction(
+    reason: 'manual' | 'overflow',
+    focus?: string,
+    signal?: AbortSignal,
+    serving?: { model?: ModelInput; maxOutputTokens?: number },
+  ): Promise<void> {
+    const request = await this.buildSnapshot(signal, serving)
     if (!canSummarize(request.messages))
       throw new Error('Nothing to compact (session too small)')
-    return request
-  }
-
-  /** The provider rejected a request as too long: summarize like /compact (like pi's overflow recovery). */
-  private async compactForOverflow(signal?: AbortSignal): Promise<void> {
-    const request = await this.compactionRequest(signal)
-    await this.contextManager.compact(request, undefined, 'overflow')
+    await this.contextManager.compact(request, focus, reason)
   }
 
   /**
@@ -1408,8 +1408,7 @@ export class VelaSession {
   async compact(focus?: string): Promise<void> {
     await this.exclusive('compact', async (signal) => {
       await this.start(signal)
-      const request = await this.compactionRequest(signal)
-      await this.contextManager.compact(request, focus)
+      await this.runCompaction('manual', focus, signal)
       await this.saveOrReport()
     })
   }

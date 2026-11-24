@@ -30,6 +30,12 @@ export type { ProviderConfig } from '../shared/provider-types.ts'
 
 const anthropicProtocolModels = new WeakSet<object>()
 
+/** Marks a resolved or wrapped LanguageModel as using the `anthropic-messages` protocol. */
+export function markAnthropicMessagesModel<T extends object>(model: T): T {
+  anthropicProtocolModels.add(model)
+  return model
+}
+
 /** Whether a resolved LanguageModel was created for an `anthropic-messages` provider regardless of provider name. */
 export function isAnthropicMessagesModel(model: unknown): boolean {
   return (
@@ -404,6 +410,7 @@ function createProvider(
           ? model
           : registerProtocol(declareHosted(model))
       }
+      const responsesOptionsKey = name.includes('azure') ? 'azure' : 'openai'
       const stripStatelessWrapStream: LanguageModelV4Middleware['wrapStream'] =
         api === 'openai-responses'
           ? async (options) => {
@@ -411,7 +418,9 @@ function createProvider(
                 compat.deepseekReasoningStream && deepseekReasoningStream
                   ? await deepseekReasoningStream(options)
                   : await options.doStream()
-              if (options.params.providerOptions?.openai?.store !== false)
+              if (
+                !isStatelessResponsesCall(options.params, responsesOptionsKey)
+              )
                 return streamResult
               return {
                 ...streamResult,
@@ -436,7 +445,7 @@ function createProvider(
             ? {
                 wrapGenerate: async ({ doGenerate, params }) => {
                   const res = await doGenerate()
-                  if (params.providerOptions?.openai?.store !== false)
+                  if (!isStatelessResponsesCall(params, responsesOptionsKey))
                     return res
                   return {
                     ...res,
@@ -497,11 +506,12 @@ function createProvider(
               (await ctx.credential())?.type === 'oauth'
                 ? transform(params)
                 : params
-            if (
-              api === 'openai-responses' &&
-              finalParams.providerOptions?.openai?.store === false
-            ) {
-              finalParams = stripUnencryptedResponsesItemIds(finalParams)
+            if (api === 'openai-responses') {
+              const stateless = isStatelessResponsesCall(
+                finalParams,
+                responsesOptionsKey,
+              )
+              finalParams = prepareResponsesPrompt(finalParams, stateless)
             }
             return finalParams
           },
@@ -512,27 +522,80 @@ function createProvider(
   }
 }
 
-function withoutOpenAIItemId<T extends Record<string, unknown> | undefined>(
+const RESPONSES_OPTION_KEYS = ['openai', 'azure'] as const
+
+function isStatelessResponsesCall(
+  params: LanguageModelV4CallOptions,
+  responsesOptionsKey: 'openai' | 'azure',
+): boolean {
+  const opts = params.providerOptions as
+    | Record<string, Record<string, unknown> | undefined>
+    | undefined
+  return (
+    opts?.[responsesOptionsKey]?.store === false ||
+    opts?.openai?.store === false
+  )
+}
+
+function editResponsesProviderOptions<
+  T extends Record<string, unknown> | undefined,
+>(
   opts: T,
-  condition: (openai: Record<string, unknown>) => boolean,
+  shouldStripItemId: (nsOpts: Record<string, unknown>) => boolean,
+  stripVela = false,
 ): T {
-  const openai = opts?.openai as Record<string, unknown> | undefined
-  if (!openai || !condition(openai)) return opts
-  const { itemId: _, ...restOpenai } = openai
-  const restOpts: Record<string, unknown> = { ...opts }
-  if (Object.keys(restOpenai).length > 0) restOpts.openai = restOpenai
-  else delete restOpts.openai
-  return (Object.keys(restOpts).length > 0 ? restOpts : undefined) as T
+  if (!opts) return opts
+  let changed = false
+  const out: Record<string, unknown> = { ...opts }
+  if (stripVela && 'vela' in out) {
+    delete out.vela
+    changed = true
+  }
+  for (const key of RESPONSES_OPTION_KEYS) {
+    const ns = out[key] as Record<string, unknown> | undefined
+    if (!ns || !shouldStripItemId(ns)) continue
+    changed = true
+    const { itemId: _, ...restNs } = ns
+    if (Object.keys(restNs).length > 0) out[key] = restNs
+    else delete out[key]
+  }
+  if (!changed) return opts
+  return (Object.keys(out).length > 0 ? out : undefined) as T
+}
+
+function withStatelessTag(
+  meta: Record<string, unknown> | undefined,
+  markStateless: boolean,
+): Record<string, unknown> | undefined {
+  const cleaned = editResponsesProviderOptions(
+    meta,
+    (ns) => typeof ns.itemId === 'string',
+  )
+  if (!markStateless) return cleaned
+  return { ...cleaned, vela: { stored: false } }
+}
+
+function isStatelessHostedPart(part: {
+  type: string
+  providerExecuted?: boolean
+}): boolean {
+  return (
+    ((part.type === 'tool-call' || part.type === 'tool-input-start') &&
+      part.providerExecuted === true) ||
+    part.type === 'tool-result'
+  )
 }
 
 function stripStatelessContentItemId<
-  T extends { providerMetadata?: Record<string, unknown> },
+  T extends {
+    type: string
+    providerExecuted?: boolean
+    providerMetadata?: Record<string, unknown>
+  },
 >(part: T): T {
-  if (!part.providerMetadata) return part
-  const next = withoutOpenAIItemId(
-    part.providerMetadata,
-    (openai) => typeof openai.itemId === 'string',
-  )
+  const markStateless = isStatelessHostedPart(part)
+  if (!part.providerMetadata && !markStateless) return part
+  const next = withStatelessTag(part.providerMetadata, markStateless)
   if (next === part.providerMetadata) return part
   if (next !== undefined) return { ...part, providerMetadata: next }
   const { providerMetadata: _, ...plain } = part
@@ -542,12 +605,19 @@ function stripStatelessContentItemId<
 function stripStatelessStreamPartItemId(
   part: LanguageModelV4StreamPart,
 ): LanguageModelV4StreamPart {
-  if (!('providerMetadata' in part) || !part.providerMetadata) return part
-  const next = withoutOpenAIItemId(
-    part.providerMetadata as Record<string, unknown>,
-    (openai) => typeof openai.itemId === 'string',
-  )
-  if (next === part.providerMetadata) return part
+  const providerExecuted =
+    'providerExecuted' in part ? part.providerExecuted : undefined
+  const markStateless = isStatelessHostedPart({
+    type: part.type,
+    providerExecuted,
+  })
+  const currentMeta =
+    'providerMetadata' in part
+      ? (part.providerMetadata as Record<string, unknown> | undefined)
+      : undefined
+  if (!currentMeta && !markStateless) return part
+  const next = withStatelessTag(currentMeta, markStateless)
+  if (next === currentMeta) return part
   if (next !== undefined)
     return {
       ...part,
@@ -560,40 +630,147 @@ function stripStatelessStreamPartItemId(
   return plain as LanguageModelV4StreamPart
 }
 
+function isVelaStatelessPart(part: { providerOptions?: unknown }): boolean {
+  const vela = (
+    part.providerOptions as { vela?: { stored?: unknown } } | undefined
+  )?.vela
+  return vela?.stored === false
+}
+
+function formatHostedResult(output: unknown): string {
+  const value = JSON.stringify(output, (key, val) =>
+    key === 'encrypted_content' || key === 'encryptedContent' ? undefined : val,
+  )
+  return value ?? 'unavailable'
+}
+
 /**
- * When targeting `store: false` (e.g. OAuth Responses or stateless compat proxies), stored-item
- * `rs_...` `itemId`s without `reasoningEncryptedContent` produce broken server `item_reference`s.
+ * Prepares OpenAI Responses prompt history across store modes:
+ * - On `store: false`, strips unencrypted `rs_...` `itemId`s so OpenAI never emits broken `item_reference`s.
+ * - On `store !== false`, converts hosted parts recorded during `store: false` into plain text so the SDK
+ *   does not emit `item_reference` from `part.toolCallId`, and strips internal `vela` metadata.
  */
-function stripUnencryptedResponsesItemIds(
+function prepareResponsesPrompt(
   params: LanguageModelV4CallOptions,
+  statelessTarget: boolean,
 ): LanguageModelV4CallOptions {
   if (!Array.isArray(params.prompt)) return params
   let changed = false
-  const prompt = params.prompt.map((message) => {
+  const statelessHostedIds = new Set<string>()
+  if (!statelessTarget) {
+    for (const message of params.prompt) {
+      if (message.role !== 'assistant' || !Array.isArray(message.content))
+        continue
+      for (const part of message.content) {
+        if (
+          (part.type === 'tool-call' || part.type === 'tool-result') &&
+          isVelaStatelessPart(part)
+        ) {
+          statelessHostedIds.add(part.toolCallId)
+        }
+      }
+    }
+  }
+  const prompt = params.prompt.flatMap((message) => {
+    if (message.role === 'tool' && Array.isArray(message.content)) {
+      let msgChanged = false
+      const nextParts = message.content.flatMap((part) => {
+        if (
+          part.type === 'tool-result' &&
+          (statelessHostedIds.has(part.toolCallId) || isVelaStatelessPart(part))
+        ) {
+          msgChanged = true
+          changed = true
+          return []
+        }
+        const cleaned = editResponsesProviderOptions(
+          part.providerOptions as Record<string, unknown> | undefined,
+          () => false,
+          true,
+        )
+        if (cleaned !== part.providerOptions) {
+          msgChanged = true
+          changed = true
+          if (cleaned !== undefined)
+            return [
+              {
+                ...part,
+                providerOptions:
+                  cleaned as LanguageModelV4CallOptions['providerOptions'],
+              },
+            ]
+          const { providerOptions: _, ...plain } = part
+          return [plain]
+        }
+        return [part]
+      })
+      if (!nextParts.length) return []
+      return msgChanged ? [{ ...message, content: nextParts }] : [message]
+    }
     if (message.role !== 'assistant' || !Array.isArray(message.content))
-      return message
+      return [message]
     let partChanged = false
-    const content = message.content.map((part) => {
-      const next = withoutOpenAIItemId(
+    const resultById = new Map<string, unknown>()
+    if (!statelessTarget && statelessHostedIds.size > 0) {
+      for (const part of message.content) {
+        if (
+          part.type === 'tool-result' &&
+          statelessHostedIds.has(part.toolCallId)
+        )
+          resultById.set(part.toolCallId, part.output)
+      }
+    }
+    const content = message.content.flatMap((part) => {
+      if (!statelessTarget) {
+        if (
+          part.type === 'tool-call' &&
+          statelessHostedIds.has(part.toolCallId)
+        ) {
+          partChanged = true
+          changed = true
+          const resultText = resultById.has(part.toolCallId)
+            ? `\nProvider ${part.toolName} result: ${formatHostedResult(resultById.get(part.toolCallId))}`
+            : ''
+          return [
+            {
+              type: 'text' as const,
+              text: `Provider ${part.toolName}: ${JSON.stringify(part.input)}${resultText}`,
+            },
+          ]
+        }
+        if (
+          part.type === 'tool-result' &&
+          statelessHostedIds.has(part.toolCallId)
+        ) {
+          partChanged = true
+          changed = true
+          return []
+        }
+      }
+      const next = editResponsesProviderOptions(
         part.providerOptions as Record<string, unknown> | undefined,
-        (openai) =>
-          typeof openai.itemId === 'string' &&
-          openai.itemId.startsWith('rs_') &&
-          openai.reasoningEncryptedContent === undefined,
+        (ns) =>
+          statelessTarget &&
+          typeof ns.itemId === 'string' &&
+          ns.itemId.startsWith('rs_') &&
+          ns.reasoningEncryptedContent === undefined,
+        true,
       )
-      if (next === part.providerOptions) return part
+      if (next === part.providerOptions) return [part]
       partChanged = true
       changed = true
       if (next !== undefined)
-        return {
-          ...part,
-          providerOptions:
-            next as LanguageModelV4CallOptions['providerOptions'],
-        }
+        return [
+          {
+            ...part,
+            providerOptions:
+              next as LanguageModelV4CallOptions['providerOptions'],
+          },
+        ]
       const { providerOptions: __, ...plain } = part
-      return plain
+      return [plain]
     })
-    return partChanged ? { ...message, content } : message
+    return [partChanged ? { ...message, content } : message]
   })
   return changed
     ? ({ ...params, prompt } as LanguageModelV4CallOptions)

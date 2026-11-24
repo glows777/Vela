@@ -1,6 +1,7 @@
 import type { ExecutionEnv } from '../execution/types.ts'
 import {
   isToolContent,
+  normalizeToolContent,
   type ToolResultOutput,
   toolContentText,
 } from '../messages.ts'
@@ -10,7 +11,11 @@ import type {
   ResultRecord,
   ToolHistoryStore,
 } from '../session/tool-history.ts'
-import { ToolResultError } from './types.ts'
+import {
+  type InterceptionContext,
+  type ToolInterception,
+  ToolResultError,
+} from './types.ts'
 
 /** An availability check or hook turned the call down; the model gets `reason` as an error result. */
 export class ToolRejection {
@@ -76,7 +81,7 @@ function normalOutput(output: unknown): ToolResultOutput {
       ? { type: 'text', value: output }
       : { type: 'json', value: (output ?? null) as never }
 }
-export function errorOutput(error: unknown): ToolResultOutput {
+function errorOutput(error: unknown): ToolResultOutput {
   return error instanceof ToolResultError && error.content
     ? { type: 'content', value: error.content, isError: true }
     : {
@@ -151,6 +156,106 @@ export function createLazyEnvResolver(
       )
     })
   }
+}
+
+/** Binds lazy env resolution to the call's persisted history location, enforcing matching location on recovery. */
+export function bindLocatedEnvResolver(
+  requireEnv: (envSignal?: AbortSignal) => Promise<ExecutionEnv>,
+  call: CallRecord,
+  history: ToolHistoryStore,
+  toolName: string,
+  recoveryLocation: CallRecord['location'] | undefined,
+  initiallyLocated: boolean,
+): (envSignal?: AbortSignal) => Promise<ExecutionEnv> {
+  let located = initiallyLocated
+  let locating: Promise<void> | undefined
+  return async (envSignal?: AbortSignal) => {
+    const env = await requireEnv(envSignal)
+    const envLoc = { environment: env.id, cwd: env.cwd }
+    if (
+      recoveryLocation &&
+      JSON.stringify(envLoc) !== JSON.stringify(recoveryLocation)
+    )
+      throw new Error(
+        `Tool ${toolName} was interrupted by a restart and may have partially run; its location changed, so it was not replayed`,
+      )
+    if (!located) {
+      located = true
+      call.location ??= envLoc
+      const recorder = history as {
+        locate?: (
+          callId: string,
+          loc: { environment: string; cwd: string },
+        ) => Promise<void>
+      }
+      if (recorder.locate) {
+        locating ??= recorder.locate(call.callId, envLoc)
+      }
+    }
+    if (locating) await locating
+    return env
+  }
+}
+
+/** Runs after-interception, appends failed/cancelled tool history, and throws the normalized error. */
+export async function handleToolExecutionError(params: {
+  error: unknown
+  name: string
+  input: unknown
+  started: number
+  callId: string
+  signal?: AbortSignal
+  history: ToolHistoryStore
+  interception?: ToolInterception
+  context: InterceptionContext
+}): Promise<never> {
+  const {
+    error,
+    name,
+    input,
+    started,
+    callId,
+    signal,
+    history,
+    interception,
+    context,
+  } = params
+  const rawMessage = error instanceof Error ? error.message : String(error)
+  let errorText = rawMessage
+  let afterOutput: string | ReturnType<typeof errorOutput> | unknown = errorText
+  if (interception?.after) {
+    afterOutput = await interception.after(
+      name,
+      input,
+      errorText,
+      context,
+      true,
+    )
+    if (isToolContent(afterOutput)) {
+      const normalized = await normalizeToolContent(afterOutput)
+      afterOutput = normalized
+      errorText = toolContentText(normalized) || errorText
+    } else if (typeof afterOutput === 'string') {
+      errorText = afterOutput
+    }
+  }
+  await history.append<ResultRecord>({
+    type: 'tool_result',
+    callId,
+    status: signal?.aborted ? 'cancelled' : 'failed',
+    durationMs: performance.now() - started,
+    error: errorText,
+    modelOutput: errorOutput(
+      isToolContent(afterOutput)
+        ? new ToolResultError(errorText, afterOutput)
+        : errorText,
+    ),
+  })
+  if (isToolContent(afterOutput))
+    throw new ToolResultError(errorText, afterOutput)
+  if (typeof afterOutput === 'string' && afterOutput !== rawMessage)
+    throw new ToolResultError(afterOutput)
+  throw error
 }
 
 /** Per call: how the call was issued */

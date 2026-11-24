@@ -43,6 +43,12 @@ import {
 } from './messages.ts'
 import type { HostedToolModel } from './models/index.ts'
 import { isAnthropicMessagesModel } from './models-config.ts'
+import {
+  applyStreamedMetadata,
+  deepMergeProviderOptions,
+  type StreamedPartMetadata,
+  type StreamedSlot,
+} from './stream-metadata.ts'
 
 export { aiParsePartialJson as parsePartialJson }
 
@@ -398,65 +404,6 @@ export interface StreamProviderStepOptions {
   }) => Promise<void>
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const proto = Object.getPrototypeOf(value)
-  return proto === Object.prototype || proto === null
-}
-
-function deepMergeProviderOptions(
-  base: ProviderOptions | undefined,
-  patch: ProviderOptions | undefined,
-): ProviderOptions | undefined {
-  if (!patch) return base
-  if (!base) return patch
-  const merge = (
-    target: Record<string, unknown>,
-    src: Record<string, unknown>,
-  ): Record<string, unknown> => {
-    const out: Record<string, unknown> = { ...target }
-    for (const [k, v] of Object.entries(src)) {
-      const prev = out[k]
-      out[k] = isPlainRecord(prev) && isPlainRecord(v) ? merge(prev, v) : v
-    }
-    return out
-  }
-  return merge(
-    base as Record<string, unknown>,
-    patch as Record<string, unknown>,
-  ) as ProviderOptions
-}
-
-interface StreamedPartMetadata {
-  text: ProviderOptions[]
-  reasoning: ProviderOptions[]
-  tools: Map<string, ProviderOptions>
-}
-
-function applyStreamedMetadata(
-  message: VelaAssistantMessage,
-  streamed: StreamedPartMetadata,
-): VelaAssistantMessage {
-  if (typeof message.content === 'string') return message
-  let textIdx = 0
-  let reasoningIdx = 0
-  let changed = false
-  const content = message.content.map((part) => {
-    let extra: ProviderOptions | undefined
-    if (part.type === 'text') extra = streamed.text[textIdx++]
-    else if (part.type === 'thinking')
-      extra = streamed.reasoning[reasoningIdx++]
-    else if (part.type === 'tool_call')
-      extra = streamed.tools.get(part.toolCallId)
-    if (!extra) return part
-    const merged = deepMergeProviderOptions(extra, part.providerOptions)
-    if (merged === part.providerOptions) return part
-    changed = true
-    return { ...part, providerOptions: merged }
-  })
-  return changed ? { ...message, content } : message
-}
-
 function isAnthropicModel(model: LanguageModel): boolean {
   if (typeof model === 'string') return model.startsWith('anthropic/')
   return (
@@ -487,19 +434,23 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
   const reasoningIndices = new Map<string, number>()
   const recordSlotMeta = (
     indices: Map<string, number>,
-    list: ProviderOptions[],
+    list: StreamedSlot[],
     id: string,
     meta: unknown,
     isStart: boolean,
+    hasDeltaText = false,
   ) => {
     let idx = indices.get(id)
     if (idx === undefined && isStart) {
       idx = list.length
       indices.set(id, idx)
-      list.push({})
+      list.push({ hasContent: false, meta: {} })
     }
-    if (idx !== undefined && meta)
-      list[idx] = deepMergeProviderOptions(list[idx], meta as ProviderOptions)!
+    if (idx === undefined) return
+    const slot = list[idx]!
+    if (hasDeltaText) slot.hasContent = true
+    if (meta)
+      slot.meta = deepMergeProviderOptions(slot.meta, meta as ProviderOptions)!
   }
   const recordToolMeta = (id: string, meta: unknown) => {
     if (!meta) return
@@ -578,6 +529,7 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
               part.id,
               part.providerMetadata,
               false,
+              part.text.length > 0,
             )
             yield {
               type: 'text-delta',
@@ -627,6 +579,7 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
               part.id,
               part.providerMetadata,
               false,
+              part.text.length > 0,
             )
             yield {
               type: 'reasoning-delta',

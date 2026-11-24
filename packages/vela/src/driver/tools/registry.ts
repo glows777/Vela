@@ -11,16 +11,17 @@ import {
   toolContentText,
 } from '../messages.ts'
 import type { SessionScope } from '../session/scope.ts'
-import type { CallRecord, ResultRecord } from '../session/tool-history.ts'
+import type { CallRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import type { BackgroundCommands } from './background.ts'
 import { prepareCallResult } from './call-result.ts'
 import { validateToolDefinition } from './definition-validation.ts'
 import { ActiveCalls, ExecutionGate } from './execution-gate.ts'
 import {
+  bindLocatedEnvResolver,
   type CallOptions,
   createLazyEnvResolver,
-  errorOutput,
+  handleToolExecutionError,
   persistResponse,
   recordToolRejection,
   recoverToolCall,
@@ -398,6 +399,16 @@ export class ToolRegistry {
           : {}),
       })
       if (this.isDraining()) return rejectDraining(call)
+      const boundRequireEnv = requireEnv
+        ? bindLocatedEnvResolver(
+            requireEnv,
+            call,
+            history,
+            name,
+            options.recovery?.location,
+            Boolean(location),
+          )
+        : undefined
       const started = performance.now()
       let settled = false
       const onUpdate = (partialResult: unknown) => {
@@ -416,7 +427,7 @@ export class ToolRegistry {
         signal?.throwIfAborted()
         raw = await tool.execute(input, {
           ...context,
-          requireEnv,
+          requireEnv: boundRequireEnv,
           background: this.background,
           scope: this.scope?.(),
           results: this.results,
@@ -428,46 +439,17 @@ export class ToolRegistry {
         })
       } catch (error) {
         settled = true
-        let errorText = error instanceof Error ? error.message : String(error)
-        let afterOutput: string | ReturnType<typeof errorOutput> | unknown =
-          errorText
-        if (interception?.after) {
-          afterOutput = await interception.after(
-            name,
-            input,
-            errorText,
-            context,
-            true,
-          )
-          if (isToolContent(afterOutput)) {
-            const normalized = await normalizeToolContent(afterOutput)
-            afterOutput = normalized
-            errorText = toolContentText(normalized) || errorText
-          } else if (typeof afterOutput === 'string') {
-            errorText = afterOutput
-          }
-        }
-        await history.append<ResultRecord>({
-          type: 'tool_result',
+        return await handleToolExecutionError({
+          error,
+          name,
+          input,
+          started,
           callId: call.callId,
-          status: signal?.aborted ? 'cancelled' : 'failed',
-          durationMs: performance.now() - started,
-          error: errorText,
-          modelOutput: errorOutput(
-            isToolContent(afterOutput)
-              ? new ToolResultError(errorText, afterOutput)
-              : errorText,
-          ),
+          signal,
+          history,
+          interception,
+          context,
         })
-        if (isToolContent(afterOutput))
-          throw new ToolResultError(errorText, afterOutput)
-        if (
-          typeof afterOutput === 'string' &&
-          afterOutput !==
-            (error instanceof Error ? error.message : String(error))
-        )
-          throw new ToolResultError(afterOutput)
-        throw error
       }
       settled = true
       if (raw instanceof ToolExecutionResult && options.toolCallId)

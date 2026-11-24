@@ -10,12 +10,12 @@ export function isToolModifier(entry: string): boolean {
   return entry.startsWith('+') || entry.startsWith('-')
 }
 
-const RETIRED_CORE_TOOLS: Record<string, string> = {
-  read_file: 'read',
-  write_file: 'write',
-  edit_file: 'edit',
-  list_directory: 'ls',
-}
+const RETIRED_CORE_TOOLS = new Map<string, string>([
+  ['read_file', 'read'],
+  ['write_file', 'write'],
+  ['edit_file', 'edit'],
+  ['list_directory', 'ls'],
+])
 
 /**
  * Error message if an explicit tool list or selection contains a retired v0.8 core tool name,
@@ -26,7 +26,7 @@ export function getRetiredToolError(
 ): string | undefined {
   for (const entry of entries) {
     const bare = isToolModifier(entry) ? entry.slice(1) : entry
-    const replacement = RETIRED_CORE_TOOLS[bare]
+    const replacement = RETIRED_CORE_TOOLS.get(bare)
     if (replacement)
       return `tool "${bare}" was renamed to "${replacement}" (see docs/upgrading.md)`
   }

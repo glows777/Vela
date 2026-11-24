@@ -184,15 +184,18 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       await env.openBinaryReader(file, undefined, context?.signal),
     )
     try {
-      const scan = unwrap(
-        await reader.scanLines(
-          { startLine: offset - 1, endLine: offset - 1 + limit },
-          context?.signal,
-        ),
-      )
-      if (offset - 1 > scan.newlines)
+      const scan =
+        offset > 1
+          ? unwrap(
+              await reader.scanLines(
+                { startLine: offset - 1, endLine: offset - 1 + limit },
+                context?.signal,
+              ),
+            )
+          : undefined
+      if (scan && offset - 1 > scan.newlines)
         throw new Error('offset/column is past the end of the file')
-      let position = scan.start
+      let position = scan?.start ?? 0
       while (true) {
         const chunk = unwrap(
           await reader.read(position, 64 * 1024, context?.signal),

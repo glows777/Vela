@@ -10,6 +10,10 @@ import type {
   ProviderRequestParams,
 } from '../shared/provider-types.ts'
 import type { HostedToolModel } from './models/index.ts'
+import {
+  isAnthropicMessagesModel,
+  markAnthropicMessagesModel,
+} from './models-config.ts'
 
 /**
  * Wraps a model so every request goes through the extension provider hooks (pi's
@@ -77,7 +81,7 @@ export function withProviderHooks(
     },
   })
   const hostedTools = (model as HostedToolModel).hostedTools
-  return hostedTools
+  const hooked = hostedTools
     ? Object.assign(wrapped, {
         hostedTools: async (options?: { reasoning?: string }) => {
           const tools = await hostedTools.call(model, options)
@@ -89,6 +93,8 @@ export function withProviderHooks(
         },
       })
     : wrapped
+  if (isAnthropicMessagesModel(aiModel)) markAnthropicMessagesModel(hooked)
+  return hooked
 }
 
 function stringHeaders(

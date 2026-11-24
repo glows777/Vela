@@ -546,3 +546,394 @@ test('moving foreground bash to background cancels the foreground timeout deadli
   expect(t.lastAssistantText()).toContain('FG_DETACHED_FINISHED')
   expect(t.lastAssistantText()).not.toContain('Command timed out')
 })
+
+test('double HTTP 200 model_context_window_exceeded rejects without leaving truncated output in context history', async () => {
+  const dir = tempDir('vela-s2a-double-overflow-')
+  const originalFetch = globalThis.fetch
+  try {
+    writeFileSync(
+      join(dir.path, 'config.json'),
+      JSON.stringify({
+        providers: {
+          anthropic: {
+            api: 'anthropic-messages',
+            baseUrl: 'https://example.test/v1',
+            apiKey: 'test',
+            models: [{ id: 'claude-test' }],
+          },
+        },
+      }),
+    )
+    let call = 0
+    const anthSse = (events: Array<{ type: string; [k: string]: unknown }>) =>
+      new Response(
+        events
+          .map(
+            (event) =>
+              `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+          )
+          .join(''),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}'))
+      if (!body.stream) {
+        return Response.json({
+          id: 'msg_sum',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-test',
+          content: [{ type: 'text', text: 'summary' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 100, output_tokens: 10 },
+        })
+      }
+      call++
+      if (call <= 5) {
+        return anthSse([
+          {
+            type: 'message_start',
+            message: {
+              id: `msg_seed_${call}`,
+              type: 'message',
+              role: 'assistant',
+              content: [],
+              model: 'claude-test',
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 100, output_tokens: 1 },
+            },
+          },
+          {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: '' },
+          },
+          {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: `seed ${call}` },
+          },
+          { type: 'content_block_stop', index: 0 },
+          {
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn', stop_sequence: null },
+            usage: { output_tokens: 5 },
+          },
+          { type: 'message_stop' },
+        ])
+      }
+      const text = call === 6 ? 'truncated first' : 'truncated second'
+      return anthSse([
+        {
+          type: 'message_start',
+          message: {
+            id: `msg_ov_${call}`,
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            model: 'claude-test',
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 500, output_tokens: 1 },
+          },
+        },
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text },
+        },
+        { type: 'content_block_stop', index: 0 },
+        {
+          type: 'message_delta',
+          delta: {
+            stop_reason: 'model_context_window_exceeded',
+            stop_sequence: null,
+          },
+          usage: { output_tokens: 10 },
+        },
+        { type: 'message_stop' },
+      ])
+    }) as unknown as typeof fetch
+    const messageEnds: string[] = []
+    const vela = createVela({
+      cwd: dir.path,
+      dataDir: dir.path,
+      model: 'anthropic/claude-test',
+      providers: loadModels({ agentDir: dir.path }),
+    })
+    const session = vela.session('double-overflow')
+    for (let i = 1; i <= 5; i++) await session.prompt(`seed ${i}`)
+    session.subscribe((e) => {
+      if (e.type === 'message_end') messageEnds.push(e.stopReason ?? 'none')
+    })
+    await expect(session.prompt('overflow twice')).rejects.toThrow(
+      'Context overflow: model_context_window_exceeded',
+    )
+    await vela.dispose()
+    expect(messageEnds).toContain('error')
+    expect(messageEnds).not.toContain('length')
+    expect(
+      session.messages.some(
+        (m) =>
+          m.role === 'assistant' &&
+          JSON.stringify(m.content).includes('truncated second'),
+      ),
+    ).toBe(false)
+  } finally {
+    globalThis.fetch = originalFetch
+    dir.cleanup()
+  }
+})
+
+test('scoped hook targets only extension canonical tool, before_agent_start setModel updates maxOutputTokens, and Ctrl+B suspends deadline during host ack', async () => {
+  const hookHits: string[] = []
+  const docs: VelaExtension = function docs(vela) {
+    vela.registerTool({
+      name: 'read',
+      description: 'docs read',
+      inputSchema: z.object({ topic: z.string() }),
+      execute: async ({ topic }) => `doc:${topic}`,
+    })
+    vela.on('tool_call', 'read', (event) => {
+      hookHits.push(event.toolName)
+    })
+  }
+  const tScoped = createTestVela({
+    extensions: [docs],
+    responses: [
+      fauxToolCall('read', { path: 'sample.txt' }),
+      fauxToolCall('docs_read', { topic: 'v0.9' }),
+      fauxText('ok'),
+    ],
+  })
+  writeFileSync(join(tScoped.cwd, 'sample.txt'), 'hello\n')
+  await tScoped.run('read both')
+  expect(hookHits).toEqual(['docs_read'])
+
+  const dir = tempDir('vela-s2a-before-start-max-')
+  const originalFetch = globalThis.fetch
+  const maxOutputSent: Array<number | undefined> = []
+  try {
+    writeFileSync(
+      join(dir.path, 'config.json'),
+      JSON.stringify({
+        providers: {
+          openai: {
+            api: 'openai-responses',
+            baseUrl: 'https://example.test/v1',
+            apiKey: 'test',
+            models: [
+              { id: 'small-out', maxTokens: 512 },
+              { id: 'big-out', maxTokens: 4096 },
+            ],
+          },
+        },
+      }),
+    )
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      maxOutputSent.push(body.max_output_tokens)
+      return responsesReply(body)
+    }) as typeof fetch
+    const switchAtStart: VelaExtension = (vela) => {
+      vela.on('before_agent_start', async (_event, ctx) => {
+        ctx.session.setModel('openai/big-out')
+      })
+    }
+    const vela = createVela({
+      cwd: dir.path,
+      dataDir: dir.path,
+      model: 'openai/small-out',
+      providers: loadModels({ agentDir: dir.path }),
+      extensions: [switchAtStart],
+    })
+    await vela.session('switch-at-start').prompt('hello')
+    await vela.dispose()
+    expect(maxOutputSent).toEqual([4096])
+  } finally {
+    globalThis.fetch = originalFetch
+    dir.cleanup()
+  }
+
+  // Ctrl+B suspends short 150ms foreground deadline while host acknowledgment takes 120ms after update (~100ms)
+  let ackEvents = 0
+  const bgResults: string[] = []
+  const tRace = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: 'echo RACE_START; sleep 0.3; echo RACE_DONE',
+        timeout: 0.15,
+      }),
+      fauxText('detached cleanly'),
+    ],
+    extensions: [background()],
+    session: {
+      host: {
+        deliver: () => {},
+        background: async (event) => {
+          if (event.type === 'started') {
+            ackEvents++
+            await Bun.sleep(120)
+          } else if (event.type === 'result') {
+            bgResults.push(event.text)
+          }
+        },
+      },
+    },
+  })
+  const running = tRace.run('race')
+  const raceDeadline = Date.now() + 5000
+  while (tRace.eventsOf('tool_execution_update').length === 0) {
+    if (Date.now() > raceDeadline)
+      throw new Error('Timed out waiting for bash output')
+    await Bun.sleep(5)
+  }
+  expect(await tRace.session.backgroundTasks('faux-call-1-1')).toEqual(['bg-1'])
+  await running
+  expect(ackEvents).toBe(1)
+  while (bgResults.length === 0) {
+    if (Date.now() > raceDeadline)
+      throw new Error('Timed out waiting for background job completion')
+    await Bun.sleep(10)
+  }
+  expect(bgResults[0]).toContain(
+    'Background command bg-1 finished with exit code 0',
+  )
+})
+
+test('session loop normalizes toolCallIds on custom anthropic-messages provider through withProviderHooks', async () => {
+  const dir = tempDir('vela-s2a-session-custom-anthropic-')
+  const originalFetch = globalThis.fetch
+  const bodies: Record<string, unknown>[] = []
+  try {
+    writeFileSync(
+      join(dir.path, 'config.json'),
+      JSON.stringify({
+        providers: {
+          company: {
+            api: 'anthropic-messages',
+            baseUrl: 'https://example.test/v1',
+            apiKey: 'test',
+            models: [{ id: 'claude-custom' }],
+          },
+        },
+      }),
+    )
+    let calls = 0
+    const toSse = (events: Array<{ type: string; [k: string]: unknown }>) =>
+      new Response(
+        events
+          .map(
+            (event) =>
+              `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+          )
+          .join(''),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)))
+      calls++
+      if (calls === 1) {
+        return toSse([
+          {
+            type: 'message_start',
+            message: {
+              id: 'msg_1',
+              type: 'message',
+              role: 'assistant',
+              content: [],
+              model: 'claude-custom',
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 10, output_tokens: 1 },
+            },
+          },
+          {
+            type: 'content_block_start',
+            index: 0,
+            content_block: {
+              type: 'tool_use',
+              id: 'a:b',
+              name: 'ext_ping',
+              input: {},
+            },
+          },
+          {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: '{}' },
+          },
+          { type: 'content_block_stop', index: 0 },
+          {
+            type: 'message_delta',
+            delta: { stop_reason: 'tool_use', stop_sequence: null },
+            usage: { output_tokens: 5 },
+          },
+          { type: 'message_stop' },
+        ])
+      }
+      return toSse([
+        {
+          type: 'message_start',
+          message: {
+            id: 'msg_2',
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            model: 'claude-custom',
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 15, output_tokens: 1 },
+          },
+        },
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'done' },
+        },
+        { type: 'content_block_stop', index: 0 },
+        {
+          type: 'message_delta',
+          delta: { stop_reason: 'end_turn', stop_sequence: null },
+          usage: { output_tokens: 2 },
+        },
+        { type: 'message_stop' },
+      ])
+    }) as typeof fetch
+    const ext: VelaExtension = (vela) => {
+      vela.registerTool({
+        name: 'ext_ping',
+        description: 'ping',
+        inputSchema: z.object({}),
+        execute: async () => 'pong',
+      })
+    }
+    const vela = createVela({
+      cwd: dir.path,
+      dataDir: dir.path,
+      model: 'company/claude-custom',
+      providers: loadModels({ agentDir: dir.path }),
+      extensions: [ext],
+    })
+    await vela.session('custom-anth-hooks').prompt('ping')
+    await vela.dispose()
+    const secondWire = JSON.stringify(bodies[1]?.messages ?? [])
+    expect(secondWire).not.toContain('"a:b"')
+    expect(secondWire).toContain('"a_b"')
+  } finally {
+    globalThis.fetch = originalFetch
+    dir.cleanup()
+  }
+})

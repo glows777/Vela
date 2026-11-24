@@ -62,6 +62,8 @@ class Foreground {
   settled = false
   /** Resolves with the job id and the tail so far once this call is moved */
   readonly detached = Promise.withResolvers<BackgroundAdmission>()
+  /** Restores foreground timeout on admission rollback; cleared once the job owns the command. */
+  resumeTimeout?: () => void
   /** The command's outcome, as the job reports it; a failed start is one more outcome */
   exitResult!: Promise<CommandExit>
 
@@ -74,6 +76,7 @@ class Foreground {
     readonly run?: AbortSignal,
     /** `!!`: the command's output is kept out of the model context, so it cannot become a job */
     readonly excludeFromContext = false,
+    private readonly suspendTimeout?: () => (() => void) | undefined,
   ) {}
 
   /** An interrupted run cancels a foreground command; a moved one no longer reaches here. */
@@ -86,6 +89,8 @@ class Foreground {
    * not replayed to a removed listener), so it is cancelled rather than left running unclaimed.
    */
   follow(): void {
+    const resume = this.resumeTimeout
+    this.resumeTimeout = undefined
     if (this.run?.aborted) {
       this.state = 'withdrawn'
       this.controller.abort(this.run.reason)
@@ -93,12 +98,14 @@ class Foreground {
     }
     this.state = 'foreground'
     this.run?.addEventListener('abort', this.forward, { once: true })
+    resume?.()
   }
 
   /** Take the command out of the run's reach; a claim is synchronous, so only one caller wins. */
   unfollow(): void {
     this.state = 'moved'
     this.run?.removeEventListener('abort', this.forward)
+    this.resumeTimeout = this.suspendTimeout?.()
   }
 }
 
@@ -191,6 +198,7 @@ export class BackgroundJobs implements BackgroundCommands {
     start,
     exit,
     excludeFromContext,
+    suspendTimeout,
   }: {
     command: string
     toolCallId?: string
@@ -199,6 +207,7 @@ export class BackgroundJobs implements BackgroundCommands {
     start: (signal: AbortSignal) => Promise<S>
     exit: (settled: S) => CommandExit
     excludeFromContext?: boolean
+    suspendTimeout?: () => (() => void) | undefined
   }): ForegroundCommand<S> {
     const entry = new Foreground(
       command,
@@ -207,6 +216,7 @@ export class BackgroundJobs implements BackgroundCommands {
       toolCallId,
       signal,
       excludeFromContext === true,
+      suspendTimeout,
     )
     this.foreground.add(entry)
     entry.follow()
@@ -226,10 +236,7 @@ export class BackgroundJobs implements BackgroundCommands {
     return { result, detached: entry.detached.promise }
   }
 
-  async detach(
-    toolCallId?: string,
-    timedOutAfterMs?: number,
-  ): Promise<string[]> {
+  async detach(toolCallId?: string): Promise<string[]> {
     const foreground = [...this.foreground].filter(
       (entry) => entry.state === 'foreground',
     )
@@ -259,16 +266,13 @@ export class BackgroundJobs implements BackgroundCommands {
       // run, and an overlapping request must not find an entry claimed but never recorded.
       if (entry.state !== 'foreground' || entry.settled) continue
       entry.unfollow()
-      ids.push(await this.move(entry, timedOutAfterMs))
+      ids.push(await this.move(entry))
     }
     return ids
   }
 
   /** Hand one claimed command to a job; a failed record leaves it in the foreground. */
-  private async move(
-    entry: Foreground,
-    timedOutAfterMs?: number,
-  ): Promise<string> {
+  private async move(entry: Foreground): Promise<string> {
     // `detach` claimed it: the command stopped following the run before this record started, so a
     // Stop that races the record cannot abort a command the job is about to own.
     const id = `bg-${++this.sequence}`
@@ -294,12 +298,6 @@ export class BackgroundJobs implements BackgroundCommands {
       // The host may already hold a start record it could not acknowledge, so clear it before
       // handing the command back to its call.
       await this.discard(job)
-      // A user's move reports this to them. A budget that expired has nobody to tell, so log it:
-      // the call keeps waiting, as a session without a budget would, instead of losing its work.
-      if (timedOutAfterMs !== undefined)
-        this.logger.error(
-          `[background] Could not move the command to the background; it stays in its call: ${errorMessage(error)}`,
-        )
       entry.follow()
       throw error
     }
@@ -311,6 +309,7 @@ export class BackgroundJobs implements BackgroundCommands {
         'The command finished while it was being moved to the background; its result came from the call.',
       )
     }
+    entry.resumeTimeout = undefined
     this.armDeadline(job)
     job.finished = entry.exitResult.then((exit) => this.exited(job, exit))
     this.session.trackWork(job.finished)
@@ -319,7 +318,6 @@ export class BackgroundJobs implements BackgroundCommands {
       id,
       output: text,
       truncated,
-      ...(timedOutAfterMs === undefined ? {} : { timedOutAfterMs }),
     })
     this.syncStatus()
     return id

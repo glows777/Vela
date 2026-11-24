@@ -72,6 +72,8 @@ interface FuzzyTextMap {
   charEnds: number[]
   /** When a match ends on the last non-trailing-whitespace char of a line, consumes trailing whitespace up to EOL */
   lineTrimEnds: number[]
+  /** Distinct source normalization cluster id so matches cannot split a ligature/multi-char NFKC expansion */
+  unitIds: number[]
 }
 
 const COMBINING_MARK = /^\p{M}$/u
@@ -81,6 +83,8 @@ function normalizeForFuzzyWithMap(text: string): FuzzyTextMap {
   const charStarts: number[] = []
   const charEnds: number[] = []
   const lineTrimEnds: number[] = []
+  const unitIds: number[] = []
+  let nextUnitId = 0
   let lineStart = 0
 
   while (lineStart <= text.length) {
@@ -89,8 +93,12 @@ function normalizeForFuzzyWithMap(text: string): FuzzyTextMap {
     const rawLine = text.slice(lineStart, lineEnd)
 
     // Group combining marks with their base code point so NFKC preserves source spans.
-    const units: Array<{ norm: string; origStart: number; origEnd: number }> =
-      []
+    const units: Array<{
+      norm: string
+      origStart: number
+      origEnd: number
+      unitId: number
+    }> = []
     let i = 0
     while (i < rawLine.length) {
       const start = i
@@ -106,8 +114,9 @@ function normalizeForFuzzyWithMap(text: string): FuzzyTextMap {
       const norm = normalizeFuzzyFragment(rawLine.slice(start, i))
       const origStart = lineStart + start
       const origEnd = lineStart + i
+      const unitId = nextUnitId++
       for (let j = 0; j < norm.length; j++) {
-        units.push({ norm: norm[j]!, origStart, origEnd })
+        units.push({ norm: norm[j]!, origStart, origEnd, unitId })
       }
     }
 
@@ -122,6 +131,7 @@ function normalizeForFuzzyWithMap(text: string): FuzzyTextMap {
       charEnds.push(unit.origEnd)
       // Reaching the last trimmed unit on a line consumes its stripped trailing spaces.
       lineTrimEnds.push(u === kept - 1 ? lineEnd : unit.origEnd)
+      unitIds.push(unit.unitId)
     }
 
     if (nlIndex === -1) break
@@ -129,6 +139,7 @@ function normalizeForFuzzyWithMap(text: string): FuzzyTextMap {
     charStarts.push(kept > 0 ? units[kept - 1]!.origEnd : lineStart)
     charEnds.push(nlIndex + 1)
     lineTrimEnds.push(nlIndex + 1)
+    unitIds.push(nextUnitId++)
     lineStart = nlIndex + 1
   }
 
@@ -137,6 +148,33 @@ function normalizeForFuzzyWithMap(text: string): FuzzyTextMap {
     charStarts,
     charEnds,
     lineTrimEnds,
+    unitIds,
+  }
+}
+
+function countOverlappingOccurrences(text: string, needle: string): number {
+  let count = 0
+  let from = 0
+  while (true) {
+    const idx = text.indexOf(needle, from)
+    if (idx === -1) return count
+    count++
+    from = idx + 1
+  }
+}
+
+function findFuzzyMatches(map: FuzzyTextMap, needle: string): number[] {
+  const matches: number[] = []
+  let from = 0
+  while (true) {
+    const idx = map.normalized.indexOf(needle, from)
+    if (idx === -1) return matches
+    const end = idx + needle.length
+    const splitsStart = idx > 0 && map.unitIds[idx] === map.unitIds[idx - 1]
+    const splitsEnd =
+      end < map.normalized.length && map.unitIds[end - 1] === map.unitIds[end]
+    if (!splitsStart && !splitsEnd) matches.push(idx)
+    from = idx + 1
   }
 }
 
@@ -261,7 +299,10 @@ export function applyEditsToNormalizedContent(
     const edit = normalizedEdits[i]!
     const exactIndex = normalizedContent.indexOf(edit.oldText)
     if (exactIndex !== -1) {
-      const exactOccurrences = normalizedContent.split(edit.oldText).length - 1
+      const exactOccurrences = countOverlappingOccurrences(
+        normalizedContent,
+        edit.oldText,
+      )
       if (exactOccurrences > 1) {
         throw getDuplicateError(
           path,
@@ -281,16 +322,21 @@ export function applyEditsToNormalizedContent(
 
     fuzzyMap ??= normalizeForFuzzyWithMap(normalizedContent)
     const fuzzyOldText = normalizeForFuzzyMatch(edit.oldText)
-    const fuzzyIndex = fuzzyOldText
-      ? fuzzyMap.normalized.indexOf(fuzzyOldText)
-      : -1
-    if (fuzzyIndex === -1) {
+    const fuzzyMatches = fuzzyOldText
+      ? findFuzzyMatches(fuzzyMap, fuzzyOldText)
+      : []
+    if (fuzzyMatches.length === 0) {
       throw getNotFoundError(path, i, normalizedEdits.length)
     }
-    const fuzzyOccurrences = fuzzyMap.normalized.split(fuzzyOldText).length - 1
-    if (fuzzyOccurrences > 1) {
-      throw getDuplicateError(path, i, normalizedEdits.length, fuzzyOccurrences)
+    if (fuzzyMatches.length > 1) {
+      throw getDuplicateError(
+        path,
+        i,
+        normalizedEdits.length,
+        fuzzyMatches.length,
+      )
     }
+    const fuzzyIndex = fuzzyMatches[0]!
 
     const fuzzyEnd = fuzzyIndex + fuzzyOldText.length
     const origStart = fuzzyMap.charStarts[fuzzyIndex]!

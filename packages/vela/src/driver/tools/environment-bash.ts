@@ -76,6 +76,28 @@ export async function environmentBash(
   const fgController = context?.background ? new AbortController() : undefined
   let fgTimedOut = false
   let fgTimer: ReturnType<typeof setTimeout> | undefined
+  let fgDeadlineAt: number | undefined
+  let fgSettled = false
+  let fgDetached = false
+  const armFgTimer = (ms: number) => {
+    if (!fgController || fgSettled || fgDetached) return
+    clearTimeout(fgTimer)
+    fgDeadlineAt = Date.now() + ms
+    fgTimer = setTimeout(() => {
+      fgTimedOut = true
+      fgController.abort()
+    }, ms)
+  }
+  const suspendTimeout = fgController
+    ? () => {
+        if (!fgTimer || fgDeadlineAt === undefined) return undefined
+        clearTimeout(fgTimer)
+        fgTimer = undefined
+        const remaining = Math.max(0, fgDeadlineAt - Date.now())
+        fgDeadlineAt = undefined
+        return () => armFgTimer(remaining)
+      }
+    : undefined
   const start = (signal: AbortSignal | undefined) => {
     if (!fgController)
       return env.exec(
@@ -86,10 +108,7 @@ export async function environmentBash(
     const forward = () => fgController.abort(signal?.reason)
     if (signal?.aborted) forward()
     else signal?.addEventListener('abort', forward, { once: true })
-    fgTimer = setTimeout(() => {
-      fgTimedOut = true
-      fgController.abort()
-    }, effectiveTimeout * 1000)
+    armFgTimer(effectiveTimeout * 1000)
     return env
       .exec(
         command,
@@ -97,6 +116,7 @@ export async function environmentBash(
         fgController.signal,
       )
       .finally(() => {
+        fgSettled = true
         clearTimeout(fgTimer)
         signal?.removeEventListener('abort', forward)
       })
@@ -109,6 +129,7 @@ export async function environmentBash(
     signal: context?.signal,
     output: tail,
     start,
+    suspendTimeout,
     exit: (settled) =>
       settled.ok
         ? {
@@ -129,6 +150,7 @@ export async function environmentBash(
         })),
       ])
       if (outcome.type === 'detached') {
+        fgDetached = true
         clearTimeout(fgTimer)
         return movedToBackground(outcome.admission)
       }

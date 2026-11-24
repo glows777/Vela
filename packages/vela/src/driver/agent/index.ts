@@ -7,6 +7,7 @@ import {
 import { describeModel } from '../../providers/models/index.ts'
 import { resolveLimits, type VelaLimits } from '../../shared/limits.ts'
 import type {
+  FinishReason,
   ModelInput,
   ReasoningOption,
 } from '../../shared/provider-types.ts'
@@ -331,6 +332,7 @@ export const agentLoop = async ({
             },
           })
 
+          let streamFinishReason: FinishReason | undefined
           for await (const part of result.stream) {
             switch (part.type) {
               case 'text-start':
@@ -410,8 +412,7 @@ export const agentLoop = async ({
                 break
               }
               case 'finish-step':
-                showSources()
-                step.end(part.finishReason)
+                streamFinishReason = part.finishReason
                 break
               case 'error': {
                 // Errors from the model request or mid-stream: rethrow the original error so the retry
@@ -463,6 +464,10 @@ export const agentLoop = async ({
             }
             step.endInterrupted('error', 'model_context_window_exceeded')
             throw new Error('Context overflow: model_context_window_exceeded')
+          }
+          if (streamFinishReason !== undefined) {
+            showSources()
+            step.end(streamFinishReason)
           }
           if (retried)
             emit({ type: 'auto_retry_end', success: true, attempt: retried })

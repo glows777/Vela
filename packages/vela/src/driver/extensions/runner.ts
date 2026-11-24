@@ -221,8 +221,12 @@ export class ExtensionRunner {
             ? {}
             : {
                 toolName,
-                matchesTool: (target) =>
-                  target === toolName || localTools.get(toolName) === target,
+                matchesTool: (target) => {
+                  const canonical = localTools.get(toolName)
+                  return canonical !== undefined
+                    ? target === canonical
+                    : target === toolName
+                },
               }),
         }
         list.push(entry)

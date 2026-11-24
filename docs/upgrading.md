@@ -18,7 +18,8 @@ Vela v0.9 uses a single `<agentDir>/config.json` (plus trusted `<cwd>/.vela/conf
 | `settings.json` → `extensionConfig.memory` | `memory` |
 | `settings.json` → `extensionConfig.local` | `local` |
 | `settings.json` → `extensionConfig.channel.eventReceiver` | `webhooks` |
-| `settings.json` → `extensionConfig.mcp.servers` | `mcpServers` |
+| `settings.json` → `extensionConfig.channel.eventDefaultTarget` | `eventDefaultTarget` |
+| `settings.json` → `extensionConfig.mcp.mcpServers` | `mcpServers` |
 | `models.json` → `providers` | `providers` |
 | `mcp.json` → `mcpServers` | `mcpServers` |
 
@@ -34,11 +35,11 @@ Paste this prompt into an AI coding assistant if you want it to convert your `~/
 > Inspect `~/.vela/settings.json`, `~/.vela/models.json`, and `~/.vela/mcp.json` (whichever exist) and create `~/.vela/config.json` with `0600` permissions using Vela v0.9 flat keys:
 > - Rename `defaultModel` → `model`, `defaultThinkingLevel` → `thinkingLevel`, `defaultTools` → `tools`.
 > - Hoist `extensionConfig.{lark,web,memory,local}` to top-level `{lark,web,memory,local}`.
-> - Hoist `extensionConfig.channel.eventReceiver` → `webhooks`.
-> - Merge `extensionConfig.mcp.servers` and `mcp.json`'s `mcpServers` into top-level `mcpServers`.
+> - Hoist `extensionConfig.channel.eventReceiver` → `webhooks`, and `extensionConfig.channel.eventDefaultTarget` → `eventDefaultTarget`.
+> - Merge `extensionConfig.mcp.mcpServers` and `mcp.json`'s `mcpServers` into top-level `mcpServers`.
 > - Hoist `models.json`'s `providers` to top-level `providers`.
 > - Update any `tools` entries from `read_file`, `write_file`, `edit_file`, `list_directory` to `read`, `write`, `edit`, `ls`.
-> - Drop retired keys: `$schema`, `builtin:rag` entries in `extensions`, `bashForegroundTimeoutSeconds`, `bashForegroundTimeoutMaxSeconds`, `compaction.microcompactThreshold`, and `compaction.minMicroSavings`.
+> - Drop retired keys: `$schema`, `builtin:rag` entries in `extensions`, `bashForegroundTimeoutSeconds`, `bashForegroundTimeoutMaxSeconds`, `limits.microcompactThreshold`, and `limits.minMicroSavings`.
 > Do not delete or overwrite existing secrets; keep backups of the old files before removing them.
 
 ## 2. Core Tool Renames
@@ -57,9 +58,9 @@ Update any `--tools` flags, `config.json` `tools` lists (for example `+ls` inste
 ## 3. Removed Features & Settings
 
 - **Nested tool execution**: `ctx.executeTool()` and `parentToolCallId` are removed from the extension/tool execution API.
-- **Microcompaction**: `compaction.microcompactThreshold`, `compaction.minMicroSavings`, `ContextEditEntry`, and `'micro'` compaction events are removed; compaction runs cleanly via turn-boundary / overflow summarization.
+- **Microcompaction**: `limits.microcompactThreshold`, `limits.minMicroSavings`, `ContextEditEntry`, and `'micro'` compaction events are removed; compaction runs cleanly via turn-boundary / overflow summarization.
 - **Heuristic loop detection & file write guard**: `loop_detected` / `'loop'` stop reasons and `read`-before-`write` guard errors are removed.
 - **Implicit bash backgrounding & shell fallback**: Automatic backgrounding of slow foreground commands and `shell_unavailable` tool-set mutations are removed. Foreground `bash` enforces its explicit `timeout` (default `120s`, max `1800s`) with `SIGTERM` → `SIGKILL`; pass `run_in_background: true` (or press `Ctrl+B` in the TUI) when you want a background job.
-- **Removed config keys**: `bashForegroundTimeoutSeconds`, `bashForegroundTimeoutMaxSeconds`, `compaction.microcompactThreshold`, `compaction.minMicroSavings`.
+- **Removed config keys**: `bashForegroundTimeoutSeconds`, `bashForegroundTimeoutMaxSeconds`, `limits.microcompactThreshold`, `limits.minMicroSavings`.
 - **Execution environment access**: Tools that need command execution or environment file access call `ctx.requireEnv()` on demand instead of assuming an eager environment on every tool call.
 - **Normalizers & CLI hints**: Legacy content part tags (`reasoning`, `tool-call`, `tool-result`, `image-data`, `image-file-reference`) and `.sessions`/`.memory`/`.usage` CWD move hints are removed from runtime message normalization and CLI startup.

@@ -10,7 +10,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createOpenAI } from '@ai-sdk/openai'
 import { APICallError, type LanguageModelV4 } from '@ai-sdk/provider'
-import { type ModelMessage as AIModelMessage, jsonSchema, tool } from 'ai'
+import {
+  type ModelMessage as AIModelMessage,
+  jsonSchema,
+  type ToolSet,
+  tool,
+} from 'ai'
 import z from 'zod'
 import { isRetryable, retryDelayMs } from '../../src/driver/agent/retry.ts'
 import { StepMessage } from '../../src/driver/agent/step.ts'
@@ -1042,4 +1047,404 @@ test('concurrent requireEnv() calls share one resolver promise and estimateMessa
     },
   ]
   expect(estimateMessagesTokens(bloated)).toBeLessThan(100)
+})
+
+test('retired tool lookup ignores prototype keys and config parser rejects retired tools', async () => {
+  const { parseConfig } = await import('../../src/config/index.ts')
+  const { getRetiredToolError } = await import(
+    '../../src/shared/tool-selection.ts'
+  )
+  expect(getRetiredToolError(['constructor', 'toString'])).toBeUndefined()
+  expect(() =>
+    parseConfig(JSON.stringify({ tools: ['-read_file'] }), 'config.json'),
+  ).toThrow('tool "read_file" was renamed to "read"')
+})
+
+test('streamProviderStep aligns start and end metadata when preceded by empty text blocks', async () => {
+  const { streamProviderStep } = await import('../../src/providers/runtime.ts')
+  const { createFauxModel } = await import('../../src/testing/core/index.ts')
+  const faux = createFauxModel({
+    responses: [{ text: 'ok', toolCalls: [{ name: 'ping', input: {} }] }],
+  })
+  const orig = faux.doStream.bind(faux)
+  faux.doStream = async (opts) => {
+    const res = await orig(opts)
+    return {
+      ...res,
+      stream: res.stream.pipeThrough(
+        new TransformStream({
+          transform(part, controller) {
+            if (part.type === 'text-start') {
+              controller.enqueue({ type: 'text-start', id: 'empty-text' })
+              controller.enqueue({ type: 'text-end', id: 'empty-text' })
+              controller.enqueue({
+                ...part,
+                providerMetadata: { openai: { phase: 'commentary' } },
+              })
+              return
+            }
+            if (part.type === 'text-end') {
+              controller.enqueue({
+                ...part,
+                providerMetadata: { openai: { itemId: 'msg_real' } },
+              })
+              return
+            }
+            controller.enqueue(part)
+          },
+        }),
+      ),
+    }
+  }
+  let checkpointContent: unknown
+  const { stream, getFinalStep } = streamProviderStep({
+    model: faux,
+    system: 's',
+    messages: [{ role: 'user', content: 'hi' }],
+    tools: {
+      sdkTools: {
+        ping: tool({
+          description: 'ping',
+          inputSchema: jsonSchema({ type: 'object', properties: {} }),
+        }),
+      },
+      toolDefinitions: [],
+      hasHostedTools: false,
+    },
+    onModelCallEnd: async (event) => {
+      checkpointContent = (await event.buildCheckpoint()).content
+    },
+  })
+  for await (const _ of stream) {
+  }
+  const finalStep = await getFinalStep()
+  const finalAssistant = finalStep.messages[0]
+  if (!finalAssistant) throw new Error('expected finalAssistant')
+  const finalText = (
+    finalAssistant.content as Array<{ type: string; providerOptions?: unknown }>
+  ).find((p) => p.type === 'text')
+  expect(finalText?.providerOptions).toEqual({
+    openai: { phase: 'commentary', itemId: 'msg_real' },
+  })
+  const ckptText = (
+    checkpointContent as Array<{ type: string; providerOptions?: unknown }>
+  ).find((p) => p.type === 'text')
+  expect(ckptText?.providerOptions).toEqual({
+    openai: { phase: 'commentary', itemId: 'msg_real' },
+  })
+})
+
+test('azure store:false strips azure.itemId and replays stateless hosted web_search without item_reference', async () => {
+  const cfgDir = join(dir, 'azure-stateless')
+  mkdirSync(cfgDir, { recursive: true })
+  writeFileSync(
+    join(cfgDir, 'config.json'),
+    JSON.stringify({
+      providers: {
+        azure: {
+          api: 'openai-responses',
+          baseUrl: 'https://example.test/v1',
+          apiKey: 'test',
+          compat: { store: false, hostedTools: ['web_search'] },
+          models: [{ id: 'gpt-5' }],
+        },
+        azureStored: {
+          api: 'openai-responses',
+          baseUrl: 'https://example.test/v1',
+          apiKey: 'test',
+          compat: { store: true, hostedTools: ['web_search'] },
+          models: [{ id: 'gpt-5' }],
+        },
+      },
+    }),
+  )
+  const requests: Record<string, unknown>[] = []
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    requests.push(body)
+    if (requests.length === 1) {
+      return Response.json({
+        id: 'resp_az_1',
+        created_at: 1,
+        model: 'gpt-5',
+        status: 'completed',
+        output: [
+          {
+            id: 'ws_stateless',
+            type: 'web_search_call',
+            status: 'completed',
+            action: { type: 'search', query: 'vela release' },
+          },
+          {
+            id: 'msg_unstored',
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [
+              { type: 'output_text', text: 'searched', annotations: [] },
+            ],
+          },
+        ],
+        usage: { input_tokens: 5, output_tokens: 4 },
+      })
+    }
+    return Response.json({
+      id: 'resp_az_2',
+      created_at: 2,
+      model: 'gpt-5',
+      status: 'completed',
+      output: [
+        {
+          id: 'msg_2',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+        },
+      ],
+      usage: { input_tokens: 6, output_tokens: 2 },
+    })
+  }) as typeof fetch
+  const reg = new ModelRegistry(
+    loadModels({ agentDir: cfgDir }),
+    memoryCredentialStore({}),
+  )
+  const { generateText } = await import('ai')
+  const { fromAiResponseMessage, toAiModelMessages } = await import(
+    '../../src/providers/messages.ts'
+  )
+  const stateless = reg.resolve('azure/gpt-5').model as LanguageModelV4
+  const hosted = await (
+    stateless as unknown as {
+      hostedTools: () => Promise<ToolSet>
+    }
+  ).hostedTools()
+  const first = await generateText({
+    model: stateless,
+    prompt: 'search vela',
+    tools: hosted,
+    maxRetries: 0,
+  })
+  const saved = first.response.messages.map((m) =>
+    fromAiResponseMessage(m as never),
+  )
+  const stored = reg.resolve('azureStored/gpt-5').model as LanguageModelV4
+  await generateText({
+    model: stored,
+    messages: toAiModelMessages([
+      { role: 'user', content: 'search vela' },
+      ...saved,
+      { role: 'user', content: 'follow up' },
+    ]) as never,
+    maxRetries: 0,
+  })
+  const wire = JSON.stringify(requests[1]?.input ?? [])
+  expect(wire).not.toContain('item_reference')
+  expect(wire).not.toContain('msg_unstored')
+  expect(wire).not.toContain('ws_stateless')
+  expect(wire).not.toContain('"vela"')
+  expect(wire).toContain('Provider web_search')
+})
+
+test('withProviderHooks preserves custom anthropic protocol classification and edit-diff catches ligatures & overlaps', async () => {
+  const { withProviderHooks } = await import('../../src/providers/hooks.ts')
+  const { isAnthropicMessagesModel } = await import(
+    '../../src/providers/models-config.ts'
+  )
+  const { streamProviderStep } = await import('../../src/providers/runtime.ts')
+  const cfgDir = join(dir, 'hooked-anthropic')
+  mkdirSync(cfgDir, { recursive: true })
+  writeFileSync(
+    join(cfgDir, 'config.json'),
+    JSON.stringify({
+      providers: {
+        company: {
+          api: 'anthropic-messages',
+          baseUrl: 'https://example.test/v1',
+          apiKey: 'test',
+          models: [{ id: 'claude-custom' }],
+        },
+      },
+    }),
+  )
+  let bodyMessages: unknown
+  globalThis.fetch = (async (_url, init) => {
+    bodyMessages = JSON.parse(String(init?.body)).messages
+    return new Response(JSON.stringify({ error: { message: 'stop' } }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+  const reg = new ModelRegistry(
+    loadModels({ agentDir: cfgDir }),
+    memoryCredentialStore({}),
+  )
+  const hooked = withProviderHooks(reg.resolve('company/claude-custom').model, {
+    has: () => false,
+    beforeRequest: async (p) => p,
+    afterResponse: async () => {},
+    streamEvent: () => {},
+  })
+  expect(isAnthropicMessagesModel(hooked)).toBe(true)
+  const { stream } = streamProviderStep({
+    model: hooked,
+    system: 's',
+    messages: [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_call', toolCallId: 'a:b', toolName: 'read', input: {} },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool_result',
+            toolCallId: 'a:b',
+            toolName: 'read',
+            output: { type: 'text', value: 'ok' },
+          },
+        ],
+      },
+    ],
+    tools: { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
+  })
+  for await (const _ of stream) {
+  }
+  const wire = JSON.stringify(bodyMessages ?? [])
+  expect(wire).not.toContain('"a:b"')
+  expect(wire).toContain('"a_b"')
+
+  expect(() =>
+    applyEditsToNormalizedContent(
+      'o\uFB03ce',
+      [{ oldText: 'ic', newText: 'X' }],
+      'ligature.txt',
+    ),
+  ).toThrow('Could not find')
+  expect(() =>
+    applyEditsToNormalizedContent(
+      'aaa',
+      [{ oldText: 'aa', newText: 'X' }],
+      'overlap.txt',
+    ),
+  ).toThrow('Found 2 occurrences')
+  expect(() =>
+    applyEditsToNormalizedContent(
+      'a\u2014a\u2014a',
+      [{ oldText: 'a-a', newText: 'X' }],
+      'overlap-fuzzy.txt',
+    ),
+  ).toThrow('Found 2 occurrences')
+})
+
+test('ToolRegistry binds lazy requireEnv location and rejects cross-workspace replay; TokenTracker avoids hook double-count; read offset=1 skips scanLines', async () => {
+  const { createLocalExecutionEnv } = await import(
+    '../../src/driver/execution/local.ts'
+  )
+  const wsA = join(dir, 'ws-a')
+  const wsB = join(dir, 'ws-b')
+  mkdirSync(wsA, { recursive: true })
+  mkdirSync(wsB, { recursive: true })
+  let activeCwd = wsA
+  const results = new ToolResultStore(join(dir, 'lazy-loc', 'results'))
+  const registry = new ToolRegistry(results, {
+    tools: new Map(),
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    interception: {
+      resolveEnv: async () => createLocalExecutionEnv({ cwd: activeCwd }),
+    },
+  })
+  let ranIn = ''
+  let notifyLocated!: () => void
+  const located = new Promise<void>((resolve) => {
+    notifyLocated = resolve
+  })
+  registry.register({
+    name: 'lazy_reader',
+    replay: 'safe',
+    description: 'lazy env read',
+    inputSchema: z.object({}),
+    execute: async (_input, ctx) => {
+      const env = await ctx!.requireEnv!()
+      ranIn = env.cwd
+      notifyLocated()
+      // Simulate process interruption after env resolves (before tool_result is written)
+      return await new Promise<string>(() => {})
+    },
+  })
+  const tools = Object.fromEntries(
+    registry.toProviderTools().map((t) => [t.name, t]),
+  )
+  void tools.lazy_reader!.execute!({}, { toolCallId: 'c-loc' })
+  await located
+  expect(ranIn).toBe(wsA)
+
+  activeCwd = wsB
+  ranIn = ''
+  const results2 = new ToolResultStore(join(dir, 'lazy-loc', 'results'))
+  await results2.resumeHistory(results.historyId)
+  const registry2 = new ToolRegistry(results2, {
+    tools: new Map(),
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    interception: {
+      resolveEnv: async () => createLocalExecutionEnv({ cwd: activeCwd }),
+    },
+  })
+  registry2.register({
+    name: 'lazy_reader',
+    replay: 'safe',
+    description: 'lazy env read',
+    inputSchema: z.object({}),
+    execute: async (_input, ctx) => {
+      const env = await ctx!.requireEnv!()
+      ranIn = env.cwd
+      return 'should not run'
+    },
+  })
+  const recovered = await registry2.recoverToolCall('lazy_reader', 'c-loc', {})
+  expect(recovered).toEqual({
+    type: 'error-text',
+    value: expect.stringContaining('location or input changed'),
+  })
+  expect(ranIn).toBe('')
+
+  const tracker = new TokenTracker()
+  tracker.setContextDelta(300)
+  tracker.updateFromAPI(500, 10)
+  tracker.setContextDelta(300)
+  expect(tracker.estimatedTokens).toBe(510)
+  tracker.setContextDelta(450)
+  expect(tracker.estimatedTokens).toBe(660)
+
+  const logPath = join(dir, 'sample.log')
+  writeFileSync(logPath, 'line1\nline2\nline3\n')
+  const localEnv = createLocalExecutionEnv({ cwd: dir })
+  let scanCalls = 0
+  const wrappedEnv = Object.assign(Object.create(localEnv), {
+    openBinaryReader: async (p: string, o?: undefined, s?: AbortSignal) => {
+      const res = await localEnv.openBinaryReader(p, o, s)
+      if (!res.ok) return res
+      const inner = res.value
+      return {
+        ok: true as const,
+        value: Object.assign(Object.create(inner), {
+          scanLines: async (
+            opts: { startLine: number; endLine?: number },
+            sig?: AbortSignal,
+          ) => {
+            scanCalls++
+            return inner.scanLines(opts, sig)
+          },
+        }),
+      }
+    },
+  })
+  const readOut = await createReadFileTool().execute(
+    { path: logPath, offset: 1, limit: 2 },
+    { execution: wrappedEnv as never, results },
+  )
+  expect(readOut).toContain('line1')
+  expect(scanCalls).toBe(0)
 })

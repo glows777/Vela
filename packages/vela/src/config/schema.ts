@@ -11,7 +11,11 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../shared/provider-types.ts'
-import { isToolModifier, mergeDefaultTools } from '../shared/tool-selection.ts'
+import {
+  getRetiredToolError,
+  isToolModifier,
+  mergeDefaultTools,
+} from '../shared/tool-selection.ts'
 
 /** Contents of `config.json` (user: `~/.vela/config.json`, project: `<cwd>/.vela/config.json`). */
 export interface VelaSettings {
@@ -413,6 +417,10 @@ export function parseConfig(
     throw new Error(
       `${file}: +name and -name entries take exact tool names, not patterns: ${toolPattern}`,
     )
+  const retiredTool = settings.tools
+    ? getRetiredToolError(settings.tools)
+    : undefined
+  if (retiredTool) throw new Error(`${file}: ${retiredTool}`)
 
   const target = raw.eventDefaultTarget
   if (target !== undefined) {
