@@ -33,7 +33,7 @@ export interface ThinkingPart {
 }
 
 /** Non-image or binary file attachment (or provider file reference) carried in user or assistant messages. */
-interface FilePart {
+export interface FilePart {
   type: 'file'
   data: string | Uint8Array | URL | Record<string, string>
   mediaType: string
@@ -42,7 +42,7 @@ interface FilePart {
 }
 
 /** Provider-emitted reasoning file (e.g. encrypted/binary reasoning payload). */
-interface ReasoningFilePart {
+export interface ReasoningFilePart {
   type: 'reasoning-file'
   data: string | Uint8Array | URL
   mediaType: string
@@ -50,7 +50,7 @@ interface ReasoningFilePart {
 }
 
 /** Provider-emitted custom opaque part. */
-interface CustomProviderPart {
+export interface CustomProviderPart {
   type: 'custom'
   kind: string
   providerOptions?: ProviderOptions
@@ -69,7 +69,7 @@ export interface ToolCallPart {
 /** Ordered text and inline images produced by a tool or a `tool_result` hook. */
 export type ToolContent = (TextContent | ImageContent)[]
 
-type ToolResultContentItem =
+export type ToolResultContentItem =
   | TextContent
   | ImageContent
   | {
@@ -120,15 +120,19 @@ export interface ToolResultPart {
 }
 
 /** Provider-emitted tool approval request carried on an assistant message. */
-interface ToolApprovalRequestPart {
+export interface ToolApprovalRequestPart {
   type: 'tool-approval-request'
   approvalId: string
   toolCallId: string
+  reason?: string
+  isAutomatic?: boolean
+  signature?: string
+  inputSchemaInput?: unknown
   providerOptions?: ProviderOptions
 }
 
 /** Tool approval response carried on a tool message. */
-interface ToolApprovalResponsePart {
+export interface ToolApprovalResponsePart {
   type: 'tool-approval-response'
   approvalId: string
   approved: boolean
@@ -139,7 +143,7 @@ interface ToolApprovalResponsePart {
 
 export type ToolMessageContentPart = ToolResultPart | ToolApprovalResponsePart
 
-type UserContentPart = TextPart | ImageContent | FilePart
+export type UserContentPart = TextPart | ImageContent | FilePart
 export type UserContent = string | UserContentPart[]
 
 export type AssistantContentPart =
@@ -203,6 +207,84 @@ export type ModelMessage = VelaMessage
 export type AssistantModelMessage = VelaAssistantMessage
 export type ToolModelMessage = VelaToolMessage
 
+const IMAGE_MEDIA_TYPE = /^image(?:\/|$)/i
+
+function toBase64IfBinary(raw: unknown): string | undefined {
+  if (typeof raw === 'string') return raw
+  if (raw instanceof Uint8Array) return Buffer.from(raw).toString('base64')
+  if (raw instanceof ArrayBuffer)
+    return Buffer.from(new Uint8Array(raw)).toString('base64')
+  if (
+    raw &&
+    typeof raw === 'object' &&
+    (raw as { type?: unknown }).type === 'Buffer' &&
+    Array.isArray((raw as { data?: unknown }).data)
+  ) {
+    return Buffer.from((raw as { data: number[] }).data).toString('base64')
+  }
+  return undefined
+}
+
+function normalizeToolResultItem(item: unknown): {
+  item: unknown
+  changed: boolean
+} {
+  if (!item || typeof item !== 'object') return { item, changed: false }
+  const rec = item as Record<string, unknown>
+  const mediaType = typeof rec.mediaType === 'string' ? rec.mediaType : ''
+  const opts = rec.providerOptions
+    ? { providerOptions: rec.providerOptions }
+    : {}
+  if (rec.type === 'image-data') {
+    const data = toBase64IfBinary(rec.data)
+    if (data !== undefined) {
+      return {
+        item: {
+          type: 'image',
+          data,
+          mimeType: mediaType || 'image/png',
+          ...opts,
+        },
+        changed: true,
+      }
+    }
+  }
+  if (rec.type === 'media' && IMAGE_MEDIA_TYPE.test(mediaType)) {
+    const data = toBase64IfBinary(rec.data)
+    if (data !== undefined) {
+      return {
+        item: { type: 'image', data, mimeType: mediaType, ...opts },
+        changed: true,
+      }
+    }
+  }
+  if (rec.type === 'file-data' && IMAGE_MEDIA_TYPE.test(mediaType)) {
+    const data = toBase64IfBinary(rec.data)
+    if (data !== undefined) {
+      return {
+        item: { type: 'image', data, mimeType: mediaType, ...opts },
+        changed: true,
+      }
+    }
+  }
+  if (
+    rec.type === 'file' &&
+    IMAGE_MEDIA_TYPE.test(mediaType) &&
+    rec.data &&
+    typeof rec.data === 'object' &&
+    (rec.data as { type?: unknown }).type === 'data'
+  ) {
+    const data = toBase64IfBinary((rec.data as { data?: unknown }).data)
+    if (data !== undefined) {
+      return {
+        item: { type: 'image', data, mimeType: mediaType, ...opts },
+        changed: true,
+      }
+    }
+  }
+  return { item, changed: false }
+}
+
 /**
  * Normalize content array items loaded from legacy JSONL transcripts (where AI SDK part tags
  * `'reasoning'`, `'tool-call'`, `'tool-result'` and legacy `{ type: 'image', image, mediaType }`
@@ -224,9 +306,35 @@ export function normalizeVelaContent(content: unknown[]): {
       changed = true
       return { ...part, type: 'tool_call' }
     }
-    if (part.type === 'tool-result') {
-      changed = true
-      return { ...part, type: 'tool_result' }
+    if (part.type === 'tool-result' || part.type === 'tool_result') {
+      let nextPart = part
+      let partChanged = part.type === 'tool-result'
+      if (
+        part.output &&
+        typeof part.output === 'object' &&
+        (part.output as { type?: unknown }).type === 'content' &&
+        Array.isArray((part.output as { value?: unknown }).value)
+      ) {
+        const output = part.output as {
+          value: unknown[]
+          [key: string]: unknown
+        }
+        let itemsChanged = false
+        const nextValue = output.value.map((entry) => {
+          const res = normalizeToolResultItem(entry)
+          if (res.changed) itemsChanged = true
+          return res.item
+        })
+        if (itemsChanged) {
+          partChanged = true
+          nextPart = { ...part, output: { ...output, value: nextValue } }
+        }
+      }
+      if (partChanged) {
+        changed = true
+        return { ...nextPart, type: 'tool_result' }
+      }
+      return item
     }
     if (
       part.type === 'image' &&
@@ -242,6 +350,10 @@ export function normalizeVelaContent(content: unknown[]): {
             ? part.mediaType
             : 'image/png'
       const { image: _img, mediaType: _mt, mimeType: _mime, ...rest } = part
+      const binaryData = toBase64IfBinary(rawImage)
+      if (binaryData !== undefined) {
+        return { ...rest, type: 'image', data: binaryData, mimeType: mediaType }
+      }
       if (
         rawImage &&
         typeof rawImage === 'object' &&
@@ -250,13 +362,12 @@ export function normalizeVelaContent(content: unknown[]): {
       ) {
         return { ...rest, type: 'file', data: rawImage, mediaType }
       }
-      const data =
-        typeof rawImage === 'string'
-          ? rawImage
-          : rawImage instanceof Uint8Array
-            ? Buffer.from(rawImage).toString('base64')
-            : String(rawImage)
-      return { ...rest, type: 'image', data, mimeType: mediaType }
+      return {
+        ...rest,
+        type: 'image',
+        data: String(rawImage),
+        mimeType: mediaType,
+      }
     }
     return item
   })

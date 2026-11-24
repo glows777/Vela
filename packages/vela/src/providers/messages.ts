@@ -11,23 +11,35 @@ import type {
   ToolResultPart as AIToolResultPart,
   UserContent as AIUserContent,
 } from 'ai'
-import type {
-  AssistantContentPart,
-  ProviderOptions,
-  ToolMessageContentPart,
-  ToolResultOutput,
-  VelaAssistantMessage,
-  VelaMessage,
-  VelaToolMessage,
+import {
+  type AssistantContentPart,
+  normalizeVelaMessage,
+  type ProviderOptions,
+  type ToolMessageContentPart,
+  type ToolResultOutput,
+  type VelaAssistantMessage,
+  type VelaMessage,
+  type VelaToolMessage,
 } from '../shared/messages.ts'
+
+const IMAGE_MEDIA_TYPE = /^image(?:\/|$)/i
 
 /** Canonical images plus legacy AI SDK image shapes accepted during transition. */
 function isImagePart(part: { type: string; mediaType?: string }): boolean {
   return (
     part.type === 'image' ||
     part.type.startsWith('image-') ||
-    (part.type === 'file' && /^image(?:\/|$)/i.test(part.mediaType ?? ''))
+    ((part.type === 'file' || part.type === 'media') &&
+      IMAGE_MEDIA_TYPE.test(part.mediaType ?? ''))
   )
+}
+
+function binaryDataToBase64(data: unknown): string {
+  if (typeof data === 'string') return data
+  if (data instanceof Uint8Array) return Buffer.from(data).toString('base64')
+  if (data instanceof ArrayBuffer)
+    return Buffer.from(new Uint8Array(data)).toString('base64')
+  return String(data)
 }
 
 /** AI SDK v7 / provider v4 tool media use nested `SharedV4FileData`. */
@@ -45,6 +57,9 @@ export function toAiToolOutput(
             type: 'file' as const,
             mediaType: part.mimeType,
             data: { type: 'data' as const, data: part.data },
+            ...(part.providerOptions
+              ? { providerOptions: part.providerOptions }
+              : {}),
           }
         : part,
     ),
@@ -60,18 +75,70 @@ export function fromAiToolOutput(
   }
   return {
     ...output,
-    value: output.value.map((part) =>
-      part.type === 'file' &&
-      part.mediaType.startsWith('image/') &&
-      part.data.type === 'data'
-        ? {
-            type: 'image' as const,
-            data: part.data.data,
-            mimeType: part.mediaType,
-          }
-        : part,
-    ),
+    value: output.value.map((part) => {
+      const rec = part as Record<string, unknown>
+      const providerOptions =
+        'providerOptions' in rec && rec.providerOptions
+          ? (rec.providerOptions as ProviderOptions)
+          : undefined
+      const opts = providerOptions ? { providerOptions } : {}
+      if (
+        part.type === 'file' &&
+        IMAGE_MEDIA_TYPE.test(part.mediaType) &&
+        part.data.type === 'data'
+      ) {
+        return {
+          type: 'image' as const,
+          data: binaryDataToBase64(part.data.data),
+          mimeType: part.mediaType,
+          ...opts,
+        }
+      }
+      if (rec.type === 'image-data') {
+        const mediaType =
+          typeof rec.mediaType === 'string' && rec.mediaType
+            ? rec.mediaType
+            : 'image/png'
+        return {
+          type: 'image' as const,
+          data: binaryDataToBase64(rec.data),
+          mimeType: mediaType,
+          ...opts,
+        }
+      }
+      if (
+        (rec.type === 'media' || rec.type === 'file-data') &&
+        typeof rec.mediaType === 'string' &&
+        IMAGE_MEDIA_TYPE.test(rec.mediaType)
+      ) {
+        return {
+          type: 'image' as const,
+          data: binaryDataToBase64(rec.data),
+          mimeType: rec.mediaType,
+          ...opts,
+        }
+      }
+      return part
+    }),
   } as ToolResultOutput
+}
+
+function omitImagesInToolOutput(
+  output: ToolResultOutput,
+  supportsImages: boolean,
+): ToolResultOutput {
+  if (output.type !== 'content' || supportsImages) return output
+  return {
+    ...output,
+    value: output.value.map((item) =>
+      isImagePart(item)
+        ? {
+            type: 'text' as const,
+            text: '(tool image omitted: model does not support images)',
+          }
+        : item,
+    ),
+  }
 }
 
 /** Request-only conversion: fallback never removes images from saved history. */
@@ -139,6 +206,12 @@ export function toAiModelMessages(
               type: 'file' as const,
               data,
               mediaType,
+              ...(part.providerOptions
+                ? {
+                    providerOptions:
+                      part.providerOptions as SharedV4ProviderOptions,
+                  }
+                : {}),
             }
           }
           return part
@@ -146,27 +219,28 @@ export function toAiModelMessages(
       }
     }
     if (message.role === 'assistant') {
-      if (typeof message.content === 'string') {
+      const normalized = normalizeVelaMessage(message) as VelaAssistantMessage
+      if (typeof normalized.content === 'string') {
         return {
           role: 'assistant',
-          content: message.content,
-          ...(message.providerOptions
+          content: normalized.content,
+          ...(normalized.providerOptions
             ? {
                 providerOptions:
-                  message.providerOptions as SharedV4ProviderOptions,
+                  normalized.providerOptions as SharedV4ProviderOptions,
               }
             : {}),
         }
       }
       return {
         role: 'assistant',
-        ...(message.providerOptions
+        ...(normalized.providerOptions
           ? {
               providerOptions:
-                message.providerOptions as SharedV4ProviderOptions,
+                normalized.providerOptions as SharedV4ProviderOptions,
             }
           : {}),
-        content: message.content.map((part) => {
+        content: normalized.content.map((part) => {
           const opts = part.providerOptions
             ? {
                 providerOptions:
@@ -187,14 +261,32 @@ export function toAiModelMessages(
                   : {}),
                 ...opts,
               }
-            case 'tool_result':
+            case 'tool_result': {
+              const filtered = omitImagesInToolOutput(
+                part.output,
+                supportsImages,
+              )
+              const aiOutput =
+                filtered.type === 'content' &&
+                'isError' in filtered &&
+                filtered.isError === true
+                  ? ({
+                      type: 'error-text' as const,
+                      value:
+                        filtered.value
+                          .filter((item) => item.type === 'text')
+                          .map((item) => item.text)
+                          .join('\n') || 'Tool reported an error',
+                    } satisfies AIToolResultPart['output'])
+                  : toAiToolOutput(filtered)
               return {
                 type: 'tool-result' as const,
                 toolCallId: part.toolCallId,
                 toolName: part.toolName,
-                output: toAiToolOutput(part.output),
+                output: aiOutput,
                 ...opts,
               }
+            }
             case 'text':
               return { type: 'text' as const, text: part.text, ...opts }
             case 'file':
@@ -217,6 +309,16 @@ export function toAiModelMessages(
                 type: 'tool-approval-request' as const,
                 approvalId: part.approvalId,
                 toolCallId: part.toolCallId,
+                ...(part.reason !== undefined ? { reason: part.reason } : {}),
+                ...(part.isAutomatic !== undefined
+                  ? { isAutomatic: part.isAutomatic }
+                  : {}),
+                ...(part.signature !== undefined
+                  ? { signature: part.signature }
+                  : {}),
+                ...(part.inputSchemaInput !== undefined
+                  ? { inputSchemaInput: part.inputSchemaInput }
+                  : {}),
                 ...opts,
               }
             case 'custom':
@@ -265,19 +367,7 @@ export function toAiModelMessages(
               }
             : {}),
           output: toAiToolOutput(
-            part.output.type === 'content' && !supportsImages
-              ? {
-                  ...part.output,
-                  value: part.output.value.map((item) =>
-                    isImagePart(item)
-                      ? {
-                          type: 'text' as const,
-                          text: '(tool image omitted: model does not support images)',
-                        }
-                      : item,
-                  ),
-                }
-              : part.output,
+            omitImagesInToolOutput(part.output, supportsImages),
           ),
         }
       }),
@@ -310,7 +400,7 @@ export function toAiModelMessages(
           if (
             supportsImages &&
             item.type === 'file' &&
-            item.mediaType.startsWith('image/') &&
+            IMAGE_MEDIA_TYPE.test(item.mediaType) &&
             item.data.type === 'data'
           ) {
             lifted.push({
@@ -448,14 +538,33 @@ export function fromAiResponseMessage(
             ...partOpts,
           })
           break
-        case 'tool-approval-request':
+        case 'tool-approval-request': {
+          const req = part as {
+            approvalId: string
+            toolCallId: string
+            reason?: string
+            isAutomatic?: boolean
+            signature?: string
+            inputSchemaInput?: unknown
+          }
           content.push({
             type: 'tool-approval-request',
-            approvalId: part.approvalId,
-            toolCallId: part.toolCallId,
+            approvalId: req.approvalId,
+            toolCallId: req.toolCallId,
+            ...(req.reason !== undefined ? { reason: req.reason } : {}),
+            ...(req.isAutomatic !== undefined
+              ? { isAutomatic: req.isAutomatic }
+              : {}),
+            ...(req.signature !== undefined
+              ? { signature: req.signature }
+              : {}),
+            ...(req.inputSchemaInput !== undefined
+              ? { inputSchemaInput: req.inputSchemaInput }
+              : {}),
             ...partOpts,
           })
           break
+        }
         case 'custom':
           content.push({ type: 'custom', kind: part.kind, ...partOpts })
           break

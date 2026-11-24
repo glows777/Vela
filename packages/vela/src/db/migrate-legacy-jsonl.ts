@@ -577,6 +577,9 @@ export function parseLegacyTranscript(
     }
 
     if (kind === 'custom_message') {
+      const normalizedContent = Array.isArray(entry.content)
+        ? normalizeVelaContent(entry.content).content
+        : entry.content
       messages.push({
         id: entry.id,
         parentId,
@@ -585,7 +588,7 @@ export function parseLegacyTranscript(
         role: 'user',
         contentJson: JSON.stringify({
           customType: entry.customType,
-          content: entry.content,
+          content: normalizedContent,
           display: entry.display === true,
         }),
         includeInContext: true,

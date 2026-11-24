@@ -95,14 +95,13 @@ export function convertV1ToEntries(
           typeof rawLine.summary === 'string' ? rawLine.summary : undefined,
       }
     } else if (rawLine.type === 'message') {
-      pushValidV1Message(checkpoint.messages, rawLine, new Date().toISOString())
+      pushValidV1Message(checkpoint.messages, rawLine)
     }
   }
 
+  const runFallbackNow = new Date().toISOString()
   const fallbackTime =
-    checkpoint.timestamp ??
-    checkpoint.messages[0]?.timestamp ??
-    new Date().toISOString()
+    checkpoint.timestamp ?? checkpoint.messages[0]?.timestamp ?? runFallbackNow
   const header: Record<string, unknown> = {
     type: 'session',
     version: 2,
@@ -112,12 +111,28 @@ export function convertV1ToEntries(
 
   const entries: RawTranscriptEntry[] = []
   const taken = new Set<string>()
-  const push = (entry: {
-    type: string
-    timestamp: string
-    [key: string]: unknown
-  }) => {
-    const seed = `${sessionId}\0${entries.length}\0${entry.type}\0${entry.timestamp}`
+  const push = (
+    entry: {
+      type: string
+      timestamp: string
+      [key: string]: unknown
+    },
+    rawTimestamp?: string,
+  ) => {
+    const payloadHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          type: entry.type,
+          message: entry.message,
+          model: entry.model,
+          thinkingLevel: entry.thinkingLevel,
+          summary: entry.summary,
+          name: entry.name,
+        }),
+      )
+      .digest('hex')
+      .slice(0, 16)
+    const seed = `${sessionId}\0${entries.length}\0${entry.type}\0${rawTimestamp ?? ''}\0${payloadHash}`
     const id = createSyntheticId(taken, seed)
     entries.push({
       ...entry,
@@ -126,20 +141,27 @@ export function convertV1ToEntries(
     })
   }
 
-  const firstTime = checkpoint.messages[0]?.timestamp ?? fallbackTime
+  const rawFirstTime = checkpoint.messages[0]?.timestamp ?? checkpoint.timestamp
+  const firstTime = rawFirstTime ?? fallbackTime
   if (checkpoint.model) {
-    push({
-      type: 'model_change',
-      timestamp: firstTime,
-      model: checkpoint.model,
-    })
+    push(
+      {
+        type: 'model_change',
+        timestamp: firstTime,
+        model: checkpoint.model,
+      },
+      rawFirstTime,
+    )
   }
   if (checkpoint.thinkingLevel) {
-    push({
-      type: 'thinking_level_change',
-      timestamp: firstTime,
-      thinkingLevel: checkpoint.thinkingLevel,
-    })
+    push(
+      {
+        type: 'thinking_level_change',
+        timestamp: firstTime,
+        thinkingLevel: checkpoint.thinkingLevel,
+      },
+      rawFirstTime,
+    )
   }
 
   const summary = checkpoint.summary
@@ -150,22 +172,28 @@ export function convertV1ToEntries(
   const compacted = Boolean(summary && firstContent === expectedSummaryText)
 
   for (const item of checkpoint.messages.slice(compacted ? 1 : 0)) {
-    push({
-      type: 'message',
-      timestamp: item.timestamp ?? fallbackTime,
-      message: item.message,
-    })
+    push(
+      {
+        type: 'message',
+        timestamp: item.timestamp ?? fallbackTime,
+        message: item.message,
+      },
+      item.timestamp,
+    )
   }
 
   if (compacted && summary) {
     const firstKept = entries.find((entry) => entry.type === 'message')
-    push({
-      type: 'compaction',
-      timestamp: checkpoint.messages[0]?.timestamp ?? fallbackTime,
-      summary,
-      firstKeptEntryId: firstKept?.id ?? '',
-      tokensBefore: 0,
-    })
+    push(
+      {
+        type: 'compaction',
+        timestamp: checkpoint.messages[0]?.timestamp ?? fallbackTime,
+        summary,
+        firstKeptEntryId: firstKept?.id ?? '',
+        tokensBefore: 0,
+      },
+      checkpoint.messages[0]?.timestamp ?? checkpoint.timestamp,
+    )
     const compaction = entries.at(-1)!
     if (!compaction.firstKeptEntryId) {
       compaction.firstKeptEntryId = compaction.id
@@ -173,11 +201,14 @@ export function convertV1ToEntries(
   }
 
   if (checkpoint.name) {
-    push({
-      type: 'session_info',
-      timestamp: fallbackTime,
-      name: checkpoint.name,
-    })
+    push(
+      {
+        type: 'session_info',
+        timestamp: fallbackTime,
+        name: checkpoint.name,
+      },
+      checkpoint.timestamp ?? checkpoint.messages[0]?.timestamp,
+    )
   }
 
   return { header, entries }

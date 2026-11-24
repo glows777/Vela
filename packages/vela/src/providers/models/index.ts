@@ -64,6 +64,11 @@ export interface ProviderContext {
 
 const localOnlyOAuthChecks = new WeakMap<ProviderContext, () => boolean>()
 
+/** True when a session belongs to a remote/external channel (such as `lark`), not local interactive/Desktop. */
+export function isRemoteChannel(channel?: string): boolean {
+  return Boolean(channel && channel !== 'local')
+}
+
 /** @internal True when this request's channel session withheld a `localOnly` OAuth token. */
 export function isLocalOnlyOAuthBlocked(ctx: ProviderContext): boolean {
   return localOnlyOAuthChecks.get(ctx)?.() ?? false
@@ -160,11 +165,12 @@ export class ModelRegistry {
 
   /**
    * The plan paying for a provider's requests (e.g. `ChatGPT plan`), when the stored credential is a subscription
-   * sign-in rather than an API key; undefined otherwise.
+   * sign-in rather than an API key and not blocked by a remote channel; undefined otherwise.
    */
-  planLabel(provider: string): string | undefined {
+  planLabel(provider: string, channel?: string): string | undefined {
     const oauth = this.providers.get(provider)?.oauth
     if (!oauth?.isSubscription) return
+    if (oauth.localOnly && isRemoteChannel(channel)) return
     if (this.credentials.get(provider)?.type !== 'oauth') return
     return oauth.planLabel
   }
@@ -260,18 +266,22 @@ export class ModelRegistry {
     provider: string,
     options: { signal?: AbortSignal; onNotice?: (text: string) => void } = {},
   ): Promise<boolean> {
+    options.signal?.throwIfAborted()
     const credential = this.credentials.get(provider)
     if (!credential) return false
     const revoke = this.providers.get(provider)?.oauth?.logout
     if (credential.type === 'oauth' && revoke) {
       try {
         await revoke(credential, options.signal ?? new AbortController().signal)
-      } catch {
+      } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason ?? error
         options.onNotice?.(
           `Could not confirm that ${provider} revoked this sign-in at the provider; the credential is removed locally.`,
         )
       }
     }
+    const current = this.credentials.get(provider)
+    if (!current || !sameCredential(credential, current)) return false
     await this.credentials.delete(provider)
     return true
   }
@@ -296,7 +306,7 @@ export class ModelRegistry {
     const ctx: ProviderContext = {
       provider,
       credential: async () => {
-        if (def.oauth?.localOnly && options.channel?.()) {
+        if (def.oauth?.localOnly && isRemoteChannel(options.channel?.())) {
           const stored = this.credentials.get(provider)
           if (stored?.type === 'api_key') return stored
           return undefined
@@ -308,10 +318,10 @@ export class ModelRegistry {
     localOnlyOAuthChecks.set(
       ctx,
       () =>
-        Boolean(def.oauth?.localOnly && options.channel?.()) &&
+        Boolean(def.oauth?.localOnly && isRemoteChannel(options.channel?.())) &&
         this.credentials.get(provider)?.type === 'oauth',
     )
-    const planLabel = this.planLabel(provider)
+    const planLabel = this.planLabel(provider, options.channel?.())
     return {
       model: def.createModel(id, ctx),
       info: {
@@ -322,6 +332,14 @@ export class ModelRegistry {
       },
     }
   }
+}
+
+function sameCredential(a: Credential, b: Credential): boolean {
+  if (a.type !== b.type) return false
+  if (a.type === 'api_key' && b.type === 'api_key') return a.key === b.key
+  if (a.type === 'oauth' && b.type === 'oauth')
+    return a.refresh === b.refresh && a.access === b.access
+  return false
 }
 
 /** Validate that a `ModelHandle` passed to the SDK is a runnable model instance. */

@@ -49,6 +49,21 @@ export class SessionDefaultState {
     return clampThinkingLevel(this.thinking, info, THINKING_LEVELS)
   }
 
+  /** Model metadata with live `planLabel` reflecting credential/auth changes. */
+  info(
+    resolved: ResolvedModel,
+    deps: Pick<SessionDeps<unknown>, 'planLabel'>,
+    channel?: string,
+  ): ModelInfo {
+    const info = resolved.info
+    if (!deps.planLabel) return info
+    const livePlan = deps.planLabel(info.provider, channel)
+    if (livePlan === info.planLabel) return info
+    if (livePlan) return { ...info, planLabel: livePlan }
+    const { planLabel: _, ...rest } = info
+    return rest
+  }
+
   async restore(
     context: SessionContext,
     deps: {

@@ -18,6 +18,7 @@ import {
   catalogLookup,
   catalogModels,
   isLocalOnlyOAuthBlocked,
+  isRemoteChannel,
   type ProviderContext,
   type ProviderDefinition,
 } from './models/index.ts'
@@ -213,15 +214,18 @@ function createProvider(
   const oauthRequests = builtin?.oauthRequests
   const envKey = builtin?.envKey
   const configured = () => read(config.apiKey)
+  const pureEnvVarName = (raw: string | undefined): string | undefined => {
+    if (!raw) return undefined
+    const match =
+      /^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$/.exec(raw)
+    return match?.[1] ?? match?.[2]
+  }
 
   // Like pi: a stored credential first, then config.json's apiKey, then the environment variable
   const authSource = (credential: Credential | undefined) => {
     if (credential)
       return credential.type === 'oauth' ? 'OAuth (auth.json)' : 'auth.json'
-    if (configured())
-      return config.apiKey?.startsWith('$')
-        ? config.apiKey.replace(/[${}]/g, '')
-        : 'config.json'
+    if (configured()) return pureEnvVarName(config.apiKey) ?? 'config.json'
     if (envKey && env[envKey]) return envKey
   }
 
@@ -237,7 +241,7 @@ function createProvider(
           `auth.json has an OAuth credential for ${name}, but Vela has no OAuth sign-in for this provider; run /logout ${name}`,
         )
       const channel = ctx.channel()
-      if (oauthRequests?.localOnly && channel) {
+      if (oauthRequests?.localOnly && isRemoteChannel(channel)) {
         const fallback = configured() ?? (envKey ? env[envKey] : undefined)
         if (fallback) return { key: fallback, oauth: false }
         throw new Error(
@@ -254,12 +258,11 @@ function createProvider(
         `${oauth.name} is only for the local terminal, not for ${channel}; give ${name} an API key (/login ${name} → Enter an API key, or the ${envKey} environment variable) or have this channel use another model`,
       )
     }
+    const envVarName = pureEnvVarName(config.apiKey)
     const ways = [
       ...(oauth || builtin ? [`run /login ${name}`] : []),
-      ...(config.apiKey?.startsWith('$')
-        ? [
-            `set the ${config.apiKey.replace(/[${}]/g, '')} environment variable`,
-          ]
+      ...(envVarName
+        ? [`set the ${envVarName} environment variable`]
         : envKey
           ? [`set the ${envKey} environment variable`]
           : []),
@@ -425,7 +428,7 @@ function createProvider(
             }
             // The OAuth route's requirements remain authoritative over caller/default options.
             const blockedLocalOAuth = Boolean(
-              oauthRequests?.localOnly && ctx.channel(),
+              oauthRequests?.localOnly && isRemoteChannel(ctx.channel()),
             )
             return transform &&
               !blockedLocalOAuth &&

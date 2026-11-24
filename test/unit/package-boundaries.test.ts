@@ -404,3 +404,77 @@ test('print mode with AGENTS.md does not load @earendil-works/pi-tui', async () 
   expect(stdout.trim().length).toBeGreaterThan(0)
   expect(stderr).not.toContain('pi-tui must not load')
 }, 20_000)
+
+test('boundary checker closes IIFE, createRequire alias, type re-export, unknown layer, .js->.ts, and escape loopholes', async () => {
+  expect(
+    (
+      await errors({
+        'packages/vela/src/lark/iife.ts':
+          "export const sdk = (() => import('@larksuiteoapi/node-sdk'))()",
+        'packages/vela/src/index.ts': "export * from './lark/iife.ts'",
+      })
+    ).join('\n'),
+  ).toMatch(/eagerly reachable/)
+
+  expect(
+    (
+      await errors({
+        'packages/vela/src/lark/uncond.ts':
+          "if (true) await import('@larksuiteoapi/node-sdk')\nexport const x = 1",
+        'packages/vela/src/index.ts': "export * from './lark/uncond.ts'",
+      })
+    ).join('\n'),
+  ).toMatch(/eagerly reachable/)
+
+  expect(
+    await errors({
+      'packages/vela/src/lark/cond.ts':
+        "export async function load(flag: boolean) { if (flag) return import('@larksuiteoapi/node-sdk') }",
+      'packages/vela/src/index.ts': "export * from './lark/cond.ts'",
+    }),
+  ).toEqual([])
+
+  expect(
+    (
+      await errors({
+        'packages/vela/src/lark/req.ts':
+          "import { createRequire as makeReq } from 'node:module'\nconst r = makeReq(import.meta.url)\nexport const sdk = r('@larksuiteoapi/node-sdk')",
+        'packages/vela/src/index.ts': "export * from './lark/req.ts'",
+      })
+    ).join('\n'),
+  ).toMatch(/eagerly reachable/)
+
+  expect(
+    await errors({
+      'packages/vela/src/lark/types.ts':
+        "import * as lark from '@larksuiteoapi/node-sdk'; export type L = typeof lark",
+      'packages/vela/src/index.ts': "export { type L } from './lark/types.ts'",
+    }),
+  ).toEqual([])
+
+  expect(
+    (
+      await errors({
+        'packages/vela/src/mystery/ok.ts': 'export const m = 1',
+      })
+    ).join('\n'),
+  ).toMatch(/unknown layer/)
+
+  expect(
+    (
+      await errors({
+        'packages/vela/src/runtime/bad-js.ts':
+          "export { shared } from '../driver/ok.js'",
+      })
+    ).join('\n'),
+  ).toMatch(/layer direction runtime -> driver/)
+
+  expect(
+    (
+      await errors({
+        'packages/vela/package-helper.ts': 'export const x = 1',
+        'packages/vela/src/index.ts': "export * from '../package-helper.ts'",
+      })
+    ).join('\n'),
+  ).toMatch(/source escape/)
+})

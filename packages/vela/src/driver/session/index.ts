@@ -686,6 +686,19 @@ export class SessionStore {
                 }
               : reparented,
           )
+        } else if (
+          reparented.type === 'custom_message' &&
+          Array.isArray(reparented.content)
+        ) {
+          const { content, changed } = normalizeVelaContent(reparented.content)
+          entries.push(
+            changed
+              ? {
+                  ...reparented,
+                  content: content as CustomMessageEntry['content'],
+                }
+              : reparented,
+          )
         } else {
           entries.push(reparented)
         }

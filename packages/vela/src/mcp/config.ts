@@ -267,7 +267,9 @@ export function loadMcpServers(options: {
   env: Env
 }): McpServersFile {
   const result: McpServersFile = { servers: {}, sources: {}, errors: [] }
-  const files = [join(options.agentDir, 'config.json')]
+  const failedUserServers = new Set<string>()
+  const userFile = join(options.agentDir, 'config.json')
+  const files = [userFile]
   if (options.trusted) files.push(join(options.projectDir, 'config.json'))
   for (const file of files) {
     if (!existsSync(file)) continue
@@ -292,36 +294,51 @@ export function loadMcpServers(options: {
       const existing = result.servers[name]
       if (
         isPlainObject(raw) &&
-        isPlainObject(existing) &&
         raw.command === undefined &&
         raw.url === undefined &&
         raw.type === undefined
       ) {
-        const extra = Object.keys(raw).filter(
-          (key) => !(OVERRIDE_KEYS as readonly string[]).includes(key),
-        )
-        if (extra.length > 0) {
-          result.errors.push(
-            `${file}: MCP server "${name}": an override can only set ${OVERRIDE_KEYS.join(', ')} (found ${extra.join(', ')})`,
+        if (file !== userFile && failedUserServers.has(name)) {
+          const extra = Object.keys(raw).filter(
+            (key) => !(OVERRIDE_KEYS as readonly string[]).includes(key),
           )
+          if (extra.length === 0) continue
+        }
+        if (isPlainObject(existing)) {
+          const extra = Object.keys(raw).filter(
+            (key) => !(OVERRIDE_KEYS as readonly string[]).includes(key),
+          )
+          if (extra.length > 0) {
+            result.errors.push(
+              `${file}: MCP server "${name}": an override can only set ${OVERRIDE_KEYS.join(', ')} (found ${extra.join(', ')})`,
+            )
+            continue
+          }
+          const overrides = Object.fromEntries(
+            OVERRIDE_KEYS.filter((key) => key in raw).map((key) => [
+              key,
+              raw[key],
+            ]),
+          )
+          // `existing` is already interpolated; apply exposure overrides without re-expanding user strings.
+          result.servers[name] = { ...existing, ...overrides }
+          result.sources[name] = file
           continue
         }
-        const overrides = Object.fromEntries(
-          OVERRIDE_KEYS.filter((key) => key in raw).map((key) => [
-            key,
-            raw[key],
-          ]),
-        )
-        // `existing` is already interpolated; apply exposure overrides without re-expanding user strings.
-        result.servers[name] = { ...existing, ...overrides }
+      }
+      if (isPlainObject(raw) && raw.enabled === false) {
+        result.servers[name] = raw
         result.sources[name] = file
+        if (file === userFile) failedUserServers.delete(name)
         continue
       }
       try {
         result.servers[name] = interpolateServer(name, raw, options.env)
         result.sources[name] = file
+        if (file === userFile) failedUserServers.delete(name)
       } catch (error) {
         delete result.servers[name]
+        if (file === userFile) failedUserServers.add(name)
         result.errors.push(
           error instanceof Error ? error.message : String(error),
         )

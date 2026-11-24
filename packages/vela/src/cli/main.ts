@@ -25,11 +25,6 @@ import { type LocalOptions, local } from '../legacy-channels/index.ts'
 import { defaultAgentDir, loadConfig, type VelaConfig } from '../load-config.ts'
 import { usableModel } from '../settings.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
-import {
-  createMockModel,
-  loadFauxScenario,
-  recordModel,
-} from '../testing/core/index.ts'
 import { createVela } from '../vela.ts'
 import { formatContextFileList } from './context-display.ts'
 import { ownerDocker } from './docker.ts'
@@ -81,7 +76,10 @@ if (args.help || args.version) {
 if (args.setupTarget === 'github') {
   const setupAgentDir = defaultAgentDir(process.env)
   try {
-    migrateLegacyConfigFiles(setupAgentDir)
+    const migratedSetup = migrateLegacyConfigFiles(setupAgentDir)
+    for (const warning of migratedSetup.warnings) {
+      console.error(`[config] ${warning}`)
+    }
   } catch (error) {
     console.error(`[config] ${error instanceof Error ? error.message : error}`)
     process.exit(1)
@@ -196,6 +194,9 @@ try {
       `[config] Migrated ${migratedConfig.sources.map((file) => basename(file)).join(', ')} to ${migratedConfig.path} (legacy files kept read-only)`,
     )
   }
+  for (const warning of migratedConfig.warnings) {
+    console.error(`[config] ${warning}`)
+  }
   const trust = await resolveTrust({
     cwd,
     agentDir,
@@ -262,10 +263,15 @@ async function chooseModel(): Promise<ModelInput | undefined> {
   // --model wins over VELA_MODEL (so VELA_RECORD wraps the model --model names)
   if (args.model) return args.model
   // VELA_MODEL=mock: offline demo with the built-in keyword demo model (simulates prompt cache behavior)
-  if (env.VELA_MODEL === 'mock') return createMockModel()
+  if (env.VELA_MODEL === 'mock') {
+    const { createMockModel } = await import('../testing/core/index.ts')
+    return createMockModel()
+  }
   // VELA_MODEL=faux:<scenario.json>: replay model responses from a JSON scenario script (bug repros, CLI e2e)
-  if (env.VELA_MODEL?.startsWith('faux:'))
+  if (env.VELA_MODEL?.startsWith('faux:')) {
+    const { loadFauxScenario } = await import('../testing/core/index.ts')
     return loadFauxScenario(env.VELA_MODEL.slice('faux:'.length))
+  }
   return (
     config.settings.model ??
     (env.OPENAI_API_MODEL_NAME
@@ -278,9 +284,12 @@ let chosenModel = args.listModels ? undefined : await chooseModel()
 
 // VELA_RECORD=<file.json>: record this run's model responses and user input as a faux scenario; replay with VELA_MODEL=faux:<file>
 // (records the default model only; a model chosen by name is resolved here via config.json / built-in providers, so extension providers can't be recorded)
-let recorder: ReturnType<typeof recordModel> | undefined
+let recorder:
+  | Awaited<ReturnType<typeof import('../testing/core/index.ts').recordModel>>
+  | undefined
 if (env.VELA_RECORD && !args.listModels && !args.setup) {
   try {
+    const { recordModel } = await import('../testing/core/index.ts')
     recorder = recordModel(
       resolveModel(chosenModel, {
         providers: config.providers,
@@ -299,7 +308,9 @@ const interactiveLogger =
   mode === 'interactive' && !args.listModels
     ? createInteractiveLogger({
         debugLog:
-          env.VELA_DEBUG === '1' ? join(agentDir, 'debug.log') : undefined,
+          env.VELA_DEBUG === '1'
+            ? join(config.agentDir, 'debug.log')
+            : undefined,
       })
     : undefined
 const logger =
@@ -334,9 +345,9 @@ const vela = createVela({
       : undefined,
     fallbackShellPath: resolveShellPath(undefined, { env }),
     workspaceModeAt: (location) =>
-      join(location, '.vela') === agentDir
+      join(location, '.vela') === config.agentDir
         ? 'home'
-        : args.approve !== false && savedTrust(agentDir, location)
+        : args.approve !== false && savedTrust(config.agentDir, location)
           ? 'all'
           : 'none',
   },
@@ -350,7 +361,7 @@ const vela = createVela({
   eventDefaultTarget: config.settings.eventDefaultTarget,
   logger,
   // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off
-  binDir: join(agentDir, 'bin'),
+  binDir: join(config.agentDir, 'bin'),
   offline: ['1', 'true', 'yes'].includes(
     (env.VELA_OFFLINE ?? '').toLowerCase(),
   ),
@@ -528,7 +539,7 @@ async function reportContextFiles(session: VelaSession) {
   const line = formatContextFileList(resources.contextFiles, {
     cwd: session.cwd,
     homeDir: homedir(),
-    agentDir,
+    agentDir: config.agentDir,
   })
   if (line) logger.info(`[context] ${line}`)
   return resources
@@ -622,15 +633,15 @@ try {
       newSessionId,
       configure: applyModelArgs,
       describeError: cliErrorMessage,
-      loginOptions: { getDeviceId: () => installationId(agentDir) },
-      agentDir,
+      loginOptions: { getDeviceId: () => installationId(config.agentDir) },
+      agentDir: config.agentDir,
       attachLogger: interactiveLogger?.attach,
       setupOnly: args.setup,
       setupTarget: args.setupTarget,
       projectSettingsPath: config.files.find(
         (file) =>
           file === join(config.cwd, '.vela', 'config.json') &&
-          file !== join(agentDir, 'config.json'),
+          file !== join(config.agentDir, 'config.json'),
       ),
       onConfigured: () => {
         args.model = undefined

@@ -46,6 +46,13 @@ export function applyMigrations(
 
   for (const migration of pending) {
     db.transaction(() => {
+      const liveVersion = db.schemaVersion
+      if (liveVersion > SCHEMA_VERSION) {
+        throw new Error(
+          `Database "${db.path}" has schema version ${liveVersion}, which is newer than supported version ${SCHEMA_VERSION}`,
+        )
+      }
+      if (liveVersion >= migration.version) return
       db.exec(migration.sql)
       db.run(
         'INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',

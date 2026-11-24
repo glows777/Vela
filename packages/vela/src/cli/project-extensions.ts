@@ -88,8 +88,10 @@ export function cliProjectExtensions(
     for (const entry of settings.extensions ?? []) {
       const match = /^([+-]?)builtin:(.+)$/.exec(entry)
       if (!match) continue
-      if (!(builtins?.names ?? []).includes(match[2]!))
+      if (!(builtins?.names ?? []).includes(match[2]!)) {
+        if (match[1] === '-' && match[2] === 'rag') continue
         throw new Error(`Unknown built-in extension builtin:${match[2]}`)
+      }
       if (match[1] === '-') disabled.add(match[2]!)
       else disabled.delete(match[2]!)
     }

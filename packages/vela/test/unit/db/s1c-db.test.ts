@@ -35,6 +35,7 @@ const EXPECTED_TABLES = [
   'events',
   'inbox_events',
   'kv_meta',
+  'oauth_registrations',
   'outbox',
   'projects',
   'runs',
@@ -48,7 +49,7 @@ const EXPECTED_TABLES = [
   'vela_tool_calls',
 ]
 
-test('openDatabase initializes WAL, pragmas, 0700/0600 permissions without mutating existing parent dir, and all 18 tables', () => {
+test('openDatabase initializes WAL, pragmas, 0700/0600 permissions without mutating existing parent dir, and all 19 tables', () => {
   const parentDir = tempDir('vela-s1c-existing-')
   cleanup.push({ dir: parentDir })
   if (process.platform !== 'win32') {
@@ -469,7 +470,7 @@ test('Node.js and Bun independently initialize WAL DBs, cross-reopen each other,
     sync: 1,
     timeout: 5000,
     fk: 1,
-    tables: 18,
+    tables: 19,
     version: SCHEMA_VERSION,
   }
   expect(JSON.parse(nodeInit.stdout.trim())).toEqual(expected)
@@ -531,4 +532,83 @@ test('tolerates concurrent absent-path database creation (EEXIST)', async () => 
   for (const db of opened) cleanup.push({ db })
   expect(opened[0].schemaVersion).toBe(SCHEMA_VERSION)
   expect(opened[1].schemaVersion).toBe(SCHEMA_VERSION)
+})
+
+test('s1c audit schema fixes: oauth_registrations, ON DELETE SET NULL, run triggers, tool_calls key, status indexes, migration tx re-check', async () => {
+  const { applyMigrations } = await import('../../../src/db/migrations.ts')
+  const { db } = openTempDb('audit-schema.db')
+
+  // oauth_registrations exists and accepts CRUD
+  db.run(
+    "INSERT INTO oauth_registrations (provider, client_id, host_id, subject, updated_at) VALUES ('openai-chatgpt', 'cid-1', 'host-1', 'sub-1', '2026-11-24T00:00:00Z')",
+  )
+  expect(
+    db.get<{ client_id: string }>(
+      "SELECT client_id FROM oauth_registrations WHERE provider = 'openai-chatgpt'",
+    ),
+  ).toEqual({ client_id: 'cid-1' })
+
+  // Status-leading indexes exist
+  const indexes = db
+    .all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_inbox_status_created', 'idx_runs_status', 'idx_bg_jobs_status', 'idx_vela_tool_calls_active_status')",
+    )
+    .map((r) => r.name)
+  expect(indexes.sort()).toEqual([
+    'idx_bg_jobs_status',
+    'idx_inbox_status_created',
+    'idx_runs_status',
+    'idx_vela_tool_calls_active_status',
+  ])
+
+  // channel_bindings.session_id uses ON DELETE SET NULL
+  db.run(
+    "INSERT INTO sessions (id, kind, state, created_at, updated_at) VALUES ('sess-bind', 'chat', 'idle', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO channel_bindings (id, channel, kind, external_id, session_id, enabled, created_at, updated_at) VALUES ('lark:chat1', 'lark', 'group', 'chat1', 'sess-bind', 1, '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run("DELETE FROM sessions WHERE id = 'sess-bind'")
+  expect(
+    db.get<{ session_id: string | null }>(
+      "SELECT session_id FROM channel_bindings WHERE id = 'lark:chat1'",
+    ),
+  ).toEqual({ session_id: null })
+
+  // runs.trigger accepts handoff & session, rejects unknown values
+  db.run(
+    "INSERT INTO sessions (id, kind, state, created_at, updated_at) VALUES ('sess-run', 'chat', 'idle', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at) VALUES ('run-h', 'sess-run', 'handoff', 'queued', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at) VALUES ('run-s', 'sess-run', 'session', 'queued', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  expect(() =>
+    db.run(
+      "INSERT INTO runs (id, session_id, trigger, status, started_at, updated_at) VALUES ('run-bad', 'sess-run', 'invalid_trigger', 'queued', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+    ),
+  ).toThrow()
+
+  // vela_tool_calls unique index is (session_id, assistant_message_id, tool_call_id)
+  db.run(
+    "INSERT INTO vela_messages (session_id, id, seq, kind, role, content_json, created_at) VALUES ('sess-run', 'm1', 1, 'message', 'assistant', '{}', '2026-11-24T00:00:00Z'), ('sess-run', 'm2', 2, 'message', 'assistant', '{}', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO vela_tool_calls (id, run_id, session_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc1', 'run-h', 'sess-run', 'm1', 'call-dup', 0, 'bash', '{}', 'running', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  db.run(
+    "INSERT INTO vela_tool_calls (id, run_id, session_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc2', 'run-h', 'sess-run', 'm2', 'call-dup', 0, 'bash', '{}', 'running', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  )
+  expect(() =>
+    db.run(
+      "INSERT INTO vela_tool_calls (id, run_id, session_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc3', 'run-s', 'sess-run', 'm1', 'call-dup', 0, 'bash', '{}', 'running', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+    ),
+  ).toThrow()
+
+  // applyMigrations re-checks schemaVersion inside transaction
+  expect(() => applyMigrations(db)).not.toThrow()
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 5}`)
+  expect(() => applyMigrations(db)).toThrow(/newer/i)
 })

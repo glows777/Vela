@@ -70,19 +70,7 @@ export async function packWorkspaces(root: string, work: string) {
     }
     manifest.gitHead = commit
     for (const file of manifest.files as string[]) {
-      try {
-        await cp(join(pkg.dir, file), join(dir, file), { recursive: true })
-      } catch (error) {
-        if (
-          !(
-            error instanceof Error &&
-            'code' in error &&
-            error.code === 'ENOENT' &&
-            !['dist', 'LICENSE', 'README.md'].includes(file)
-          )
-        )
-          throw error
-      }
+      await cp(join(pkg.dir, file), join(dir, file), { recursive: true })
     }
     const readme = join(dir, 'README.md')
     await writeFile(
@@ -104,10 +92,21 @@ export async function packWorkspaces(root: string, work: string) {
     for (const file of [
       'package/LICENSE',
       'package/README.md',
+      'package/CHANGELOG.md',
       'package/dist/index.js',
       'package/dist/index.d.ts',
       ...(pkg.key === 'vela'
-        ? ['package/dist/docker/adapter.mjs', 'package/dist/docker/guest.cjs']
+        ? [
+            'package/dist/cli/main.js',
+            'package/dist/extension-api.js',
+            'package/dist/extension-api.d.ts',
+            'package/dist/testing/index.js',
+            'package/dist/testing/index.d.ts',
+            'package/dist/legacy-desktop.js',
+            'package/dist/legacy-desktop.d.ts',
+            'package/dist/docker/adapter.mjs',
+            'package/dist/docker/guest.cjs',
+          ]
         : []),
     ])
       if (!contents.includes(file))

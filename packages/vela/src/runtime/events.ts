@@ -11,13 +11,26 @@
 import type { VelaMessage } from '../shared/messages.ts'
 import type { ProviderUsage } from '../shared/provider-types.ts'
 
-export type RunEndStatus = 'completed' | 'stopped' | 'failed' | 'waiting_human'
+export type RunEndStatus =
+  | 'completed'
+  | 'stopped'
+  | 'failed'
+  | 'waiting_human'
+  | 'interrupted'
 
 export type RuntimeEventPayload =
   | {
       type: 'run_started'
       runId: string
-      trigger: 'user' | 'channel' | 'timer' | 'webhook' | 'approval' | 'job'
+      trigger:
+        | 'user'
+        | 'channel'
+        | 'timer'
+        | 'webhook'
+        | 'approval'
+        | 'job'
+        | 'handoff'
+        | 'session'
     }
   | {
       type: 'message_committed'
@@ -53,9 +66,11 @@ export type RuntimeEventPayload =
     }
   | {
       type: 'approval_resolved'
+      runId?: string
       approvalId: string
-      decision: 'approved' | 'denied'
+      decision: 'approved' | 'denied' | 'cancelled'
       reason?: string
+      decidedBy?: string
     }
   | {
       type: 'compaction_finished'
