@@ -154,8 +154,8 @@ Vela's own keys:
 | Shift+Tab | Cycle the thinking level. |
 | Ctrl+L | Open the model picker. |
 | Ctrl+P, Shift+Ctrl+P | Switch to the next or previous model in `enabledModels` (all available models when unset). |
-| Ctrl+O | Expand or collapse tool output. |
-| Ctrl+T | Show or hide thinking. |
+| Ctrl+O | Expand or collapse the process of every turn. Clicking a turn's line does the same for that turn only. |
+| Ctrl+T | Show or hide thinking inside open turns. |
 | Ctrl+C | Clear the editor; press twice within half a second to exit. |
 | Ctrl+D | Exit when the editor is empty; otherwise delete the character after the cursor. |
 
@@ -182,7 +182,9 @@ In pickers and dialogs: Up and Down move, Enter selects, Esc cancels. Keybinding
 
 ### Tool output
 
-Each tool call is a block showing the tool and its key argument, like pi. While `bash` runs, its output streams into the block with the elapsed time; collapsed, the block keeps the last 5 lines and shows how long the command took. `edit_file` shows the diff of its change. Other tools show the first 10 lines of their result. Ctrl+O expands every block (and `!` command output, which keeps the last 20 lines collapsed). A resumed session draws its tool blocks again with diffs and nested calls. Calls a tool makes through `ctx.executeTool()` are listed inside its block, one line each with ✓ or ✗ and the time taken.
+A turn's process folds into one line above its answer, like Claude Code: `Thought for 12s, searched for 3 patterns, read 2 files, ran 4 shell commands`. Thinking and the tool calls behind that line stay in the transcript but are hidden; Ctrl+O opens every turn and clicking a line opens that turn alone. A turn that left no answer text, because it was interrupted or only ran tools, stays open so its evidence shows. Within a turn, text the model wrote before a tool call is a preamble and joins the fold; the turn's last text stays on screen.
+
+Inside an open turn each tool call is a block showing the tool and its key argument and its full output, like pi. `bash` shows how long it took; `edit_file` shows the diff of its change. Ctrl+T hides or shows thinking inside open turns. A failed call leaves the fold and stays on screen, as do notices, permission prompts and your own `!` commands (those keep the last 20 lines and expand with Ctrl+O). A resumed session draws the same folds, with diffs and nested calls. Calls a tool makes through `ctx.executeTool()` are listed inside its block, one line each with ✓ or ✗ and the time taken.
 
 If the terminal goes away (the window is closed or the SSH connection drops), Vela exits: on SIGHUP it saves and closes the sessions first, and when reading or writing the terminal fails it exits at once with code 129.
 

@@ -40,23 +40,17 @@ import { createCliDispatcher } from './dispatcher.ts'
 import { formatContextFileList, headerSessionLabel } from './status-display.ts'
 import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
 import { backgroundRunning } from './tui/background.ts'
+import { ChatLog } from './tui/chat-log.ts'
 import { commandCompletions, HOTKEYS } from './tui/commands.ts'
 import {
-  AssistantMessage,
   agentEndNotice,
-  BashExecution,
-  CustomMessageBlock,
   compactionLine,
   contextLine,
   errorMessage,
-  imagePlaceholder,
   isDeadTerminalError,
   lastAnswer,
-  notice,
   oneLine,
   sanitize,
-  ToolBlock,
-  UserMessage,
 } from './tui/components.ts'
 import { keyLabel, VelaEditor } from './tui/editor.ts'
 import { Footer } from './tui/footer.ts'
@@ -113,7 +107,7 @@ export class InteractiveMode {
 
   private readonly header = new Container()
   private readonly transcript = new Container()
-  private readonly chat = new Container()
+  private readonly log = new ChatLog(() => this.tui.requestRender())
   /** `!` commands run while the agent works; they move to the chat when it stops, where they are recorded (like pi) */
   private readonly pendingBash = new Container()
   private readonly pending = new Container()
@@ -125,13 +119,6 @@ export class InteractiveMode {
   private readonly dispatch: ReturnType<typeof createCliDispatcher>
   private loader?: Loader
 
-  private current?: AssistantMessage
-  private readonly tools = new Map<string, ToolBlock>()
-  private readonly allTools: ToolBlock[] = []
-  private readonly allAssistant: AssistantMessage[] = []
-  private readonly allBash: BashExecution[] = []
-  private toolsExpanded = false
-  private hideThinking = false
   private lastCtrlC = 0
   private shownError?: unknown
   private readonly widgetLines = new Map<string, string[]>()
@@ -184,7 +171,7 @@ export class InteractiveMode {
     this.editor = new VelaEditor(this.tui, editorTheme, { paddingX: 1 })
     this.dispatch = createCliDispatcher(this.vela)
     for (const child of [
-      this.chat,
+      this.log.container,
       this.pendingBash,
       this.pending,
       this.status,
@@ -363,14 +350,8 @@ export class InteractiveMode {
   }
 
   private resetChat(): void {
-    for (const block of this.allTools) block.stop()
-    this.chat.clear()
+    this.log.clear()
     this.pendingBash.clear()
-    this.tools.clear()
-    this.allTools.length = 0
-    this.allAssistant.length = 0
-    this.allBash.length = 0
-    this.current = undefined
     this.stopLoader()
   }
 
@@ -411,8 +392,10 @@ export class InteractiveMode {
       })
     for (const entry of shown) {
       if (entry.type === 'bash_execution') {
-        this.addBash(entry.command, !!entry.excludeFromContext).setResult(entry)
-        this.current = undefined
+        this.log.endTurn()
+        this.log
+          .addBash(entry.command, !!entry.excludeFromContext)
+          .setResult(entry)
         continue
       }
       if (entry.type === 'branch_summary') {
@@ -437,7 +420,7 @@ export class InteractiveMode {
         continue
       for (const part of message.content) {
         if (part.type !== 'tool-result') continue
-        const block = this.tools.get(part.toolCallId)
+        const block = this.log.tool(part.toolCallId)
         if (!block) continue
         for (const call of entry.nestedCalls?.[part.toolCallId]?.calls ?? []) {
           block.addNested(call.id, call.name, call.arguments)
@@ -448,14 +431,15 @@ export class InteractiveMode {
               call.durationMs,
             )
         }
-        block.setResult(
+        this.log.settleTool(
+          block,
           part.output,
           part.output.type.startsWith('error'),
           entry.details?.[part.toolCallId],
         )
       }
     }
-    this.current = undefined
+    this.log.endTurn()
   }
 
   // ---------------------------------------------------------------- Events
@@ -464,6 +448,7 @@ export class InteractiveMode {
     if (sessionId !== this.session.id) return
     switch (event.type) {
       case 'agent_start':
+        this.log.endTurn()
         this.shownError = undefined
         this.startLoader('Thinking…')
         break
@@ -472,20 +457,19 @@ export class InteractiveMode {
           this.renderMessage(event.message, false, event.custom)
         break
       case 'turn_start':
-        this.current = undefined
+        this.log.nextMessage()
         this.startLoader('Thinking…')
         break
       case 'message_update': {
         const update = event.assistantMessageEvent
-        if (update.type === 'thinking_delta')
-          this.assistant().appendThinking(update.delta)
-        else if (update.type === 'text_delta') {
-          this.assistant().appendText(update.delta)
+        if (update.type === 'thinking_delta') {
+          this.log.appendThinking(update.delta)
+        } else if (update.type === 'text_delta') {
+          this.log.appendText(update.delta)
           this.setLoader('Answering…')
         } else if (update.type === 'toolcall_end') {
           // Like pi: the tool block appears once the call is written; its result arrives with tool_execution_end
-          this.current = undefined
-          this.addTool(
+          this.log.addTool(
             update.toolCall.toolCallId,
             update.toolCall.toolName,
             update.toolCall.input,
@@ -496,46 +480,40 @@ export class InteractiveMode {
       case 'message_end':
         if (event.message.role !== 'assistant') break
         // Like pi: a failed attempt keeps its partial text, marked as failed; a retry starts a new message
-        if (event.stopReason === 'error' && this.current?.hasContent)
-          this.current.markFailed()
-        this.current = undefined
+        if (event.stopReason === 'error') this.log.markFailed()
+        this.log.nextMessage()
         break
       case 'tool_execution_start':
         // Calls made through ctx.executeTool() are listed inside the top-level call's block (like pi)
         if (event.parentToolCallId) {
-          this.rootTool(event.parentToolCallId)?.addNested(
-            event.toolCallId,
-            event.toolName,
-            event.args,
-          )
+          this.log
+            .rootTool(event.parentToolCallId)
+            ?.addNested(event.toolCallId, event.toolName, event.args)
           break
         }
-        if (!this.tools.has(event.toolCallId))
-          this.addTool(event.toolCallId, event.toolName, event.args)
-        this.tools.get(event.toolCallId)?.start()
+        if (!this.log.hasTool(event.toolCallId))
+          this.log.addTool(event.toolCallId, event.toolName, event.args)
+        this.log.startTool(event.toolCallId)
         this.setLoader(`Running ${event.toolName}…`)
         break
       case 'tool_execution_update':
         if (!event.parentToolCallId)
-          this.tools.get(event.toolCallId)?.update(event.partialResult)
+          this.log.updateTool(event.toolCallId, event.partialResult)
         break
       case 'tool_execution_end':
         if (event.parentToolCallId) {
-          this.rootTool(event.parentToolCallId)?.setNestedResult(
-            event.toolCallId,
-            event.isError,
-            event.durationMs,
-          )
+          this.log
+            .rootTool(event.parentToolCallId)
+            ?.setNestedResult(event.toolCallId, event.isError, event.durationMs)
           break
         }
-        this.tools
-          .get(event.toolCallId)
-          ?.setResult(
-            event.result,
-            event.isError,
-            event.details,
-            event.durationMs,
-          )
+        this.log.settleTool(
+          this.log.tool(event.toolCallId),
+          event.result,
+          event.isError,
+          event.details,
+          event.durationMs,
+        )
         break
       case 'auto_retry_start':
         this.addNotice(
@@ -550,8 +528,8 @@ export class InteractiveMode {
         )
         break
       case 'agent_end': {
-        this.current = undefined
-        for (const block of this.allTools) block.stop()
+        this.log.endTurn()
+        this.log.stopTools()
         if (event.reason === 'error') this.shownError = event.error
         const ended = agentEndNotice(event)
         if (ended) this.addNotice(ended.message, ended.level)
@@ -596,97 +574,32 @@ export class InteractiveMode {
     this.tui.requestRender()
   }
 
+  /** An extension's custom message, or a session message, goes to the chat log as it was recorded. */
   private renderMessage(
     message: ModelMessage,
     history = false,
     custom = this.session.customMessageOf(message),
   ): void {
-    if (message.role === 'user') {
-      const text =
-        typeof message.content === 'string'
-          ? message.content
-          : message.content
-              .map((part) =>
-                part.type === 'text'
-                  ? part.text
-                  : `\n${imagePlaceholder(part) ?? ''}`,
-              )
-              .join('')
-      // Like pi: an extension's custom message shows only with `display: true`, in its own block
-      if (custom) {
-        if (custom.display)
-          this.chat.addChild(new CustomMessageBlock(custom.customType, text))
-      } else if (text.trim()) this.chat.addChild(new UserMessage(text))
-      this.current = undefined
-      return
-    }
-    if (!history) return
-    if (message.role === 'assistant') {
-      if (typeof message.content === 'string') {
-        this.assistant().appendText(message.content)
-        return
-      }
-      for (const part of message.content) {
-        if (part.type === 'text') this.assistant().appendText(part.text)
-        else if (part.type === 'reasoning')
-          this.assistant().appendThinking(part.text)
-        else if (part.type === 'tool-call') {
-          this.current = undefined
-          this.addTool(part.toolCallId, part.toolName, part.input)
-        }
-      }
-    }
-  }
-
-  private assistant(): AssistantMessage {
-    if (!this.current) {
-      this.current = new AssistantMessage(this.hideThinking)
-      this.allAssistant.push(this.current)
-      this.chat.addChild(this.current)
-    }
-    return this.current
-  }
-
-  private addTool(id: string, name: string, input: unknown): void {
-    const block = new ToolBlock(name, input, this.toolsExpanded, () =>
-      this.tui.requestRender(),
-    )
-    this.tools.set(id, block)
-    this.allTools.push(block)
-    this.chat.addChild(block)
-  }
-
-  private addBash(
-    command: string,
-    excludeFromContext: boolean,
-    container: Container = this.chat,
-  ): BashExecution {
-    const block = new BashExecution(
-      command,
-      excludeFromContext,
-      this.toolsExpanded,
-    )
-    this.allBash.push(block)
-    container.addChild(block)
-    return block
+    this.log.renderMessage(message, history, custom)
   }
 
   /** The agent stopped: `!` blocks run meanwhile go to the chat, where their results are now recorded */
   private movePendingBash(): void {
-    for (const child of [...this.pendingBash.children])
-      this.chat.addChild(child)
+    for (const child of [...this.pendingBash.children]) this.log.add(child)
     this.pendingBash.clear()
   }
 
   /** `!cmd` / `!!cmd` (like pi): runs the command; its output goes to the model with the next message unless `!!` */
   private async runBash(command: string, excludeFromContext: boolean) {
     const session = this.session
-    const block = this.addBash(
+    const running = session.isRunning
+    const block = this.log.addBash(
       command,
       excludeFromContext,
-      session.isRunning ? this.pendingBash : this.chat,
+      running ? this.pendingBash : this.log.container,
     )
-    this.current = undefined
+    // A command run mid-turn gets its own block below the log; the turn keeps its one fold
+    if (!running) this.log.endTurn()
     this.tui.requestRender()
     try {
       const result = await session.executeBash(command, {
@@ -704,23 +617,12 @@ export class InteractiveMode {
     this.tui.requestRender()
   }
 
-  /** The top-level block a nested call belongs to: nested ids are `<parent>/<n>`, at any depth */
-  private rootTool(parentToolCallId: string): ToolBlock | undefined {
-    return (
-      this.tools.get(parentToolCallId) ??
-      this.tools.get(parentToolCallId.split('/', 1)[0] as string)
-    )
-  }
-
   private addNotice(
     text: string,
     level: LogLevel | 'dim' = 'info',
     raw = false,
   ): void {
-    const trimmed = text.replace(/^\n+|\n+$/g, '')
-    if (!trimmed.trim()) return
-    this.chat.addChild(notice(trimmed, level, raw))
-    this.tui.requestRender()
+    this.log.addNotice(text, level, raw)
   }
 
   private startLoader(message: string): void {
@@ -855,19 +757,8 @@ export class InteractiveMode {
     actions.set('selectModel', () => void this.selectModel())
     actions.set('cycleModelForward', () => this.cycleModel(1))
     actions.set('cycleModelBackward', () => this.cycleModel(-1))
-    actions.set('expandTools', () => {
-      this.toolsExpanded = !this.toolsExpanded
-      for (const block of [...this.allTools, ...this.allBash])
-        block.setExpanded(this.toolsExpanded)
-      this.chat.invalidate()
-      this.tui.requestRender()
-    })
-    actions.set('toggleThinking', () => {
-      this.hideThinking = !this.hideThinking
-      for (const message of this.allAssistant)
-        message.setHideThinking(this.hideThinking)
-      this.tui.requestRender()
-    })
+    actions.set('expandTools', () => this.log.toggleExpanded())
+    actions.set('toggleThinking', () => this.log.toggleThinking())
   }
 
   /** Move queued messages back to the editor (like pi); with abort, also interrupt the current task. Returns how many were moved. */

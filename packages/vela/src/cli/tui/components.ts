@@ -141,6 +141,11 @@ export class AssistantMessage extends Container {
     return this.thinking.trim() !== '' || this.text.trim() !== ''
   }
 
+  /** The answer text (thinking alone does not count): a turn without it keeps its fold open. */
+  get hasText(): boolean {
+    return this.text.trim() !== ''
+  }
+
   /** The request that produced this text failed (it was retried or the turn stopped). */
   markFailed(): void {
     this.failed = true
@@ -179,10 +184,6 @@ export class AssistantMessage extends Container {
   }
 }
 
-/** Collapsed previews (pi's defaults): bash keeps the last lines, other tools the first. */
-const BASH_PREVIEW_LINES = 5
-const PREVIEW_LINES = 10
-
 interface NestedCall {
   name: string
   input: unknown
@@ -193,14 +194,14 @@ interface NestedCall {
 /**
  * Tool call (like pi's ToolExecutionComponent with its built-in renderers): name + key argument, then
  * the output. bash streams its output while it runs and shows the last lines with the elapsed time;
- * edit_file shows its diff; other tools show the first lines (Ctrl+O expands). Calls the tool made
+ * edit_file shows its diff; other tools show their output. A block lives inside its turn's fold, so
+ * opening the fold is what reveals it, in full. Calls the tool made
  * through `ctx.executeTool()` are listed inside the block, one line each (like pi's codemode renderer).
  */
 export class ToolBlock implements Component {
   private status: 'pending' | 'success' | 'error' = 'pending'
   private output = ''
   private details: unknown
-  private expanded: boolean
   private startedAt?: number
   private durationMs?: number
   private timer?: ReturnType<typeof setInterval>
@@ -209,11 +210,8 @@ export class ToolBlock implements Component {
   constructor(
     private readonly name: string,
     private readonly input: unknown,
-    expanded: boolean,
     private readonly requestRender: () => void = () => {},
-  ) {
-    this.expanded = expanded
-  }
+  ) {}
 
   /** The tool started running: bash shows a live elapsed time. */
   start(): void {
@@ -271,10 +269,6 @@ export class ToolBlock implements Component {
     call.durationMs = durationMs
   }
 
-  setExpanded(expanded: boolean): void {
-    this.expanded = expanded
-  }
-
   invalidate(): void {}
 
   render(width: number): string[] {
@@ -326,26 +320,7 @@ export class ToolBlock implements Component {
     if (!output) return []
     const color = (line: string) =>
       theme.fg(this.status === 'error' ? 'red' : 'muted', line)
-    const all = output.split('\n')
-    if (this.expanded) return all.map(color)
-    if (this.name === 'bash') {
-      if (all.length <= BASH_PREVIEW_LINES) return all.map(color)
-      return [
-        theme.fg(
-          'dim',
-          `… ${all.length - BASH_PREVIEW_LINES} earlier lines (Ctrl+O to expand)`,
-        ),
-        ...all.slice(-BASH_PREVIEW_LINES).map(color),
-      ]
-    }
-    if (all.length <= PREVIEW_LINES) return all.map(color)
-    return [
-      ...all.slice(0, PREVIEW_LINES).map(color),
-      theme.fg(
-        'dim',
-        `… ${all.length - PREVIEW_LINES} more lines (Ctrl+O to expand)`,
-      ),
-    ]
+    return output.split('\n').map(color)
   }
 
   /** bash only (like pi): `Elapsed 3.0s` while running, `Took 3.2s` after. */

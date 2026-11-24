@@ -52,7 +52,7 @@ export const HOTKEYS = [
   `${keyLabel('background')} move the running command to the background (under tmux press it twice; it replaces the editor's ${keyLabel('background')} cursor-left, so use Left)`,
   '/tasks list background tasks, /tasks stop <id> ends one (alias /bashes)',
   `${keyLabel('cycleThinking')} cycle thinking level · ${keyLabel('selectModel')} select model · ${keyLabel('cycleModelForward')} / ${keyLabel('cycleModelBackward')} cycle models`,
-  `${keyLabel('expandTools')} expand / collapse tool output · ${keyLabel('toggleThinking')} show / hide thinking`,
+  `${keyLabel('expandTools')} expand / collapse every turn's process (click one line for a single turn) · ${keyLabel('toggleThinking')} show / hide thinking inside an open turn`,
   `${keyLabel('pasteImage')} paste a clipboard image as a file path for read_file`,
   `${keyLabel('clear')} clear editor, twice to exit · ${keyLabel('exit')} exit when editor is empty`,
 ]
