@@ -1329,9 +1329,13 @@ test.concurrent('--tools / --exclude-tools limit the tools; an unknown name stop
     'Available tools: .',
   )
 
-  const typo = await run(['--tools', 'read_file'])
+  const typo = await run(['--tools', 'rea_typo'])
   expect(typo.code).toBe(2)
-  expect(typo.stderr).toContain('Unknown tool: read_file. Available: read')
+  expect(typo.stderr).toContain('Unknown tool: rea_typo. Available: read')
+
+  const retired = await run(['--tools', 'read_file'])
+  expect(retired.code).toBe(2)
+  expect(retired.stderr).toContain('tool "read_file" was renamed to "read"')
 })
 
 test.concurrent('+name / -name change the default tools, from --tools or defaultTools', async () => {

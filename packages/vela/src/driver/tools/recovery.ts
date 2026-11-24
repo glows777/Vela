@@ -179,7 +179,7 @@ export function bindLocatedEnvResolver(
       throw new Error(
         `Tool ${toolName} was interrupted by a restart and may have partially run; its location changed, so it was not replayed`,
       )
-    if (!located) {
+    if (!located && call.replay === 'safe') {
       located = true
       call.location ??= envLoc
       const recorder = history as {

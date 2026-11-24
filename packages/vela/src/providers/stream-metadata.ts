@@ -44,10 +44,12 @@ export interface StreamedPartMetadata {
   tools: Map<string, ProviderOptions>
 }
 
-function activeSlotMetas(slots: StreamedSlot[]): ProviderOptions[] {
+function activeSlotMetas(
+  slots: StreamedSlot[],
+): Array<ProviderOptions | undefined> {
   return slots
     .filter((slot) => slot.hasContent || Object.keys(slot.meta).length > 0)
-    .map((slot) => slot.meta)
+    .map((slot) => (Object.keys(slot.meta).length > 0 ? slot.meta : undefined))
 }
 
 /** Merges start/delta/end streamed metadata back onto assistant message parts in ordinal order. */
