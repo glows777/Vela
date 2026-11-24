@@ -1,4 +1,8 @@
 export {
+  type LegacyConfigMigrationResult,
+  migrateLegacyConfigFiles,
+} from './migrate-legacy.ts'
+export {
   formatJsonParseError,
   interpolateConfigLayer,
   mergeConfig,

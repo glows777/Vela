@@ -3,8 +3,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { savedTrust } from '../config/index.ts'
+import { basename, join, resolve } from 'node:path'
+import { migrateLegacyConfigFiles, savedTrust } from '../config/index.ts'
 import { registerExtensionHostModules } from '../driver/config/extensions.ts'
 import {
   buildSessionPath,
@@ -183,6 +183,12 @@ const agentDir = defaultAgentDir(env)
 let config: VelaConfig
 let localOptions: LocalOptions | undefined
 try {
+  const migratedConfig = migrateLegacyConfigFiles(agentDir)
+  if (migratedConfig.createdConfig) {
+    console.error(
+      `[config] Migrated ${migratedConfig.sources.map((file) => basename(file)).join(', ')} to ${migratedConfig.path} (legacy files kept read-only)`,
+    )
+  }
   const trust = await resolveTrust({
     cwd,
     agentDir,

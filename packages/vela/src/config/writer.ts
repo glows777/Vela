@@ -151,6 +151,25 @@ export function writeRawConfigFile(
   )
 }
 
+/**
+ * Atomically create `<agentDir>/config.json` only if it does not already exist under lock.
+ * Used by legacy config migration so legacy `settings.json` / `models.json` / `mcp.json` can
+ * be flattened without overwriting an existing or concurrently created `config.json`.
+ */
+export function writeConfigIfMissing(
+  agentDir: string,
+  data: Record<string, unknown>,
+): { written: boolean; path: string } {
+  return withConfigLockSync(agentDir, (assertOwned) => {
+    const path = join(agentDir, 'config.json')
+    if (existsSync(path)) return { written: false, path }
+    return {
+      written: true,
+      path: writeRawConfigUnlocked(agentDir, data, assertOwned),
+    }
+  })
+}
+
 /** Read, transform, and atomically write `<agentDir>/config.json` under cross-process lock with `0600` permissions. */
 export function updateConfigFile(
   agentDir: string,

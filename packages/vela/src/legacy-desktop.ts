@@ -3,6 +3,22 @@
  * Not part of the public SDK contract; deleted in S4c.
  * @internal
  */
+export {
+  type LegacyConfigMigrationResult,
+  migrateLegacyConfigFiles,
+} from './config/index.ts'
+export {
+  type LegacyMigrationResult,
+  type LegacyMigrationSummary,
+  migrateLegacyVelaDir,
+  type OpenDatabaseOptions,
+  openDatabase,
+  type RunResult,
+  SCHEMA_VERSION,
+  type SqlParam,
+  VelaDatabase,
+} from './db/index.ts'
+export { defaultAgentDir } from './driver/config/paths.ts'
 export { resolveModel } from './driver/diagnostics.ts'
 export { loadModels } from './driver/index.ts'
 export {

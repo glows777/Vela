@@ -1,0 +1,271 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { isPlainObject } from '../shared/interpolate.ts'
+import { formatJsonParseError, parseConfig } from './schema.ts'
+import { LEGACY_CONFIG_FILES, writeConfigIfMissing } from './writer.ts'
+
+interface LegacyConfigInputs {
+  settings?: unknown
+  models?: unknown
+  mcp?: unknown
+  files?: {
+    settings?: string
+    models?: string
+    mcp?: string
+  }
+  targetFile?: string
+}
+
+export interface LegacyConfigMigrationResult {
+  migrated: boolean
+  createdConfig: boolean
+  path: string
+  sources: string[]
+  warnings: string[]
+}
+
+const FLATTENED_EXTENSION_SECTIONS = ['lark', 'web', 'memory', 'local'] as const
+
+const RETIRED_SETTINGS_KEYS = [
+  'bashForegroundTimeoutSeconds',
+  'bashForegroundTimeoutMaxSeconds',
+] as const
+
+function mergeRecord(
+  base: unknown,
+  override: unknown,
+  label: string,
+): Record<string, unknown> {
+  if (base !== undefined && !isPlainObject(base))
+    throw new Error(`${label} must be an object`)
+  if (override !== undefined && !isPlainObject(override))
+    throw new Error(`${label} must be an object`)
+  return {
+    ...(isPlainObject(base) ? base : {}),
+    ...(isPlainObject(override) ? override : {}),
+  }
+}
+
+function readLegacyJson(file: string): unknown {
+  const text = readFileSync(file, 'utf8')
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(formatJsonParseError(file, text, error))
+  }
+}
+
+/**
+ * Pure transformation from legacy v0.8 config files (`settings.json`, `models.json`, `mcp.json`)
+ * into a validated flat v0.9 `config.json` object.
+ */
+function flattenLegacyConfig(inputs: LegacyConfigInputs): {
+  config: Record<string, unknown>
+  warnings: string[]
+} {
+  const warnings: string[] = []
+  const targetFile = inputs.targetFile ?? 'config.json'
+  const settingsFile = inputs.files?.settings ?? 'settings.json'
+  const modelsFile = inputs.files?.models ?? 'models.json'
+  const mcpFile = inputs.files?.mcp ?? 'mcp.json'
+
+  if (inputs.settings !== undefined && !isPlainObject(inputs.settings))
+    throw new Error(`${settingsFile} must be a JSON object`)
+  if (inputs.models !== undefined && !isPlainObject(inputs.models))
+    throw new Error(`${modelsFile} must be a JSON object`)
+  if (inputs.mcp !== undefined && !isPlainObject(inputs.mcp))
+    throw new Error(`${mcpFile} must be a JSON object`)
+
+  const config: Record<string, unknown> = inputs.settings
+    ? { ...inputs.settings }
+    : {}
+
+  const renameKey = (legacyKey: string, nextKey: string) => {
+    if (!(legacyKey in config)) return
+    const legacyValue = config[legacyKey]
+    delete config[legacyKey]
+    if (legacyValue !== undefined && config[nextKey] === undefined) {
+      config[nextKey] = legacyValue
+    }
+  }
+  renameKey('defaultModel', 'model')
+  renameKey('defaultThinkingLevel', 'thinkingLevel')
+  renameKey('defaultTools', 'tools')
+
+  for (const retiredKey of RETIRED_SETTINGS_KEYS) {
+    if (retiredKey in config) {
+      delete config[retiredKey]
+      warnings.push(
+        `Dropped retired setting "${retiredKey}" from ${settingsFile}`,
+      )
+    }
+  }
+
+  if (config.extensionConfig !== undefined) {
+    if (!isPlainObject(config.extensionConfig))
+      throw new Error(`${settingsFile}: extensionConfig must be an object`)
+    const nextExtensionConfig: Record<string, unknown> = {}
+    for (const [name, rawSection] of Object.entries(config.extensionConfig)) {
+      if (name === 'background' || name === 'todo') {
+        if (isPlainObject(rawSection) && Object.keys(rawSection).length > 0) {
+          warnings.push(
+            `Dropped deprecated extensionConfig.${name} section during migration`,
+          )
+        }
+        continue
+      }
+      if ((FLATTENED_EXTENSION_SECTIONS as readonly string[]).includes(name)) {
+        if (!isPlainObject(rawSection))
+          throw new Error(
+            `${settingsFile}: extensionConfig.${name} must be an object`,
+          )
+        config[name] = mergeRecord(
+          rawSection,
+          config[name],
+          `${settingsFile}: ${name}`,
+        )
+        continue
+      }
+      if (name === 'channel') {
+        if (!isPlainObject(rawSection))
+          throw new Error(
+            `${settingsFile}: extensionConfig.channel must be an object`,
+          )
+        const rest = { ...rawSection }
+        if ('eventReceiver' in rest) {
+          const receiver = rest.eventReceiver
+          delete rest.eventReceiver
+          if (receiver !== undefined) {
+            config.webhooks = mergeRecord(
+              receiver,
+              config.webhooks,
+              `${settingsFile}: webhooks`,
+            )
+          }
+        }
+        if ('eventDefaultTarget' in rest) {
+          const target = rest.eventDefaultTarget
+          delete rest.eventDefaultTarget
+          if (target !== undefined && config.eventDefaultTarget === undefined) {
+            config.eventDefaultTarget = target
+          }
+        }
+        if (Object.keys(rest).length > 0) {
+          nextExtensionConfig.channel = rest
+        }
+        continue
+      }
+      if (name === 'mcp') {
+        if (!isPlainObject(rawSection))
+          throw new Error(
+            `${settingsFile}: extensionConfig.mcp must be an object`,
+          )
+        const rest = { ...rawSection }
+        if ('mcpServers' in rest) {
+          const servers = rest.mcpServers
+          delete rest.mcpServers
+          if (servers !== undefined) {
+            config.mcpServers = mergeRecord(
+              config.mcpServers,
+              servers,
+              `${settingsFile}: mcpServers`,
+            )
+          }
+        }
+        if (Object.keys(rest).length > 0) {
+          nextExtensionConfig.mcp = rest
+        }
+        continue
+      }
+      nextExtensionConfig[name] = rawSection
+    }
+    if (Object.keys(nextExtensionConfig).length > 0) {
+      config.extensionConfig = nextExtensionConfig
+    } else {
+      delete config.extensionConfig
+    }
+  }
+
+  if (inputs.models && isPlainObject(inputs.models)) {
+    const modelsProviders = inputs.models.providers
+    if (modelsProviders !== undefined) {
+      config.providers = mergeRecord(
+        config.providers,
+        modelsProviders,
+        `${modelsFile}: providers`,
+      )
+    }
+  }
+
+  if (inputs.mcp && isPlainObject(inputs.mcp)) {
+    const mcpServers = inputs.mcp.mcpServers
+    if (mcpServers !== undefined) {
+      config.mcpServers = mergeRecord(
+        config.mcpServers,
+        mcpServers,
+        `${mcpFile}: mcpServers`,
+      )
+    }
+  }
+
+  parseConfig(JSON.stringify(config), targetFile)
+  return { config, warnings }
+}
+
+/**
+ * Automatically flattens legacy `<agentDir>/{settings,models,mcp}.json` into `<agentDir>/config.json`
+ * in read-only mode (all legacy files stay untouched on disk). No-op when `config.json` already exists.
+ */
+export function migrateLegacyConfigFiles(
+  agentDir: string,
+): LegacyConfigMigrationResult {
+  const targetPath = join(agentDir, 'config.json')
+  if (existsSync(targetPath)) {
+    return {
+      migrated: false,
+      createdConfig: false,
+      path: targetPath,
+      sources: [],
+      warnings: [],
+    }
+  }
+
+  const sources = LEGACY_CONFIG_FILES.map((name) =>
+    join(agentDir, name),
+  ).filter((file) => existsSync(file))
+  if (sources.length === 0) {
+    return {
+      migrated: false,
+      createdConfig: false,
+      path: targetPath,
+      sources: [],
+      warnings: [],
+    }
+  }
+
+  const settingsFile = join(agentDir, 'settings.json')
+  const modelsFile = join(agentDir, 'models.json')
+  const mcpFile = join(agentDir, 'mcp.json')
+  const { config, warnings } = flattenLegacyConfig({
+    settings: existsSync(settingsFile)
+      ? readLegacyJson(settingsFile)
+      : undefined,
+    models: existsSync(modelsFile) ? readLegacyJson(modelsFile) : undefined,
+    mcp: existsSync(mcpFile) ? readLegacyJson(mcpFile) : undefined,
+    files: {
+      settings: settingsFile,
+      models: modelsFile,
+      mcp: mcpFile,
+    },
+    targetFile: targetPath,
+  })
+
+  const writeResult = writeConfigIfMissing(agentDir, config)
+  return {
+    migrated: writeResult.written,
+    createdConfig: writeResult.written,
+    path: writeResult.path,
+    sources,
+    warnings,
+  }
+}
