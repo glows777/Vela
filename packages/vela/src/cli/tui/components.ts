@@ -13,7 +13,7 @@ import {
 } from '@earendil-works/pi-tui'
 import { isToolContent } from '../../driver/diagnostics.ts'
 import {
-  agentErrorHint,
+  failureHint,
   type ModelMessage,
   type VelaEvent,
 } from '../../driver/index.ts'
@@ -689,7 +689,7 @@ export function agentEndNotice(
   if (event.reason === 'loop')
     return { message: 'Repeated tool calls detected, stopped', level: 'error' }
   if (event.reason !== 'error') return undefined
-  const hint = agentErrorHint(event.errorKind)
+  const hint = failureHint(event.errorKind, event.error)
   return {
     message: `Error: ${errorMessage(event.error)}${hint ? `\n${hint}` : ''}`,
     level: 'error',

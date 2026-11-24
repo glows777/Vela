@@ -650,6 +650,7 @@
     input?: string[] | undefined
     maxTokens?: number | undefined
     name?: string | undefined
+    planLabel?: string | undefined
     provider: string
     reasoning?: boolean | undefined
     ref: string
@@ -692,10 +693,14 @@
     refresh: string
     type: "oauth"
   interface OAuthLogin
+    isSubscription?: boolean | undefined
     localOnly?: boolean | undefined
     login: (interaction: AuthInteraction, options: LoginOptions & { previous?: Credential; }) => Promise<Credential>
+    logout?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<void>) | undefined
     name: string
+    planLabel?: string | undefined
     refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
+    usageUrl?: string | undefined
   interface OutgoingMessage
     channelId: string
     deliveryId?: string | undefined
@@ -1166,7 +1171,7 @@
     listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
     loginProviders: () => LoginProvider[]
-    logout: (provider: string) => Promise<boolean>
+    logout: (provider: string, options?: { signal?: AbortSignal; onNotice?: (text: string) => void; }) => Promise<boolean>
     models: (options?: { all?: boolean; }) => ModelInfo[]
     publishEvent: (event: ChannelEvent) => Promise<void>
     readonly cwd: string
@@ -1589,6 +1594,7 @@
       | ExtensionEvents[K][1]
       | undefined
       | Promise<ExtensionEvents[K][1] | undefined>
+  function failureHint: (kind: AgentErrorKind | undefined, error: unknown) => string | undefined
   interface ImageContent
     data: string
     mimeType: string

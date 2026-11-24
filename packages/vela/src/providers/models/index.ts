@@ -44,6 +44,8 @@ export function catalogLookup(
 export interface ModelInfo extends ModelSpec {
   provider: string
   ref: string
+  /** The plan paying for this model, e.g. `ChatGPT plan`, when a subscription sign-in funds the provider */
+  planLabel?: string
 }
 
 /** What createModel() gets besides the id. */
@@ -156,6 +158,17 @@ export class ModelRegistry {
     return def.authSource(this.credentials.get(name))
   }
 
+  /**
+   * The plan paying for a provider's requests (e.g. `ChatGPT plan`), when the stored credential is a subscription
+   * sign-in rather than an API key; undefined otherwise.
+   */
+  planLabel(provider: string): string | undefined {
+    const oauth = this.providers.get(provider)?.oauth
+    if (!oauth?.isSubscription) return
+    if (this.credentials.get(provider)?.type !== 'oauth') return
+    return oauth.planLabel
+  }
+
   /** Models listed by all providers, configured or not */
   list(): ModelInfo[] {
     return [...this.providers].flatMap(([provider, def]) =>
@@ -238,9 +251,27 @@ export class ModelRegistry {
     await this.credentials.modify(provider, async () => credential)
   }
 
-  /** Removes the stored credential (`/logout`); environment variables and models.json keys are untouched */
-  async logout(provider: string): Promise<boolean> {
-    if (!this.credentials.get(provider)) return false
+  /**
+   * Removes the stored credential (`/logout`). An OAuth sign-in that supports it revokes its session at the
+   * provider first; when that fails the credential is removed anyway and `onNotice` says so. Environment variables
+   * and models.json keys are untouched.
+   */
+  async logout(
+    provider: string,
+    options: { signal?: AbortSignal; onNotice?: (text: string) => void } = {},
+  ): Promise<boolean> {
+    const credential = this.credentials.get(provider)
+    if (!credential) return false
+    const revoke = this.providers.get(provider)?.oauth?.logout
+    if (credential.type === 'oauth' && revoke) {
+      try {
+        await revoke(credential, options.signal ?? new AbortController().signal)
+      } catch {
+        options.onNotice?.(
+          `Could not confirm that ${provider} revoked this sign-in at the provider; the credential is removed locally.`,
+        )
+      }
+    }
     await this.credentials.delete(provider)
     return true
   }
@@ -280,9 +311,15 @@ export class ModelRegistry {
         Boolean(def.oauth?.localOnly && options.channel?.()) &&
         this.credentials.get(provider)?.type === 'oauth',
     )
+    const planLabel = this.planLabel(provider)
     return {
       model: def.createModel(id, ctx),
-      info: { ...spec, provider, ref: `${provider}/${id}` },
+      info: {
+        ...spec,
+        provider,
+        ref: `${provider}/${id}`,
+        ...(planLabel ? { planLabel } : {}),
+      },
     }
   }
 }

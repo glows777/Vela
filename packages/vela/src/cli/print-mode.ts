@@ -4,7 +4,7 @@ import type {
   ModelMessage,
   VelaSession,
 } from '../driver/index.ts'
-import { agentErrorHint } from '../driver/index.ts'
+import { failureHint } from '../driver/index.ts'
 import type { Vela } from '../vela.ts'
 import { jsonEvent, toJsonLine, writeStdout } from './json-event.ts'
 
@@ -101,7 +101,7 @@ export async function runPrintMode(options: {
       '[Agent] Turn stopped:',
       error instanceof Error ? error.message : error,
     )
-    const hint = agentErrorHint(failure?.kind)
+    const hint = failureHint(failure?.kind, failure?.cause ?? error)
     if (mode === 'text' && hint) console.error(hint)
     exitCode = 1
   } finally {

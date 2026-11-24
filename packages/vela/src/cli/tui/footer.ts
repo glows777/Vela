@@ -27,8 +27,11 @@ export class Footer implements Component {
     const usage = session.usage
     const totals = usage.totals
     let model = '(no model)'
+    let plan: string | undefined
     try {
-      model = session.modelInfo.ref
+      const info = session.modelInfo
+      model = info.ref
+      plan = info.planLabel
     } catch {}
     const left = [
       `↑${compact(totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens)}`,
@@ -38,7 +41,8 @@ export class Footer implements Component {
     ]
       .filter(Boolean)
       .join(' ')
-    const right = `${model} · ${session.thinkingLevel}`
+    // A plan-funded session says which plan pays, e.g. `openai/gpt-6.2-sol · medium · ChatGPT plan`
+    const right = `${model} · ${session.thinkingLevel}${plan ? ` · ${plan}` : ''}`
     const gap = Math.max(
       1,
       width - visibleWidth(left) - visibleWidth(right) - 2,

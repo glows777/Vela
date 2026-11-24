@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import { memoryCredentialStore } from '../../../../src/providers/auth/store.ts'
+import type { OAuthLogin } from '../../../../src/providers/auth/types.ts'
 import {
   limitsForModel,
   ModelRegistry,
@@ -30,6 +32,36 @@ test('resolve splits provider/id at the first slash and attaches listed metadata
   })
   expect((unlisted.model as { modelId: string }).modelId).toBe('vendor/model-x')
   expect(registry.list().map((m) => m.ref)).toEqual(['p/m'])
+})
+
+test('planLabel names the plan only for a stored subscription sign-in', () => {
+  const plan: OAuthLogin = {
+    name: 'Sign in with a plan',
+    isSubscription: true,
+    planLabel: 'ChatGPT plan',
+    login: async () => ({ type: 'api_key', key: 'k' }),
+  }
+  const keyLogin: OAuthLogin = { ...plan, isSubscription: false }
+  const credentials = memoryCredentialStore({
+    plan: { type: 'oauth', access: 'a', refresh: 'r', expires: 0 },
+    key: { type: 'api_key', key: 'k' },
+    plain: { type: 'oauth', access: 'a', refresh: 'r', expires: 0 },
+  })
+  const registry = new ModelRegistry(
+    {
+      plan: { ...provider(), oauth: plan },
+      key: { ...provider(), oauth: plan },
+      plain: { ...provider(), oauth: keyLogin },
+      none: provider(),
+    },
+    credentials,
+  )
+  expect(registry.planLabel('plan')).toBe('ChatGPT plan')
+  // An API key pays per token, a non-subscription sign-in is not a plan, and no sign-in has no label
+  expect(registry.planLabel('key')).toBeUndefined()
+  expect(registry.planLabel('plain')).toBeUndefined()
+  expect(registry.planLabel('none')).toBeUndefined()
+  expect(registry.planLabel('missing')).toBeUndefined()
 })
 
 test('resolve and register report mistakes', () => {

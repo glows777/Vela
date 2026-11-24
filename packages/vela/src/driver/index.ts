@@ -59,7 +59,7 @@ export type {
   VelaEventListener,
   VelaSessionEventListener,
 } from './agent/events.ts'
-export { agentErrorHint } from './agent/retry.ts'
+export { agentErrorHint, failureHint } from './agent/retry.ts'
 export {
   type ExtensionEntry,
   importExtension,

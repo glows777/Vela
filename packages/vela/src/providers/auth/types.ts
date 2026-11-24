@@ -81,6 +81,12 @@ export interface OAuthLogin {
   name: string
   /** True when the OAuth token is restricted to local interactive terminals, never channel sessions. */
   localOnly?: boolean
+  /** Whether this sign-in is backed by a subscription (pi's `OAuthAuth.isSubscription`) rather than per-token billing */
+  isSubscription?: boolean
+  /** The plan to name in notices, e.g. `ChatGPT plan` */
+  planLabel?: string
+  /** Where the user manages this plan's usage */
+  usageUrl?: string
   login(
     interaction: AuthInteraction,
     options: LoginOptions & { previous?: Credential },
@@ -90,6 +96,8 @@ export interface OAuthLogin {
     credential: OAuthCredential,
     signal: AbortSignal,
   ): Promise<OAuthCredential>
+  /** Ends the renewable session at the provider before `/logout` removes the credential, so the tokens stop working */
+  logout?(credential: OAuthCredential, signal: AbortSignal): Promise<void>
 }
 
 /** A fetch function (what AI SDK providers accept as `fetch`) */

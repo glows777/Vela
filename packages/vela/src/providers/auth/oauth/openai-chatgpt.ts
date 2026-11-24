@@ -3,6 +3,7 @@
 // (packages/ai/src/auth/oauth/openai-chatgpt.ts, MIT). No client secret or app registration: the first
 // sign-in registers this installation and OpenAI returns the client id to keep for later sign-ins.
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
+import { CHATGPT_USAGE_URL } from '../../subscription-errors.ts'
 import type {
   Credential,
   FetchFunction,
@@ -13,6 +14,7 @@ import {
   startCallbackServer,
   waitForCallbackOrPaste,
 } from './callback-server.ts'
+import { openAIDiscovery, verifyIdToken } from './id-token.ts'
 import { generatePKCE, randomValue } from './pkce.ts'
 
 const DYNAMIC_CLIENT_ID = 'dynamic_agent_client'
@@ -29,6 +31,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** Refresh this long before the real expiry (pi) */
 const EXPIRY_MARGIN_MS = 3 * 60 * 1000
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
+/**
+ * A sign-out must not hang on a stuck revocation request: one budget covers discovery and every revocation attempt,
+ * and the waits between attempts come out of it. A network failure or a 5xx is worth a retry (OpenAI's sign-out
+ * guidance); a 4xx is not.
+ * @internal Tests shorten both so a timeout case does not cost ten seconds of wall clock.
+ */
+export const revocationTiming = {
+  budgetMs: 10_000,
+  backoffMs: [250, 500, 1_000, 2_000] as readonly number[],
+}
 
 /** Request fields the ChatGPT plan route rejects (OpenAI's "Preview limitations" page) */
 const UNSUPPORTED_FIELDS = [
@@ -83,10 +95,18 @@ async function requestToken(
   return data as TokenResponse
 }
 
+/** The verified account identity and the ID token proving it, kept for a later reauthorization */
+interface StoredIdentity {
+  idToken: string
+  subject: string
+  email?: string
+}
+
 function credentialFrom(
   token: TokenResponse,
   clientId: string,
   previous?: OAuthCredential,
+  identity?: StoredIdentity,
 ): OAuthCredential {
   const text = (value: unknown, field: string) => {
     if (typeof value !== 'string' || !value.trim())
@@ -129,7 +149,28 @@ function credentialFrom(
     expires: Date.now() + token.expires_in * 1000 - EXPIRY_MARGIN_MS,
     clientId,
     ...(scopes ? { scopes } : {}),
+    ...identity,
   }
+}
+
+/** A string field of an earlier credential, when this installation stored one */
+function retainedField(
+  previous: Credential | undefined,
+  key: 'idToken' | 'subject' | 'email',
+): string | undefined {
+  const value = previous?.type === 'oauth' ? previous[key] : undefined
+  return typeof value === 'string' && value ? value : undefined
+}
+
+/** The identity a refresh must carry over: OpenAI rotates the tokens, not the account or its ID token */
+function storedIdentity(
+  previous: Credential | undefined,
+): StoredIdentity | undefined {
+  const idToken = retainedField(previous, 'idToken')
+  const subject = retainedField(previous, 'subject')
+  if (!idToken || !subject) return
+  const email = retainedField(previous, 'email')
+  return { idToken, subject, ...(email ? { email } : {}) }
 }
 
 /** The issued client id of an earlier sign-in, reused so this installation keeps one registration */
@@ -258,9 +299,107 @@ function wrapFetch(base: FetchFunction): FetchFunction {
   }
 }
 
+/**
+ * Ends the renewable session, retrying a network failure or a 5xx with backoff inside `deadline` (OpenAI's sign-out
+ * guidance: retry while the refresh token is still available, and tell the user when revocation could not be
+ * confirmed). Any other refusal is final: a 4xx means the token is already invalid or the request is wrong, so
+ * repeating it would only spend the budget.
+ */
+async function revokeSession(
+  endpoint: string,
+  clientId: string,
+  refreshToken: string,
+  deadline: AbortSignal,
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    const outcome = await attemptRevocation(
+      endpoint,
+      clientId,
+      refreshToken,
+      deadline,
+    )
+    if (outcome.done) return
+    if (!outcome.retry) throw outcome.error
+    const wait = revocationTiming.backoffMs[attempt]
+    if (wait === undefined || deadline.aborted) throw outcome.error
+    await pause(wait, deadline).catch(() => {
+      throw outcome.error
+    })
+  }
+}
+
+/** One revocation POST: over, or the failure to retry or to report */
+async function attemptRevocation(
+  endpoint: string,
+  clientId: string,
+  refreshToken: string,
+  deadline: AbortSignal,
+): Promise<{ done: true } | { done: false; retry: boolean; error: Error }> {
+  let response: Response
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        token: refreshToken,
+        token_type_hint: 'refresh_token',
+        client_id: clientId,
+      }),
+      signal: deadline,
+    })
+  } catch (error) {
+    // A reached deadline is the end of the budget, not a network failure to retry
+    const reason: unknown = deadline.aborted ? deadline.reason : undefined
+    return {
+      done: false,
+      retry: !deadline.aborted,
+      error: reason instanceof Error ? reason : toError(error),
+    }
+  }
+  if (response.ok) return { done: true }
+  const text = await response.text().catch(() => '')
+  const error = new Error(
+    `OpenAI token revocation failed (${response.status}): ${text || response.statusText}`,
+  )
+  // A 4xx says the token is already invalid or the request is wrong: repeating it would only spend the budget
+  return { done: false, retry: response.status >= 500, error }
+}
+
+function pause(ms: number, deadline: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (deadline.aborted) return reject(abortReason(deadline))
+    const timer = setTimeout(() => {
+      deadline.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(abortReason(deadline))
+    }
+    deadline.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function abortReason(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason
+  return reason instanceof Error
+    ? reason
+    : new Error('OpenAI token revocation timed out')
+}
+
 export const openaiChatGPTLogin: OAuthLogin = {
   name: 'Sign in with ChatGPT (Plus/Pro)',
   localOnly: true,
+  isSubscription: true,
+  planLabel: 'ChatGPT plan',
+  usageUrl: CHATGPT_USAGE_URL,
   async login(interaction, options) {
     const deviceId = options.getDeviceId?.()
     if (!deviceId || !UUID.test(deviceId))
@@ -268,8 +407,10 @@ export const openaiChatGPTLogin: OAuthLogin = {
         'Sign in with ChatGPT needs a device id (UUID) for this installation',
       )
     const known = issuedClientId(options.previous)
+    const retainedIdentity = storedIdentity(options.previous)
     const { verifier, challenge } = await generatePKCE()
     const state = randomValue()
+    const nonce = randomValue()
     const callback = await startCallbackServer({
       providerName: 'ChatGPT',
       host: CALLBACK_HOST,
@@ -291,6 +432,13 @@ export const openaiChatGPTLogin: OAuthLogin = {
       url.search = new URLSearchParams({
         client_id: known ?? DYNAMIC_CLIENT_ID,
         ...(known ? {} : { agent_name_hint: options.agentName ?? 'Vela' }),
+        // A retained ID token and email let OpenAI skip the account selector on reauthorization
+        ...(known && retainedIdentity
+          ? { id_token_hint: retainedIdentity.idToken }
+          : {}),
+        ...(known && retainedIdentity?.email
+          ? { login_hint: retainedIdentity.email }
+          : {}),
         ext_agent_host_id: `urn:uuid:${deviceId.toLowerCase()}`,
         response_type: 'code',
         redirect_uri: REDIRECT_URI,
@@ -299,7 +447,7 @@ export const openaiChatGPTLogin: OAuthLogin = {
         state,
         code_challenge: challenge,
         code_challenge_method: 'S256',
-        nonce: randomValue(),
+        nonce,
       }).toString()
       interaction.notify({
         type: 'auth_url',
@@ -331,7 +479,35 @@ export const openaiChatGPTLogin: OAuthLogin = {
         }),
         interaction.signal,
       )
-      return credentialFrom(token, clientId)
+      const idToken = token.id_token
+      if (typeof idToken !== 'string' || !idToken)
+        throw new Error('OpenAI token response has no valid id_token')
+      const verified = await verifyIdToken(idToken, {
+        clientId,
+        nonce,
+        signal: interaction.signal,
+      })
+      // A reauthorization must prove it is the same OpenAI account as the credential it replaces
+      const storedSubject = retainedField(options.previous, 'subject')
+      if (storedSubject && storedSubject !== verified.subject)
+        throw new Error(
+          'The ChatGPT sign-in returned a different account than the one already saved for this installation; sign in with that account, or log out first to replace it',
+        )
+      const replaced =
+        options.previous?.type === 'oauth' ? options.previous : undefined
+      const credential = credentialFrom(token, clientId, replaced, {
+        idToken,
+        subject: verified.subject,
+        ...(verified.email ? { email: verified.email } : {}),
+      })
+      // The plan notice introduces the plan itself, so it belongs to the first sign-in that does not replace an
+      // earlier ChatGPT sign-in; switching an API key over to the plan is such a first sign-in
+      if (options.previous?.type !== 'oauth')
+        interaction.notify({
+          type: 'info',
+          message: `Requests now use your ChatGPT plan allowance; usage is managed at ${CHATGPT_USAGE_URL}`,
+        })
+      return credential
     } finally {
       callback.close()
     }
@@ -351,7 +527,38 @@ export const openaiChatGPTLogin: OAuthLogin = {
       }),
       signal,
     )
-    return credentialFrom(token, clientId, credential)
+    // A refresh may return a new ID token, but nothing verifies it here: keep the token and identity the sign-in
+    // already proved, so a later reauthorization still sends a validated id_token_hint
+    return credentialFrom(
+      token,
+      clientId,
+      credential,
+      storedIdentity(credential),
+    )
+  },
+  async logout(credential, signal) {
+    const clientId = issuedClientId(credential)
+    if (!clientId)
+      throw new Error(
+        'The stored ChatGPT credential has no issued client id, so its session cannot be revoked at OpenAI; only the local credential can be removed',
+      )
+    // One budget covers discovery and the revocation itself: an unreachable provider must not keep the local
+    // sign-out from finishing
+    const deadline = AbortSignal.any([
+      signal,
+      AbortSignal.timeout(revocationTiming.budgetMs),
+    ])
+    const { revocationEndpoint } = await openAIDiscovery(deadline)
+    if (!revocationEndpoint)
+      throw new Error(
+        "OpenAI's OpenID configuration has no revocation_endpoint, so the ChatGPT session could not be revoked",
+      )
+    await revokeSession(
+      revocationEndpoint,
+      clientId,
+      credential.refresh,
+      deadline,
+    )
   },
 }
 
