@@ -27,6 +27,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - Extension directory discovery now follows symlinked `.ts` files and directories while skipping broken symlinks, and `importExtension()` loads standalone `.ts` extensions via `jiti` under both Node.js and Bun ([#535](https://github.com/glows777/Vela/issues/535)).
 - Desktop: Arrow keys and typing immediately after opening a picker keep it open, so Enter selects the highlighted option ([#547](https://github.com/glows777/Vela/issues/547)).
 - Desktop: In the New routine dialog, Escape closes the Where menu first without discarding the draft. A second Escape closes the dialog ([#541](https://github.com/glows777/Vela/issues/541)).
+- The TUI no longer prints a `[audit]` line for every file write or edit. The tool block shows the path before the call and the turn's fold line counts the edit, and the `audit` event that extensions and SDK subscribers receive is unchanged ([#553](https://github.com/glows777/Vela/issues/553)).
 
 ## [0.8.1] - 2026-11-23
 
