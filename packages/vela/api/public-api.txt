@@ -90,6 +90,7 @@
     type: "branch_summary"
   interface ChannelAdapter
     deliver: (message: ChannelOutboundMessage) => Promise<ChannelDeliveryResult>
+    fetchAttachment?: ((ref: string, signal?: AbortSignal) => Promise<Uint8Array>) | undefined
     readonly description?: string | undefined
     readonly name: string
     start: (ctx: ChannelAdapterContext) => Promise<void>
@@ -105,6 +106,7 @@
     kind: ChannelBindingKind
     projectId: string | null
     sessionId: string | null
+    threadId?: string | null | undefined
   type ChannelBindingKind = 'group' | 'direct'
   interface ChannelDefinition
     canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
@@ -146,20 +148,25 @@
     kind: ChannelBindingKind
     mentioned?: boolean | undefined
     messageId?: string | undefined
+    passive?: boolean | undefined
     raw?: unknown
     senderId: string
     senderName: string
     text: string
     threadId?: string | undefined
     timestamp: string
+    wake?: boolean | undefined
   interface ChannelOutboundMessage
     channel: string
     externalChatId: string
     files?: { path: string; name?: string; mimeType?: string; }[] | undefined
+    forwardMessageId?: string | undefined
+    kind?: "reply" | "topic_start" | "forward" | "file" | undefined
     outboxId: string
     replyToMessageId?: string | undefined
     text: string
     threadId?: string | undefined
+    title?: string | undefined
   interface CompactionEntry
     firstKeptEntryId: string
     id: string
@@ -198,6 +205,7 @@
   type Credential = ApiKeyCredential | OAuthCredential
   interface CredentialStore
     delete: (provider: string) => Promise<void>
+    deleteIf?: ((provider: string, predicate: (current: Credential) => boolean) => Promise<boolean>) | undefined
     get: (provider: string) => Credential | undefined
     list: () => string[]
     modify: (provider: string, fn: (current: Credential | undefined) => Promise<Credential | undefined>) => Promise<Credential | undefined>
@@ -228,6 +236,10 @@
     details?: unknown
     display: boolean
   function customMessageMissing: (messages: readonly ModelMessage[], markers: readonly string[]) => boolean
+  interface CustomProviderPart
+    kind: string
+    providerOptions?: ProviderOptions | undefined
+    type: "custom"
   function defineJsonSchemaTool: (tool: ToolDefinition & { inputSchema: VelaJsonSchema<unknown>; }) => ToolDefinition
   interface DocsPaths
     docs?: string | undefined
@@ -346,6 +358,12 @@
     name: string
     path: string
     size: number
+  interface FilePart
+    data: string | Record<string, string> | Uint8Array<ArrayBufferLike> | URL
+    filename?: string | undefined
+    mediaType: string
+    providerOptions?: ProviderOptions | undefined
+    type: "file"
   function fileSessionStorage: (dir: string, logger?: VelaLogger) => SessionStorage
   type FinishReason = | 'stop'
       | 'length'
@@ -758,6 +776,11 @@
     totalTokens?: number | undefined
   function publishChannelEvent: (session: VelaSession, event: Extract<VelaEvent, { type: "channel_message" | "channel_reply" | "channel_error"; }>) => void
   type QueueMode = 'one-at-a-time' | 'all'
+  interface ReasoningFilePart
+    data: string | Uint8Array<ArrayBufferLike> | URL
+    mediaType: string
+    providerOptions?: ProviderOptions | undefined
+    type: "reasoning-file"
   type ReasoningOption = | 'none'
       | 'minimal'
       | 'low'
@@ -767,7 +790,11 @@
       | 'max'
   function resolveBinary: (vela: Vela, name: "rg" | "fd") => Promise<string>
   type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
-  type RunEndStatus = 'completed' | 'stopped' | 'failed' | 'waiting_human'
+  type RunEndStatus = | 'completed'
+      | 'stopped'
+      | 'failed'
+      | 'waiting_human'
+      | 'interrupted'
   type RuntimeEvent = RuntimeEventPayload & {
       seq: number
       sessionId: string
@@ -777,7 +804,15 @@
   type RuntimeEventPayload = | {
       type: 'run_started'
       runId: string
-      trigger: 'user' | 'channel' | 'timer' | 'webhook' | 'approval' | 'job'
+      trigger:
+      | 'user'
+      | 'channel'
+      | 'timer'
+      | 'webhook'
+      | 'approval'
+      | 'job'
+      | 'handoff'
+      | 'session'
       }
       | {
       type: 'message_committed'
@@ -813,9 +848,11 @@
       }
       | {
       type: 'approval_resolved'
+      runId?: string
       approvalId: string
-      decision: 'approved' | 'denied'
+      decision: 'approved' | 'denied' | 'cancelled'
       reason?: string
+      decidedBy?: string
       }
       | {
       type: 'compaction_finished'
@@ -1045,6 +1082,22 @@
     idempotentHint?: boolean | undefined
     openWorldHint?: boolean | undefined
     readOnlyHint?: boolean | undefined
+  interface ToolApprovalRequestPart
+    approvalId: string
+    inputSchemaInput?: unknown
+    isAutomatic?: boolean | undefined
+    providerOptions?: ProviderOptions | undefined
+    reason?: string | undefined
+    signature?: string | undefined
+    toolCallId: string
+    type: "tool-approval-request"
+  interface ToolApprovalResponsePart
+    approvalId: string
+    approved: boolean
+    providerExecuted?: boolean | undefined
+    providerOptions?: ProviderOptions | undefined
+    reason?: string | undefined
+    type: "tool-approval-response"
   interface ToolCallEvent
     input: Record<string, unknown>
     parentToolCallId?: string | undefined
@@ -1108,11 +1161,37 @@
       ): Promise<{ success: true; data: T } | { success: false; error: Error }>
       }
       | VelaJsonSchema<T>
+  type ToolMessageContentPart = ToolResultPart | ToolApprovalResponsePart
   type ToolModelMessage = VelaToolMessage
   interface ToolNamespace
     description?: string | undefined
     instructions?: string | undefined
     name: string
+  type ToolResultContentItem = | TextContent
+      | ImageContent
+      | {
+      type: 'file'
+      mediaType: string
+      data: { type: 'data'; data: string } | { type: 'url'; url: string }
+      }
+      | {
+      type: 'media'
+      data: string
+      mediaType: string
+      }
+      | {
+      type: 'image-data'
+      data: string
+      mediaType: string
+      }
+      | {
+      type: 'custom'
+      providerOptions?: ProviderOptions
+      }
+      | {
+      type: 'image-file-reference'
+      [key: string]: unknown
+      }
   interface ToolResultEvent
     content?: ToolContent | undefined
     input: unknown
@@ -1161,6 +1240,7 @@
     savedCost?: number | undefined
     steps: number
   type UserContent = string | UserContentPart[]
+  type UserContentPart = TextPart | ImageContent | FilePart
   interface Vela
     channel: { (name: "local"): LocalHost; (name: "lark"): LarkHost; (name: string): ChannelHost; }
     channels: () => { name: string; description: string; }[]

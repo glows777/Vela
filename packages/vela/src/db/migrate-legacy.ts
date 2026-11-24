@@ -1,13 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto'
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from 'node:fs'
-import { homedir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   migrateLegacyConfigFiles,
   removeConfigIfHashMatches,
@@ -18,9 +11,14 @@ import {
   migrateChannelDirectory,
   migratePendingInboxMessages,
   migrateRemainingLarkChats,
-  migrateRoutinesAndSubscriptions,
 } from './migrate-legacy-channels.ts'
+import {
+  buildSessionIdResolver,
+  collectTranscriptFiles,
+  discoverLegacyDataDirs,
+} from './migrate-legacy-discovery.ts'
 import { parseLegacyTranscript } from './migrate-legacy-jsonl.ts'
+import { migrateRoutinesAndSubscriptions } from './migrate-legacy-routines.ts'
 import {
   type DeferredPendingMessages,
   type LarkChatMigrationConfig,
@@ -29,7 +27,6 @@ import {
   type MigrationOps,
   migrateLocalProjects,
   migrateTrustFile,
-  readJsonStrict,
 } from './migrate-legacy-sources.ts'
 import type { VelaDatabase } from './sqlite.ts'
 
@@ -45,200 +42,22 @@ export interface LegacyMigrationResult {
   warnings: string[]
 }
 
-function expandHomePath(path: string): string {
-  if (path === '~') return homedir()
-  if (path.startsWith('~/') || path.startsWith('~\\'))
-    return join(homedir(), path.slice(2))
-  return path
-}
-
-function shortDirHash(dir: string): string {
-  return createHash('sha256').update(resolve(dir)).digest('hex').slice(0, 8)
-}
-
-function discoverLegacyDataDirs(
-  agentDir: string,
-  options: { cwd?: string; dataDir?: string },
-  warnings: string[],
-  incompleteRef: { incomplete: boolean },
-): string[] {
-  const dirs: string[] = []
-  const seen = new Set<string>()
-  const add = (dir: string) => {
-    const resolved = resolve(dir)
-    if (seen.has(resolved)) return
-    seen.add(resolved)
-    dirs.push(resolved)
-  }
-
-  add(agentDir)
-  if (options.dataDir) add(options.dataDir)
-
-  const projectsRoot = join(agentDir, 'projects')
-  if (existsSync(projectsRoot)) {
-    for (const entry of readdirSync(projectsRoot, { withFileTypes: true })) {
-      if (entry.isDirectory()) add(join(projectsRoot, entry.name))
+function mergeJsonObjects(
+  existingJson: string | null | undefined,
+  incomingJson: string | null | undefined,
+): string | null {
+  if (!existingJson) return incomingJson ?? null
+  if (!incomingJson) return existingJson
+  try {
+    const existingObj = JSON.parse(existingJson)
+    const incomingObj = JSON.parse(incomingJson)
+    if (isPlainObject(existingObj) && isPlainObject(incomingObj)) {
+      return JSON.stringify({ ...incomingObj, ...existingObj })
     }
+  } catch {
+    // Keep existing JSON if either side is not a JSON object.
   }
-
-  const configFile = join(agentDir, 'config.json')
-  const settingsFile = join(agentDir, 'settings.json')
-  const primaryConfigFile = existsSync(configFile)
-    ? configFile
-    : existsSync(settingsFile)
-      ? settingsFile
-      : undefined
-  if (primaryConfigFile) {
-    const parsed = readJsonStrict(primaryConfigFile)
-    if (isPlainObject(parsed) && typeof parsed.dataDir === 'string') {
-      const expanded = expandHomePath(parsed.dataDir)
-      if (isAbsolute(expanded)) {
-        add(expanded)
-      } else if (options.cwd) {
-        add(resolve(options.cwd, expanded))
-      } else {
-        incompleteRef.incomplete = true
-        warnings.push(
-          `Skipped relative dataDir "${parsed.dataDir}" in ${primaryConfigFile} without cwd`,
-        )
-      }
-    }
-  }
-
-  return dirs
-}
-
-function collectTranscriptFiles(
-  sessionsDir: string,
-): { id: string; path: string }[] {
-  if (!existsSync(sessionsDir)) return []
-  const entries = readdirSync(sessionsDir, { withFileTypes: true })
-  const byId = new Map<string, string>()
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const path = join(sessionsDir, entry.name, 'transcript.jsonl')
-    if (existsSync(path) && statSync(path).isFile()) {
-      byId.set(entry.name, path)
-    }
-  }
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-    const id = entry.name.slice(0, -'.jsonl'.length)
-    if (!byId.has(id)) {
-      byId.set(id, join(sessionsDir, entry.name))
-    }
-  }
-  return [...byId.entries()].map(([id, path]) => ({ id, path }))
-}
-
-function buildSessionIdResolver(
-  dataDirs: readonly string[],
-  warnings: string[],
-  priorAllocations: Record<string, string>,
-  existingDbSessionIds: ReadonlySet<string>,
-): {
-  resolveSessionId: (dataDir: string, legacySessionId: string) => string
-  allocations: Record<string, string>
-} {
-  const dirsByRawId = new Map<string, Set<string>>()
-  const register = (dataDir: string, sessionId: string) => {
-    if (!sessionId) return
-    let dirs = dirsByRawId.get(sessionId)
-    if (!dirs) {
-      dirs = new Set<string>()
-      dirsByRawId.set(sessionId, dirs)
-    }
-    dirs.add(dataDir)
-  }
-
-  for (const dataDir of dataDirs) {
-    for (const item of collectTranscriptFiles(join(dataDir, 'sessions'))) {
-      register(dataDir, item.id)
-    }
-    const indexFile = join(dataDir, 'channels', 'index.json')
-    if (existsSync(indexFile)) {
-      const parsed = readJsonStrict(indexFile)
-      if (isPlainObject(parsed) && Array.isArray(parsed.records)) {
-        for (const rec of parsed.records) {
-          if (!isPlainObject(rec)) continue
-          if (typeof rec.activeSessionId === 'string') {
-            register(dataDir, rec.activeSessionId)
-          }
-          if (Array.isArray(rec.previousSessionIds)) {
-            for (const prev of rec.previousSessionIds) {
-              if (typeof prev === 'string') register(dataDir, prev)
-            }
-          }
-        }
-      }
-    }
-    const projectsFile = join(dataDir, 'local', 'projects.json')
-    if (existsSync(projectsFile)) {
-      const parsed = readJsonStrict(projectsFile)
-      if (isPlainObject(parsed) && Array.isArray(parsed.projects)) {
-        for (const proj of parsed.projects) {
-          if (!isPlainObject(proj) || typeof proj.id !== 'string') continue
-          const logFile = join(dataDir, 'local', `${proj.id}.json`)
-          if (!existsSync(logFile)) continue
-          const rawMessages = readJsonStrict(logFile)
-          if (!Array.isArray(rawMessages)) continue
-          for (const msg of rawMessages) {
-            if (isPlainObject(msg) && typeof msg.sessionId === 'string') {
-              register(dataDir, msg.sessionId)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  const allocatedByPair = new Map<string, string>(
-    Object.entries(priorAllocations),
-  )
-  const usedIds = new Set<string>([
-    ...existingDbSessionIds,
-    ...allocatedByPair.values(),
-  ])
-  const reservedNames = new Set<string>([...usedIds, ...dirsByRawId.keys()])
-
-  for (const [rawId, dirs] of dirsByRawId) {
-    const sortedDirs = [...dirs].sort()
-    for (const dataDir of sortedDirs) {
-      const pairKey = `${dataDir}\0${rawId}`
-      const prior = allocatedByPair.get(pairKey)
-      if (prior) {
-        usedIds.add(prior)
-        reservedNames.add(prior)
-        continue
-      }
-      if (!usedIds.has(rawId)) {
-        allocatedByPair.set(pairKey, rawId)
-        usedIds.add(rawId)
-        reservedNames.add(rawId)
-        continue
-      }
-      let candidate = `${rawId}--${shortDirHash(dataDir)}`
-      let suffix = 2
-      while (usedIds.has(candidate) || reservedNames.has(candidate)) {
-        candidate = `${rawId}--${shortDirHash(dataDir)}-${suffix++}`
-      }
-      usedIds.add(candidate)
-      reservedNames.add(candidate)
-      allocatedByPair.set(pairKey, candidate)
-      warnings.push(
-        `Disambiguated colliding session "${rawId}" in ${dataDir} as "${candidate}"`,
-      )
-    }
-  }
-
-  return {
-    resolveSessionId: (dataDir: string, legacySessionId: string): string => {
-      const pairKey = `${dataDir}\0${legacySessionId}`
-      return allocatedByPair.get(pairKey) ?? legacySessionId
-    },
-    allocations: Object.fromEntries(allocatedByPair),
-  }
+  return existingJson
 }
 
 /**
@@ -358,6 +177,7 @@ export function migrateLegacyVelaDir(options: {
       const larkChatConfigById = new Map<string, LarkChatMigrationConfig>()
       const boundLarkChats = new Set<string>()
       const channelTimezones = new Map<string, string>()
+      const unresolvedTimezoneChannels = new Set<string>()
       const channelSessionByKey = new Map<
         string,
         {
@@ -402,22 +222,32 @@ export function migrateLegacyVelaDir(options: {
           )
           summary.projects += 1
         } else {
+          const existingProj = db.get<{ config_json: string | null }>(
+            'SELECT config_json FROM projects WHERE id = ?',
+            row.id,
+          )
+          const mergedConfigJson = mergeJsonObjects(
+            existingProj?.config_json,
+            row.configJson,
+          )
           db.run(
             `UPDATE projects SET
+              cwd = COALESCE(cwd, ?),
               data_dir = COALESCE(data_dir, ?),
               hub_session_id = COALESCE(hub_session_id, ?),
               default_model = COALESCE(default_model, ?),
               default_thinking_level = COALESCE(default_thinking_level, ?),
               default_tools_json = COALESCE(default_tools_json, ?),
-              config_json = COALESCE(config_json, ?),
+              config_json = ?,
               updated_at = ?
             WHERE id = ?`,
+            row.cwd ?? null,
             row.dataDir ?? null,
             row.hubSessionId ?? null,
             row.defaultModel ?? null,
             row.defaultThinkingLevel ?? null,
             row.defaultToolsJson ?? null,
-            row.configJson ?? null,
+            mergedConfigJson,
             now,
             row.id,
           )
@@ -495,8 +325,11 @@ export function migrateLegacyVelaDir(options: {
         row,
       ) => {
         const enabledVal = row.enabled === false ? 0 : 1
-        const existingBinding = db.get<{ id: string }>(
-          'SELECT id FROM channel_bindings WHERE channel = ? AND external_id = ?',
+        const existingBinding = db.get<{
+          id: string
+          config_json: string | null
+        }>(
+          'SELECT id, config_json FROM channel_bindings WHERE channel = ? AND external_id = ?',
           row.channel,
           row.externalId,
         )
@@ -521,20 +354,24 @@ export function migrateLegacyVelaDir(options: {
           summary.channelBindings += 1
           return
         }
+        const mergedConfigJson = mergeJsonObjects(
+          existingBinding.config_json,
+          row.configJson,
+        )
         db.run(
           `UPDATE channel_bindings SET
             thread_id = COALESCE(thread_id, ?),
             project_id = COALESCE(project_id, ?),
             session_id = COALESCE(session_id, ?),
             enabled = CASE WHEN ? = 1 THEN 1 ELSE enabled END,
-            config_json = COALESCE(config_json, ?),
+            config_json = ?,
             updated_at = ?
           WHERE id = ?`,
           row.threadId ?? null,
           row.projectId,
           row.sessionId,
           enabledVal,
-          row.configJson ?? null,
+          mergedConfigJson,
           now,
           existingBinding.id,
         )
@@ -555,6 +392,7 @@ export function migrateLegacyVelaDir(options: {
         larkChatConfigById,
         boundLarkChats,
         channelTimezones,
+        unresolvedTimezoneChannels,
         projectByChat,
         channelSessionByKey,
         channelSessionDataDirs,
@@ -616,6 +454,82 @@ export function migrateLegacyVelaDir(options: {
                 ? JSON.stringify({ environment: 'local', cwd: parsed.cwd })
                 : null
 
+          const existingRows = db.all<{
+            id: string
+            seq: number
+            kind: string
+            content_json: string
+            parent_id: string | null
+            first_kept_id: string | null
+          }>(
+            'SELECT id, seq, kind, content_json, parent_id, first_kept_id FROM vela_messages WHERE session_id = ? ORDER BY seq ASC',
+            targetSessionId,
+          )
+          const existingIds = new Set(existingRows.map((row) => row.id))
+          const claimedRowIds = new Set<string>()
+          const matchedRowByMsgId = new Map<
+            string,
+            (typeof existingRows)[number]
+          >()
+          const idMap = new Map<string, string>()
+
+          // Pass 1: exact (seq, kind, content_json) matches claim their existing IDs first.
+          const rowBySeq = new Map(existingRows.map((row) => [row.seq, row]))
+          for (const msg of parsed.messages) {
+            const row = rowBySeq.get(msg.seq)
+            if (
+              row &&
+              row.kind === msg.kind &&
+              row.content_json === msg.contentJson
+            ) {
+              claimedRowIds.add(row.id)
+              matchedRowByMsgId.set(msg.id, row)
+              if (row.id !== msg.id) idMap.set(msg.id, row.id)
+            }
+          }
+
+          // Pass 2: shifted-seq fallback matches by identical kind + content_json so newly
+          // inserted messages never alias an earlier compaction/message ID at the same seq.
+          const unmatchedBySignature = new Map<
+            string,
+            Array<(typeof existingRows)[number]>
+          >()
+          for (const row of existingRows) {
+            if (claimedRowIds.has(row.id)) continue
+            const sig = `${row.kind}\0${row.content_json}`
+            const bucket = unmatchedBySignature.get(sig)
+            if (bucket) bucket.push(row)
+            else unmatchedBySignature.set(sig, [row])
+          }
+          for (const msg of parsed.messages) {
+            if (matchedRowByMsgId.has(msg.id)) continue
+            const sig = `${msg.kind}\0${msg.contentJson}`
+            const row = unmatchedBySignature.get(sig)?.shift()
+            if (row) {
+              claimedRowIds.add(row.id)
+              matchedRowByMsgId.set(msg.id, row)
+              if (row.id !== msg.id) idMap.set(msg.id, row.id)
+              continue
+            }
+            if (existingIds.has(msg.id)) {
+              const freshId = randomUUID()
+              idMap.set(msg.id, freshId)
+              existingIds.add(freshId)
+            } else {
+              existingIds.add(msg.id)
+            }
+          }
+          const usedSeqs = new Set<number>()
+          let maxSeq = -1
+          for (const row of existingRows) {
+            if (!claimedRowIds.has(row.id)) {
+              usedSeqs.add(row.seq)
+              maxSeq = Math.max(maxSeq, row.seq)
+            }
+          }
+          const remapId = (id: string | null): string | null =>
+            id ? (idMap.get(id) ?? id) : null
+
           ensureSession({
             id: targetSessionId,
             projectId: inferredProjectId,
@@ -625,7 +539,7 @@ export function migrateLegacyVelaDir(options: {
             model: parsed.model ?? null,
             thinkingLevel: parsed.thinkingLevel ?? null,
             locationJson,
-            leafMessageId: parsed.leafMessageId,
+            leafMessageId: remapId(parsed.leafMessageId),
             discoveredToolsJson: parsed.discoveredTools
               ? JSON.stringify(parsed.discoveredTools)
               : null,
@@ -634,7 +548,60 @@ export function migrateLegacyVelaDir(options: {
             updatedAt: parsed.updatedAt,
           })
 
-          for (const msg of parsed.messages) {
+          const planned = parsed.messages.map((msg) => {
+            let targetSeq = msg.seq
+            if (usedSeqs.has(targetSeq)) {
+              targetSeq = ++maxSeq
+            } else {
+              maxSeq = Math.max(maxSeq, targetSeq)
+            }
+            usedSeqs.add(targetSeq)
+            return {
+              msg,
+              targetSeq,
+              remappedParent: remapId(msg.parentId),
+              remappedFirstKept: remapId(msg.firstKeptId),
+              matchedRow: matchedRowByMsgId.get(msg.id),
+              mappedId: idMap.get(msg.id) ?? msg.id,
+            }
+          })
+
+          // Park moving rows above all existing/target seq values so UNIQUE(session_id, seq) never
+          // blocks shifting existing rows or inserting new messages into vacated seq slots.
+          let parkSeq = existingRows.reduce(
+            (max, row) => Math.max(max, row.seq),
+            maxSeq,
+          )
+          for (const item of planned) {
+            if (item.matchedRow && item.matchedRow.seq !== item.targetSeq) {
+              db.run(
+                'UPDATE vela_messages SET seq = ? WHERE session_id = ? AND id = ?',
+                ++parkSeq,
+                targetSessionId,
+                item.matchedRow.id,
+              )
+            }
+          }
+          for (const item of planned) {
+            if (
+              item.matchedRow &&
+              (item.matchedRow.seq !== item.targetSeq ||
+                item.matchedRow.parent_id !== item.remappedParent ||
+                item.matchedRow.first_kept_id !== item.remappedFirstKept)
+            ) {
+              db.run(
+                'UPDATE vela_messages SET parent_id = ?, first_kept_id = ?, seq = ? WHERE session_id = ? AND id = ?',
+                item.remappedParent,
+                item.remappedFirstKept,
+                item.targetSeq,
+                targetSessionId,
+                item.matchedRow.id,
+              )
+            }
+          }
+          for (const item of planned) {
+            if (item.matchedRow) continue
+            const { msg, mappedId, remappedParent, targetSeq } = item
             const res = db.run(
               `INSERT OR IGNORE INTO vela_messages (
                 session_id, id, parent_id, seq, kind, role, content_json,
@@ -642,16 +609,16 @@ export function migrateLegacyVelaDir(options: {
                 tokens_before, label, details_json, created_at
               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               targetSessionId,
-              msg.id,
-              msg.parentId,
-              msg.seq,
+              mappedId,
+              remappedParent,
+              targetSeq,
               msg.kind,
               msg.role,
               msg.contentJson,
               msg.includeInContext ? 1 : 0,
               msg.stopReason,
               msg.producedBy,
-              msg.firstKeptId,
+              remapId(msg.firstKeptId),
               msg.tokensBefore,
               msg.label,
               msg.detailsJson,
@@ -770,10 +737,14 @@ export function migrateLegacyVelaDir(options: {
     }, 'IMMEDIATE')
   } catch (error) {
     if (createdConfigSha256) {
-      removeConfigIfHashMatches(agentDir, createdConfigSha256)
+      try {
+        removeConfigIfHashMatches(agentDir, createdConfigSha256)
+      } catch {}
     }
     for (const blobPath of createdBlobPaths) {
-      rmSync(blobPath, { force: true })
+      try {
+        rmSync(blobPath, { force: true })
+      } catch {}
     }
     throw error
   }

@@ -160,11 +160,12 @@ export class ModelRegistry {
 
   /**
    * The plan paying for a provider's requests (e.g. `ChatGPT plan`), when the stored credential is a subscription
-   * sign-in rather than an API key; undefined otherwise.
+   * sign-in rather than an API key and not blocked by a remote channel; undefined otherwise.
    */
-  planLabel(provider: string): string | undefined {
+  planLabel(provider: string, channel?: string): string | undefined {
     const oauth = this.providers.get(provider)?.oauth
     if (!oauth?.isSubscription) return
+    if (oauth.localOnly && channel) return
     if (this.credentials.get(provider)?.type !== 'oauth') return
     return oauth.planLabel
   }
@@ -260,20 +261,29 @@ export class ModelRegistry {
     provider: string,
     options: { signal?: AbortSignal; onNotice?: (text: string) => void } = {},
   ): Promise<boolean> {
+    options.signal?.throwIfAborted()
     const credential = this.credentials.get(provider)
     if (!credential) return false
+    if (!this.credentials.deleteIf) {
+      options.onNotice?.(
+        `Could not log out ${provider}: credential store does not support atomic conditional deletion.`,
+      )
+      return false
+    }
     const revoke = this.providers.get(provider)?.oauth?.logout
     if (credential.type === 'oauth' && revoke) {
       try {
         await revoke(credential, options.signal ?? new AbortController().signal)
-      } catch {
+      } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason ?? error
         options.onNotice?.(
           `Could not confirm that ${provider} revoked this sign-in at the provider; the credential is removed locally.`,
         )
       }
     }
-    await this.credentials.delete(provider)
-    return true
+    return this.credentials.deleteIf(provider, (current) =>
+      sameCredential(credential, current),
+    )
   }
 
   /** `provider/id` → model; the id may contain more `/` (e.g. `openrouter/anthropic/claude`). */
@@ -308,10 +318,10 @@ export class ModelRegistry {
     localOnlyOAuthChecks.set(
       ctx,
       () =>
-        Boolean(def.oauth?.localOnly && options.channel?.()) &&
+        Boolean(def.oauth?.localOnly && Boolean(options.channel?.())) &&
         this.credentials.get(provider)?.type === 'oauth',
     )
-    const planLabel = this.planLabel(provider)
+    const planLabel = this.planLabel(provider, options.channel?.())
     return {
       model: def.createModel(id, ctx),
       info: {
@@ -322,6 +332,14 @@ export class ModelRegistry {
       },
     }
   }
+}
+
+function sameCredential(a: Credential, b: Credential): boolean {
+  if (a.type !== b.type) return false
+  if (a.type === 'api_key' && b.type === 'api_key') return a.key === b.key
+  if (a.type === 'oauth' && b.type === 'oauth')
+    return a.refresh === b.refresh && a.access === b.access
+  return false
 }
 
 /** Validate that a `ModelHandle` passed to the SDK is a runnable model instance. */

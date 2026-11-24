@@ -47,6 +47,13 @@ export function memoryCredentialStore(
         if (next) credentials.set(provider, next)
         return credentials.get(provider)
       }),
+    deleteIf: (provider, predicate) =>
+      serialize(provider, async () => {
+        const current = credentials.get(provider)
+        if (!current || !predicate(current)) return false
+        credentials.delete(provider)
+        return true
+      }),
     delete: (provider) =>
       serialize(provider, async () => {
         credentials.delete(provider)
@@ -67,13 +74,26 @@ const LOCK_TIMEOUT_MS = 20_000
 export function fileCredentialStore(path: string): CredentialStore {
   const serialize = serializer()
   let cache:
-    | { mtimeMs: number; size: number; data: Record<string, Credential> }
+    | {
+        ino: number
+        mtimeMs: number
+        size: number
+        data: Record<string, Credential>
+      }
     | undefined
 
   const read = (): Record<string, Credential> => {
-    if (!existsSync(path)) return {}
+    if (!existsSync(path)) {
+      cache = undefined
+      return {}
+    }
     const stat = statSync(path)
-    if (cache && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size)
+    if (
+      cache &&
+      cache.ino === stat.ino &&
+      cache.mtimeMs === stat.mtimeMs &&
+      cache.size === stat.size
+    )
       return cache.data
     const text = readFileSync(path, 'utf-8')
     let raw: unknown
@@ -92,6 +112,7 @@ export function fileCredentialStore(path: string): CredentialStore {
           `${path}: ${provider} must be an object with type "api_key" or "oauth"`,
         )
     cache = {
+      ino: stat.ino,
       mtimeMs: stat.mtimeMs,
       size: stat.size,
       data: raw as Record<string, Credential>,
@@ -186,6 +207,18 @@ export function fileCredentialStore(path: string): CredentialStore {
           const next = await fn(data[provider])
           if (next) write({ ...read(), [provider]: next }, assertOwned)
           return read()[provider]
+        }),
+      ),
+    deleteIf: (provider, predicate) =>
+      serialize(provider, () =>
+        withFileLock(async (assertOwned) => {
+          cache = undefined
+          const data = read()
+          const current = data[provider]
+          if (!current || !predicate(current)) return false
+          const { [provider]: _, ...rest } = data
+          write(rest, assertOwned)
+          return true
         }),
       ),
     delete: (provider) =>

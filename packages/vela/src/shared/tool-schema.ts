@@ -60,6 +60,17 @@ function isZodSchema(value: unknown): value is z.ZodType {
   )
 }
 
+type JsonSchemaDraft = '4' | '7' | '2019-09' | '2020-12'
+
+function detectJsonSchemaDraft(schema: JsonSchemaObject): JsonSchemaDraft {
+  const uri = typeof schema.$schema === 'string' ? schema.$schema : ''
+  if (uri.includes('2020-12')) return '2020-12'
+  if (uri.includes('2019-09')) return '2019-09'
+  if (uri.includes('draft-07') || uri.includes('draft/7')) return '7'
+  if (uri.includes('draft-04') || uri.includes('draft/4')) return '4'
+  return '2019-09'
+}
+
 /** Construct a Vela JSON Schema with built-in `@cfworker/json-schema` validation. */
 export function createJsonSchema<T = unknown>(
   schema:
@@ -80,7 +91,10 @@ export function createJsonSchema<T = unknown>(
     (async (value) => {
       compiled ??= Promise.resolve(getSchema()).then(
         (json) =>
-          new Validator(json as ConstructorParameters<typeof Validator>[0]),
+          new Validator(
+            json as ConstructorParameters<typeof Validator>[0],
+            detectJsonSchemaDraft(json),
+          ),
       )
       const result = (await compiled).validate(value)
       return result.valid
@@ -215,6 +229,7 @@ export async function validateToolInput(
     const json = await inputSchema.jsonSchema
     const validated = new Validator(
       json as ConstructorParameters<typeof Validator>[0],
+      detectJsonSchemaDraft(json),
     ).validate(input)
     if (!validated.valid) throw new Error(JSON.stringify(validated.errors))
     return input

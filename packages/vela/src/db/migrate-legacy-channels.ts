@@ -1,18 +1,12 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { interpolate, isPlainObject } from '../shared/interpolate.ts'
-import {
-  latestOccurrence,
-  nextOccurrence,
-  type RoutineSchedule,
-  routineTimezone,
-} from '../shared/routine-time.ts'
+import { routineTimezone } from '../shared/routine-time.ts'
 import {
   isSafeSegment,
   isStrictlyInside,
   type LarkChatMigrationConfig,
-  legacyChannelSessionId,
   type MigrationOps,
   readJsonStrict,
 } from './migrate-legacy-sources.ts'
@@ -45,11 +39,24 @@ function mapChannelState(
   return 'idle'
 }
 
-function interpolateIfEnv(
+const ENV_REF_RE =
+  /\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g
+
+function analyzeEnvRefs(
   value: string,
   env: Record<string, string | undefined> | undefined,
-): string {
-  return env ? interpolate(value, env) : value
+): { hasVarRef: boolean; hasUnresolved: boolean } {
+  let hasVarRef = false
+  let hasUnresolved = false
+  for (const match of value.matchAll(ENV_REF_RE)) {
+    const name = match[1] ?? match[2]
+    if (!name) continue
+    hasVarRef = true
+    if (!env || env[name] === undefined) {
+      hasUnresolved = true
+    }
+  }
+  return { hasVarRef, hasUnresolved }
 }
 
 function resolveConfiguredToken(
@@ -58,14 +65,15 @@ function resolveConfiguredToken(
   ops: MigrationOps,
 ): string | undefined {
   if (!rawValue.includes('$')) return rawValue.trim() || undefined
-  if (!ops.env) {
+  const { hasVarRef, hasUnresolved } = analyzeEnvRefs(rawValue, ops.env)
+  if (hasVarRef && hasUnresolved) {
     ops.incompleteRef.incomplete = true
     ops.warnings.push(
       `Skipped env-expression ${label} entry "${rawValue}" during offline database migration`,
     )
     return undefined
   }
-  const expanded = interpolate(rawValue, ops.env).trim()
+  const expanded = interpolate(rawValue, ops.env ?? {}).trim()
   if (!expanded) {
     ops.warnings.push(
       `Skipped empty expanded ${label} entry "${rawValue}" during database migration`,
@@ -157,8 +165,25 @@ function parseLarkChats(
 
 function buildLarkChatConfig(
   chat: Record<string, unknown>,
-  env: Record<string, string | undefined> | undefined,
+  chatId: string,
+  ops: MigrationOps,
 ): LarkChatMigrationConfig {
+  const resolveChatString = (
+    raw: string,
+    field: string,
+  ): string | undefined => {
+    if (!raw.includes('$')) return raw
+    const { hasVarRef, hasUnresolved } = analyzeEnvRefs(raw, ops.env)
+    if (hasVarRef && hasUnresolved) {
+      ops.incompleteRef.incomplete = true
+      ops.warnings.push(
+        `Skipped env-expression lark.chats["${chatId}"].${field} "${raw}" during offline database migration`,
+      )
+      return undefined
+    }
+    return interpolate(raw, ops.env ?? {})
+  }
+
   const extraConfig: Record<string, unknown> = {}
   for (const key of [
     'environment',
@@ -167,24 +192,45 @@ function buildLarkChatConfig(
     'topicThinkingLevel',
   ] as const) {
     const raw = chat[key]
-    if (raw !== undefined) {
-      extraConfig[key] =
-        typeof raw === 'string' ? interpolateIfEnv(raw, env) : raw
+    if (raw === undefined) continue
+    if (typeof raw === 'string') {
+      const resolved = resolveChatString(raw, key)
+      if (resolved !== undefined) extraConfig[key] = resolved
+    } else {
+      extraConfig[key] = raw
     }
   }
-  const tools = Array.isArray(chat.tools)
-    ? chat.tools.map((item) =>
-        typeof item === 'string' ? interpolateIfEnv(item, env) : item,
-      )
-    : undefined
+  let tools: unknown[] | undefined
+  if (Array.isArray(chat.tools)) {
+    const resolvedTools: unknown[] = []
+    let skippedTool = false
+    for (const item of chat.tools) {
+      if (typeof item === 'string') {
+        const resolved = resolveChatString(item, 'tools')
+        if (resolved === undefined) {
+          skippedTool = true
+          break
+        }
+        resolvedTools.push(resolved)
+      } else {
+        resolvedTools.push(item)
+      }
+    }
+    if (!skippedTool) tools = resolvedTools
+  }
+
+  const defaultModel =
+    typeof chat.model === 'string'
+      ? (resolveChatString(chat.model, 'model') ?? null)
+      : null
+  const defaultThinkingLevel =
+    typeof chat.thinkingLevel === 'string'
+      ? (resolveChatString(chat.thinkingLevel, 'thinkingLevel') ?? null)
+      : null
 
   return {
-    defaultModel:
-      typeof chat.model === 'string' ? interpolateIfEnv(chat.model, env) : null,
-    defaultThinkingLevel:
-      typeof chat.thinkingLevel === 'string'
-        ? interpolateIfEnv(chat.thinkingLevel, env)
-        : null,
+    defaultModel,
+    defaultThinkingLevel,
     defaultToolsJson: tools ? JSON.stringify(tools) : null,
     configJson:
       Object.keys(extraConfig).length > 0 ? JSON.stringify(extraConfig) : null,
@@ -195,7 +241,11 @@ export function loadLarkAndChannelConfig(ops: MigrationOps): void {
   for (const name of ['lark', 'local'] as const) {
     const sec = readChannelSection(ops.agentDir, name)
     if (sec && typeof sec.timezone === 'string' && sec.timezone.trim()) {
-      const tz = interpolateIfEnv(sec.timezone, ops.env).trim()
+      const tz = resolveConfiguredToken(sec.timezone, `${name}.timezone`, ops)
+      if (!tz) {
+        ops.unresolvedTimezoneChannels.add(name)
+        continue
+      }
       try {
         ops.channelTimezones.set(name, routineTimezone(tz))
       } catch {
@@ -209,7 +259,7 @@ export function loadLarkAndChannelConfig(ops: MigrationOps): void {
   for (const chat of parseLarkChats(larkSection, ops)) {
     const chatId = String(chat.id)
     ops.configuredLarkChats.add(chatId)
-    ops.larkChatConfigById.set(chatId, buildLarkChatConfig(chat, ops.env))
+    ops.larkChatConfigById.set(chatId, buildLarkChatConfig(chat, chatId, ops))
   }
 }
 
@@ -369,10 +419,10 @@ export function migrateChannelDirectory(
         channel: rec.channel,
         chatId: rec.chatId,
       }
-      ops.channelSessionByKey.set(rec.key, keyEntry)
+      ops.channelSessionByKey.set(`${dataDir}\0${rec.key}`, keyEntry)
       ops.channelSessionDataDirs.set(activeSessionId, dataDir)
       if (rec.legacyKey) {
-        ops.channelSessionByKey.set(rec.legacyKey, keyEntry)
+        ops.channelSessionByKey.set(`${dataDir}\0${rec.legacyKey}`, keyEntry)
       }
 
       for (const rawPrevId of rec.previousSessionIds ?? []) {
@@ -418,9 +468,13 @@ export function migrateChannelDirectory(
     }
 
     if (isPlainObject(parsed.notes)) {
+      const dirHash = createHash('sha256')
+        .update(dataDir)
+        .digest('hex')
+        .slice(0, 8)
       for (const [groupKey, rawNotes] of Object.entries(parsed.notes)) {
         if (!Array.isArray(rawNotes)) continue
-        const target = ops.channelSessionByKey.get(groupKey)
+        const target = ops.channelSessionByKey.get(`${dataDir}\0${groupKey}`)
         let noteProjectId = target?.projectId ?? null
         if (!noteProjectId) {
           const dash = groupKey.indexOf('-')
@@ -432,19 +486,87 @@ export function migrateChannelDirectory(
         for (let idx = 0; idx < rawNotes.length; idx++) {
           const note = rawNotes[idx]
           if (typeof note !== 'string') continue
-          const dedupeKey = `legacy-note:${groupKey}:${idx}`
-          const res = ops.db.run(
-            `INSERT OR IGNORE INTO inbox_events (
+          const dedupeKey = `legacy-note:${dirHash}:${groupKey}:${idx}`
+          const legacyKey = `legacy-note:${groupKey}:${idx}`
+          const payloadJson = JSON.stringify({
+            type: 'handoff_note',
+            groupKey,
+            text: note,
+          })
+          const existingNote = ops.db.get<{ id: string }>(
+            "SELECT id FROM inbox_events WHERE source = 'handoff' AND dedupe_key = ?",
+            dedupeKey,
+          )
+          const legacyNote = ops.db.get<{
+            id: string
+            status: string
+            processed_at: string | null
+            run_id: string | null
+            session_id: string | null
+            project_id: string | null
+            payload_json: string
+          }>(
+            "SELECT id, status, processed_at, run_id, session_id, project_id, payload_json FROM inbox_events WHERE source = 'handoff' AND dedupe_key = ?",
+            legacyKey,
+          )
+          const matchingLegacy =
+            legacyNote && legacyNote.payload_json === payloadJson
+              ? legacyNote
+              : undefined
+          if (!existingNote && matchingLegacy) {
+            ops.db.run(
+              `UPDATE inbox_events SET
+                dedupe_key = ?,
+                session_id = COALESCE(session_id, ?),
+                project_id = COALESCE(project_id, ?)
+              WHERE id = ?`,
+              dedupeKey,
+              target?.sessionId ?? null,
+              noteProjectId,
+              matchingLegacy.id,
+            )
+            continue
+          }
+          if (existingNote && matchingLegacy) {
+            ops.db.run(
+              `UPDATE inbox_events SET
+                status = CASE WHEN status = 'pending' AND ? != 'pending' THEN ? ELSE status END,
+                processed_at = COALESCE(processed_at, ?),
+                run_id = COALESCE(run_id, ?),
+                session_id = COALESCE(session_id, ?, ?),
+                project_id = COALESCE(project_id, ?, ?)
+              WHERE id = ?`,
+              matchingLegacy.status,
+              matchingLegacy.status,
+              matchingLegacy.processed_at,
+              matchingLegacy.run_id,
+              matchingLegacy.session_id,
+              target?.sessionId ?? null,
+              matchingLegacy.project_id,
+              noteProjectId,
+              existingNote.id,
+            )
+            ops.db.run(
+              'DELETE FROM inbox_events WHERE id = ?',
+              matchingLegacy.id,
+            )
+            continue
+          }
+          ops.db.run(
+            `INSERT INTO inbox_events (
               id, session_id, project_id, source, dedupe_key, wake, passive, status, payload_json, created_at
-            ) VALUES (?, ?, ?, 'handoff', ?, 0, 0, 'pending', ?, ?)`,
+            ) VALUES (?, ?, ?, 'handoff', ?, 0, 0, 'pending', ?, ?)
+            ON CONFLICT(source, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
+              session_id = COALESCE(inbox_events.session_id, excluded.session_id),
+              project_id = COALESCE(inbox_events.project_id, excluded.project_id)`,
             randomUUID(),
             target?.sessionId ?? null,
             noteProjectId,
             dedupeKey,
-            JSON.stringify({ type: 'handoff_note', groupKey, text: note }),
+            payloadJson,
             ops.now,
           )
-          if (res.changes > 0) ops.summary.inboxEvents += 1
+          if (!existingNote) ops.summary.inboxEvents += 1
         }
       }
     }
@@ -506,239 +628,4 @@ export function migratePendingInboxMessages(ops: MigrationOps): void {
       if (res.changes > 0) ops.summary.inboxEvents += 1
     }
   }
-}
-
-function resolveChannelTarget(
-  ops: MigrationOps,
-  channel: string,
-  chatId: string,
-  explicitTargetKey: unknown,
-):
-  | {
-      resolved: { sessionId: string; projectId: string | null }
-      missingExplicit: false
-    }
-  | { resolved: undefined; missingExplicit: boolean } {
-  if (typeof explicitTargetKey === 'string') {
-    const hit = ops.channelSessionByKey.get(explicitTargetKey)
-    if (hit && hit.channel === channel && hit.chatId === chatId) {
-      return {
-        resolved: { sessionId: hit.sessionId, projectId: hit.projectId },
-        missingExplicit: false,
-      }
-    }
-    return { resolved: undefined, missingExplicit: true }
-  }
-  const hit = ops.channelSessionByKey.get(
-    legacyChannelSessionId(channel, chatId),
-  )
-  if (hit && hit.channel === channel && hit.chatId === chatId) {
-    return {
-      resolved: { sessionId: hit.sessionId, projectId: hit.projectId },
-      missingExplicit: false,
-    }
-  }
-  return { resolved: undefined, missingExplicit: false }
-}
-
-export function migrateRoutinesAndSubscriptions(
-  ops: MigrationOps,
-  dataDirs: readonly string[],
-): void {
-  const nowParsed = Date.parse(ops.now)
-  const nowMs = Number.isFinite(nowParsed) ? nowParsed : Date.now()
-
-  for (const dataDir of dataDirs) {
-    const routinesFile = join(dataDir, 'channels', 'routines.json')
-    if (existsSync(routinesFile)) {
-      const parsed = readJsonStrict(routinesFile)
-      if (!isPlainObject(parsed) || !Array.isArray(parsed.routines)) {
-        throw new Error(`Invalid channel routines ${routinesFile}`)
-      }
-      for (const r of parsed.routines) {
-        if (
-          !isPlainObject(r) ||
-          typeof r.id !== 'string' ||
-          typeof r.channel !== 'string' ||
-          typeof r.chatId !== 'string' ||
-          typeof r.message !== 'string' ||
-          !isPlainObject(r.schedule)
-        ) {
-          continue
-        }
-        const { resolved, missingExplicit } = resolveChannelTarget(
-          ops,
-          r.channel,
-          r.chatId,
-          r.targetKey,
-        )
-        if (missingExplicit) {
-          ops.warnings.push(
-            `Imported routine "${r.id}" disabled because target "${String(r.targetKey)}" is unavailable`,
-          )
-        }
-        const projectId =
-          resolved?.projectId ??
-          ops.projectByChat.get(`${r.channel}\0${r.chatId}`) ??
-          (ops.localProjectIds.has(r.chatId) ? r.chatId : null)
-        const creator = isPlainObject(r.creator) ? r.creator : undefined
-        const createdAt =
-          typeof r.createdAt === 'string' ? r.createdAt : ops.now
-        const timezone =
-          ops.channelTimezones.get(r.channel) ?? routineTimezone()
-        const createdMs = Date.parse(createdAt)
-        const lastFiredMs =
-          typeof r.lastFiredAt === 'string'
-            ? Date.parse(r.lastFiredAt)
-            : Number.NaN
-        const editedMs =
-          typeof r.scheduleUpdatedAt === 'string'
-            ? Date.parse(r.scheduleUpdatedAt)
-            : Number.NaN
-        const baseCreatedMs = Number.isFinite(createdMs) ? createdMs : 0
-        const floorMs = Math.max(
-          Number.isFinite(lastFiredMs) ? lastFiredMs : baseCreatedMs,
-          Number.isFinite(editedMs) ? editedMs : baseCreatedMs,
-        )
-        const schedule = r.schedule as unknown as RoutineSchedule
-        const catchUpMs = latestOccurrence(schedule, floorMs, nowMs, timezone)
-        const nextMs =
-          catchUpMs !== undefined
-            ? catchUpMs
-            : nextOccurrence(schedule, Math.max(nowMs, floorMs), timezone)
-        const nextFireAt =
-          nextMs !== undefined ? new Date(nextMs).toISOString() : null
-        const enabled = !missingExplicit && nextFireAt !== null ? 1 : 0
-
-        const res = dbInsertTimer(ops, {
-          id: r.id,
-          projectId,
-          sessionId: resolved?.sessionId ?? null,
-          channel: r.channel,
-          creatorId: typeof creator?.id === 'string' ? creator.id : null,
-          creatorName: typeof creator?.name === 'string' ? creator.name : null,
-          message: r.message,
-          scheduleJson: JSON.stringify(r.schedule),
-          timezone,
-          enabled,
-          nextFireAt,
-          lastFiredAt: typeof r.lastFiredAt === 'string' ? r.lastFiredAt : null,
-          scheduleUpdatedAt:
-            typeof r.scheduleUpdatedAt === 'string'
-              ? r.scheduleUpdatedAt
-              : null,
-          createdAt,
-        })
-        if (res > 0) ops.summary.timers += 1
-      }
-    }
-
-    const subsFile = join(dataDir, 'channels', 'subscriptions.json')
-    if (existsSync(subsFile)) {
-      const parsed = readJsonStrict(subsFile)
-      if (!isPlainObject(parsed) || !Array.isArray(parsed.subscriptions)) {
-        throw new Error(`Invalid channel subscriptions ${subsFile}`)
-      }
-      for (const sub of parsed.subscriptions) {
-        if (
-          !isPlainObject(sub) ||
-          typeof sub.id !== 'string' ||
-          typeof sub.source !== 'string' ||
-          typeof sub.key !== 'string' ||
-          typeof sub.channel !== 'string' ||
-          typeof sub.chatId !== 'string'
-        ) {
-          continue
-        }
-        const { resolved, missingExplicit } = resolveChannelTarget(
-          ops,
-          sub.channel,
-          sub.chatId,
-          sub.targetKey,
-        )
-        if (missingExplicit) {
-          ops.warnings.push(
-            `Skipped subscription "${sub.id}" because target "${String(sub.targetKey)}" is unavailable`,
-          )
-          continue
-        }
-        let projectId =
-          resolved?.projectId ??
-          ops.projectByChat.get(`${sub.channel}\0${sub.chatId}`) ??
-          (ops.localProjectIds.has(sub.chatId) ? sub.chatId : null)
-        let sessionId = resolved?.sessionId
-        if (!sessionId) {
-          sessionId = legacyChannelSessionId(sub.channel, sub.chatId)
-          if (!projectId && sub.channel === 'lark') {
-            projectId = `lark-group:${sub.chatId}`
-            ops.ensureProject({ id: projectId, name: sub.chatId })
-          }
-          ops.ensureSession({
-            id: sessionId,
-            projectId,
-            kind: projectId ? 'hub' : 'chat',
-            state: 'idle',
-          })
-        }
-        const creator = isPlainObject(sub.creator) ? sub.creator : undefined
-        const res = ops.db.run(
-          `INSERT OR IGNORE INTO subscriptions (
-            id, source, event_key, project_id, session_id, creator_id, creator_name, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          sub.id,
-          sub.source,
-          sub.key,
-          projectId,
-          sessionId,
-          typeof creator?.id === 'string' ? creator.id : null,
-          typeof creator?.name === 'string' ? creator.name : null,
-          ops.now,
-        )
-        if (res.changes > 0) ops.summary.subscriptions += 1
-      }
-    }
-  }
-}
-
-function dbInsertTimer(
-  ops: MigrationOps,
-  row: {
-    id: string
-    projectId: string | null
-    sessionId: string | null
-    channel: string
-    creatorId: string | null
-    creatorName: string | null
-    message: string
-    scheduleJson: string
-    timezone: string
-    enabled: number
-    nextFireAt: string | null
-    lastFiredAt: string | null
-    scheduleUpdatedAt: string | null
-    createdAt: string
-  },
-): number {
-  return ops.db.run(
-    `INSERT OR IGNORE INTO timers (
-      id, kind, project_id, session_id, channel, creator_id, creator_name,
-      message, schedule_json, timezone, enabled, next_fire_at, last_fired_at,
-      schedule_updated_at, created_at, updated_at
-    ) VALUES (?, 'routine', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    row.id,
-    row.projectId,
-    row.sessionId,
-    row.channel,
-    row.creatorId,
-    row.creatorName,
-    row.message,
-    row.scheduleJson,
-    row.timezone,
-    row.enabled,
-    row.nextFireAt,
-    row.lastFiredAt,
-    row.scheduleUpdatedAt,
-    row.createdAt,
-    ops.now,
-  ).changes
 }

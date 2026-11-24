@@ -89,6 +89,8 @@ export interface SessionDeps<Session> {
     model: ModelInput | undefined,
     session: Session,
   ) => ResolvedModel
+  /** Live subscription plan label for a provider/channel pair (reflects mid-session login/logout). */
+  planLabel?: (provider: string, channel?: string) => string | undefined
   thinkingLevel: ThinkingLevel
   /** Automatic compaction for new sessions */
   autoCompaction: boolean

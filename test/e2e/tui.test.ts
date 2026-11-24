@@ -684,6 +684,20 @@ test('a steer typed while the model streams is answered in the same run', async 
   ])
 })
 
+test('the startup header leaves the extension list to /extensions', async () => {
+  const t = createTestVela({ extensions: [todo] })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  const header = tui.screen()
+  expect(header).toContain('Vela v')
+  expect(header).not.toContain('Extensions:')
+
+  tui.submit('/extensions')
+  // The same list is one command away
+  await tui.until('[extensions]\n   memory\n     Tools: memory')
+})
+
 test('slash commands: CLI command output, extension commands and /hotkeys go to the chat', async () => {
   const t = createTestVela({ extensions: [todo] })
   const tui = await startTui(t.vela)
@@ -1255,6 +1269,27 @@ test('a turn folds its thinking and tool calls into one line above the answer', 
   tui.terminal.press(KEYS.ctrlO)
   expect(tui.screen()).not.toContain('Read the haystack')
   expect(tui.screen()).toContain('Found it')
+})
+
+test('the running spinner sits one blank line under the turn line, not two', async () => {
+  const t = createTestVela({
+    responses: [{ reasoning: 'Weigh the options', hang: true }],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('say something')
+  await tui.until('(Esc to interrupt)')
+  await tui.until('▸ Thinking for')
+  const lines = tui.screen().split('\n')
+  const fold = lines.findIndex((line) =>
+    line.trimStart().startsWith('▸ Thinking for'),
+  )
+  const spinner = lines.findIndex((line) => line.includes('(Esc to interrupt)'))
+  expect(fold).toBeGreaterThanOrEqual(0)
+  // The loader draws its own blank line: an extra spacer left a two-row gap above it
+  expect(lines[fold + 1]?.trim()).toBe('')
+  expect(spinner).toBe(fold + 2)
 })
 
 test('clicking a turn line opens that turn alone; Ctrl+O still opens all of them', async () => {

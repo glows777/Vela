@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import type { ThinkingLevel } from '../../providers/models/index.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
 import {
+  normalizeUserContent,
   normalizeVelaContent,
   normalizeVelaMessage,
 } from '../../shared/messages.ts'
@@ -683,6 +684,19 @@ export class SessionStore {
                     ...reparented.replacement,
                     content: content as ModelMessage['content'],
                   },
+                }
+              : reparented,
+          )
+        } else if (
+          reparented.type === 'custom_message' &&
+          Array.isArray(reparented.content)
+        ) {
+          const { content, changed } = normalizeUserContent(reparented.content)
+          entries.push(
+            changed
+              ? {
+                  ...reparented,
+                  content,
                 }
               : reparented,
           )

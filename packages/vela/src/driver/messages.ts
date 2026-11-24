@@ -19,18 +19,26 @@ export type {
   AssistantContent,
   AssistantContentPart,
   AssistantModelMessage,
+  CustomProviderPart,
+  FilePart,
   ImageContent,
   ModelMessage,
   ProviderOptions,
+  ReasoningFilePart,
   TextContent,
   TextPart,
   ThinkingPart,
+  ToolApprovalRequestPart,
+  ToolApprovalResponsePart,
   ToolCallPart,
   ToolContent,
+  ToolMessageContentPart,
   ToolModelMessage,
+  ToolResultContentItem,
   ToolResultOutput,
   ToolResultPart,
   UserContent,
+  UserContentPart,
   VelaAssistantMessage,
   VelaMessage,
   VelaPart,
@@ -79,7 +87,8 @@ export function isImageContentPart(part: {
   return (
     part.type === 'image' ||
     part.type.startsWith('image-') ||
-    (part.type === 'file' && /^image(?:\/|$)/i.test(part.mediaType ?? ''))
+    ((part.type === 'file' || part.type === 'media') &&
+      /^image(?:\/|$)/i.test(part.mediaType ?? ''))
   )
 }
 
@@ -99,7 +108,12 @@ export async function normalizeUserMessage(
       continue
     }
     const result = await normalizeImage(part)
-    if (result.image) content.push(result.image)
+    if (result.image)
+      content.push(
+        part.providerOptions
+          ? { ...result.image, providerOptions: part.providerOptions }
+          : result.image,
+      )
     else
       content.push({
         type: 'text',

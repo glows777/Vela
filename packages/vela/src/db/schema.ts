@@ -4,12 +4,12 @@
  * Logical boundary:
  * - Platform control-plane tables (`projects`, `sessions`, `channel_bindings`, `inbox_events`,
  *   `runs`, `events`, `approvals`, `outbox`, `timers`, `subscriptions`, `background_jobs`,
- *   `blobs`, `usage_records`, `trusted_paths`, `kv_meta`) are driver-agnostic.
+ *   `blobs`, `usage_records`, `trusted_paths`, `oauth_registrations`, `kv_meta`) are driver-agnostic.
  * - `VelaDriver` private tables (`vela_messages`, `vela_tool_calls`) share the same SQLite
  *   connection for atomic step-level durability without leaking Vela internals into Runtime.
  */
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export const INITIAL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -27,6 +27,14 @@ CREATE TABLE IF NOT EXISTS kv_meta (
 CREATE TABLE IF NOT EXISTS trusted_paths (
   path TEXT PRIMARY KEY NOT NULL,
   trusted INTEGER NOT NULL CHECK (trusted IN (0, 1)),
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_registrations (
+  provider TEXT PRIMARY KEY NOT NULL,
+  client_id TEXT NOT NULL,
+  host_id TEXT,
+  subject TEXT,
   updated_at TEXT NOT NULL
 );
 
@@ -87,7 +95,7 @@ CREATE TABLE IF NOT EXISTS channel_bindings (
   thread_id TEXT,
   kind TEXT NOT NULL CHECK (kind IN ('group', 'direct')),
   project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
   config_json TEXT,
   created_at TEXT NOT NULL,
@@ -123,12 +131,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_source_dedupe
 CREATE INDEX IF NOT EXISTS idx_inbox_session_status
   ON inbox_events (session_id, status, created_at);
 
+CREATE INDEX IF NOT EXISTS idx_inbox_status_created
+  ON inbox_events (status, created_at);
+
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   driver TEXT NOT NULL DEFAULT 'vela',
-  trigger TEXT NOT NULL CHECK (trigger IN ('user', 'channel', 'timer', 'webhook', 'approval', 'job')),
+  trigger TEXT NOT NULL CHECK (trigger IN ('user', 'channel', 'timer', 'webhook', 'approval', 'job', 'handoff', 'session')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'waiting_human', 'completed', 'stopped', 'failed', 'interrupted')),
   model TEXT,
   error TEXT,
@@ -144,6 +155,9 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_session_status
   ON runs (session_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_runs_status
+  ON runs (status);
 
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,6 +276,9 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 CREATE INDEX IF NOT EXISTS idx_bg_jobs_session_status
   ON background_jobs (session_id, status);
 
+CREATE INDEX IF NOT EXISTS idx_bg_jobs_status
+  ON background_jobs (status);
+
 CREATE TABLE IF NOT EXISTS blobs (
   id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
@@ -359,11 +376,14 @@ CREATE TABLE IF NOT EXISTS vela_tool_calls (
   finished_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE (run_id, tool_call_id)
+  UNIQUE (session_id, assistant_message_id, tool_call_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vela_tool_calls_status
   ON vela_tool_calls (session_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_vela_tool_calls_active_status
+  ON vela_tool_calls (status);
 
 CREATE INDEX IF NOT EXISTS idx_vela_tool_calls_msg
   ON vela_tool_calls (session_id, assistant_message_id, call_index);

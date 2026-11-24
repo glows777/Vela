@@ -13,6 +13,7 @@ export interface ChannelBinding {
   id: string
   channel: string
   externalId: string
+  threadId?: string | null
   kind: ChannelBindingKind
   projectId: string | null
   sessionId: string | null
@@ -39,6 +40,8 @@ export interface ChannelInboundMessage {
   senderName: string
   text: string
   mentioned?: boolean
+  passive?: boolean
+  wake?: boolean
   attachments?: ChannelInboundAttachment[]
   timestamp: string
   raw?: unknown
@@ -47,10 +50,13 @@ export interface ChannelInboundMessage {
 /** Outbound payload delivered by `Runtime` `outbox` through a `ChannelAdapter`. */
 export interface ChannelOutboundMessage {
   outboxId: string
+  kind?: 'reply' | 'topic_start' | 'forward' | 'file'
   channel: string
   externalChatId: string
   threadId?: string
   replyToMessageId?: string
+  title?: string
+  forwardMessageId?: string
   text: string
   files?: { path: string; name?: string; mimeType?: string }[]
 }
@@ -71,4 +77,5 @@ export interface ChannelAdapter {
   start(ctx: ChannelAdapterContext): Promise<void>
   stop(): Promise<void>
   deliver(message: ChannelOutboundMessage): Promise<ChannelDeliveryResult>
+  fetchAttachment?(ref: string, signal?: AbortSignal): Promise<Uint8Array>
 }

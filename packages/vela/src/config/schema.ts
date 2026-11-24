@@ -229,6 +229,8 @@ function validateLimits(limits: Record<string, unknown>, label: string): void {
   }
 }
 
+const PROVIDER_NAME = /^[A-Za-z0-9][\w.-]*$/
+
 /** Validate a `providers` record from `config.json` with clear file-prefixed messages. */
 function validateProvidersRecord(
   providers: unknown,
@@ -238,6 +240,8 @@ function validateProvidersRecord(
   if (!isPlainObject(providers))
     throw new Error(`${file}: providers must be an object`)
   for (const [name, config] of Object.entries(providers)) {
+    if (!PROVIDER_NAME.test(name))
+      throw new Error(`${file}: invalid provider name "${name}"`)
     if (!isPlainObject(config))
       throw new Error(`${file}: providers.${name} must be an object`)
     if (
@@ -457,7 +461,9 @@ export function parseConfig(
     const list = settings[key]
     if (!list) continue
     settings[key] = list.map((item) =>
-      /^[+-]?builtin:/.test(item) ? item : resolvePath(item),
+      key === 'extensions' && /^[+-]?builtin:/.test(item)
+        ? item
+        : resolvePath(item),
     )
   }
 

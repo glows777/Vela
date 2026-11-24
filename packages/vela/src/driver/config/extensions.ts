@@ -85,8 +85,8 @@ async function loadHostModule(
   diskPath?: string,
 ): Promise<boolean> {
   const loader =
-    hostLoaders[specifier] ??
-    (diskPath ? () => import(pathToFileURL(diskPath).href) : undefined)
+    (diskPath ? () => import(pathToFileURL(diskPath).href) : undefined) ??
+    hostLoaders[specifier]
   if (!loader) return false
   storeHostModule(specifier, await loader())
   return true
@@ -207,9 +207,13 @@ async function resolveAliasWithShim(
   specifier: string,
   diskPath: string | undefined,
   shimFile: string,
+  forceHostBridge = false,
 ): Promise<string | undefined> {
-  if (diskPath) return diskPath
-  if (!(await loadHostModule(specifier))) return undefined
+  if (!forceHostBridge && diskPath) return diskPath
+  if (
+    !(await loadHostModule(specifier, forceHostBridge ? diskPath : undefined))
+  )
+    return diskPath
   const target = join(ensureShimDir(), shimFile)
   writeFileSync(
     target,
@@ -251,11 +255,13 @@ function getJiti(aliasZod: boolean): Promise<JitiInstance> {
       '@glows777/vela/extension-api',
       disk.get('@glows777/vela/extension-api'),
       'extension-api.cjs',
+      true,
     )
     const velaRoot = await resolveAliasWithShim(
       '@glows777/vela',
       disk.get('@glows777/vela'),
       'vela.cjs',
+      true,
     )
     if (extensionApi) alias['@glows777/vela/extension-api'] = extensionApi
     if (velaRoot) alias['@glows777/vela'] = velaRoot

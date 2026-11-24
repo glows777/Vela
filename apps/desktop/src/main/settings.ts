@@ -71,6 +71,28 @@ function readRawUserSections(agentDir: string): {
  * `directModel` is a model handed to the host (`VELA_MODEL=faux:<scenario>`), and
  * `hasAvailableModel` says some provider already has a credential; either one means no setup screen.
  */
+function withoutLocalOnlyOAuth(
+  providers: Record<string, ProviderDefinition>,
+  credentials: CredentialStore,
+): CredentialStore {
+  const isBlocked = (provider: string) =>
+    credentials.get(provider)?.type === 'oauth' &&
+    Boolean(providers[provider]?.oauth?.localOnly)
+  return {
+    get: (provider) =>
+      isBlocked(provider) ? undefined : credentials.get(provider),
+    list: () => credentials.list().filter((provider) => !isBlocked(provider)),
+    modify: (provider, fn) => credentials.modify(provider, fn),
+    delete: (provider) => credentials.delete(provider),
+    ...(credentials.deleteIf
+      ? {
+          deleteIf: (provider, predicate) =>
+            credentials.deleteIf!(provider, predicate),
+        }
+      : {}),
+  }
+}
+
 export function readSettings(options: {
   agentDir: string
   cwd: string
@@ -80,12 +102,16 @@ export function readSettings(options: {
   hasAvailableModel: boolean
 }): SettingsState {
   const config = loadDesktopConfig(options.cwd, options.agentDir)
+  const desktopCredentials = withoutLocalOnlyOAuth(
+    config.providers,
+    config.credentials,
+  )
   const { custom, rawLark } = readRawUserSections(config.agentDir)
   const providers: SettingsProvider[] = Object.entries(config.providers).map(
     ([name, definition]: [string, ProviderDefinition]) => ({
       name,
       ...(definition.authSource
-        ? { credential: definition.authSource(config.credentials.get(name)) }
+        ? { credential: definition.authSource(desktopCredentials.get(name)) }
         : {}),
       custom: custom.has(name),
       models: (definition.models ?? []).map(
@@ -116,11 +142,11 @@ export function readSettings(options: {
         ? options.hasAvailableModel
           ? { required: false }
           : { required: true, reason: 'no-model' }
-        : resolves(model, config.providers, config.credentials)
+        : resolves(model, config.providers, desktopCredentials)
           ? usableSetup(
               usableModel({
                 providers: config.providers,
-                credentials: config.credentials,
+                credentials: desktopCredentials,
                 model,
               }),
             )
