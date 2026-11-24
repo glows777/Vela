@@ -36,6 +36,7 @@ import type { VelaDatabase } from './sqlite.ts'
 export type { LegacyMigrationSummary }
 
 const LEGACY_MIGRATION_KEY = 'legacy_migration_v08'
+const LEGACY_MIGRATION_STATE_KEY = 'legacy_migration_v08_state'
 
 export interface LegacyMigrationResult {
   skipped: boolean
@@ -134,7 +135,12 @@ function collectTranscriptFiles(
 function buildSessionIdResolver(
   dataDirs: readonly string[],
   warnings: string[],
-): (dataDir: string, legacySessionId: string) => string {
+  priorAllocations: Record<string, string>,
+  existingDbSessionIds: ReadonlySet<string>,
+): {
+  resolveSessionId: (dataDir: string, legacySessionId: string) => string
+  allocations: Record<string, string>
+} {
   const dirsByRawId = new Map<string, Set<string>>()
   const register = (dataDir: string, sessionId: string) => {
     if (!sessionId) return
@@ -187,28 +193,38 @@ function buildSessionIdResolver(
     }
   }
 
-  const allocatedByPair = new Map<string, string>()
-  const usedIds = new Set<string>()
-  for (const [rawId, dirs] of dirsByRawId) {
-    if (dirs.size === 1) usedIds.add(rawId)
-  }
+  const allocatedByPair = new Map<string, string>(
+    Object.entries(priorAllocations),
+  )
+  const usedIds = new Set<string>([
+    ...existingDbSessionIds,
+    ...allocatedByPair.values(),
+  ])
+  const reservedNames = new Set<string>([...usedIds, ...dirsByRawId.keys()])
 
   for (const [rawId, dirs] of dirsByRawId) {
     const sortedDirs = [...dirs].sort()
-    for (let i = 0; i < sortedDirs.length; i++) {
-      const dataDir = sortedDirs[i]!
+    for (const dataDir of sortedDirs) {
       const pairKey = `${dataDir}\0${rawId}`
-      if (i === 0) {
+      const prior = allocatedByPair.get(pairKey)
+      if (prior) {
+        usedIds.add(prior)
+        reservedNames.add(prior)
+        continue
+      }
+      if (!usedIds.has(rawId)) {
         allocatedByPair.set(pairKey, rawId)
         usedIds.add(rawId)
+        reservedNames.add(rawId)
         continue
       }
       let candidate = `${rawId}--${shortDirHash(dataDir)}`
       let suffix = 2
-      while (usedIds.has(candidate)) {
+      while (usedIds.has(candidate) || reservedNames.has(candidate)) {
         candidate = `${rawId}--${shortDirHash(dataDir)}-${suffix++}`
       }
       usedIds.add(candidate)
+      reservedNames.add(candidate)
       allocatedByPair.set(pairKey, candidate)
       warnings.push(
         `Disambiguated colliding session "${rawId}" in ${dataDir} as "${candidate}"`,
@@ -216,9 +232,12 @@ function buildSessionIdResolver(
     }
   }
 
-  return (dataDir: string, legacySessionId: string): string => {
-    const pairKey = `${dataDir}\0${legacySessionId}`
-    return allocatedByPair.get(pairKey) ?? legacySessionId
+  return {
+    resolveSessionId: (dataDir: string, legacySessionId: string): string => {
+      const pairKey = `${dataDir}\0${legacySessionId}`
+      return allocatedByPair.get(pairKey) ?? legacySessionId
+    },
+    allocations: Object.fromEntries(allocatedByPair),
   }
 }
 
@@ -295,13 +314,42 @@ export function migrateLegacyVelaDir(options: {
         blobs: 0,
       }
 
+      const priorStateRow = db.get<{ value_json: string }>(
+        'SELECT value_json FROM kv_meta WHERE key = ?',
+        LEGACY_MIGRATION_STATE_KEY,
+      )
+      let priorAllocations: Record<string, string> = {}
+      if (priorStateRow) {
+        try {
+          const parsedState = JSON.parse(priorStateRow.value_json) as {
+            sessionAllocations?: unknown
+          }
+          if (isPlainObject(parsedState.sessionAllocations)) {
+            priorAllocations = Object.fromEntries(
+              Object.entries(parsedState.sessionAllocations).filter(
+                (pair): pair is [string, string] => typeof pair[1] === 'string',
+              ),
+            )
+          }
+        } catch {}
+      }
+      const existingDbSessionIds = new Set(
+        db.all<{ id: string }>('SELECT id FROM sessions').map((r) => r.id),
+      )
+
       const dataDirs = discoverLegacyDataDirs(
         agentDir,
         options,
         warnings,
         incompleteRef,
       )
-      const resolveSessionId = buildSessionIdResolver(dataDirs, warnings)
+      const { resolveSessionId, allocations: sessionAllocations } =
+        buildSessionIdResolver(
+          dataDirs,
+          warnings,
+          priorAllocations,
+          existingDbSessionIds,
+        )
       const projectByCwd = new Map<string, string>()
       const projectByChat = new Map<string, string>()
       const localProjectIds = new Set<string>()
@@ -327,7 +375,6 @@ export function migrateLegacyVelaDir(options: {
         { projectId: string; messages: LegacyLocalMessage[] }
       >()
       const seenSessionIds = new Set<string>()
-      const seenChannelBindings = new Set<string>()
 
       const ensureProject: MigrationOps['ensureProject'] = (row) => {
         const present = db.get<{ id: string }>(
@@ -447,8 +494,7 @@ export function migrateLegacyVelaDir(options: {
       const ensureChannelBinding: MigrationOps['ensureChannelBinding'] = (
         row,
       ) => {
-        const key = `${row.channel}\0${row.externalId}`
-        if (seenChannelBindings.has(key)) return
+        const enabledVal = row.enabled === false ? 0 : 1
         const existingBinding = db.get<{ id: string }>(
           'SELECT id FROM channel_bindings WHERE channel = ? AND external_id = ?',
           row.channel,
@@ -467,14 +513,31 @@ export function migrateLegacyVelaDir(options: {
             row.kind,
             row.projectId,
             row.sessionId,
-            row.enabled === false ? 0 : 1,
+            enabledVal,
             row.configJson ?? null,
             now,
             now,
           )
           summary.channelBindings += 1
+          return
         }
-        seenChannelBindings.add(key)
+        db.run(
+          `UPDATE channel_bindings SET
+            thread_id = COALESCE(thread_id, ?),
+            project_id = COALESCE(project_id, ?),
+            session_id = COALESCE(session_id, ?),
+            enabled = CASE WHEN ? = 1 THEN 1 ELSE enabled END,
+            config_json = COALESCE(config_json, ?),
+            updated_at = ?
+          WHERE id = ?`,
+          row.threadId ?? null,
+          row.projectId,
+          row.sessionId,
+          enabledVal,
+          row.configJson ?? null,
+          now,
+          existingBinding.id,
+        )
       }
 
       const ops: MigrationOps = {
@@ -676,6 +739,7 @@ export function migrateLegacyVelaDir(options: {
       }
 
       if (!incompleteRef.incomplete) {
+        db.run('DELETE FROM kv_meta WHERE key = ?', LEGACY_MIGRATION_STATE_KEY)
         db.run(
           `INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?)`,
           LEGACY_MIGRATION_KEY,
@@ -685,6 +749,14 @@ export function migrateLegacyVelaDir(options: {
             summary,
             warnings,
           }),
+          now,
+        )
+      } else {
+        db.run(
+          `INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+          LEGACY_MIGRATION_STATE_KEY,
+          JSON.stringify({ sessionAllocations }),
           now,
         )
       }

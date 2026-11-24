@@ -738,3 +738,185 @@ test('P2 #2,#3,#4,#5,#6,#7,#12,#13: transcript guards, branch-local context_edit
     db.close()
   }
 })
+
+test('GitHub Codex fixes: retry allocation stability, deterministic V1 IDs, and binding reconciliation', () => {
+  // 1. P1: preserve canonical session IDs across incomplete retries when an earlier dataDir joins later
+  // 2. P2: deterministic synthetic IDs across incomplete retries on V1 checkpoints
+  // 3. P2: reconcile channel_bindings on topic-before-hub order and env retry
+  const root = tempDir('vela-s1c-gh-codex-')
+  dirs.push(root)
+  const agentDir = join(root.path, 'agent')
+  const zzzDir = join(agentDir, 'projects', 'zzz')
+  const cwd = join(root.path, 'aaa-workspace')
+  const relDir = join(cwd, 'aaa-rel')
+  mkdirSync(join(zzzDir, 'sessions'), { recursive: true })
+  mkdirSync(join(relDir, 'sessions'), { recursive: true })
+  mkdirSync(join(agentDir, 'channels'), { recursive: true })
+
+  writeFileSync(
+    join(agentDir, 'settings.json'),
+    JSON.stringify({
+      dataDir: './aaa-rel',
+      extensionConfig: {
+        lark: {
+          chats: ['$LARK_ENV_CHAT'],
+        },
+      },
+    }),
+  )
+
+  // Both zzzDir and relDir contain session id "named", plus zzzDir has a V1 checkpoint
+  writeFileSync(
+    join(zzzDir, 'sessions', 'named.jsonl'),
+    `${[
+      JSON.stringify({
+        type: 'session',
+        version: 2,
+        id: 'named',
+        timestamp: '2026-11-24T00:00:00Z',
+      }),
+      JSON.stringify({
+        type: 'message',
+        id: 'msg-1',
+        parentId: null,
+        timestamp: '2026-11-24T00:00:01Z',
+        message: { role: 'user', content: 'from zzz' },
+      }),
+    ].join('\n')}\n`,
+  )
+  writeFileSync(
+    join(zzzDir, 'sessions', 'v1-retry.jsonl'),
+    `${JSON.stringify({
+      type: 'checkpoint',
+      timestamp: '2026-11-24T00:00:00Z',
+      messages: [
+        {
+          timestamp: '2026-11-24T00:00:01Z',
+          message: { role: 'user', content: 'v1 hello' },
+        },
+      ],
+    })}\n`,
+  )
+  writeFileSync(
+    join(relDir, 'sessions', 'named.jsonl'),
+    `${[
+      JSON.stringify({
+        type: 'session',
+        version: 2,
+        id: 'named',
+        timestamp: '2026-11-24T00:00:00Z',
+      }),
+      JSON.stringify({
+        type: 'message',
+        id: 'msg-1',
+        parentId: null,
+        timestamp: '2026-11-24T00:00:01Z',
+        message: { role: 'user', content: 'from aaa rel' },
+      }),
+    ].join('\n')}\n`,
+  )
+
+  // Topic record appears BEFORE Hub record, and chat oc_delayed relies on $LARK_ENV_CHAT
+  writeFileSync(
+    join(agentDir, 'channels', 'index.json'),
+    JSON.stringify({
+      version: 1,
+      records: [
+        {
+          key: 'lark-oc_delayed-om_r1',
+          channel: 'lark',
+          chatId: 'oc_delayed',
+          chatKind: 'group',
+          rootId: 'om_r1',
+          threadId: 'omt_r1',
+          task: 'Topic First',
+          activeSessionId: 'topic-first-sess',
+          previousSessionIds: [],
+          state: 'done',
+          pendingMessageIds: [],
+        },
+        {
+          key: 'lark-oc_delayed',
+          channel: 'lark',
+          chatId: 'oc_delayed',
+          chatKind: 'group',
+          task: 'Hub Second',
+          activeSessionId: 'hub-second-sess',
+          previousSessionIds: [],
+          state: 'done',
+          pendingMessageIds: [],
+        },
+      ],
+    }),
+  )
+
+  const db = openDatabase({ path: join(agentDir, 'vela.db') })
+  try {
+    // Pass 1 without cwd or env -> incomplete; zzz claims 'named', v1-retry imported, oc_delayed group disabled
+    const p1 = migrateLegacyVelaDir({ agentDir, db })
+    expect(p1.skipped).toBe(false)
+    const v1Leaf1 = db.get<{ leaf_message_id: string | null }>(
+      "SELECT leaf_message_id FROM sessions WHERE id = 'v1-retry'",
+    )?.leaf_message_id
+    expect(v1Leaf1).toBeTruthy()
+    expect(
+      db.get<{ enabled: number; session_id: string | null }>(
+        "SELECT enabled, session_id FROM channel_bindings WHERE external_id = 'oc_delayed'",
+      ),
+    ).toEqual({ enabled: 0, session_id: 'hub-second-sess' })
+
+    // Pass 2 with cwd + env -> discovers lexicographically earlier relDir('named') & enables oc_delayed
+    const p2 = migrateLegacyVelaDir({
+      agentDir,
+      db,
+      cwd,
+      env: { LARK_ENV_CHAT: 'oc_delayed' },
+    })
+    expect(p2.skipped).toBe(false)
+
+    // zzz keeps canonical 'named' with 'from zzz'; relDir gets disambiguated ID with 'from aaa rel'
+    const origNamedMsg = db.get<{ content_json: string }>(
+      "SELECT content_json FROM vela_messages WHERE session_id = 'named' AND id = 'msg-1'",
+    )
+    expect(JSON.parse(origNamedMsg!.content_json)).toEqual({
+      role: 'user',
+      content: 'from zzz',
+    })
+    const disambiguated = db.get<{ id: string }>(
+      "SELECT id FROM sessions WHERE id LIKE 'named--%'",
+    )
+    expect(disambiguated?.id).toBeTruthy()
+    const newRelMsg = db.get<{ content_json: string }>(
+      "SELECT content_json FROM vela_messages WHERE session_id = ? AND id = 'msg-1'",
+      disambiguated!.id,
+    )
+    expect(JSON.parse(newRelMsg!.content_json)).toEqual({
+      role: 'user',
+      content: 'from aaa rel',
+    })
+
+    // V1 checkpoint retry keeps deterministic leaf_message_id matching an existing row
+    const v1Leaf2 = db.get<{ leaf_message_id: string | null }>(
+      "SELECT leaf_message_id FROM sessions WHERE id = 'v1-retry'",
+    )?.leaf_message_id
+    expect(v1Leaf2).toBe(v1Leaf1)
+    expect(
+      db.get<{ id: string }>(
+        "SELECT id FROM vela_messages WHERE session_id = 'v1-retry' AND id = ?",
+        v1Leaf2!,
+      )?.id,
+    ).toBe(v1Leaf2!)
+
+    // Group binding reconciled both hub session_id (from topic-before-hub) AND enabled = 1 (from env retry)
+    expect(
+      db.get<{ enabled: number; session_id: string | null }>(
+        "SELECT enabled, session_id FROM channel_bindings WHERE external_id = 'oc_delayed'",
+      ),
+    ).toEqual({ enabled: 1, session_id: 'hub-second-sess' })
+
+    // Pass 3 is idempotent no-op
+    expect(migrateLegacyVelaDir({ agentDir, db, cwd }).skipped).toBe(true)
+  } finally {
+    db.close()
+  }
+})

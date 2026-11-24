@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { isPlainObject } from '../shared/interpolate.ts'
 import type { VelaMessage } from '../shared/messages.ts'
 
@@ -10,15 +10,22 @@ export interface RawTranscriptEntry {
   [key: string]: unknown
 }
 
-function createSyntheticId(taken: Set<string>): string {
-  for (let i = 0; i < 100; i++) {
-    const candidate = randomUUID().slice(0, 8)
+function createSyntheticId(taken: Set<string>, seed: string): string {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const input = attempt === 0 ? seed : `${seed}\0${attempt}`
+    const candidate = createHash('sha256')
+      .update(input)
+      .digest('hex')
+      .slice(0, 8)
     if (!taken.has(candidate)) {
       taken.add(candidate)
       return candidate
     }
   }
-  const fallback = randomUUID()
+  const fallback = createHash('sha256')
+    .update(`${seed}\0full\0${taken.size}`)
+    .digest('hex')
+    .slice(0, 16)
   taken.add(fallback)
   return fallback
 }
@@ -110,7 +117,8 @@ export function convertV1ToEntries(
     timestamp: string
     [key: string]: unknown
   }) => {
-    const id = createSyntheticId(taken)
+    const seed = `${sessionId}\0${entries.length}\0${entry.type}\0${entry.timestamp}`
+    const id = createSyntheticId(taken, seed)
     entries.push({
       ...entry,
       id,
