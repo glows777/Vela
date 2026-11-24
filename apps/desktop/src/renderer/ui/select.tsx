@@ -49,10 +49,10 @@ export function Select<T extends string>({
       menu.current?.hidePopover()
       return
     }
-    if (key === 'Escape' && open) {
+    if (key === 'Escape' && menu.current?.matches(':popover-open')) {
       event.preventDefault()
       event.stopPropagation()
-      menu.current?.hidePopover()
+      menu.current.hidePopover()
       return
     }
     if (open && (key === 'Enter' || key === ' ')) {

@@ -59,9 +59,11 @@ export function DialogContent({
   const handleEscape: NonNullable<DialogContentProps['onEscapeKeyDown']> = (
     event,
   ) => {
-    if (
-      document.activeElement?.matches('[role="combobox"][aria-expanded="true"]')
-    )
+    const trigger = document.activeElement
+    const listId = trigger?.matches('[role="combobox"]')
+      ? trigger.getAttribute('aria-controls')
+      : null
+    if (listId && document.getElementById(listId)?.matches(':popover-open'))
       event.preventDefault()
     onEscapeKeyDown?.(event)
   }
