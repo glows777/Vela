@@ -53,7 +53,7 @@ export const HOTKEYS = [
   '/tasks list background tasks, /tasks stop <id> ends one (alias /bashes)',
   `${keyLabel('cycleThinking')} cycle thinking level · ${keyLabel('selectModel')} select model · ${keyLabel('cycleModelForward')} / ${keyLabel('cycleModelBackward')} cycle models`,
   `${keyLabel('expandTools')} expand / collapse every turn's process (click one line for a single turn) · ${keyLabel('toggleThinking')} show / hide thinking inside an open turn`,
-  `${keyLabel('pasteImage')} paste a clipboard image as a file path for read_file`,
+  `${keyLabel('pasteImage')} paste clipboard files as their paths, an image as a temporary path, or text`,
   `${keyLabel('clear')} clear editor, twice to exit · ${keyLabel('exit')} exit when editor is empty`,
 ]
 

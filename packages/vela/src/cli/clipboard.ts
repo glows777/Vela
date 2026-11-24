@@ -4,6 +4,7 @@ import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getNativeClipboard } from '@earendil-works/pi-tui'
+import { imageMimeType } from '../shared/images/index.ts'
 
 /** pi-tui supplies native image reads on macOS, Windows and X11; Wayland uses wl-paste. */
 export async function readClipboardImage(): Promise<Uint8Array | undefined> {
@@ -26,6 +27,61 @@ export async function readClipboardText(): Promise<string | undefined> {
     )?.toString('utf8')
   }
   return (await getNativeClipboard()?.getText()) ?? undefined
+}
+
+/**
+ * Files on the clipboard, such as a Finder file copy, as their original paths. pi-tui reads
+ * `public.file-url` on macOS and reports nothing where its helper has no file support.
+ */
+export async function readClipboardFilePaths(): Promise<string[] | undefined> {
+  const paths = await getNativeClipboard()?.getFilePaths?.()
+  return paths?.length ? paths : undefined
+}
+
+/** Shell-quotes one clipboard path for `!` bash mode (pi's `quoteIfNeeded`). */
+export function quoteClipboardPath(path: string): string {
+  if (path.length > 0 && !/[^\w./~:@-]/.test(path)) return path
+  return `'${path.replaceAll("'", "'\\''")}'`
+}
+
+/**
+ * The text Ctrl+V inserts for clipboard files: their original paths, newline-separated, or
+ * shell-quoted and space-separated in `!` bash mode. A path with a control character is refused
+ * before it reaches the terminal, and a space goes on each side only where the cursor's neighbour
+ * is not whitespace (pi's rule), so a path does not run into the word next to it.
+ */
+export function clipboardFilesText(
+  paths: readonly string[],
+  options: { bash?: boolean; before?: string; after?: string } = {},
+): string {
+  if (paths.some((path) => /\p{Cc}/u.test(path)))
+    throw new Error('Clipboard file path contains control characters')
+  const text = options.bash
+    ? paths.map(quoteClipboardPath).join(' ')
+    : paths.join('\n')
+  const before = options.before ?? ''
+  const after = options.after ?? ''
+  return `${before && !/\s$/.test(before) ? ' ' : ''}${text}${
+    after && !/^\s/.test(after) ? ' ' : ''
+  }`
+}
+
+/**
+ * Copies a clipboard image into a private temporary file inside `dir` and returns the editor text:
+ * its path, spaced the way pasted images have always been (a space before it when the text does
+ * not already end with one, and one after it to keep typing separate). Throws for a format Vela
+ * cannot identify; the TUI removes `dir` when it exits.
+ */
+export function clipboardImageText(
+  bytes: Uint8Array,
+  dir: string,
+  before = '',
+): string {
+  const mimeType = imageMimeType(Buffer.from(bytes))
+  if (!mimeType) throw new Error('Unsupported clipboard image format')
+  const file = join(dir, `${randomUUID()}.${mimeType.slice('image/'.length)}`)
+  writeFileSync(file, bytes, { mode: 0o600 })
+  return `${before && !/\s$/.test(before) ? ' ' : ''}${file} `
 }
 
 /** Terminals cap OSC 52 payloads; pi uses the same limit. */

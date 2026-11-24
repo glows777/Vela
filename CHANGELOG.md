@@ -21,6 +21,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **The TUI's Ctrl+V (Alt+V on Windows) pastes copied files as their original paths.** Files come first, including a Finder file copy: their paths are inserted at the cursor, one per line, or shell-quoted and space-separated in a `!` bash command, and a path with a control character is refused with a notice instead of being inserted. With no files, the shortcut still pastes a clipboard image as a private temporary file path for `read_file`, then clipboard text. The `/hotkeys` list, `--help` and [the CLI docs](docs/cli.md) say so ([#561](https://github.com/glows777/Vela/issues/561)).
+
 - **Native SQLite WAL foundation (`vela.db`), full v0.9 schema, and read-only legacy migrator (`src/db/`).** Backed by built-in `node:sqlite` (zero native/shared-library dependencies across Node.js, Bun, and Electron), `openDatabase()` initializes WAL mode, `foreign_keys = ON`, `0600` file permissions, nested `SAVEPOINT` transactions, and forward schema migrations covering all 19 v0.9 platform and `VelaDriver` tables (`projects`, `sessions`, `channel_bindings`, `inbox_events`, `runs`, `events`, `approvals`, `outbox`, `timers`, `subscriptions`, `background_jobs`, `blobs`, `usage_records`, `trusted_paths`, `oauth_registrations`, `kv_meta`, `vela_messages`, `vela_tool_calls`, plus `schema_migrations`). `migrateLegacyVelaDir()` performs an idempotent, single-transaction, read-only import of legacy `~/.vela/` data without modifying original files ([#535](https://github.com/glows777/Vela/issues/535)).
 
 ### Changed

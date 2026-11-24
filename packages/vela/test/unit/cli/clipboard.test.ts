@@ -8,7 +8,11 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { copyToClipboard } from '../../../src/cli/clipboard.ts'
+import {
+  clipboardFilesText,
+  copyToClipboard,
+  quoteClipboardPath,
+} from '../../../src/cli/clipboard.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'vela-clipboard-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -77,6 +81,54 @@ test('a display with no clipboard tool fails loudly with what to install', async
       writeTerminal: () => {},
     }),
   ).rejects.toThrow('install `xclip` or `xsel`')
+})
+
+test('a plain clipboard file path is inserted unchanged', () => {
+  expect(clipboardFilesText(['/Users/me/report.pdf'])).toBe(
+    '/Users/me/report.pdf',
+  )
+  expect(quoteClipboardPath('/Users/me/report.pdf')).toBe(
+    '/Users/me/report.pdf',
+  )
+})
+
+test('a path that needs quoting is single-quoted, escaping single quotes', () => {
+  expect(quoteClipboardPath('/Users/me/two words.pdf')).toBe(
+    "'/Users/me/two words.pdf'",
+  )
+  expect(quoteClipboardPath("/Users/me/it's.png")).toBe(
+    "'/Users/me/it'\\''s.png'",
+  )
+})
+
+test('bash mode joins shell-quoted paths with a space', () => {
+  expect(
+    clipboardFilesText(['/a/b.png', '/a/two words.png', "/a/it's.png"], {
+      bash: true,
+    }),
+  ).toBe(`/a/b.png '/a/two words.png' '/a/it'\\''s.png'`)
+})
+
+test('normal mode joins paths with a newline and leaves them unquoted', () => {
+  expect(clipboardFilesText(['/a/b.png', '/a/two words.png'])).toBe(
+    '/a/b.png\n/a/two words.png',
+  )
+})
+
+test('a space goes on each side only where the cursor has no whitespace', () => {
+  expect(clipboardFilesText(['/a.png'], { before: 'look', after: 'now' })).toBe(
+    ' /a.png ',
+  )
+  expect(
+    clipboardFilesText(['/a.png'], { before: 'look ', after: ' now' }),
+  ).toBe('/a.png')
+  expect(clipboardFilesText(['/a.png'], { after: '\n' })).toBe('/a.png')
+})
+
+test('a clipboard file path with a control character is refused', () => {
+  expect(() => clipboardFilesText(['/tmp/\x1b[31mred.png'])).toThrow(
+    'Clipboard file path contains control characters',
+  )
 })
 
 test('Windows copies Unicode text through an explicit UTF-8 file read', async () => {
