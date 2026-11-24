@@ -39,20 +39,41 @@ function mapChannelState(
   return 'idle'
 }
 
+const ENV_REF_RE =
+  /\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g
+
+function analyzeEnvRefs(
+  value: string,
+  env: Record<string, string | undefined> | undefined,
+): { hasVarRef: boolean; hasUnresolved: boolean } {
+  let hasVarRef = false
+  let hasUnresolved = false
+  for (const match of value.matchAll(ENV_REF_RE)) {
+    const name = match[1] ?? match[2]
+    if (!name) continue
+    hasVarRef = true
+    if (!env || env[name] === undefined) {
+      hasUnresolved = true
+    }
+  }
+  return { hasVarRef, hasUnresolved }
+}
+
 function resolveConfiguredToken(
   rawValue: string,
   label: string,
   ops: MigrationOps,
 ): string | undefined {
   if (!rawValue.includes('$')) return rawValue.trim() || undefined
-  if (!ops.env) {
+  const { hasVarRef, hasUnresolved } = analyzeEnvRefs(rawValue, ops.env)
+  if (hasVarRef && hasUnresolved) {
     ops.incompleteRef.incomplete = true
     ops.warnings.push(
       `Skipped env-expression ${label} entry "${rawValue}" during offline database migration`,
     )
     return undefined
   }
-  const expanded = interpolate(rawValue, ops.env).trim()
+  const expanded = interpolate(rawValue, ops.env ?? {}).trim()
   if (!expanded) {
     ops.warnings.push(
       `Skipped empty expanded ${label} entry "${rawValue}" during database migration`,
@@ -152,14 +173,15 @@ function buildLarkChatConfig(
     field: string,
   ): string | undefined => {
     if (!raw.includes('$')) return raw
-    if (!ops.env) {
+    const { hasVarRef, hasUnresolved } = analyzeEnvRefs(raw, ops.env)
+    if (hasVarRef && hasUnresolved) {
       ops.incompleteRef.incomplete = true
       ops.warnings.push(
         `Skipped env-expression lark.chats["${chatId}"].${field} "${raw}" during offline database migration`,
       )
       return undefined
     }
-    return interpolate(raw, ops.env)
+    return interpolate(raw, ops.env ?? {})
   }
 
   const extraConfig: Record<string, unknown> = {}
@@ -466,29 +488,69 @@ export function migrateChannelDirectory(
           if (typeof note !== 'string') continue
           const dedupeKey = `legacy-note:${dirHash}:${groupKey}:${idx}`
           const legacyKey = `legacy-note:${groupKey}:${idx}`
+          const payloadJson = JSON.stringify({
+            type: 'handoff_note',
+            groupKey,
+            text: note,
+          })
           const existingNote = ops.db.get<{ id: string }>(
             "SELECT id FROM inbox_events WHERE source = 'handoff' AND dedupe_key = ?",
             dedupeKey,
           )
-          if (!existingNote) {
-            const legacyNote = ops.db.get<{ id: string }>(
-              "SELECT id FROM inbox_events WHERE source = 'handoff' AND dedupe_key = ?",
-              legacyKey,
+          const legacyNote = ops.db.get<{
+            id: string
+            status: string
+            processed_at: string | null
+            run_id: string | null
+            session_id: string | null
+            project_id: string | null
+            payload_json: string
+          }>(
+            "SELECT id, status, processed_at, run_id, session_id, project_id, payload_json FROM inbox_events WHERE source = 'handoff' AND dedupe_key = ?",
+            legacyKey,
+          )
+          const matchingLegacy =
+            legacyNote && legacyNote.payload_json === payloadJson
+              ? legacyNote
+              : undefined
+          if (!existingNote && matchingLegacy) {
+            ops.db.run(
+              `UPDATE inbox_events SET
+                dedupe_key = ?,
+                session_id = COALESCE(session_id, ?),
+                project_id = COALESCE(project_id, ?)
+              WHERE id = ?`,
+              dedupeKey,
+              target?.sessionId ?? null,
+              noteProjectId,
+              matchingLegacy.id,
             )
-            if (legacyNote) {
-              ops.db.run(
-                `UPDATE inbox_events SET
-                  dedupe_key = ?,
-                  session_id = COALESCE(session_id, ?),
-                  project_id = COALESCE(project_id, ?)
-                WHERE id = ?`,
-                dedupeKey,
-                target?.sessionId ?? null,
-                noteProjectId,
-                legacyNote.id,
-              )
-              continue
-            }
+            continue
+          }
+          if (existingNote && matchingLegacy) {
+            ops.db.run(
+              `UPDATE inbox_events SET
+                status = CASE WHEN status = 'pending' AND ? != 'pending' THEN ? ELSE status END,
+                processed_at = COALESCE(processed_at, ?),
+                run_id = COALESCE(run_id, ?),
+                session_id = COALESCE(session_id, ?, ?),
+                project_id = COALESCE(project_id, ?, ?)
+              WHERE id = ?`,
+              matchingLegacy.status,
+              matchingLegacy.status,
+              matchingLegacy.processed_at,
+              matchingLegacy.run_id,
+              matchingLegacy.session_id,
+              target?.sessionId ?? null,
+              matchingLegacy.project_id,
+              noteProjectId,
+              existingNote.id,
+            )
+            ops.db.run(
+              'DELETE FROM inbox_events WHERE id = ?',
+              matchingLegacy.id,
+            )
+            continue
           }
           ops.db.run(
             `INSERT INTO inbox_events (
@@ -501,7 +563,7 @@ export function migrateChannelDirectory(
             target?.sessionId ?? null,
             noteProjectId,
             dedupeKey,
-            JSON.stringify({ type: 'handoff_note', groupKey, text: note }),
+            payloadJson,
             ops.now,
           )
           if (!existingNote) ops.summary.inboxEvents += 1

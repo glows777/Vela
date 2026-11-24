@@ -440,7 +440,10 @@ export function buildSessionContext(
     const message = edit
       ? normalizeVelaMessage({
           ...original,
-          content: edit.replacement.content,
+          content:
+            original.role === 'user' && Array.isArray(edit.replacement.content)
+              ? normalizeUserContent(edit.replacement.content).content
+              : edit.replacement.content,
         })
       : original
     if (entry.type === 'custom_message')

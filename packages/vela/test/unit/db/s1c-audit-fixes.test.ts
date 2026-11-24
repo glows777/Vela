@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
@@ -217,7 +218,12 @@ test('resolver safety, subscription collision, project cwd backfill, invalid/tar
 
     // Seed pre-audit legacy-note:<group>:<idx> row and ensure retry reconciles without duplication
     db.run(
-      "INSERT INTO inbox_events (id, source, dedupe_key, wake, passive, status, payload_json, created_at) VALUES ('old-note', 'handoff', 'legacy-note:shared-group:0', 0, 0, 'pending', '{}', '2026-11-24T00:00:00Z')",
+      "INSERT INTO inbox_events (id, source, dedupe_key, wake, passive, status, payload_json, created_at) VALUES ('old-note', 'handoff', 'legacy-note:shared-group:0', 0, 0, 'pending', ?, '2026-11-24T00:00:00Z')",
+      JSON.stringify({
+        type: 'handoff_note',
+        groupKey: 'shared-group',
+        text: 'handoff from A',
+      }),
     )
 
     // Pass 1 without env -> unresolved ${MISSING_TZ}, ${MISSING_CHAT}, ${MISSING_ENV} keep migration incomplete
@@ -300,6 +306,272 @@ test('resolver safety, subscription collision, project cwd backfill, invalid/tar
         "SELECT timezone, enabled FROM timers WHERE id = 'no-target'",
       ),
     ).toEqual({ timezone: 'UTC', enabled: 0 })
+  } finally {
+    db.close()
+  }
+})
+
+test('V1 checkpoint retry after appended message shifting compaction seq preserves existing compaction ID and imports added message', () => {
+  const dir = tempDir('vela-s1c-v1-shift-')
+  dirs.push(dir)
+  const agentDir = join(dir.path, 'agent')
+  const sessDir = join(agentDir, 'sessions')
+  mkdirSync(sessDir, { recursive: true })
+  writeFileSync(
+    join(agentDir, 'config.json'),
+    JSON.stringify({ lark: { timezone: '$PENDING_RETRY_TZ' } }),
+  )
+  const jsonlPath = join(sessDir, 'v1-shift.jsonl')
+  writeFileSync(
+    jsonlPath,
+    `${JSON.stringify({
+      type: 'checkpoint',
+      timestamp: '2026-11-24T00:00:00.000Z',
+      messages: [
+        {
+          timestamp: '2026-11-24T00:00:00.500Z',
+          message: {
+            role: 'user',
+            content: '[Summary of the earlier conversation]\nearlier summary',
+          },
+        },
+        {
+          timestamp: '2026-11-24T00:00:01.000Z',
+          message: { role: 'user', content: 'hello' },
+        },
+      ],
+      summary: 'earlier summary',
+    })}\n`,
+  )
+
+  const db = openDatabase({ path: join(dir.path, 'vela.db') })
+  try {
+    migrateLegacyVelaDir({ agentDir, db })
+    const initialRows = db.all<{
+      id: string
+      seq: number
+      kind: string
+      content_json: string
+    }>(
+      "SELECT id, seq, kind, content_json FROM vela_messages WHERE session_id = 'v1-shift' ORDER BY seq",
+    )
+    expect(initialRows.map((r) => r.kind)).toEqual(['message', 'compaction'])
+    const initialCompId = initialRows[1]!.id
+
+    // Now simulate v1 checkpoint growing with another message before the compaction summary shifts seq
+    writeFileSync(
+      jsonlPath,
+      `${JSON.stringify({
+        type: 'checkpoint',
+        timestamp: '2026-11-24T00:00:00.000Z',
+        messages: [
+          {
+            timestamp: '2026-11-24T00:00:00.500Z',
+            message: {
+              role: 'user',
+              content: '[Summary of the earlier conversation]\nearlier summary',
+            },
+          },
+          {
+            timestamp: '2026-11-24T00:00:01.000Z',
+            message: { role: 'user', content: 'hello' },
+          },
+          {
+            timestamp: '2026-11-24T00:00:02.000Z',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'added later' }],
+            },
+          },
+        ],
+        summary: 'earlier summary',
+      })}\n`,
+    )
+
+    migrateLegacyVelaDir({
+      agentDir,
+      db,
+      env: { PENDING_RETRY_TZ: 'UTC' },
+    })
+    const updatedRows = db.all<{
+      id: string
+      parent_id: string | null
+      seq: number
+      kind: string
+      content_json: string
+      first_kept_id: string | null
+    }>(
+      "SELECT id, parent_id, seq, kind, content_json, first_kept_id FROM vela_messages WHERE session_id = 'v1-shift' ORDER BY seq",
+    )
+    expect(updatedRows).toHaveLength(3)
+    expect(updatedRows.map((r) => r.kind)).toEqual([
+      'message',
+      'message',
+      'compaction',
+    ])
+    expect(updatedRows[0]!.parent_id).toBeNull()
+    expect(updatedRows[1]!.parent_id).toBe(updatedRows[0]!.id)
+    expect(updatedRows[1]!.content_json).toContain('added later')
+    expect(updatedRows[2]!.id).toBe(initialCompId)
+    expect(updatedRows[2]!.parent_id).toBe(updatedRows[1]!.id)
+    expect(updatedRows[2]!.first_kept_id).toBe(updatedRows[0]!.id)
+    expect(
+      db.get<{ leaf_message_id: string | null }>(
+        "SELECT leaf_message_id FROM sessions WHERE id = 'v1-shift'",
+      )?.leaf_message_id,
+    ).toBe(initialCompId)
+  } finally {
+    db.close()
+  }
+})
+
+test('env: {} defers unresolved $TZ and $ENVIRONMENT like omitted env and allows retry with values', () => {
+  const dir = tempDir('vela-s1c-empty-env-')
+  dirs.push(dir)
+  const agentDir = join(dir.path, 'agent')
+  const channelsDir = join(agentDir, 'channels')
+  mkdirSync(channelsDir, { recursive: true })
+  writeFileSync(
+    join(agentDir, 'config.json'),
+    JSON.stringify({
+      lark: {
+        timezone: ['$', '{MISSING_CH_TZ}'].join(''),
+        chats: [
+          {
+            id: 'oc_env_retry',
+            readUntagged: true,
+            environment: '$MISSING_CH_ENV',
+          },
+        ],
+      },
+    }),
+  )
+  writeFileSync(
+    join(channelsDir, 'routines.json'),
+    JSON.stringify({
+      routines: [
+        {
+          id: 'r-tz-empty',
+          channel: 'lark',
+          chatId: 'oc_env_retry',
+          message: 'ping',
+          schedule: { time: '09:00' },
+        },
+      ],
+    }),
+  )
+
+  const db = openDatabase({ path: join(dir.path, 'vela.db') })
+  try {
+    const pass1 = migrateLegacyVelaDir({ agentDir, db, env: {} })
+    expect(pass1.skipped).toBe(false)
+    expect(
+      db.get<{ id: string }>("SELECT id FROM timers WHERE id = 'r-tz-empty'"),
+    ).toBeUndefined()
+    const binding1 = db.get<{ config_json: string | null }>(
+      "SELECT config_json FROM channel_bindings WHERE external_id = 'oc_env_retry'",
+    )
+    expect(JSON.parse(binding1!.config_json!)).toEqual({ readUntagged: true })
+
+    const pass2 = migrateLegacyVelaDir({
+      agentDir,
+      db,
+      env: { MISSING_CH_TZ: 'UTC', MISSING_CH_ENV: 'docker' },
+    })
+    expect(pass2.skipped).toBe(false)
+    expect(
+      db.get<{ timezone: string }>(
+        "SELECT timezone FROM timers WHERE id = 'r-tz-empty'",
+      ),
+    ).toEqual({ timezone: 'UTC' })
+    const binding2 = db.get<{ config_json: string | null }>(
+      "SELECT config_json FROM channel_bindings WHERE external_id = 'oc_env_retry'",
+    )
+    expect(JSON.parse(binding2!.config_json!)).toEqual({
+      readUntagged: true,
+      environment: 'docker',
+    })
+  } finally {
+    db.close()
+  }
+})
+
+test('legacy-note reconciliation avoids cross-directory stealing and reconciles matching dual keys', () => {
+  const dir = tempDir('vela-s1c-notes-')
+  dirs.push(dir)
+  const agentDirA = join(dir.path, 'agent-a')
+  const channelsA = join(agentDirA, 'channels')
+  mkdirSync(channelsA, { recursive: true })
+  writeFileSync(
+    join(channelsA, 'index.json'),
+    JSON.stringify({
+      records: [],
+      notes: {
+        'lark-oc_shared': ['note-from-a'],
+        'lark-oc_reconcile': ['shared-note'],
+      },
+    }),
+  )
+
+  const db = openDatabase({ path: join(dir.path, 'vela.db') })
+  try {
+    const dirAHash = createHash('sha256')
+      .update(agentDirA)
+      .digest('hex')
+      .slice(0, 8)
+    // Pre-seed unrelated un-scoped note for lark-oc_shared, and a processed un-scoped + pending scoped duplicate for lark-oc_reconcile
+    db.run(
+      "INSERT INTO inbox_events (id, source, dedupe_key, status, payload_json, created_at) VALUES ('other-dir-note', 'handoff', 'legacy-note:lark-oc_shared:0', 'pending', ?, '2026-11-24T00:00:00Z')",
+      JSON.stringify({
+        type: 'handoff_note',
+        groupKey: 'lark-oc_shared',
+        text: 'different-dir-note',
+      }),
+    )
+    db.run(
+      "INSERT INTO inbox_events (id, source, dedupe_key, status, processed_at, payload_json, created_at) VALUES ('old-reconcile', 'handoff', 'legacy-note:lark-oc_reconcile:0', 'done', '2026-11-24T01:00:00Z', ?, '2026-11-24T00:00:00Z')",
+      JSON.stringify({
+        type: 'handoff_note',
+        groupKey: 'lark-oc_reconcile',
+        text: 'shared-note',
+      }),
+    )
+    db.run(
+      "INSERT INTO inbox_events (id, source, dedupe_key, status, payload_json, created_at) VALUES ('scoped-reconcile', 'handoff', ?, 'pending', ?, '2026-11-24T00:00:00Z')",
+      `legacy-note:${dirAHash}:lark-oc_reconcile:0`,
+      JSON.stringify({
+        type: 'handoff_note',
+        groupKey: 'lark-oc_reconcile',
+        text: 'shared-note',
+      }),
+    )
+
+    migrateLegacyVelaDir({ agentDir: agentDirA, db })
+
+    // Unrelated dir note was NOT overwritten/stolen; agentA wrote its own scoped note
+    expect(
+      db.get<{ payload_json: string }>(
+        "SELECT payload_json FROM inbox_events WHERE dedupe_key = 'legacy-note:lark-oc_shared:0'",
+      )?.payload_json,
+    ).toContain('different-dir-note')
+    expect(
+      db.get<{ payload_json: string }>(
+        'SELECT payload_json FROM inbox_events WHERE dedupe_key = ?',
+        `legacy-note:${dirAHash}:lark-oc_shared:0`,
+      )?.payload_json,
+    ).toContain('note-from-a')
+
+    // Dual matching keys reconciled into scoped row and removed old un-scoped duplicate
+    expect(
+      db.get<{ status: string; processed_at: string | null }>(
+        "SELECT status, processed_at FROM inbox_events WHERE id = 'scoped-reconcile'",
+      ),
+    ).toEqual({ status: 'done', processed_at: '2026-11-24T01:00:00Z' })
+    expect(
+      db.get<{ id: string }>(
+        "SELECT id FROM inbox_events WHERE id = 'old-reconcile'",
+      ),
+    ).toBeUndefined()
   } finally {
     db.close()
   }

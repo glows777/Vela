@@ -428,3 +428,41 @@ console.log(JSON.stringify({ isInstance: res instanceof extApi.ToolExecutionResu
   })
   expect(existsSync(extPath)).toBe(true)
 })
+
+test('ModelRegistry.logout fails closed without deleting when custom CredentialStore omits deleteIf', async () => {
+  const stored = new Map([
+    ['openai', { type: 'api_key' as const, key: 'sk-old' }],
+  ])
+  let deleteCalls = 0
+  const notices: string[] = []
+  const store = {
+    path: ':custom:',
+    get: (provider: string) => stored.get(provider),
+    set: async (provider: string, cred: { type: 'api_key'; key: string }) => {
+      stored.set(provider, cred)
+    },
+    delete: async (provider: string) => {
+      deleteCalls += 1
+      stored.delete(provider)
+    },
+    save: async () => {},
+  }
+  const registry = new ModelRegistry(
+    {
+      openai: {
+        createModel: () => createMockModel(),
+        models: [
+          { id: 'mock', name: 'Mock', contextWindow: 8192, maxTokens: 1024 },
+        ],
+      },
+    },
+    store as never,
+  )
+  const ok = await registry.logout('openai', {
+    onNotice: (text) => notices.push(text),
+  })
+  expect(ok).toBe(false)
+  expect(deleteCalls).toBe(0)
+  expect(stored.get('openai')).toEqual({ type: 'api_key', key: 'sk-old' })
+  expect(notices.length).toBe(1)
+})

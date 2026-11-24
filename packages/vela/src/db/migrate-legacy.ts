@@ -454,19 +454,77 @@ export function migrateLegacyVelaDir(options: {
                 ? JSON.stringify({ environment: 'local', cwd: parsed.cwd })
                 : null
 
-          const existingIdBySeq = new Map<number, string>(
-            db
-              .all<{ seq: number; id: string }>(
-                'SELECT seq, id FROM vela_messages WHERE session_id = ?',
-                targetSessionId,
-              )
-              .map((row) => [row.seq, row.id]),
+          const existingRows = db.all<{
+            id: string
+            seq: number
+            kind: string
+            content_json: string
+            parent_id: string | null
+            first_kept_id: string | null
+          }>(
+            'SELECT id, seq, kind, content_json, parent_id, first_kept_id FROM vela_messages WHERE session_id = ? ORDER BY seq ASC',
+            targetSessionId,
           )
+          const existingIds = new Set(existingRows.map((row) => row.id))
+          const claimedRowIds = new Set<string>()
+          const matchedRowByMsgId = new Map<
+            string,
+            (typeof existingRows)[number]
+          >()
           const idMap = new Map<string, string>()
+
+          // Pass 1: exact (seq, kind, content_json) matches claim their existing IDs first.
+          const rowBySeq = new Map(existingRows.map((row) => [row.seq, row]))
           for (const msg of parsed.messages) {
-            const existingId = existingIdBySeq.get(msg.seq)
-            if (existingId && existingId !== msg.id) {
-              idMap.set(msg.id, existingId)
+            const row = rowBySeq.get(msg.seq)
+            if (
+              row &&
+              row.kind === msg.kind &&
+              row.content_json === msg.contentJson
+            ) {
+              claimedRowIds.add(row.id)
+              matchedRowByMsgId.set(msg.id, row)
+              if (row.id !== msg.id) idMap.set(msg.id, row.id)
+            }
+          }
+
+          // Pass 2: shifted-seq fallback matches by identical kind + content_json so newly
+          // inserted messages never alias an earlier compaction/message ID at the same seq.
+          const unmatchedBySignature = new Map<
+            string,
+            Array<(typeof existingRows)[number]>
+          >()
+          for (const row of existingRows) {
+            if (claimedRowIds.has(row.id)) continue
+            const sig = `${row.kind}\0${row.content_json}`
+            const bucket = unmatchedBySignature.get(sig)
+            if (bucket) bucket.push(row)
+            else unmatchedBySignature.set(sig, [row])
+          }
+          for (const msg of parsed.messages) {
+            if (matchedRowByMsgId.has(msg.id)) continue
+            const sig = `${msg.kind}\0${msg.contentJson}`
+            const row = unmatchedBySignature.get(sig)?.shift()
+            if (row) {
+              claimedRowIds.add(row.id)
+              matchedRowByMsgId.set(msg.id, row)
+              if (row.id !== msg.id) idMap.set(msg.id, row.id)
+              continue
+            }
+            if (existingIds.has(msg.id)) {
+              const freshId = randomUUID()
+              idMap.set(msg.id, freshId)
+              existingIds.add(freshId)
+            } else {
+              existingIds.add(msg.id)
+            }
+          }
+          const usedSeqs = new Set<number>()
+          let maxSeq = -1
+          for (const row of existingRows) {
+            if (!claimedRowIds.has(row.id)) {
+              usedSeqs.add(row.seq)
+              maxSeq = Math.max(maxSeq, row.seq)
             }
           }
           const remapId = (id: string | null): string | null =>
@@ -490,8 +548,60 @@ export function migrateLegacyVelaDir(options: {
             updatedAt: parsed.updatedAt,
           })
 
-          for (const msg of parsed.messages) {
-            const mappedId = idMap.get(msg.id) ?? msg.id
+          const planned = parsed.messages.map((msg) => {
+            let targetSeq = msg.seq
+            if (usedSeqs.has(targetSeq)) {
+              targetSeq = ++maxSeq
+            } else {
+              maxSeq = Math.max(maxSeq, targetSeq)
+            }
+            usedSeqs.add(targetSeq)
+            return {
+              msg,
+              targetSeq,
+              remappedParent: remapId(msg.parentId),
+              remappedFirstKept: remapId(msg.firstKeptId),
+              matchedRow: matchedRowByMsgId.get(msg.id),
+              mappedId: idMap.get(msg.id) ?? msg.id,
+            }
+          })
+
+          // Park moving rows above all existing/target seq values so UNIQUE(session_id, seq) never
+          // blocks shifting existing rows or inserting new messages into vacated seq slots.
+          let parkSeq = existingRows.reduce(
+            (max, row) => Math.max(max, row.seq),
+            maxSeq,
+          )
+          for (const item of planned) {
+            if (item.matchedRow && item.matchedRow.seq !== item.targetSeq) {
+              db.run(
+                'UPDATE vela_messages SET seq = ? WHERE session_id = ? AND id = ?',
+                ++parkSeq,
+                targetSessionId,
+                item.matchedRow.id,
+              )
+            }
+          }
+          for (const item of planned) {
+            if (
+              item.matchedRow &&
+              (item.matchedRow.seq !== item.targetSeq ||
+                item.matchedRow.parent_id !== item.remappedParent ||
+                item.matchedRow.first_kept_id !== item.remappedFirstKept)
+            ) {
+              db.run(
+                'UPDATE vela_messages SET parent_id = ?, first_kept_id = ?, seq = ? WHERE session_id = ? AND id = ?',
+                item.remappedParent,
+                item.remappedFirstKept,
+                item.targetSeq,
+                targetSessionId,
+                item.matchedRow.id,
+              )
+            }
+          }
+          for (const item of planned) {
+            if (item.matchedRow) continue
+            const { msg, mappedId, remappedParent, targetSeq } = item
             const res = db.run(
               `INSERT OR IGNORE INTO vela_messages (
                 session_id, id, parent_id, seq, kind, role, content_json,
@@ -500,8 +610,8 @@ export function migrateLegacyVelaDir(options: {
               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               targetSessionId,
               mappedId,
-              remapId(msg.parentId),
-              msg.seq,
+              remappedParent,
+              targetSeq,
               msg.kind,
               msg.role,
               msg.contentJson,

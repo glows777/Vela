@@ -158,7 +158,30 @@ const MIGRATIONS: readonly Migration[] = [
             updated_at TEXT NOT NULL,
             UNIQUE (session_id, assistant_message_id, tool_call_id)
           );
-          INSERT INTO vela_tool_calls_new SELECT * FROM vela_tool_calls;
+          INSERT INTO vela_tool_calls_new (
+            id, session_id, run_id, assistant_message_id, tool_call_id, call_index,
+            tool_name, input_json, execution_mode, replay, location_json, status,
+            attempt, is_error, preview, result_json, spill_path, details_json,
+            duration_ms, started_at, finished_at, created_at, updated_at
+          )
+          SELECT
+            id, session_id, run_id, assistant_message_id,
+            CASE
+              WHEN rn = 1 THEN tool_call_id
+              ELSE tool_call_id || '--attempt-' || id
+            END AS tool_call_id,
+            call_index, tool_name, input_json, execution_mode, replay, location_json,
+            status, attempt, is_error, preview, result_json, spill_path, details_json,
+            duration_ms, started_at, finished_at, created_at, updated_at
+          FROM (
+            SELECT
+              *,
+              ROW_NUMBER() OVER (
+                PARTITION BY session_id, assistant_message_id, tool_call_id
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
+              ) AS rn
+            FROM vela_tool_calls
+          );
           DROP TABLE vela_tool_calls;
           ALTER TABLE vela_tool_calls_new RENAME TO vela_tool_calls;
           CREATE INDEX IF NOT EXISTS idx_vela_tool_calls_status

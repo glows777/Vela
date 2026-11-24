@@ -90,8 +90,8 @@ export async function packWorkspaces(root: string, work: string) {
     const members = new Set(
       contents
         .split(/\r?\n/)
-        .map((line) => line.trim().replace(/^\.\//, ''))
-        .filter(Boolean),
+        .map((line) => line.replace(/^\.\//, ''))
+        .filter((line) => line.length > 0),
     )
     if (
       [...members].some(

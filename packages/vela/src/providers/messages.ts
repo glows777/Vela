@@ -382,21 +382,32 @@ export function toAiModelMessages(
       if (
         supportsImages &&
         item.type === 'file' &&
-        IMAGE_MEDIA_TYPE.test(item.mediaType) &&
-        item.data.type === 'data'
+        IMAGE_MEDIA_TYPE.test(item.mediaType)
       ) {
-        lifted.push({
-          type: 'file',
-          mediaType: item.mediaType,
-          data: item.data.data,
-          ...('providerOptions' in item && item.providerOptions
-            ? {
-                providerOptions:
-                  item.providerOptions as SharedV4ProviderOptions,
-              }
-            : {}),
-        })
-        return false
+        let data: string | Uint8Array | ArrayBuffer | URL | undefined
+        if (item.data.type === 'data') {
+          data = item.data.data
+        } else if (item.data.type === 'url') {
+          try {
+            data = new URL(item.data.url)
+          } catch {
+            return true
+          }
+        }
+        if (data !== undefined) {
+          lifted.push({
+            type: 'file',
+            mediaType: item.mediaType,
+            data,
+            ...('providerOptions' in item && item.providerOptions
+              ? {
+                  providerOptions:
+                    item.providerOptions as SharedV4ProviderOptions,
+                }
+              : {}),
+          })
+          return false
+        }
       }
       return true
     })

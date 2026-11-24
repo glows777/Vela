@@ -417,3 +417,101 @@ test('createJsonSchema detects schema drafts and resolveProviderTools extracts Z
     properties: { query: { type: 'string' } },
   })
 })
+
+test('toAiModelMessages lifts URL-backed images from failed assistant tool_result before stripping to error-text', () => {
+  const ai = toAiModelMessages(
+    [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_call',
+            toolCallId: 'tc-url',
+            toolName: 'snap',
+            input: {},
+          },
+          {
+            type: 'tool_result',
+            toolCallId: 'tc-url',
+            toolName: 'snap',
+            output: {
+              type: 'content',
+              isError: true,
+              value: [
+                { type: 'text', text: 'boom with screenshot' },
+                {
+                  type: 'file',
+                  mediaType: 'image/png',
+                  data: { type: 'url', url: 'https://example.com/fail.png' },
+                },
+              ],
+            } as never,
+          },
+        ],
+      },
+    ],
+    true,
+    false,
+  )
+  expect(ai).toHaveLength(2)
+  const toolPart = (ai[0] as { content: unknown[] }).content[1] as {
+    type: string
+    output: { type: string; value: string }
+  }
+  expect(toolPart.output).toEqual({
+    type: 'error-text',
+    value: 'boom with screenshot',
+  })
+  const liftedUser = ai[1] as {
+    role: string
+    content: Array<{ type: string; mediaType?: string; data?: unknown }>
+  }
+  expect(liftedUser.role).toBe('user')
+  expect(liftedUser.content[0]).toMatchObject({
+    type: 'file',
+    mediaType: 'image/png',
+  })
+  expect(liftedUser.content[0]?.data).toBeInstanceOf(URL)
+  expect((liftedUser.content[0]?.data as URL | undefined)?.href).toBe(
+    'https://example.com/fail.png',
+  )
+})
+
+test('buildSessionContext normalizes legacy reasoning arrays in context_edit targeting user messages for generateText', async () => {
+  const entries: SessionEntry[] = [
+    {
+      type: 'message',
+      id: 'u1',
+      parentId: null,
+      timestamp: '2026-11-24T00:00:00.000Z',
+      message: { role: 'user', content: 'original' },
+    },
+    {
+      type: 'context_edit',
+      id: 'ce1',
+      parentId: 'u1',
+      timestamp: '2026-11-24T00:00:01.000Z',
+      targetId: 'u1',
+      replacement: {
+        content: [
+          { type: 'reasoning', text: 'legacy thought' },
+          { type: 'text', text: 'edited prompt' },
+        ] as never,
+      },
+    },
+  ]
+  const ctx = buildSessionContext(entries, 'ce1')
+  expect(ctx.messages).toHaveLength(1)
+  expect(ctx.messages[0]).toEqual({
+    role: 'user',
+    content: [
+      { type: 'text', text: 'legacy thought' },
+      { type: 'text', text: 'edited prompt' },
+    ],
+  })
+  const res = await generateText({
+    model: createMockModel(),
+    messages: toAiModelMessages(ctx.messages, true, true),
+  })
+  expect(res.text).toBeDefined()
+})

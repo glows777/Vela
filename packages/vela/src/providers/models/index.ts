@@ -264,6 +264,12 @@ export class ModelRegistry {
     options.signal?.throwIfAborted()
     const credential = this.credentials.get(provider)
     if (!credential) return false
+    if (!this.credentials.deleteIf) {
+      options.onNotice?.(
+        `Could not log out ${provider}: credential store does not support atomic conditional deletion.`,
+      )
+      return false
+    }
     const revoke = this.providers.get(provider)?.oauth?.logout
     if (credential.type === 'oauth' && revoke) {
       try {
@@ -275,15 +281,9 @@ export class ModelRegistry {
         )
       }
     }
-    if (this.credentials.deleteIf) {
-      return this.credentials.deleteIf(provider, (current) =>
-        sameCredential(credential, current),
-      )
-    }
-    const current = this.credentials.get(provider)
-    if (!current || !sameCredential(credential, current)) return false
-    await this.credentials.delete(provider)
-    return true
+    return this.credentials.deleteIf(provider, (current) =>
+      sameCredential(credential, current),
+    )
   }
 
   /** `provider/id` → model; the id may contain more `/` (e.g. `openrouter/anthropic/claude`). */
