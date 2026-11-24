@@ -42,6 +42,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - Desktop: Arrow keys and typing immediately after opening a picker keep it open, so Enter selects the highlighted option ([#547](https://github.com/glows777/Vela/issues/547)).
 - Desktop: In the New routine dialog, Escape closes the Where menu first without discarding the draft. A second Escape closes the dialog ([#541](https://github.com/glows777/Vela/issues/541)).
 - The TUI no longer prints a `[audit]` line for every file write or edit. The tool block shows the path before the call and the turn's fold line counts the edit, and the `audit` event that extensions and SDK subscribers receive is unchanged ([#553](https://github.com/glows777/Vela/issues/553)).
+- The running spinner sits one blank row under the turn's fold line instead of two: the status line added a spacer the loader already draws itself, so `Thinking… (Esc to interrupt)` was pushed down by an empty row.
 
 ## [0.8.1] - 2026-11-23
 
