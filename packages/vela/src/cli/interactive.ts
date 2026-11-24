@@ -606,7 +606,7 @@ export class InteractiveMode {
         message,
       )
       this.status.clear()
-      this.status.addChild(new Spacer(1))
+      // The loader's own render opens with a blank line; a spacer here would leave two
       this.status.addChild(this.loader)
       this.loader.start()
     }
