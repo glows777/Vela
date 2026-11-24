@@ -1,0 +1,743 @@
+import { expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import z from 'zod'
+import { z as z3 } from 'zod/v3'
+import { createVela } from '../../../src/driver/index.ts'
+import {
+  fromAiResponseMessage,
+  toAiModelMessages,
+} from '../../../src/providers/messages.ts'
+import type { ChannelAdapter } from '../../../src/runtime/channels.ts'
+import type {
+  RuntimeEvent,
+  StreamDeltaEvent,
+} from '../../../src/runtime/events.ts'
+import {
+  normalizeVelaMessage,
+  type VelaMessage,
+} from '../../../src/shared/messages.ts'
+import {
+  createJsonSchema,
+  toJsonSchema,
+  validateToolInput,
+} from '../../../src/shared/tool-schema.ts'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+} from '../../../src/testing/core/index.ts'
+
+test('VelaMessage converts to AI SDK wire format and back cleanly', () => {
+  const history: VelaMessage[] = [
+    { role: 'user', content: 'Check a.ts' },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'thinking', text: 'Inspecting file' },
+        { type: 'text', text: 'Reading now.' },
+        {
+          type: 'tool_call',
+          toolCallId: 'c1',
+          toolName: 'read_file',
+          input: { path: 'a.ts' },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool_result',
+          toolCallId: 'c1',
+          toolName: 'read_file',
+          output: { type: 'text', value: 'const x = 1' },
+        },
+      ],
+    },
+  ]
+
+  const aiMessages = toAiModelMessages(history)
+  expect(aiMessages[1]).toEqual({
+    role: 'assistant',
+    content: [
+      { type: 'reasoning', text: 'Inspecting file' },
+      { type: 'text', text: 'Reading now.' },
+      {
+        type: 'tool-call',
+        toolCallId: 'c1',
+        toolName: 'read_file',
+        input: { path: 'a.ts' },
+      },
+    ],
+  })
+  expect(aiMessages[2]).toEqual({
+    role: 'tool',
+    content: [
+      {
+        type: 'tool-result',
+        toolCallId: 'c1',
+        toolName: 'read_file',
+        output: { type: 'text', value: 'const x = 1' },
+      },
+    ],
+  })
+
+  expect<VelaMessage>(fromAiResponseMessage(aiMessages[1]!)).toEqual(
+    history[1]!,
+  )
+  expect<VelaMessage>(fromAiResponseMessage(aiMessages[2]!)).toEqual(
+    history[2]!,
+  )
+})
+
+test('normalizeVelaMessage migrates legacy AI SDK JSONL part names to canonical VelaPart names', () => {
+  const legacyAssistant = {
+    role: 'assistant',
+    content: [
+      { type: 'reasoning', text: 'thought' },
+      { type: 'tool-call', toolCallId: 'c1', toolName: 'bash', input: {} },
+    ],
+  }
+  const legacyTool = {
+    role: 'tool',
+    content: [
+      {
+        type: 'tool-result',
+        toolCallId: 'c1',
+        toolName: 'bash',
+        output: { type: 'text', value: 'ok' },
+      },
+    ],
+  }
+  expect(normalizeVelaMessage(legacyAssistant)).toEqual({
+    role: 'assistant',
+    content: [
+      { type: 'thinking', text: 'thought' },
+      { type: 'tool_call', toolCallId: 'c1', toolName: 'bash', input: {} },
+    ],
+  })
+  expect(normalizeVelaMessage(legacyTool)).toEqual({
+    role: 'tool',
+    content: [
+      {
+        type: 'tool_result',
+        toolCallId: 'c1',
+        toolName: 'bash',
+        output: { type: 'text', value: 'ok' },
+      },
+    ],
+  })
+})
+
+test('ToolInputSchema converts and validates Zod and JSON Schema without AI SDK', async () => {
+  const zodSchema = z.object({ path: z.string().min(1) })
+  const zodJson = await toJsonSchema(zodSchema)
+  expect(zodJson.type).toBe('object')
+  expect(await validateToolInput(zodSchema, { path: 'a.ts' })).toEqual({
+    path: 'a.ts',
+  })
+  await expect(validateToolInput(zodSchema, { path: '' })).rejects.toThrow()
+
+  const mcpSchema = createJsonSchema({
+    type: 'object',
+    properties: {
+      notes: {
+        type: 'object',
+        propertyNames: { type: 'string', minLength: 1 },
+        additionalProperties: { type: 'string' },
+      },
+    },
+    required: ['notes'],
+    additionalProperties: false,
+  })
+  expect((await toJsonSchema(mcpSchema)).type).toBe('object')
+  expect(await validateToolInput(mcpSchema, { notes: { ok: 'yes' } })).toEqual({
+    notes: { ok: 'yes' },
+  })
+  await expect(
+    validateToolInput(mcpSchema, { notes: { '': 'bad' } }),
+  ).rejects.toThrow()
+})
+
+test('RuntimeEvent(seq), StreamDeltaEvent, and ChannelAdapter contracts are structurally sound', () => {
+  const persisted: RuntimeEvent = {
+    seq: 1,
+    sessionId: 's1',
+    projectId: 'p1',
+    timestamp: '2026-11-23T00:00:00.000Z',
+    type: 'run_started',
+    runId: 'r1',
+    trigger: 'user',
+  }
+  const delta: StreamDeltaEvent = {
+    type: 'thinking_delta',
+    sessionId: 's1',
+    runId: 'r1',
+    contentIndex: 0,
+    delta: 'step 1',
+  }
+  const adapter: ChannelAdapter = {
+    name: 'test-channel',
+    async start() {},
+    async stop() {},
+    async deliver() {
+      return { externalMessageId: 'm1' }
+    },
+  }
+  expect(persisted.seq).toBe(1)
+  expect(delta.type).toBe('thinking_delta')
+  expect(adapter.name).toBe('test-channel')
+})
+
+test('resuming a legacy v0.8 transcript with an interrupted tool-call reconciles and calls the model', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-legacy-recover-'))
+  try {
+    const dataDir = join(dir, 'data')
+    const sessionDir = join(dataDir, 'sessions', 'legacy-recover')
+    const historyId = '11111111-1111-4111-8111-111111111111'
+    const historyDir = join(sessionDir, historyId)
+    mkdirSync(historyDir, { recursive: true })
+    const now = '2026-11-23T00:00:00.000Z'
+    writeFileSync(
+      join(sessionDir, 'transcript.jsonl'),
+      [
+        JSON.stringify({
+          type: 'session',
+          version: 2,
+          id: 'legacy-recover',
+          timestamp: now,
+          cwd: dir,
+          toolHistoryId: historyId,
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e1',
+          parentId: null,
+          timestamp: now,
+          message: { role: 'user', content: 'run it' },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e2',
+          parentId: 'e1',
+          timestamp: now,
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolCallId: 'call-1',
+                toolName: 'bash',
+                input: { command: 'echo hi' },
+              },
+            ],
+          },
+        }),
+      ].join('\n') + '\n',
+    )
+    writeFileSync(
+      join(historyDir, 'tool-history.jsonl'),
+      `${JSON.stringify({
+        version: 1,
+        type: 'tool_call',
+        seq: 1,
+        timestamp: now,
+        callId: 'call-1',
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        input: { command: 'echo hi' },
+        replay: 'unsafe',
+        location: { environment: 'local', cwd: dir },
+      })}\n`,
+    )
+
+    const model = createFauxModel({ responses: [fauxText('recovered ok')] })
+    const vela = createVela({ cwd: dir, dataDir, model, contextFiles: false })
+    try {
+      const session = vela.session('legacy-recover')
+      await session.resume()
+      await session.prompt('continue')
+      expect(model.calls).toHaveLength(1)
+      expect(JSON.stringify(model.calls[0]!.prompt)).toContain('call-1')
+    } finally {
+      await vela.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resuming a legacy v0.8 transcript preserves previously discovered deferred tools', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-legacy-tools-'))
+  try {
+    const dataDir = join(dir, 'data')
+    const sessionDir = join(dataDir, 'sessions', 'legacy-tools')
+    mkdirSync(sessionDir, { recursive: true })
+    const now = '2026-11-23T00:00:00.000Z'
+    writeFileSync(
+      join(sessionDir, 'transcript.jsonl'),
+      [
+        JSON.stringify({
+          type: 'session',
+          version: 2,
+          id: 'legacy-tools',
+          timestamp: now,
+          cwd: dir,
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e1',
+          parentId: null,
+          timestamp: now,
+          message: { role: 'user', content: 'find lookup' },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e2',
+          parentId: 'e1',
+          timestamp: now,
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolCallId: 'ts-1',
+                toolName: 'tool_search',
+                input: { query: 'lookup' },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e3',
+          parentId: 'e2',
+          timestamp: now,
+          message: {
+            role: 'tool',
+            content: [
+              {
+                type: 'tool-result',
+                toolCallId: 'ts-1',
+                toolName: 'tool_search',
+                output: {
+                  type: 'text',
+                  value: 'Loaded 1 tool:\n- ext_lookup: Lookup by zip',
+                },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e4',
+          parentId: 'e3',
+          timestamp: now,
+          message: { role: 'assistant', content: 'Loaded ext_lookup.' },
+        }),
+      ].join('\n') + '\n',
+    )
+
+    const model = createFauxModel({ responses: [fauxText('ready')] })
+    const vela = createVela({
+      cwd: dir,
+      dataDir,
+      model,
+      contextFiles: false,
+      extensions: [
+        function ext(api) {
+          api.registerTool({
+            name: 'lookup',
+            description: 'Lookup by zip',
+            exposure: 'deferred',
+            inputSchema: z.object({ zipcode: z.string() }),
+            execute: async () => 'ok',
+          })
+        },
+      ],
+    })
+    try {
+      const session = vela.session('legacy-tools')
+      await session.resume()
+      await session.prompt('use it')
+      expect(model.calls[0]!.tools).toContain('ext_lookup')
+    } finally {
+      await vela.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resuming a legacy v0.8 transcript with {type:"image", image, mediaType} preserves bytes and mediaType', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-legacy-img-'))
+  try {
+    const dataDir = join(dir, 'data')
+    const sessionDir = join(dataDir, 'sessions', 'legacy-img')
+    mkdirSync(sessionDir, { recursive: true })
+    const now = '2026-11-23T00:00:00.000Z'
+    const pngBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    writeFileSync(
+      join(sessionDir, 'transcript.jsonl'),
+      [
+        JSON.stringify({
+          type: 'session',
+          version: 2,
+          id: 'legacy-img',
+          timestamp: now,
+          cwd: dir,
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e1',
+          parentId: null,
+          timestamp: now,
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Look at this' },
+              { type: 'image', image: pngBase64, mediaType: 'image/png' },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e2',
+          parentId: 'e1',
+          timestamp: now,
+          message: { role: 'assistant', content: 'Saw it.' },
+        }),
+      ].join('\n') + '\n',
+    )
+
+    const model = createFauxModel({ responses: [fauxText('still see it')] })
+    const vela = createVela({ cwd: dir, dataDir, model, contextFiles: false })
+    try {
+      const session = vela.session('legacy-img')
+      await session.resume()
+      await session.prompt('describe again')
+      const userParts = model.calls[0]!.prompt.flatMap((m) =>
+        m.role === 'user' ? m.content : [],
+      )
+      const filePart = userParts.find((p) => p.type === 'file')
+      expect(filePart).toBeDefined()
+      expect(
+        filePart && filePart.type === 'file' ? filePart.mediaType : '',
+      ).toBe('image/png')
+      expect(
+        JSON.stringify(
+          filePart && filePart.type === 'file' ? filePart.data : '',
+        ),
+      ).toContain(pngBase64)
+    } finally {
+      await vela.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('deferred Zod v3 tool preserves parameter names for tool_search discovery', async () => {
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('tool_search', { query: 'zipcode' }),
+      fauxText('found'),
+    ],
+  })
+  const vela = createVela({
+    model,
+    contextFiles: false,
+    extensions: [
+      function ext(api) {
+        api.registerTool({
+          name: 'lookup',
+          description: 'Generic query tool',
+          exposure: 'deferred',
+          inputSchema: z3.object({
+            zipcode: z3.string().describe('Postal code'),
+          }),
+          execute: async () => '94107',
+        })
+      },
+    ],
+  })
+  try {
+    const session = vela.session('zod3-discovery')
+    await session.prompt('find zipcode tool')
+    expect(model.calls[1]!.tools).toContain('ext_lookup')
+  } finally {
+    await vela.dispose()
+  }
+})
+
+test('invalid ModelHandle is rejected cleanly at SDK boundary', async () => {
+  const fake = {
+    specificationVersion: 'v4',
+    provider: 'demo',
+    modelId: 'review',
+  }
+  const vela = createVela({ model: fake, contextFiles: false })
+  try {
+    const session = vela.session('bad-model')
+    await expect(session.prompt('hi')).rejects.toThrow('Invalid ModelHandle')
+  } finally {
+    await vela.dispose()
+  }
+})
+
+test('hosted tools with client-side execute respect checkpoint guard on failure', async () => {
+  const { agentLoop } = await import('../../../src/driver/agent/index.ts')
+  const { ToolResultStore } = await import(
+    '../../../src/driver/session/tool-results.ts'
+  )
+  const { ToolRegistry } = await import('../../../src/driver/tools/registry.ts')
+  const { TokenTracker } = await import('../../../src/driver/usage/tracker.ts')
+  const { tool } = await import('ai')
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-hosted-guard-'))
+  try {
+    let executions = 0
+    const model = Object.assign(
+      createFauxModel({
+        responses: [fauxToolCall('local_shell', { cmd: 'echo hi' })],
+      }),
+      {
+        hostedTools: async () => ({
+          local_shell: tool({
+            description: 'Hosted local shell',
+            inputSchema: z.object({ cmd: z.string() }),
+            execute: async () => {
+              executions++
+              return { output: 'ran' }
+            },
+          }),
+        }),
+      },
+    )
+    const registry = new ToolRegistry(new ToolResultStore(join(dir, 'results')))
+    registry.register({
+      name: 'local_shell',
+      description: 'probe',
+      inputSchema: z.object({ cmd: z.string() }),
+      execute: async () => 'unused',
+    })
+    await expect(
+      agentLoop({
+        model,
+        systemPrompt: 'test',
+        toolRegistry: registry,
+        messages: [{ role: 'user', content: 'probe' }],
+        tokenTracker: new TokenTracker(),
+        onCheckpoint: async () => {
+          throw new Error('checkpoint unavailable')
+        },
+      }),
+    ).rejects.toThrow('checkpoint unavailable')
+    expect(executions).toBe(0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resuming a transcript with tool-approval-request preserves approval parts in both directions', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-approval-'))
+  try {
+    const dataDir = join(dir, 'data')
+    const sessionDir = join(dataDir, 'sessions', 'approval-session')
+    mkdirSync(sessionDir, { recursive: true })
+    const now = '2026-11-23T00:00:00.000Z'
+    writeFileSync(
+      join(sessionDir, 'transcript.jsonl'),
+      `${[
+        JSON.stringify({
+          type: 'session',
+          version: 2,
+          id: 'approval-session',
+          timestamp: now,
+          cwd: dir,
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e1',
+          parentId: null,
+          timestamp: now,
+          message: { role: 'user', content: 'search' },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e2',
+          parentId: 'e1',
+          timestamp: now,
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolCallId: 'c1',
+                toolName: 'mcp.read',
+                input: {},
+                providerExecuted: true,
+              },
+              {
+                type: 'tool-approval-request',
+                approvalId: 'apr-1',
+                toolCallId: 'c1',
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e3',
+          parentId: 'e2',
+          timestamp: now,
+          message: {
+            role: 'tool',
+            content: [
+              {
+                type: 'tool-approval-response',
+                approvalId: 'apr-1',
+                approved: true,
+                reason: 'ok',
+                providerExecuted: true,
+              },
+            ],
+          },
+        }),
+      ].join('\n')}\n`,
+    )
+    const model = createFauxModel({ responses: [fauxText('ok')] })
+    const vela = createVela({ cwd: dir, dataDir, model, contextFiles: false })
+    try {
+      const session = vela.session('approval-session')
+      expect(await session.resume()).toBe(true)
+      await session.prompt('follow up')
+      expect(model.calls).toHaveLength(1)
+      const approvalPart = model.calls[0]!.prompt.flatMap((m) =>
+        m.role === 'tool' ? m.content : [],
+      ).find((p) => p.type === 'tool-approval-response')
+      expect(approvalPart).toMatchObject({
+        type: 'tool-approval-response',
+        approvalId: 'apr-1',
+        approved: true,
+        reason: 'ok',
+      })
+    } finally {
+      await vela.dispose()
+    }
+    const roundTripped = fromAiResponseMessage({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-approval-request',
+          approvalId: 'apr-2',
+          toolCallId: 'c2',
+        },
+      ],
+    })
+    expect(roundTripped).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-approval-request',
+          approvalId: 'apr-2',
+          toolCallId: 'c2',
+        },
+      ],
+    })
+    const roundTrippedResp = fromAiResponseMessage({
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-approval-response',
+          approvalId: 'apr-2',
+          approved: false,
+          reason: 'denied',
+        },
+      ],
+    })
+    expect(roundTrippedResp).toEqual({
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-approval-response',
+          approvalId: 'apr-2',
+          approved: false,
+          reason: 'denied',
+        },
+      ],
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('resuming a legacy image with provider file reference object preserves structured data', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-s1a-file-ref-'))
+  try {
+    const dataDir = join(dir, 'data')
+    const sessionDir = join(dataDir, 'sessions', 'file-ref')
+    mkdirSync(sessionDir, { recursive: true })
+    const now = '2026-11-23T00:00:00.000Z'
+    writeFileSync(
+      join(sessionDir, 'transcript.jsonl'),
+      `${[
+        JSON.stringify({
+          type: 'session',
+          version: 2,
+          id: 'file-ref',
+          timestamp: now,
+          cwd: dir,
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e1',
+          parentId: null,
+          timestamp: now,
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'check ref' },
+              {
+                type: 'image',
+                image: { openai: 'file-abc' },
+                mediaType: 'image/png',
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'e2',
+          parentId: 'e1',
+          timestamp: now,
+          message: { role: 'assistant', content: 'seen' },
+        }),
+      ].join('\n')}\n`,
+    )
+    const model = createFauxModel({ responses: [fauxText('still valid')] })
+    const vela = createVela({ cwd: dir, dataDir, model, contextFiles: false })
+    try {
+      const session = vela.session('file-ref')
+      await session.resume()
+      await session.prompt('describe')
+      expect(model.calls).toHaveLength(1)
+      const filePart = model.calls[0]!.prompt.flatMap((m) =>
+        m.role === 'user' ? m.content : [],
+      ).find((p) => p.type === 'file')
+      expect(filePart).toBeDefined()
+      expect(
+        filePart && filePart.type === 'file' ? filePart.data : null,
+      ).toEqual({
+        type: 'reference',
+        reference: { openai: 'file-abc' },
+      })
+    } finally {
+      await vela.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

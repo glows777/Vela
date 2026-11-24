@@ -27,6 +27,8 @@ const read = async (store: ToolResultStore) =>
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line))
+const sdkTools = (r: ToolRegistry) =>
+  Object.fromEntries(r.toProviderTools().map((t) => [t.name, t]))
 const options = (toolCallId: string, abortSignal?: AbortSignal) => ({
   toolCallId,
   messages: [],
@@ -49,7 +51,7 @@ test('Registry persists begin before execute and stores native small results wit
       return { ok: true, value: 42 }
     },
   })
-  const value = await registry.toAISDKFormat().inspect!.execute!(
+  const value = await sdkTools(registry).inspect!.execute!(
     input,
     options('sdk-small'),
   )
@@ -90,10 +92,10 @@ test('native MCP errors and thrown errors are recorded without parsing preview s
   )
   // A native error is an error result for the model (like pi), and recorded as is
   await expect(
-    registry.toAISDKFormat().mcp!.execute!({}, options('mcp')),
+    sdkTools(registry).mcp!.execute!({}, options('mcp')),
   ).rejects.toThrow('remote problem')
   await expect(
-    registry.toAISDKFormat().throw!.execute!({}, options('throw')),
+    sdkTools(registry).throw!.execute!({}, options('throw')),
   ).rejects.toThrow('explicit failure')
   const records = await read(store)
   expect(records[1]).toMatchObject({
@@ -125,7 +127,7 @@ test('terminal storage failure on an inline result leaves only the begin record 
     },
   })
   await expect(
-    registry.toAISDKFormat().short!.execute!({}, options('one')),
+    sdkTools(registry).short!.execute!({}, options('one')),
   ).rejects.toThrow('ran, but saving its result failed')
   const records = (await Bun.file(backup).text())
     .trim()
@@ -133,7 +135,7 @@ test('terminal storage failure on an inline result leaves only the begin record 
     .map((line) => JSON.parse(line))
   expect(records.map((record) => record.type)).toEqual(['tool_call'])
   await expect(
-    registry.toAISDKFormat().short!.execute!({}, options('two')),
+    sdkTools(registry).short!.execute!({}, options('two')),
   ).rejects.toThrow()
   expect(executions).toBe(1)
 })
@@ -154,7 +156,7 @@ test('begin storage failure prevents execution; rejection records preserve inval
     },
   })
   await expect(
-    registry.toAISDKFormat().write!.execute!({}, options('blocked')),
+    sdkTools(registry).write!.execute!({}, options('blocked')),
   ).rejects.toThrow()
   expect(executed).toBe(false)
   const other = new ToolRegistry(
@@ -181,7 +183,7 @@ test('new sessions get separate histories; session resume reuses exact history a
     inputSchema: z.object({}),
     execute: async () => 'saved',
   })
-  await registry.toAISDKFormat().one!.execute!({}, options('one'))
+  await sdkTools(registry).one!.execute!({}, options('one'))
   session.appendMessage({ role: 'user', content: 'hi' })
   await session.flush()
   const resumed = new SessionStore('default', join(root, 'sessions'))
@@ -197,7 +199,7 @@ test('Bash cancellation persists status and original stdout', async () => {
   const registry = new ToolRegistry(results)
   registry.register(createTestBashTool(root))
   const abort = new AbortController()
-  const pending = registry.toAISDKFormat().bash!.execute!(
+  const pending = sdkTools(registry).bash!.execute!(
     { command: "printf 'BEFORE_CANCEL\\n'; touch ready; sleep 30 & wait" },
     options('cancel', abort.signal),
   )
@@ -234,7 +236,7 @@ test('legacy references are indexed honestly without inventing call parameters',
         role: 'tool',
         content: [
           {
-            type: 'tool-result',
+            type: 'tool_result',
             toolCallId: 'old',
             toolName: 'bash',
             output: {
@@ -354,7 +356,7 @@ for (const kind of ['bash', 'generic'] as const) {
     })
     let failure: unknown
     try {
-      await registry.toAISDKFormat()[kind]!.execute!(
+      await sdkTools(registry)[kind]!.execute!(
         kind === 'bash'
           ? { command: "printf '%060000d\\n' 0; echo RECOVERY_EVIDENCE" }
           : {},
@@ -381,7 +383,7 @@ for (const kind of ['bash', 'generic'] as const) {
     expect(String(failure)).toContain('do not rerun it automatically')
     if (kind === 'bash') expect(String(failure)).toContain('exitCode=0')
     await expect(
-      registry.toAISDKFormat()[kind]!.execute!({}, options('next')),
+      sdkTools(registry)[kind]!.execute!({}, options('next')),
     ).rejects.toThrow()
     expect(executions).toBe(1)
     // Only the begin record survived. The session cannot confirm or replay this call.

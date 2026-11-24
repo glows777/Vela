@@ -125,7 +125,11 @@ test.each([
       ],
     }
     const original = structuredClone(options)
-    await Promise.resolve(model.doGenerate(options)).catch(() => {})
+    await Promise.resolve(
+      (model as unknown as { doGenerate: (o: unknown) => unknown }).doGenerate(
+        options,
+      ),
+    ).catch(() => {})
     expect(requests.at(-1)?.body.input).toEqual([
       {
         role: 'user',
@@ -166,7 +170,7 @@ test('a reasoning model inlines an earlier answer whose reasoning was pruned', a
   if (typeof model === 'string' || model.specificationVersion !== 'v4')
     throw new Error('Expected a v4 provider model')
   await Promise.resolve(
-    model.doGenerate({
+    (model as unknown as { doGenerate: (o: unknown) => unknown }).doGenerate({
       prompt: [
         {
           role: 'assistant',
@@ -229,7 +233,11 @@ test.each([
       },
     }
     const original = structuredClone(options)
-    await Promise.resolve(model.doGenerate(options)).catch(() => {})
+    await Promise.resolve(
+      (model as unknown as { doGenerate: (o: unknown) => unknown }).doGenerate(
+        options,
+      ),
+    ).catch(() => {})
     expect(requests.at(-1)?.body).toMatchObject({
       store: expectedStore,
       parallel_tool_calls: false,

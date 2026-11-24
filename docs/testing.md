@@ -151,9 +151,9 @@ export const greet: VelaExtension = (vela) => {
     annotations: { readOnlyHint: true },
     execute: async ({ name }: { name: string }) => `Hello, ${name}!`,
   })
-  vela.on('tool_call', async (event, ctx) => {
+  vela.on('tool_call', async (event) => {
     if (event.toolName !== 'bash') return
-    if (!(await ctx.ui.confirm('Run bash?', String(event.input.command))))
+    if (String(event.input.command).includes('rm -rf'))
       return { block: true, reason: 'Not allowed' }
   })
 }

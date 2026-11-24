@@ -1,6 +1,6 @@
-import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { ModelRegistry } from '../../providers/models/index.ts'
 import { errorMessage, type VelaLogger } from '../../shared/logger.ts'
+import type { ProviderRequestParams } from '../../shared/provider-types.ts'
 import type { CustomMessage, VelaEvent } from '../agent/events.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
 import {
@@ -254,8 +254,7 @@ export class ExtensionRunner {
   context(session: VelaSession, signal = session.signal): ExtensionContext {
     return {
       session,
-      ui: session.ui,
-      hasUI: session.hasUI,
+      notify: (message, level = 'info') => session.notify(message, level),
       cwd: session.cwd,
       signal,
     }
@@ -538,8 +537,8 @@ export class ExtensionRunner {
   /** before_provider_request: handlers edit `params` in place or return replacements; errors are logged. */
   async beforeProviderRequest(
     session: VelaSession,
-    params: LanguageModelV4CallOptions,
-  ): Promise<LanguageModelV4CallOptions> {
+    params: ProviderRequestParams,
+  ): Promise<ProviderRequestParams> {
     let current = params
     const ctx = this.context(session)
     for (const { extension, fn } of this.list('before_provider_request')) {
@@ -549,7 +548,7 @@ export class ExtensionRunner {
           params: current,
         }
         const result = (await fn(event, ctx)) as
-          | LanguageModelV4CallOptions
+          | ProviderRequestParams
           | undefined
         current = result ?? event.params
       } catch (error) {

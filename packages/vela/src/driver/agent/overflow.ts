@@ -1,4 +1,4 @@
-import { APICallError } from '@ai-sdk/provider'
+import { inspectProviderApiError } from '../../providers/index.ts'
 
 /**
  * Context overflow detection, copied from pi (`ai/src/utils/overflow.ts`, error-message patterns only).
@@ -49,8 +49,8 @@ const NON_OVERFLOW_PATTERNS = [
 
 /** The text to match: the provider's response body when there is one, plus the error message. */
 function errorText(error: unknown): string {
-  if (APICallError.isInstance(error))
-    return `${error.message}\n${error.responseBody ?? ''}`
+  const apiError = inspectProviderApiError(error)
+  if (apiError) return `${apiError.message}\n${apiError.responseBody ?? ''}`
   return error instanceof Error ? error.message : String(error)
 }
 

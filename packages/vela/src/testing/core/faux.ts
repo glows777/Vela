@@ -9,12 +9,17 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4Usage,
 } from '@ai-sdk/provider'
+import type {
+  FinishReason,
+  ModelHandle,
+  ReasoningOption,
+} from '../../shared/provider-types.ts'
 import { compactionSources, findConversation } from './compaction-request.ts'
 
 /**
  * Scripted faux model (the counterpart of pi's faux provider).
  *
- * Implements the AI SDK's LanguageModelV4 and plays back preset responses in order, so
+ * Implements the AI SDK's LanguageModelV4 internally and plays back preset responses in order, so
  * streamText / generateText, tool execution, retries and context compaction all run real code.
  * Every request is recorded in `calls`, so tests can assert on what the model "saw".
  * A request after the script runs out fails right away instead of hanging silently.
@@ -24,7 +29,7 @@ import { compactionSources, findConversation } from './compaction-request.ts'
  * (merged into one response, for parallel tool calls).
  */
 
-export type FauxFinishReason = LanguageModelV4FinishReason['unified']
+export type FauxFinishReason = FinishReason
 
 export interface FauxToolCall {
   name: string
@@ -56,12 +61,102 @@ export interface FauxResponse {
   hang?: boolean
 }
 
+type FauxToolOutputContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'file'; data: unknown; mediaType: string; filename?: string }
+  | { type: 'file-data'; data: string; mediaType: string; filename?: string }
+  | { type: 'file-url'; url: string }
+  | { type: 'image-data'; data: string; mediaType: string }
+  | { type: 'image-url'; url: string }
+  | { type: 'media'; data: string; mediaType: string }
+  | {
+      type: 'custom'
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+
+type FauxToolResultOutput =
+  | { type: 'text'; value: string }
+  | { type: 'error-text'; value: string }
+  | { type: 'json'; value: unknown }
+  | { type: 'error-json'; value: unknown }
+  | {
+      type: 'execution-denied'
+      reason?: string
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | { type: 'content'; value: FauxToolOutputContentPart[] }
+
+type FauxPromptPart =
+  | {
+      type: 'text'
+      text: string
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | {
+      type: 'reasoning'
+      text: string
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | {
+      type: 'file'
+      data: unknown
+      mediaType: string
+      filename?: string
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | {
+      type: 'reasoning-file'
+      data: unknown
+      mediaType: string
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | {
+      type: 'tool-call'
+      toolCallId: string
+      toolName: string
+      input: unknown
+      providerExecuted?: boolean
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | {
+      type: 'tool-result'
+      toolCallId: string
+      toolName: string
+      output: FauxToolResultOutput
+      providerExecuted?: boolean
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | {
+      type: 'tool-approval-response'
+      approvalId: string
+      approved: boolean
+      reason?: string
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | {
+      type: 'custom'
+      kind: string
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+
+export type FauxPromptMessage =
+  | {
+      role: 'system'
+      content: string
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+  | {
+      role: 'user' | 'assistant' | 'tool'
+      content: FauxPromptPart[]
+      providerOptions?: Record<string, Record<string, unknown>>
+    }
+
 export interface FauxRequest {
   /** 1-based request index (shared by stream and generate) */
   index: number
   kind: 'stream' | 'generate'
   system: string
-  prompt: LanguageModelV4Prompt
+  prompt: FauxPromptMessage[]
   /** Tool names available to this request */
   tools: string[]
   /** Text of the last user message */
@@ -81,11 +176,11 @@ export interface FauxRequest {
    */
   inputTokens: number
   /** Output format the request asks for. */
-  responseFormat?: LanguageModelV4CallOptions['responseFormat']
+  responseFormat?: Record<string, unknown>
   /** The request's reasoning setting (mapped from the thinking level) */
-  reasoning?: LanguageModelV4CallOptions['reasoning']
+  reasoning?: ReasoningOption | string
   /** Extra HTTP headers the request asked for */
-  headers?: LanguageModelV4CallOptions['headers']
+  headers?: Record<string, string | undefined>
   abortSignal?: AbortSignal
 }
 
@@ -113,7 +208,8 @@ export interface FauxModelOptions {
   modelId?: string
 }
 
-export interface FauxModel extends LanguageModelV4 {
+export interface FauxModel extends ModelHandle {
+  readonly specificationVersion: 'v4'
   /** Record of every request, in order */
   readonly calls: FauxRequest[]
   /**
@@ -127,6 +223,10 @@ export interface FauxModel extends LanguageModelV4 {
   pushGenerate(...steps: FauxStep[]): void
   /** Number of unused responses (main + generate queues) */
   pending(): number
+  // biome-ignore lint/suspicious/noExplicitAny: provider-agnostic test double methods
+  doGenerate(options: any): Promise<any>
+  // biome-ignore lint/suspicious/noExplicitAny: provider-agnostic test double methods
+  doStream(options: any): Promise<any>
 }
 
 // --- Response helpers ---
@@ -164,7 +264,9 @@ export const fauxHang = (partialText = ''): FauxResponse => ({
 export const fauxSummary =
   (pick: { goal?: number } = {}) =>
   (req: FauxRequest): FauxResponse => {
-    const control = findCompactionControl(req.prompt)
+    const control = findCompactionControl(
+      req.prompt as unknown as LanguageModelV4Prompt,
+    )
     if (!control)
       throw new Error('faux: fauxSummary used on a non-compaction request')
     const conversation = findConversation(
@@ -265,7 +367,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
     }
   }
 
-  model = {
+  const impl: LanguageModelV4 & FauxModel = {
     specificationVersion: 'v4',
     provider: 'faux',
     modelId: options.modelId ?? 'faux',
@@ -276,7 +378,9 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
     pushGenerate: (...steps) => (generate ?? main).push(...steps),
     pending: () => main.length + (generate?.length ?? 0),
 
-    async doGenerate(opts): Promise<LanguageModelV4GenerateResult> {
+    async doGenerate(
+      opts: LanguageModelV4CallOptions,
+    ): Promise<LanguageModelV4GenerateResult> {
       opts.abortSignal?.throwIfAborted()
       const { req, response, prefix } = next('generate', opts)
       if (response.error) throw toError(response.error)
@@ -298,7 +402,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
       }
     },
 
-    async doStream(opts) {
+    async doStream(opts: LanguageModelV4CallOptions) {
       opts.abortSignal?.throwIfAborted()
       const { req, response, prefix } = next('stream', opts)
       if (response.error) throw toError(response.error)
@@ -345,6 +449,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
       return { stream, response: { headers: fauxHeaders(req) } }
     },
   }
+  model = impl
   return model
 }
 

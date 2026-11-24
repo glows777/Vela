@@ -1,7 +1,11 @@
 import type { ThinkingLevel } from '../../providers/models/index.ts'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
-import type { ModelMessage, UserContent } from '../messages.ts'
+import {
+  type ModelMessage,
+  normalizeVelaMessage,
+  type UserContent,
+} from '../messages.ts'
 
 /**
  * Session file format version written now (like pi's CURRENT_SESSION_VERSION). Version 1 was one
@@ -418,7 +422,7 @@ export function buildSessionContext(
     let original: ModelMessage
     if (entry.type === 'message') {
       if (entry.stopReason) continue
-      original = entry.message
+      original = normalizeVelaMessage(entry.message)
     } else if (entry.type === 'custom_message')
       // Like pi's convertToLlm: the model sees a custom message as a user message
       original = { role: 'user', content: entry.content }
@@ -428,10 +432,10 @@ export function buildSessionContext(
     const edit = edits.get(entry.id)
     if (edit?.replacement === null) continue
     const message = edit
-      ? ({
+      ? normalizeVelaMessage({
           ...original,
           content: edit.replacement.content,
-        } as ModelMessage)
+        })
       : original
     if (entry.type === 'custom_message')
       context.custom.set(message, {

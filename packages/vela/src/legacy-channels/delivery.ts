@@ -88,7 +88,7 @@ function finalAnswerIdentity(
   const content = last.message.content
   if (
     Array.isArray(content) &&
-    content.some((part) => part.type === 'tool-call')
+    content.some((part) => part.type === 'tool_call')
   )
     return
   const answer =

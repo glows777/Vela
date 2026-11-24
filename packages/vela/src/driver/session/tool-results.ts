@@ -216,7 +216,7 @@ export async function archiveToolResults(
     if (message.role !== 'tool' && message.role !== 'assistant') continue
     if (typeof message.content === 'string') continue
     for (const part of message.content) {
-      if (part.type !== 'tool-result') continue
+      if (part.type !== 'tool_result') continue
       const stored = getStoredResult(part.output)
       if (stored) {
         await stat(stored.path)

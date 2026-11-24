@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { generateText } from 'ai'
+import { generateText, type LanguageModel } from 'ai'
 import type { CredentialStore } from '../auth/types.ts'
 import type { ProviderConfig } from '../models-config.ts'
 import { type ProviderDefinition, resolveModel } from './index.ts'
@@ -13,7 +13,7 @@ export async function verifyProviderModel(
   signal?: AbortSignal,
 ): Promise<void> {
   await generateText({
-    model: resolveModel(ref, { providers, credentials }),
+    model: resolveModel(ref, { providers, credentials }) as LanguageModel,
     prompt: 'Reply OK.',
     maxOutputTokens: 16,
     maxRetries: 0,

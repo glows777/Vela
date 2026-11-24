@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import type { ThinkingLevel } from '../../providers/models/index.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
+import {
+  normalizeVelaContent,
+  normalizeVelaMessage,
+} from '../../shared/messages.ts'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import { validateStoredLocation } from '../execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
@@ -283,7 +287,7 @@ export class SessionStore {
     )) {
       if (entry.type !== 'message' || entry.message.role !== 'tool') continue
       for (const part of entry.message.content) {
-        if (part.type !== 'tool-result' || part.toolName !== 'tool_search')
+        if (part.type !== 'tool_result' || part.toolName !== 'tool_search')
           continue
         if (part.output.type === 'text') {
           const path = part.output.value.match(
@@ -626,7 +630,7 @@ export class SessionStore {
       )
     if (version < SESSION_FORMAT_VERSION)
       throw new Error(
-        `Session ${this.sessionId} uses file format version ${version}; its storage must convert it (see migrateSessionV1)`,
+        `Session ${this.sessionId} uses file format version ${version}; its storage must convert it before loading`,
       )
     if ('location' in header) validateStoredLocation(header.location)
     // A write retried after it failed part way can repeat entries: the first copy of each id counts
@@ -653,10 +657,39 @@ export class SessionStore {
         validateStoredLocation(entry.data)
         location = entry.data
         markerParents.set(entry.id, parentId)
-      } else
-        entries.push(
-          entry.parentId === parentId ? entry : { ...entry, parentId },
-        )
+      } else {
+        const reparented =
+          entry.parentId === parentId ? entry : { ...entry, parentId }
+        if (reparented.type === 'message') {
+          const normalized = normalizeVelaMessage(reparented.message)
+          entries.push(
+            normalized === reparented.message
+              ? reparented
+              : { ...reparented, message: normalized },
+          )
+        } else if (
+          reparented.type === 'context_edit' &&
+          reparented.replacement &&
+          Array.isArray(reparented.replacement.content)
+        ) {
+          const { content, changed } = normalizeVelaContent(
+            reparented.replacement.content,
+          )
+          entries.push(
+            changed
+              ? {
+                  ...reparented,
+                  replacement: {
+                    ...reparented.replacement,
+                    content: content as ModelMessage['content'],
+                  },
+                }
+              : reparented,
+          )
+        } else {
+          entries.push(reparented)
+        }
+      }
     }
     // Like pi: the leaf is the last entry
     const context = buildSessionContext(entries, entries.at(-1)?.id ?? null)

@@ -1,6 +1,23 @@
 import { format } from 'node:util'
-import type { LogWarningsFunction, Warning } from 'ai'
 import type { LogLevel } from './types.ts'
+
+interface ProviderWarning {
+  type: string
+  feature?: string
+  setting?: string
+  details?: string
+  message?: string
+}
+
+type ProviderLogWarningsFn = (options: {
+  warnings: ProviderWarning[]
+  provider?: string
+  model?: string
+}) => void
+
+const globalWarnings = globalThis as {
+  AI_SDK_LOG_WARNINGS?: ProviderLogWarningsFn | false
+}
 
 /**
  * Send console output and AI SDK warnings to the chat log while the TUI runs: writing either to the
@@ -28,7 +45,11 @@ export function captureCliLogs(
 
   // The default logger emits a provider warning again on every request; one session shows each text once.
   const shown = new Set<string>()
-  const logWarnings: LogWarningsFunction = ({ warnings, provider, model }) => {
+  const logWarnings: ProviderLogWarningsFn = ({
+    warnings,
+    provider,
+    model,
+  }) => {
     const prefix = `AI SDK Warning${
       provider != null && model != null ? ` (${provider} / ${model})` : ''
     }:`
@@ -39,18 +60,18 @@ export function captureCliLogs(
       addNotice(text, 'warning')
     }
   }
-  const previous = globalThis.AI_SDK_LOG_WARNINGS
-  globalThis.AI_SDK_LOG_WARNINGS = logWarnings
+  const previous = globalWarnings.AI_SDK_LOG_WARNINGS
+  globalWarnings.AI_SDK_LOG_WARNINGS = logWarnings
   return () => {
     Object.assign(console, original)
     if (previous === undefined)
-      Reflect.deleteProperty(globalThis, 'AI_SDK_LOG_WARNINGS')
-    else globalThis.AI_SDK_LOG_WARNINGS = previous
+      Reflect.deleteProperty(globalWarnings, 'AI_SDK_LOG_WARNINGS')
+    else globalWarnings.AI_SDK_LOG_WARNINGS = previous
   }
 }
 
 /** The default logger's wording; the SDK exports the global and its type, not this formatter. */
-function formatWarning(warning: Warning, prefix: string): string {
+function formatWarning(warning: ProviderWarning, prefix: string): string {
   switch (warning.type) {
     case 'unsupported':
     case 'compatibility': {

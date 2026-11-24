@@ -326,7 +326,7 @@ test('input handlers transform or handle input, after extension commands and bef
   const seen: string[] = []
   function ext(vela: ExtensionAPI) {
     vela.registerCommand('ping', {
-      handler: (_args, ctx) => ctx.ui.notify('pong'),
+      handler: (_args, ctx) => ctx.notify('pong'),
     })
     vela.on('input', (event) => {
       seen.push(`${event.source}:${event.text}`)

@@ -3,11 +3,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createOpenAI } from '@ai-sdk/openai'
-import { generateText, type ModelMessage } from 'ai'
+import { generateText } from 'ai'
 import z from 'zod'
 import { summarize } from '../../../../src/driver/context/compressor.ts'
 import { createRequestSnapshot } from '../../../../src/driver/context/request.ts'
-import { toModelMessages } from '../../../../src/driver/messages.ts'
+import type { ModelMessage } from '../../../../src/driver/messages.ts'
 import {
   preamble,
   SystemPromptBuilder,
@@ -15,6 +15,10 @@ import {
 import { SessionStore } from '../../../../src/driver/session/index.ts'
 import { ToolRegistry } from '../../../../src/driver/tools/registry.ts'
 import { TokenTracker } from '../../../../src/driver/usage/tracker.ts'
+import {
+  resolveProviderTools,
+  toAiModelMessages,
+} from '../../../../src/providers/index.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'vela-prefix-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -84,11 +88,15 @@ test('summary sends only the dropped messages as text, without tool definitions'
     { role: 'user', content: 'old' },
     { role: 'assistant', content: 'response' },
   ]
+  const initialTools = await resolveProviderTools(
+    model,
+    registry.toProviderTools(),
+  )
   await generateText({
     model,
     instructions: system(),
-    tools: registry.toAISDKFormat(),
-    messages: first,
+    tools: initialTools.sdkTools,
+    messages: toAiModelMessages(first),
   })
   const history: ModelMessage[] = [
     ...first,
@@ -106,13 +114,13 @@ test('summary sends only the dropped messages as text, without tool definitions'
   await generateText({
     model,
     instructions: system(),
-    tools: registry.toAISDKFormat(),
-    messages: toModelMessages(restored),
+    tools: initialTools.sdkTools,
+    messages: toAiModelMessages(restored),
   })
-  const snapshot = await createRequestSnapshot(
+  const snapshot = createRequestSnapshot(
     model,
     system(),
-    registry.toAISDKFormat(),
+    initialTools,
     restored,
   )
   await summarize(snapshot, store, new TokenTracker())
@@ -129,13 +137,17 @@ test('summary sends only the dropped messages as text, without tool definitions'
   expect(conversation).not.toContain('next-0')
   expect(requests[1]!.response_format).toBeUndefined()
   expect(requests[2]!.response_format).toBeUndefined()
-  registry.searchTools('later')
-  const discovered = await createRequestSnapshot(
+  await registry.searchTools('later')
+  const discoveredTools = await resolveProviderTools(
+    model,
+    registry.toProviderTools(),
+  )
+  const discovered = createRequestSnapshot(
     model,
     system(),
-    registry.toAISDKFormat(),
+    discoveredTools,
     restored,
   )
-  expect(Object.keys(snapshot.tools)).toEqual(['read_file'])
-  expect(Object.keys(discovered.tools)).toEqual(['read_file', 'later'])
+  expect(Object.keys(snapshot.tools.sdkTools)).toEqual(['read_file'])
+  expect(Object.keys(discovered.tools.sdkTools)).toEqual(['read_file', 'later'])
 })

@@ -159,10 +159,10 @@ function expectCanonicalHistory(messages: ModelMessage[], count = 1) {
   expect(results).toHaveLength(count)
   for (const result of results) {
     expect(result).toMatchObject({
-      type: 'tool-result',
+      type: 'tool_result',
       output: { type: 'content' },
     })
-    if (result.type !== 'tool-result' || result.output.type !== 'content')
+    if (result.type !== 'tool_result' || result.output.type !== 'content')
       throw new Error('Expected canonical tool content')
     expect(result.output.value).toContainEqual(image)
   }
@@ -288,7 +288,7 @@ test.each([{ variants: ['mixed'] }, { variants: ['image-only', 'mixed'] }])(
       message.role === 'tool' ? message.content : [],
     )
     expect(saved.at(-1)).toMatchObject({
-      type: 'tool-result',
+      type: 'tool_result',
       output: { type: 'content', value: [] },
     })
   },

@@ -157,7 +157,9 @@ function getToolResultContent(prompt: Prompt): string {
       for (const c of m.content) {
         if (c.type !== 'tool-result') continue
         const val = ('value' in c.output && c.output.value) || c.output || ''
-        const stored = getStoredResult(c.output)
+        const stored = getStoredResult(
+          c.output as Parameters<typeof getStoredResult>[0],
+        )
         parts.push(
           stored?.preview ??
             (typeof val === 'string' ? val : JSON.stringify(val)),

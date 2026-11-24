@@ -187,11 +187,11 @@ test('clone and fork retain history without inheriting routing authority', async
     channel: 'fake',
     tools: ['bash', 'background_stop'],
     host: {
-      deliver: (text) => {
+      deliver: (text: string) => {
         delivered.push(text)
       },
     },
-  })
+  } as import('../../packages/vela/src/driver/session/options.ts').InternalSessionOptions)
   expect(source.scope?.id).toBe('group')
   await source.prompt('hello')
   const clone = (await source.clone({ sessionId: 'copy' })).session!

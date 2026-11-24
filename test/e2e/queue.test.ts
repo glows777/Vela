@@ -211,7 +211,7 @@ test('an extension command can abort the running task without waiting on itself'
         vela.registerCommand('stop', {
           handler: async (_args, ctx) => {
             await ctx.session.abort()
-            ctx.ui.notify('stopped')
+            ctx.notify('stopped')
           },
         }),
     ],

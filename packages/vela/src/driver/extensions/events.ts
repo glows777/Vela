@@ -1,4 +1,4 @@
-import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
+import type { ProviderRequestParams } from '../../shared/provider-types.ts'
 import type { CustomMessage, VelaEvent } from '../agent/events.ts'
 import type { ImageContent, ModelMessage, ToolContent } from '../messages.ts'
 import type { BranchSummaryEntry, SessionEntry } from '../session/entries.ts'
@@ -54,7 +54,7 @@ export interface ContextEventResult {
  */
 export interface BeforeProviderRequestEvent {
   type: 'before_provider_request'
-  params: LanguageModelV4CallOptions
+  params: ProviderRequestParams
 }
 
 /**
@@ -220,10 +220,7 @@ type InterceptEvents = {
   before_agent_start: [BeforeAgentStartEvent, BeforeAgentStartEventResult]
   input: [InputEvent, InputEventResult]
   context: [ContextEvent, ContextEventResult]
-  before_provider_request: [
-    BeforeProviderRequestEvent,
-    LanguageModelV4CallOptions,
-  ]
+  before_provider_request: [BeforeProviderRequestEvent, ProviderRequestParams]
   after_provider_response: [AfterProviderResponseEvent, void]
   provider_stream_event: [ProviderStreamEvent, void]
   session_start: [SessionStartEvent, void]

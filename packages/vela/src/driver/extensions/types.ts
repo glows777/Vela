@@ -3,7 +3,6 @@ import type { VelaLogger } from '../../shared/logger.ts'
 import type { ToolDefinition } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
 import type { ExtensionEventName, ExtensionEvents } from './events.ts'
-import type { ExtensionUI } from './ui.ts'
 
 export type { CustomMessage } from '../agent/events.ts'
 export type { SendMessageOptions } from '../session/options.ts'
@@ -33,24 +32,22 @@ export type {
   ToolResultEventResult,
   TreePreparation,
 } from './events.ts'
-export type { ExtensionUI, SessionUI } from './ui.ts'
 
 /**
- * An extension: receives the ExtensionAPI and registers tools, commands, channels and event handlers
+ * An extension: receives the ExtensionAPI and registers tools, commands, and event handlers
  * (modeled on pi's `(pi) => {}`).
  * Unlike pi, it runs once per Vela, and what it registers is shared by all concurrent sessions;
  * handlers learn which session fired the event from `ctx.session`.
  * Only register things in the factory; do not start processes, sockets or timers there. Put long-lived
- * resources in `session_start` or a channel's start().
+ * resources in `session_start`.
  */
 export type VelaExtension = (vela: ExtensionAPI) => void | Promise<void>
 
-/** A handler's second argument: the session that fired the event and its UI. */
+/** A handler's second argument: the headless session context that fired the event. */
 export interface ExtensionContext {
   session: VelaSession
-  ui: ExtensionUI
-  /** Whether there is a UI that can actually show confirm / select */
-  hasUI: boolean
+  /** Emit a user-visible notification on the session event stream. */
+  notify(message: string, level?: 'info' | 'warning' | 'error'): void
   cwd: string
   /** Abort signal while the session is running; undefined when idle */
   signal: AbortSignal | undefined

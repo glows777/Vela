@@ -3,7 +3,6 @@ import type { ToolExecutionMode, ToolExposure } from './types.ts'
 const EXPOSURES: readonly ToolExposure[] = [
   'direct',
   'model-only',
-  'codemode',
   'deferred',
   'hidden',
 ]

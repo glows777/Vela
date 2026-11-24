@@ -147,8 +147,8 @@ export function mcp(options: McpOptions = {}): VelaExtension {
       const report = (problems: string[]) => {
         if (problems.length === 0) return
         const message = `[mcp] ${problems.join('\n[mcp] ')}\nRun /mcp for details.`
-        if (ctx.hasUI) ctx.ui.notify(message, 'error')
-        else vela.logger.error(message)
+        ctx.notify(message, 'error')
+        vela.logger.error(message)
       }
       // Report configuration errors now and failed connections once they settle (like pi)
       report(errors)
@@ -205,25 +205,25 @@ export function mcp(options: McpOptions = {}): VelaExtension {
         if (action === 'reconnect') {
           const connection = server ? connections.get(server) : undefined
           if (!connection)
-            return ctx.ui.notify(
+            return ctx.notify(
               `Unknown MCP server "${server ?? ''}". Servers: ${[...connections.keys()].join(', ') || 'none'}`,
               'error',
             )
           try {
             await connection.reconnect()
-            ctx.ui.notify(
+            ctx.notify(
               `MCP server "${connection.name}" connected (${connection.tools.length} tools)`,
             )
           } catch (error) {
-            ctx.ui.notify(
+            ctx.notify(
               error instanceof Error ? error.message : String(error),
               'error',
             )
           }
           return
         }
-        if (action) return ctx.ui.notify('Usage: /mcp [reconnect <server>]')
-        ctx.ui.notify(statusReport(entries, connections, registered, errors))
+        if (action) return ctx.notify('Usage: /mcp [reconnect <server>]')
+        ctx.notify(statusReport(entries, connections, registered, errors))
       },
     })
 

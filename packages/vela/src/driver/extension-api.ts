@@ -2,6 +2,11 @@
 
 export type { VelaLogger } from '../shared/logger.ts'
 export { silentLogger } from '../shared/logger.ts'
+export {
+  createJsonSchema,
+  type ToolInputSchema,
+  type VelaJsonSchema,
+} from '../shared/tool-schema.ts'
 export type { AgentErrorKind, VelaEvent } from './agent/events.ts'
 export { agentErrorHint } from './agent/retry.ts'
 export type {
@@ -15,7 +20,13 @@ export {
   lastCustomMessage,
 } from './extensions/custom-message.ts'
 export type * from './extensions/types.ts'
-export type { ImageContent, ModelMessage, ToolContent } from './messages.ts'
+export type {
+  ImageContent,
+  ModelMessage,
+  ToolContent,
+  VelaMessage,
+  VelaPart,
+} from './messages.ts'
 export { publishChannelEvent } from './session/channel-events.ts'
 export { messageText } from './session/message-queue.ts'
 export type { SessionOptions } from './session/options.ts'

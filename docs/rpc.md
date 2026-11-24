@@ -42,7 +42,7 @@ VELA_MODEL=mock VELA_DIR=$(mktemp -d) vela --mode rpc
 | stdin | Command | Prompt, inspect state, change settings, manage sessions. |
 | stdout | `response` | Whether one command succeeded, with its data. |
 | stdout | Event | What the active session is doing: a `VelaEvent` plus `sessionId`. See [SDK events](sdk.md#events) and [JSON mode](json.md#session-header). |
-| both | `extension_ui_request` / `extension_ui_response` | Extension dialogs and notifications. See [Extension UI](#extension-ui). |
+| stdout | `notify` | Extension notification (`message`, `level`). See [Extension Notifications](#extension-notifications). |
 
 ### Commands and responses
 
@@ -374,41 +374,9 @@ Turns automatic compaction on or off for the active session (like pi; not saved)
 
 Extension commands (`source: "extension"`, with the `extension` that registered them), prompt templates (`source: "prompt"`) and skills (`source: "skill"`, named `skill:<name>`), as in pi. Run any of them with `prompt` and `/name args`. The interactive CLI's built-in commands are not listed.
 
-## Extension UI
+## Extension Notifications
 
-Extensions talk to the user through `ctx.ui` (see [Extensions](extensions.md)). In RPC mode each call becomes an `extension_ui_request` on stdout. In extension handlers `ctx.hasUI` is `true`.
-
-Dialog requests (`confirm`, `select`, `input`) wait for an `extension_ui_response` on stdin with the same `id`. They have no timeout: the extension waits until the client answers, the run is aborted, or stdin closes. Notification requests (`notify`, `setStatus`, `setWidget`) expect no answer; display them or ignore them.
-
-| `method` | Fields | Answer |
-|---|---|---|
-| `confirm` | `title`, `message` | `confirmed: true` / `false`, or `cancelled: true` |
-| `select` | `title`, `options` (string array) | `value` (one of `options`), or `cancelled: true` |
-| `input` | `title`, `placeholder?` | `value`, or `cancelled: true` |
-| `notify` | `message`, `notifyType` (`info`, `warning`, `error`) | none |
-| `setStatus` | `statusKey`, `statusText?` | none; a missing or empty `statusText` clears the entry |
-| `setWidget` | `widgetKey`, `widgetLines?` | none; missing or empty `widgetLines` clears the widget |
-
-Requests:
-
-```json
-{"type":"extension_ui_request","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","method":"confirm","title":"Delete files?","message":"rm build.log"}
-{"type":"extension_ui_request","id":"5b1f...","method":"select","title":"Pick a branch","options":["main","dev"]}
-{"type":"extension_ui_request","id":"9c2e...","method":"input","title":"Commit message","placeholder":"fix: ..."}
-{"type":"extension_ui_request","id":"c848642d-de54-43c8-a759-4418a8ccda61","method":"notify","message":"[memory] 0 memories, 0 with warnings","notifyType":"info"}
-{"type":"extension_ui_request","id":"1e7a...","method":"setStatus","statusKey":"my-ext","statusText":"indexing"}
-{"type":"extension_ui_request","id":"77d0...","method":"setWidget","widgetKey":"my-ext","widgetLines":["3 todos"]}
-```
-
-Responses:
-
-```json
-{"type":"extension_ui_response","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","confirmed":false}
-{"type":"extension_ui_response","id":"5b1f...","value":"main"}
-{"type":"extension_ui_response","id":"9c2e...","cancelled":true}
-```
-
-The extension sees `cancelled` as `false` for `confirm` and `undefined` for `select` and `input`. A `confirm` answer counts as yes only when `confirmed` is exactly `true`. An `extension_ui_response` gets no `response` record back, and one with an unknown `id` is ignored.
+Extensions notify the user through `ctx.notify(message, level?)` (see [Extensions](extensions.md)). In RPC mode each call is emitted on stdout as a normal `notify` session event (`{ "type": "notify", "message": "...", "level": "info" | "warning" | "error" }`).
 
 ## Errors
 
@@ -467,18 +435,16 @@ An extension dialog, captured with the [confirm-dangerous](../examples/extension
 < {"type":"message_end","message":{"role":"user","content":"delete the build log"},"sessionId":"20261008-105126-f165"}
 < {"type":"turn_start","turn":1,"sessionId":"20261008-105126-f165"}
 < {"type":"message_start","message":{"role":"assistant","content":[]},"sessionId":"20261008-105126-f165"}
-< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{}}]},"assistantMessageEvent":{"type":"toolcall_start","contentIndex":0},"sessionId":"20261008-105126-f165"}
-< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}},"sessionId":"20261008-105126-f165"}
-< {"type":"message_end","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"stopReason":"toolUse","sessionId":"20261008-105126-f165"}
+< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{}}]},"assistantMessageEvent":{"type":"toolcall_start","contentIndex":0},"sessionId":"20261008-105126-f165"}
+< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}},"sessionId":"20261008-105126-f165"}
+< {"type":"message_end","message":{"role":"assistant","content":[{"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"stopReason":"toolUse","sessionId":"20261008-105126-f165"}
 < {"type":"tool_execution_start","toolCallId":"call-1","toolName":"bash","args":{"command":"rm build.log"},"sessionId":"20261008-105126-f165"}
-< {"type":"extension_ui_request","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","method":"confirm","title":"Delete files?","message":"rm build.log"}
-> {"type":"extension_ui_response","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","confirmed":false}
-< {"type":"tool_execution_end","toolCallId":"call-1","toolName":"bash","result":"[Blocked by hook] User did not allow the deletion","isError":true,"durationMs":3912,"sessionId":"20261008-105126-f165"}
+< {"type":"tool_execution_end","toolCallId":"call-1","toolName":"bash","result":"[Blocked by hook] Blocked dangerous command: rm build.log","isError":true,"durationMs":12,"sessionId":"20261008-105126-f165"}
 ...
 < {"type":"agent_settled","sessionId":"20261008-105126-f165"}
 ```
 
-The dialog comes from the extension's `tool_call` handler, which runs after `tool_execution_start` and before the tool; `tool_execution_end` follows the answer.
+The block comes from the extension's `tool_call` handler, which runs after `tool_execution_start` and before the tool; `tool_execution_end` follows with `isError: true`.
 
 ## Client example
 

@@ -19,7 +19,7 @@ const hello: VelaExtension = (vela) => {
   vela.registerCommand('hello', {
     description: 'Show a greeting',
     handler: (name, ctx) => {
-      ctx.ui.notify(`Hello, ${name || 'world'}!`)
+      ctx.notify(`Hello, ${name || 'world'}!`)
     },
   })
 }
@@ -150,7 +150,7 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `annotations` | Hints about the tool, same as pi and MCP: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Vela does not enforce these hints; a user extension can inspect them |
 | `maxResultChars` | Results longer than this (default 51,200) are saved to a file and the model gets a preview and the path to read the rest |
 | `hostedOnly` | When `true`, the tool is offered only if the current model declares a same-name hosted equivalent and the tool is allowed. It is never executed locally |
-| `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, `codemode` tools only for other tools, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
+| `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
 | `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's). The deferred tool list shows the namespace once instead of each tool, and `tool_search` returns its `instructions` with the tools it loads |
 | `searchHint` | Short hint shown next to a deferred tool's name |
 | `promptSnippet` | One line for the system prompt's `<tools>` section while the tool is active (pi's `promptSnippet`). A tool without one is not listed there; its definition still reaches the model |
@@ -184,7 +184,7 @@ Example: [todo-command.ts](../examples/extensions/todo-command.ts)
 vela.registerCommand('todo', {
   description: 'Add a todo; with no arguments, list todos',
   handler: (args, ctx) => {
-    ctx.ui.notify(args ? `Added: ${args}` : 'No todos')
+    ctx.notify(args ? `Added: ${args}` : 'No todos')
   },
 })
 ```
@@ -293,7 +293,7 @@ Details:
 - `before_agent_start` messages: like pi, a returned `{ message: { customType, content, display, details? } }` is added as a custom message (see [Messages](#messages)) after the user message and any `nextTurn` messages. Unlike a section it is part of the conversation, so it does not change the cached system prompt.
 - `context` (like pi): `event.messages` is a copy of the messages the request sends, without the system prompt; handlers chain. The history, the session file and later requests are unchanged. Images a handler adds are sent as given, without normalization (like pi). After an overflow compaction the request is built again and handlers run again. A throwing handler is logged and the previous result is used.
 - Provider hooks (like pi's, with one difference): pi's providers are its own, so pi passes the provider's JSON body; Vela uses the AI SDK, which builds the body inside the provider, so `before_provider_request` gets the AI SDK call options (`prompt`, `tools`, `providerOptions`, `headers`, `maxOutputTokens`, ...). Add request headers through `event.params.headers`. `after_provider_response` gets the response headers but no status: the AI SDK reports a failed response as the request's error. Errors in either are logged and the request goes on.
-- `tool_call`: handlers are awaited in registration order before execution, including async checks. Cancelling while a check is pending prevents later tool execution. `vela.on('tool_call', 'tool_search', handler)` limits a handler to one tool name; the two-argument form handles all tools. A matching handler prevents the provider-hosted equivalent because remote execution cannot be intercepted locally. `event` has `toolName`, `toolCallId`, `parentToolCallId` and `input`. `parentToolCallId` is set when another tool issued the call through `ctx.executeTool()` (the call's id is then `<parent id>/<n>`, like pi). A changed input is validated against the tool's schema again; invalid input rejects the call. A handler that throws blocks the call (fail-safe). The first handler that blocks wins and later handlers do not run. The model sees `[Blocked by hook] <reason>`, and `tool_execution_end` reports it with `isError: true`. To ask before a call, check `ctx.hasUI` and use `ctx.ui.confirm` in a handler; return `{ block: true, reason }` when no UI is attached or the user declines. Example: [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
+- `tool_call`: handlers are awaited in registration order before execution, including async checks. Cancelling while a check is pending prevents later tool execution. `vela.on('tool_call', 'tool_search', handler)` limits a handler to one tool name; the two-argument form handles all tools. A matching handler prevents the provider-hosted equivalent because remote execution cannot be intercepted locally. `event` has `toolName`, `toolCallId`, `parentToolCallId` and `input`. `parentToolCallId` is set when another tool issued the call through `ctx.executeTool()` (the call's id is then `<parent id>/<n>`, like pi). A changed input is validated against the tool's schema again; invalid input rejects the call. A handler that throws blocks the call (fail-safe). The first handler that blocks wins and later handlers do not run. The model sees `[Blocked by hook] <reason>`, and `tool_execution_end` reports it with `isError: true`. Return `{ block: true, reason }` to refuse matching calls. Example: [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
 - `tool_result`: handlers are awaited after original-result persistence and truncation, before the next model request. `event` has `toolName`, `toolCallId`, `parentToolCallId`, `input`, `output` (the caption text; a preview for oversized results), and optional `content` (`ToolContent`, ordered text/image blocks). Returning `{ output }` replaces text while retaining images; `{ content }` replaces all blocks and `content: []` removes them. Images are normalized after the entire hook chain. Handlers chain: each sees the previous handler's output. A throwing handler is logged and skipped. Only the model's view changes; the tool history and saved full output keep the original. Example: [redact-secrets.ts](../examples/extensions/redact-secrets.ts).
 - `session_before_tree` / `session_before_fork` (pi's events of the same names): handlers run in order; the first `cancel` wins and stops the rest, other returned fields are merged (later handlers override). `session_tree` handlers are awaited in order. A throwing handler is logged and skipped.
 - `session_start`: errors are logged and the next handler runs.
@@ -344,25 +344,11 @@ Handlers and command handlers receive a context as their second argument:
 | Field | Description |
 |---|---|
 | `ctx.session` | The session that fired the event: `id`, `name`, `model`, `messages`, `getActiveTools()`, `setActiveTools(names)`, `setModel()`, `prompt()`, ... (see [SDK](sdk.md)) |
-| `ctx.ui` | How to talk to the user (below) |
-| `ctx.hasUI` | Whether `confirm`, `select` and `input` can actually ask someone |
+| `ctx.notify(message, level?)` | Emits a `notify` event (`info`, `warning`, or `error`); shown in the TUI chat log, emitted as an event in JSON/RPC mode, and printed to stderr in `-p` mode |
 | `ctx.cwd` | The current session's working directory, for both host and project handlers |
 | `ctx.signal` | Abort signal of the running turn; `undefined` when the session is idle. In a command handler it is the command's own signal |
 
 `ctx.session.setActiveTools(names)` limits the tools of that one session; `undefined` restores all. Unknown names are ignored.
-
-### ctx.ui
-
-| Method | Interactive | RPC | No UI (SDK without `ui`, `-p`, `--mode json`, channel sessions) |
-|---|---|---|---|
-| `notify(message, level?)` | Shown in the chat log | `extension_ui_request` | Emitted as a `notify` event; `-p` prints it to stderr |
-| `confirm(title, message)` | Yes/no dialog | Request, the client answers | Returns `false` |
-| `select(title, options)` | Selection list | Request, the client answers | Returns `undefined` |
-| `input(title, placeholder?)` | Text input | Request, the client answers | Returns `undefined` |
-| `setStatus(key, text?)` | Footer entry; empty text clears it | Sent to the client | Does nothing |
-| `setWidget(key, lines?)` | Lines above the editor; empty clears them | Sent to the client | Does nothing |
-
-`level` is `info` (default), `warning` or `error`. Because `confirm` returns `false` without a UI, a guard written as "block unless confirmed" blocks in print mode and in channel sessions. See [RPC](rpc.md) for the `extension_ui_request` / `extension_ui_response` protocol. SDK users pass a UI with `vela.session(id, { ui })`.
 
 ## Configuration
 

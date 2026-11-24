@@ -134,12 +134,12 @@ export function memory(): VelaExtension {
         'List memories; /memory search <keywords> to search, /memory lint to check',
       handler: (args, ctx) => {
         if (!ctx.session.getActiveTools().includes('memory'))
-          return ctx.ui.notify('Memory is not enabled for this session.')
+          return ctx.notify('Memory is not enabled for this session.')
         const local = forSession(ctx.session.scope)
-        if (args === 'lint') return ctx.ui.notify(lintReport(local))
+        if (args === 'lint') return ctx.notify(lintReport(local))
         if (args.startsWith('search ')) {
           const query = args.slice('search '.length).trim()
-          return ctx.ui.notify(searchReport(local, query))
+          return ctx.notify(searchReport(local, query))
         }
         const entries = local.list()
         const reports = local.lint()
@@ -154,7 +154,7 @@ export function memory(): VelaExtension {
             : '   '
           lines.push(`${flag} [${e.type}] ${e.name} — ${e.description}`)
         }
-        ctx.ui.notify(lines.join('\n'))
+        ctx.notify(lines.join('\n'))
       },
     })
 
@@ -163,17 +163,17 @@ export function memory(): VelaExtension {
         'Consolidate memory against recent conversations in an isolated model call',
       handler: async (_args, ctx) => {
         if (!ctx.session.getActiveTools().includes('memory'))
-          return ctx.ui.notify('Memory is not enabled for this session.')
-        ctx.ui.notify('[dream] Starting memory consolidation...')
+          return ctx.notify('Memory is not enabled for this session.')
+        ctx.notify('[dream] Starting memory consolidation...')
         try {
           const report = await dreamFor(forSession(ctx.session.scope)).run(
             ctx.session,
             ctx.signal,
           )
-          ctx.ui.notify(report)
+          ctx.notify(report)
         } catch (error) {
           if (ctx.signal?.aborted) throw error
-          ctx.ui.notify(
+          ctx.notify(
             `[dream] Failed: ${error instanceof Error ? error.message : String(error)}. Inbox retained.`,
           )
         }

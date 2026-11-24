@@ -1,6 +1,6 @@
-import type { LanguageModel } from 'ai'
 import type { ThinkingLevel } from '../../providers/models/index.ts'
 import type { VelaLimits } from '../../shared/limits.ts'
+import type { ModelInput } from '../../shared/provider-types.ts'
 import {
   readLocalSystemFile,
   type SystemFile,
@@ -25,7 +25,7 @@ export interface SessionResources {
 
 /** Internal effective defaults after user/project/explicit-host precedence has been applied. */
 export interface SessionDefaults {
-  model?: string | LanguageModel
+  model?: ModelInput
   thinkingLevel?: ThinkingLevel
   limits?: Partial<VelaLimits>
   autoCompaction?: boolean

@@ -50,15 +50,15 @@ function renderMessage(message: ModelMessage): string {
     switch (part.type) {
       case 'text':
         return text(part.text)
-      case 'reasoning':
+      case 'thinking':
         return details('Thinking', text(part.text), 'thinking')
-      case 'tool-call':
+      case 'tool_call':
         return details(
           `Tool call: ${part.toolName}`,
           text(json(part.input), 'code'),
           'tool-call',
         )
-      case 'tool-result':
+      case 'tool_result':
         return details(
           `Result: ${part.toolName}`,
           text(toolResultOutputToText(part.output as ToolResultOutput), 'code'),

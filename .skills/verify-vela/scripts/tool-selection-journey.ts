@@ -1,5 +1,5 @@
 // Run through verify-vela exec in its isolated workspace. Only the model is faux;
-// the SDK, example confirmation hook, supplied UI, tool selection and file side effects are real.
+// the SDK, example blocking hook, tool selection and file side effects are real.
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
@@ -13,11 +13,10 @@ import { prepareWorkspace } from './workspace.ts'
 
 prepareWorkspace()
 
-for (const mode of ['headless', 'accept', 'decline'] as const) {
-  const cwd = join(process.cwd(), mode)
+{
+  const cwd = join(process.cwd(), 'blocked-hook')
   mkdirSync(cwd, { recursive: true })
   writeFileSync(join(cwd, 'junk.txt'), 'keep me')
-  const asked: string[] = []
   const model = createFauxModel({
     responses: [
       fauxToolCall('bash', { command: 'rm junk.txt' }),
@@ -31,40 +30,14 @@ for (const mode of ['headless', 'accept', 'decline'] as const) {
     extensions: [confirmDangerous],
   })
   try {
-    const session = vela.session(
-      mode,
-      mode === 'headless'
-        ? {}
-        : {
-            ui: {
-              notify() {},
-              select: async () => undefined,
-              input: async () => undefined,
-              confirm: async (title, text) => {
-                asked.push(`${title}: ${text}`)
-                return mode === 'accept'
-              },
-            },
-          },
-    )
+    const session = vela.session('blocked-hook')
     await session.prompt('Delete junk.txt')
     const output = model.calls[1]!.toolResults[0]!.output
     const exists = existsSync(join(cwd, 'junk.txt'))
-    if (exists !== (mode !== 'accept'))
-      throw new Error(`${mode}: unexpected file side effect`)
-    if (
-      mode === 'headless' &&
-      (!output.includes('no UI for confirmation') || asked.length)
-    )
-      throw new Error('Headless reason missing')
-    if (mode !== 'headless' && asked.join('') !== 'Delete files?: rm junk.txt')
-      throw new Error('Supplied UI not used')
-    if (
-      mode === 'decline' &&
-      !output.includes('User did not allow the deletion')
-    )
-      throw new Error('Decline reason missing')
-    console.log(JSON.stringify({ mode, asked, exists, output }))
+    if (!exists) throw new Error('blocked-hook: unexpected file side effect')
+    if (!output.includes('Deletion blocked by confirm-dangerous extension'))
+      throw new Error(`Blocked reason missing: ${output}`)
+    console.log(JSON.stringify({ mode: 'blocked-hook', exists, output }))
   } finally {
     await vela.dispose()
   }
@@ -92,4 +65,4 @@ for (const tools of [['read_file'], ['-bash']] as string[][]) {
     await vela.dispose()
   }
 }
-console.log('SDK confirmation and tool selection journey passed')
+console.log('SDK hook blocking and tool selection journey passed')

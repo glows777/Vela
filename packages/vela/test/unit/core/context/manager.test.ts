@@ -2,15 +2,19 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ModelMessage, ToolResultPart } from 'ai'
 import { planMicrocompact } from '../../../../src/driver/context/compressor.ts'
 import {
   ContextManager,
   createRequestSnapshot,
 } from '../../../../src/driver/context/manager.ts'
+import type {
+  ModelMessage,
+  ToolResultPart,
+} from '../../../../src/driver/messages.ts'
 import { SessionStore } from '../../../../src/driver/session/index.ts'
 import { getStoredResult } from '../../../../src/driver/session/tool-results.ts'
 import { TokenTracker } from '../../../../src/driver/usage/tracker.ts'
+import { resolveProviderTools } from '../../../../src/providers/index.ts'
 import {
   createFauxModel,
   fauxSummary,
@@ -28,7 +32,7 @@ function history(count: number, size: number): ModelMessage[] {
         role: 'assistant',
         content: [
           {
-            type: 'tool-call',
+            type: 'tool_call',
             toolCallId: `c${i}`,
             toolName: 'read_file',
             input: { path: `f${i}` },
@@ -39,7 +43,7 @@ function history(count: number, size: number): ModelMessage[] {
         role: 'tool',
         content: [
           {
-            type: 'tool-result',
+            type: 'tool_result',
             toolCallId: `c${i}`,
             toolName: 'read_file',
             output: {
@@ -52,6 +56,7 @@ function history(count: number, size: number): ModelMessage[] {
     ]).flat(),
   ]
 }
+const EMPTY_TOOLS = { sdkTools: {}, toolDefinitions: [], hasHostedTools: false }
 const model = createFauxModel()
 
 test('old timestamps do not change history or create files below capacity', async () => {
@@ -65,7 +70,7 @@ test('old timestamps do not change history or create files below capacity', asyn
   })
   const before = JSON.stringify(messages)
   await manager.prepare(
-    await createRequestSnapshot(model, 'stable', {}, messages),
+    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
   )
   expect(JSON.stringify(messages)).toBe(before)
   expect(await Bun.file(store.results.indexPath).exists()).toBe(false)
@@ -107,12 +112,12 @@ test('micro is recorded as context edits once, keeps references across restart a
     summary: 'old summary',
   })
   await manager.prepare(
-    await createRequestSnapshot(model, 'stable', {}, messages),
+    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
   )
   const references = messages
     .filter((m) => m.role === 'tool')
     .flatMap((m) => m.content)
-    .filter((p) => p.type === 'tool-result' && getStoredResult(p.output))
+    .filter((p) => p.type === 'tool_result' && getStoredResult(p.output))
   expect(references).toHaveLength(5)
   const first = references[0] as ToolResultPart
   expect(await Bun.file(getStoredResult(first.output)!.path).text()).toContain(
@@ -120,7 +125,7 @@ test('micro is recorded as context edits once, keeps references across restart a
   )
   const index = await Bun.file(store.results.indexPath).text()
   await manager.prepare(
-    await createRequestSnapshot(model, 'stable', {}, messages),
+    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
   )
   expect(await Bun.file(store.results.indexPath).text()).toBe(index)
   await manager.save()
@@ -143,7 +148,7 @@ test('low net savings does not clear even above the micro trigger', async () => 
   })
   const before = JSON.stringify(messages)
   await manager.prepare(
-    await createRequestSnapshot(model, 'stable', {}, messages),
+    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
   )
   expect(JSON.stringify(messages)).toBe(before)
   expect(await Bun.file(store.results.indexPath).exists()).toBe(false)
@@ -192,7 +197,9 @@ test('summary chosen directly when a profitable micro still leaves >=150k', asyn
     timestamps: new Map(),
     summary: '',
   })
-  await manager.prepare(await createRequestSnapshot(m, 'stable', {}, messages))
+  await manager.prepare(
+    await createRequestSnapshot(m, 'stable', EMPTY_TOOLS, messages),
+  )
   expect(m.calls).toHaveLength(1)
   expect(JSON.stringify(m.calls[0]!.prompt)).not.toContain(
     'tool result preview omitted',
@@ -224,7 +231,7 @@ test('summary cannot execute tools and rejected summary leaves original history'
     },
   })
   const m = createFauxModel({
-    responses: [fauxToolCall('write_file', {}, { id: 'bad' })],
+    responses: [fauxToolCall('write_file', EMPTY_TOOLS, { id: 'bad' })],
   })
   const messages: ModelMessage[] = [
     { role: 'user', content: 'x'.repeat(510000) },
@@ -242,10 +249,10 @@ test('summary cannot execute tools and rejected summary leaves original history'
   const before = JSON.stringify(messages)
   await expect(
     manager.prepare(
-      await createRequestSnapshot(
+      createRequestSnapshot(
         m,
         'stable',
-        registry.toAISDKFormat(),
+        await resolveProviderTools(m, registry.toProviderTools()),
         messages,
       ),
     ),
@@ -266,7 +273,12 @@ test('a request with nothing to summarize is kept under the input cap and stoppe
     new TokenTracker(),
     { messages, timestamps: new Map(), summary: '' },
   )
-  const request = await createRequestSnapshot(m, 'stable', {}, messages)
+  const request = await createRequestSnapshot(
+    m,
+    'stable',
+    EMPTY_TOOLS,
+    messages,
+  )
   const before = JSON.stringify(messages)
   await manager.prepare(request, { allowSummary: false })
   expect(m.calls).toHaveLength(0)
@@ -281,7 +293,9 @@ test('a request with nothing to summarize is kept under the input cap and stoppe
     ),
   )
   await expect(
-    manager.prepare(await createRequestSnapshot(m, 'stable', {}, messages)),
+    manager.prepare(
+      await createRequestSnapshot(m, 'stable', EMPTY_TOOLS, messages),
+    ),
   ).rejects.toThrow('safe input size')
   expect(m.calls).toHaveLength(0)
 })
@@ -302,7 +316,9 @@ test('empty summary is rejected without changing the live summary or messages', 
   )
   const before = JSON.stringify(messages)
   await expect(
-    manager.prepare(await createRequestSnapshot(m, 'stable', {}, messages)),
+    manager.prepare(
+      await createRequestSnapshot(m, 'stable', EMPTY_TOOLS, messages),
+    ),
   ).rejects.toThrow('Summary was not fully generated')
   expect(JSON.stringify(messages)).toBe(before)
   expect(manager.state.summary).toBe('keep this')

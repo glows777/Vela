@@ -17,11 +17,11 @@ import {
 function paired(messages: readonly ModelMessage[]) {
   const calls = messages.flatMap((m) =>
     m.role === 'assistant' && Array.isArray(m.content)
-      ? m.content.filter((p) => p.type === 'tool-call')
+      ? m.content.filter((p) => p.type === 'tool_call')
       : [],
   )
   const results = messages.flatMap((m) =>
-    m.role === 'tool' ? m.content.filter((p) => p.type === 'tool-result') : [],
+    m.role === 'tool' ? m.content.filter((p) => p.type === 'tool_result') : [],
   )
   expect(calls).toHaveLength(2)
   for (const call of calls) {

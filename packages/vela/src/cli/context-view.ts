@@ -180,9 +180,9 @@ function approxMessageTokens(messages: ModelMessage[]): number {
       for (const part of m.content) {
         if (isImageContentPart(part)) chars += IMAGE_CHARS
         else if (part.type === 'text') chars += (part.text || '').length
-        else if (part.type === 'tool-call')
+        else if (part.type === 'tool_call')
           chars += JSON.stringify(part.input || {}).length + 80
-        else if (part.type === 'tool-result') {
+        else if (part.type === 'tool_result') {
           const out = part.output
           if (out.type === 'content')
             chars += out.value.reduce(

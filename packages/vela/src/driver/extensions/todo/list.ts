@@ -13,7 +13,7 @@ export function latestTodoList(
   for (const entry of entries) {
     if (entry.type !== 'message' || entry.message.role !== 'tool') continue
     for (const part of entry.message.content) {
-      if (part.type !== 'tool-result' || part.toolName !== 'todo') continue
+      if (part.type !== 'tool_result' || part.toolName !== 'todo') continue
       const parsed = todoInputSchema.safeParse(entry.details?.[part.toolCallId])
       if (parsed.success) latest = parsed.data
     }

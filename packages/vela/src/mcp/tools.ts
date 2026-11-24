@@ -10,13 +10,13 @@ import type {
   CallToolResult,
   Tool as McpTool,
 } from '@modelcontextprotocol/sdk/types.js'
-import { jsonSchema } from 'ai'
 import type {
   ToolAnnotations,
   ToolDefinition,
   ToolNamespace,
 } from '../extension-api.ts'
 import { ToolExecutionResult } from '../extension-api.ts'
+import { createJsonSchema } from '../shared/tool-schema.ts'
 import type { McpExposure } from './config.ts'
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`. */
@@ -214,7 +214,7 @@ export function createMcpTool(options: {
       tool.description?.trim() ||
       title ||
       `MCP tool ${tool.name} from server ${server}`,
-    inputSchema: jsonSchema(toParameters(tool.inputSchema)),
+    inputSchema: createJsonSchema(toParameters(tool.inputSchema)),
     exposure: options.exposure,
     namespace: options.namespace,
     ...(annotations ? { annotations } : {}),

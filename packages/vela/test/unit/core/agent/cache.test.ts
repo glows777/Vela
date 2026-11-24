@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { jsonSchema, type ModelMessage, streamText, tool } from 'ai'
-import { withPromptCache } from '../../../../src/driver/agent/cache.ts'
+import { withPromptCache } from '../../../../src/providers/cache.ts'
 
 const tools = {
   read_file: tool({ inputSchema: jsonSchema({ type: 'object' }) }),

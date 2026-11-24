@@ -1,7 +1,6 @@
 import type {
   ImageContent,
   QueueMode,
-  SessionUI,
   ThinkingLevel,
   VelaSession,
 } from '../driver/index.ts'
@@ -17,14 +16,6 @@ import { nextModel, scopedModels } from './model-cycle.ts'
  */
 
 type RpcCommand = { id?: string; type: string; [key: string]: unknown }
-
-type UiResponse = {
-  type: 'extension_ui_response'
-  id: string
-  value?: string
-  confirmed?: boolean
-  cancelled?: boolean
-}
 
 export interface RpcModeOptions {
   vela: Vela
@@ -63,43 +54,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     return output
   }
 
-  // Extension UI: requests that need an answer send extension_ui_request and wait for extension_ui_response; the rest are just sent
-  const pending = new Map<string, (response: UiResponse) => void>()
-  const request = (method: string, fields: Record<string, unknown>) =>
-    new Promise<UiResponse>((resolve) => {
-      const id = crypto.randomUUID()
-      pending.set(id, resolve)
-      void send({ type: 'extension_ui_request', id, method, ...fields })
-    })
-  const notifyClient = (method: string, fields: Record<string, unknown>) =>
-    void send({
-      type: 'extension_ui_request',
-      id: crypto.randomUUID(),
-      method,
-      ...fields,
-    })
-  const ui: SessionUI = {
-    notify: (message, level = 'info') =>
-      notifyClient('notify', { message, notifyType: level }),
-    async confirm(title, message) {
-      const response = await request('confirm', { title, message })
-      return !response.cancelled && response.confirmed === true
-    },
-    async select(title, choices) {
-      const response = await request('select', { title, options: choices })
-      return response.cancelled ? undefined : response.value
-    },
-    async input(title, placeholder) {
-      const response = await request('input', { title, placeholder })
-      return response.cancelled ? undefined : response.value
-    },
-    setStatus: (key, text) =>
-      notifyClient('setStatus', { statusKey: key, statusText: text }),
-    setWidget: (key, lines) =>
-      notifyClient('setWidget', { widgetKey: key, widgetLines: lines }),
-  }
-
-  let session = vela.session(options.sessionId, { ui })
+  let session = vela.session(options.sessionId)
   if (options.resume) await session.resume()
   const initial = await session.resources()
   options.configure?.(session, {
@@ -215,7 +170,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     },
     async new_session() {
       idle()
-      const next = vela.session(options.newSessionId(), { ui })
+      const next = vela.session(options.newSessionId())
       await switchTo(next)
       return { sessionId: next.id }
     },
@@ -227,7 +182,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       const alreadyOpen = vela
         .sessions()
         .some((candidate) => candidate.id === id)
-      const next = vela.session(id, { ui })
+      const next = vela.session(id)
       try {
         if (next !== session) await next.resume()
         await switchTo(next)
@@ -438,12 +393,6 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       })
       return
     }
-    if (command.type === 'extension_ui_response') {
-      const resolve = pending.get(String(command.id))
-      pending.delete(String(command.id))
-      resolve?.(command as unknown as UiResponse)
-      return
-    }
     const id = command.id === undefined ? {} : { id: command.id }
     const handler = handlers[command.type]
     try {
@@ -490,10 +439,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   buffer += decoder.decode()
   if (buffer) dispatch(buffer)
 
-  // stdin closed: treat unanswered UI requests as cancelled, abort the running task, dispose and exit (like pi)
-  for (const [id, resolve] of pending)
-    resolve({ type: 'extension_ui_response', id, cancelled: true })
-  pending.clear()
+  // stdin closed: abort the running task, dispose and exit (like pi)
   session.abortBash()
   await session.abort()
   await Promise.allSettled(inFlight)

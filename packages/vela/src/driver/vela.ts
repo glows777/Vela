@@ -1,7 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import type { LanguageModel } from 'ai'
 import type {
   AuthInteraction,
   CredentialStore,
@@ -19,6 +18,7 @@ import {
 } from '../providers/models/index.ts'
 import { resolveLimits, type VelaLimits } from '../shared/limits.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
+import type { ModelInput } from '../shared/provider-types.ts'
 import type { VelaSessionEventListener } from './agent/events.ts'
 import type { ConfigResourceSplit } from './config/runtime-resources.ts'
 import {
@@ -80,7 +80,7 @@ export interface VelaOptions {
    * providers from loadConfig(). Without it, a session must call setModel() (or resume a session with a
    * saved model) before it can prompt.
    */
-  model?: LanguageModel | string
+  model?: ModelInput
   /** Model providers (built-in anthropic / openai / openrouter / deepseek + models.json from loadConfig(), or your own) */
   providers?: Record<string, ProviderDefinition>
   /**
@@ -165,7 +165,7 @@ export interface Vela {
   readonly cwd: string
   readonly dataDir: string
   /** Default model (a name is resolved on first access; throws if none is given or it cannot be resolved) */
-  readonly model: LanguageModel
+  readonly model: ModelInput
   readonly limits: VelaLimits
   /**
    * Models of the providers that have a credential (`provider/id`, context window, price, ...), used by `/model`
@@ -175,7 +175,7 @@ export interface Vela {
   /** Update a configured provider for subsequent model selections. */
   configureProvider(name: string, provider: ProviderDefinition): void
   /** Set defaults for subsequently created sessions, without changing open sessions. */
-  setDefaults(model: string | LanguageModel, thinkingLevel: ThinkingLevel): void
+  setDefaults(model: ModelInput, thinkingLevel: ThinkingLevel): void
   /** Providers `/login` can sign in to, with their current credential source */
   loginProviders(): LoginProvider[]
   /**
@@ -272,7 +272,7 @@ export function createVela(options: VelaOptions = {}): Vela {
   let defaultThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL
   const models = new ModelRegistry(options.providers, options.credentials)
   const resolveModel = (
-    requested: string | LanguageModel | undefined,
+    requested: ModelInput | undefined,
     from?: VelaSession,
   ): ResolvedModel => {
     // Like pi: without a chosen model, the first provider with a credential supplies its default model
@@ -335,7 +335,7 @@ export function createVela(options: VelaOptions = {}): Vela {
   const sessions = new Map<string, VelaSession>()
   const hostDefaults = new Map<
     string,
-    { model?: string | LanguageModel; thinkingLevel?: ThinkingLevel }
+    { model?: ModelInput; thinkingLevel?: ThinkingLevel }
   >()
   const hostResources = {
     systemPrompt: options.systemPrompt,
@@ -667,7 +667,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         : output
     },
   })
-  let defaultModel: LanguageModel | undefined
+  let defaultModel: ModelInput | undefined
   const vela: Vela = {
     cwd,
     dataDir,

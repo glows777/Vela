@@ -2,12 +2,12 @@ import { afterEach, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import type {
   LanguageModelV4FilePart,
-  LanguageModelV4Prompt,
   SharedV4FileData,
 } from '@ai-sdk/provider'
 import { PhotonImage } from '@silvia-odwyer/photon-node'
 import {
   createFauxModel,
+  type FauxPromptMessage,
   fauxSummary,
   fauxText,
 } from '../../packages/vela/src/testing/core/index.ts'
@@ -28,12 +28,14 @@ const encoded = (data: SharedV4FileData) => {
     ? data.data
     : Buffer.from(data.data).toString('base64')
 }
-const imagesIn = (prompt: LanguageModelV4Prompt) =>
+const imagesIn = (prompt: FauxPromptMessage[]) =>
   prompt.flatMap((message) =>
     message.role === 'user'
       ? message.content.filter(
           (part): part is LanguageModelV4FilePart =>
-            part.type === 'file' && part.mediaType.startsWith('image/'),
+            part.type === 'file' &&
+            typeof part.mediaType === 'string' &&
+            part.mediaType.startsWith('image/'),
         )
       : [],
   )
@@ -198,7 +200,7 @@ test('saved and appended images are sent as stored, without decoding them again 
     content: [{ type: 'text', text: 'appended by an extension' }, headerOnly],
   })
   await t.session.prompt('Remember this picture', { images: [image] })
-  const sent = (prompt: LanguageModelV4Prompt) =>
+  const sent = (prompt: FauxPromptMessage[]) =>
     imagesIn(prompt).map((part) => encoded(part.data))
   expect(sent(t.model.calls[0]!.prompt)).toEqual([headerOnly.data, image.data])
   const resumed = createTestVela({
@@ -356,7 +358,7 @@ test('text-only requests omit compatible AI SDK image file parts from user and t
     role: 'assistant',
     content: [
       {
-        type: 'tool-call',
+        type: 'tool_call',
         toolName: 'picture',
         toolCallId: 'picture-1',
         input: {},
@@ -367,7 +369,7 @@ test('text-only requests omit compatible AI SDK image file parts from user and t
     role: 'tool',
     content: [
       {
-        type: 'tool-result',
+        type: 'tool_result',
         toolName: 'picture',
         toolCallId: 'picture-1',
         output: {

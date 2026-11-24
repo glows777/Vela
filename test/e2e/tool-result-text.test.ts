@@ -218,7 +218,7 @@ test('a pre-change StoredToolResult session resumes with its original result tex
   expect(second.lastAssistantText()).toBe('remembered')
   const savedResult = second.messages
     .flatMap((m) => (m.role === 'tool' ? m.content : []))
-    .find((p) => p.type === 'tool-result')!.output
+    .find((p) => p.type === 'tool_result')!.output
   expect(savedResult).toEqual({ type: 'json', value: legacy })
   expect(readFileSync(saved, 'utf8')).toContain(JSON.stringify(legacy))
 })

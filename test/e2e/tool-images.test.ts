@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { LanguageModelV4Prompt } from '@ai-sdk/provider'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { PhotonImage } from '@silvia-odwyer/photon-node'
@@ -11,6 +10,7 @@ import { ToolExecutionResult } from '../../packages/vela/src/driver/index.ts'
 import { mcp } from '../../packages/vela/src/mcp/index.ts'
 import {
   createFauxModel,
+  type FauxPromptMessage,
   fauxText,
   fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
@@ -24,14 +24,14 @@ const image = (name = 'blue.png'): ImageContent => ({
   data: bytes(name).toString('base64'),
   mimeType: 'image/png',
 })
-const toolImages = (prompt: LanguageModelV4Prompt) =>
+const toolImages = (prompt: FauxPromptMessage[]) =>
   prompt.flatMap((message) =>
     message.role === 'tool'
       ? message.content.flatMap((part) =>
-          part.type === 'tool-result' && part.output.type === 'content'
+          part.type === 'tool-result' && part.output?.type === 'content'
             ? part.output.value.filter(
-                (item) =>
-                  item.type === 'file' && item.mediaType.startsWith('image/'),
+                (item: { type: string; mediaType?: string }) =>
+                  item.type === 'file' && item.mediaType?.startsWith('image/'),
               )
             : [],
         )
@@ -61,7 +61,7 @@ test('a tool returns text and a canonical image, saved inline and restored on re
   expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(1)
   const result = t.messages
     .flatMap((message) => (message.role === 'tool' ? message.content : []))
-    .find((part) => part.type === 'tool-result')!
+    .find((part) => part.type === 'tool_result')!
   expect(result.output).toEqual({
     type: 'content',
     value: [{ type: 'text', text: 'A blue picture' }, image()],
@@ -449,7 +449,11 @@ test('Chat redaction after an image tool does not promise a second attachment', 
     (message) => message.role === 'user',
   )
   expect(
-    users.at(-1)?.content.filter((part) => part.type === 'file'),
+    Array.isArray(users.at(-1)?.content)
+      ? (users.at(-1)!.content as { type: string }[]).filter(
+          (part) => part.type === 'file',
+        )
+      : [],
   ).toHaveLength(1)
 })
 
@@ -466,7 +470,7 @@ test('resized read_file transparency survives the tool request and saved image',
   expect(part).toMatchObject({ type: 'file', mediaType: 'image/png' })
   const result = t.messages
     .flatMap((message) => (message.role === 'tool' ? message.content : []))
-    .find((part) => part.type === 'tool-result')!.output
+    .find((part) => part.type === 'tool_result')!.output
   if (result.type !== 'content') throw new Error('Missing tool image content')
   const saved = result.value.find((part) => part.type === 'image')
   if (!saved) throw new Error('Missing saved image')

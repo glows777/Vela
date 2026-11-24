@@ -1,4 +1,5 @@
 import { setDefaultToolModifiers } from '../driver/index.ts'
+import type { InternalSessionOptions } from '../driver/session/options.ts'
 import type { SessionOptions, VelaSession } from '../extension-api.ts'
 import { LarkDeliveryRefusedError } from './delivery.ts'
 import {
@@ -158,7 +159,10 @@ export class ChannelSessions {
   constructor(
     private directory: ChannelDirectory,
     private channel: (name: string) => ChannelDefinition | undefined,
-    private session: (id: string, options?: SessionOptions) => VelaSession,
+    private session: (
+      id: string,
+      options?: InternalSessionOptions,
+    ) => VelaSession,
     /** The open session with this id, without opening one: did something else create it first? */
     private find: (id: string) => VelaSession | undefined,
     private dataDir: string,

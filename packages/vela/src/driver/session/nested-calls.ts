@@ -115,7 +115,7 @@ export function takeToolDetails(
   const details: Record<string, unknown> = {}
   if (message.role === 'tool')
     for (const part of message.content) {
-      if (part.type !== 'tool-result') continue
+      if (part.type !== 'tool_result') continue
       const calls = log.take(part.toolCallId)
       if (calls) nestedCalls[part.toolCallId] = calls
       if (pending.has(part.toolCallId)) {

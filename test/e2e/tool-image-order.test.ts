@@ -69,9 +69,9 @@ test.each(['before', 'after'] as const)(
     ).find((part) => part.type === 'tool-result')!.output
     expect(requested.type).toBe('content')
     if (requested.type !== 'content') throw new Error('Missing image content')
-    expect(requested.value.slice(0, 4).map((part) => part.type)).toEqual(
-      content.map((part) => (part.type === 'image' ? 'file' : 'text')),
-    )
+    expect(
+      requested.value.slice(0, 4).map((part: { type: string }) => part.type),
+    ).toEqual(content.map((part) => (part.type === 'image' ? 'file' : 'text')))
     for (const index of [0, 1]) {
       const imageIndex = index * 2 + (position === 'before' ? 1 : 0)
       const captionIndex = index * 2 + (position === 'before' ? 0 : 1)
@@ -94,7 +94,7 @@ test.each(['before', 'after'] as const)(
     }
     const saved = t.messages
       .flatMap((message) => (message.role === 'tool' ? message.content : []))
-      .find((part) => part.type === 'tool-result')!.output
+      .find((part) => part.type === 'tool_result')!.output
     expect(saved.type).toBe('content')
     if (saved.type !== 'content') throw new Error('Missing saved image content')
     expect(saved.value.slice(0, 4).map((part) => part.type)).toEqual(
@@ -150,10 +150,13 @@ test('many ordered captions share a bounded preview and one recovery notice', as
   expect(output.type).toBe('content')
   if (output.type !== 'content') throw new Error('Missing image content')
   expect(
-    output.value.slice(0, content.length).map((part) => part.type),
+    output.value
+      .slice(0, content.length)
+      .map((part: { type: string }) => part.type),
   ).toEqual(content.map((part) => (part.type === 'image' ? 'file' : 'text')))
-  const texts = output.value.flatMap((part) =>
-    part.type === 'text' ? [part.text] : [],
+  const texts: string[] = output.value.flatMap(
+    (part: { type: string; text?: string }) =>
+      part.type === 'text' ? [part.text ?? ''] : [],
   )
   const notices = texts.filter((text) => text.includes('Full output:'))
   expect(notices).toHaveLength(1)

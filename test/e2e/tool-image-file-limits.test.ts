@@ -74,14 +74,15 @@ test('read_file explains that image reads ignore text pagination parameters', as
   })
   let description = ''
   const t = createTestVela({
-    model: {
-      ...faux,
+    model: Object.assign({}, faux, {
       async doStream(options: Parameters<typeof faux.doStream>[0]) {
-        const tool = options.tools?.find((tool) => tool.name === 'read_file')
+        const tool = options.tools?.find(
+          (tool: { name?: string }) => tool.name === 'read_file',
+        )
         if (tool?.type === 'function') description = tool.description ?? ''
         return faux.doStream(options)
       },
-    },
+    }),
   })
   writeFileSync(join(t.cwd, 'picture.txt'), image)
   await t.run('Read picture.txt')

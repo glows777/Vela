@@ -1,6 +1,6 @@
 /**
- * registerCommand + ctx.ui.notify: `/todo buy milk` adds a todo, `/todo` lists them.
- * With no UI, notify becomes a `notify` event.
+ * registerCommand + ctx.notify: `/todo buy milk` adds a todo, `/todo` lists them.
+ * Notifications are emitted as `notify` events on the session event stream.
  */
 import type { VelaExtension } from '@glows777/vela'
 
@@ -15,9 +15,9 @@ const todo: VelaExtension = (vela) => {
       todos.set(ctx.session.id, list)
       if (args) {
         list.push(args)
-        ctx.ui.notify(`Added: ${args}`)
+        ctx.notify(`Added: ${args}`)
       } else {
-        ctx.ui.notify(list.length ? list.join('\n') : 'No todos')
+        ctx.notify(list.length ? list.join('\n') : 'No todos')
       }
     },
   })

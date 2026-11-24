@@ -22,7 +22,7 @@ test('an interrupted message is kept as plain text and whole tool calls, without
   expect(step.snapshot({ complete: false }).content).toEqual([
     { type: 'text', text: 'Let me check' },
     {
-      type: 'tool-call',
+      type: 'tool_call',
       toolCallId: 'c1',
       toolName: 'read_file',
       input: { path: 'a' },

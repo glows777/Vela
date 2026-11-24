@@ -1,21 +1,21 @@
+import { parsePartialJson } from '../../providers/index.ts'
+import type { FinishReason } from '../../shared/provider-types.ts'
 import {
-  type AssistantContent,
   type AssistantModelMessage,
-  type FinishReason,
-  type ProviderMetadata,
-  parsePartialJson,
+  isToolContent,
+  type ModelMessage,
+  type ProviderOptions,
+  type TextPart,
+  type ThinkingPart,
   type ToolCallPart,
-} from 'ai'
-import type { ToolModelMessage, ToolResultPart } from '../messages.ts'
-import { isToolContent, type ModelMessage } from '../messages.ts'
+  type ToolModelMessage,
+  type ToolResultPart,
+} from '../messages.ts'
 import { ToolResultError } from '../tools/types.ts'
 import type { AssistantMessageEvent, StopReason, VelaEvent } from './events.ts'
 
 /** The assistant parts Vela streams */
-type ContentPart = Extract<
-  Exclude<AssistantContent, string>[number],
-  { type: 'text' | 'reasoning' | 'tool-call' }
->
+type ContentPart = TextPart | ThinkingPart | ToolCallPart
 
 /** Result text for tool calls that did not finish because the run was aborted (pi's wording). */
 export const ABORTED_RESULT = 'Operation aborted'
@@ -75,7 +75,7 @@ export class StepMessage {
           : // An interrupted message keeps its text and whole tool calls; half-written reasoning (its signature is
             // incomplete) and tool calls are dropped, like pi drops the whole message
             part.type === 'text' ||
-            (part.type === 'tool-call' && finished.has(part.toolCallId)),
+            (part.type === 'tool_call' && finished.has(part.toolCallId)),
       )
       .filter((part) => part.type !== 'text' || part.text !== '')
       .map((part) => {
@@ -116,7 +116,7 @@ export class StepMessage {
   private open(
     id: string,
     part: ContentPart,
-    providerMetadata: ProviderMetadata | undefined,
+    providerMetadata: ProviderOptions | undefined,
   ): number {
     const index = this.content.length
     this.content.push(
@@ -126,13 +126,13 @@ export class StepMessage {
     return index
   }
 
-  private merge(index: number, providerMetadata: ProviderMetadata | undefined) {
+  private merge(index: number, providerMetadata: ProviderOptions | undefined) {
     const part = this.content[index]
     if (!part || !providerMetadata) return
     part.providerOptions = { ...part.providerOptions, ...providerMetadata }
   }
 
-  textStart(id: string, providerMetadata?: ProviderMetadata): void {
+  textStart(id: string, providerMetadata?: ProviderOptions): void {
     const contentIndex = this.open(
       id,
       { type: 'text', text: '' },
@@ -144,7 +144,7 @@ export class StepMessage {
   textDelta(
     id: string,
     delta: string,
-    providerMetadata?: ProviderMetadata,
+    providerMetadata?: ProviderOptions,
   ): void {
     if (!this.byStreamId.has(id)) this.textStart(id)
     const contentIndex = this.byStreamId.get(id) as number
@@ -154,7 +154,7 @@ export class StepMessage {
     this.update({ type: 'text_delta', contentIndex, delta })
   }
 
-  textEnd(id: string, providerMetadata?: ProviderMetadata): void {
+  textEnd(id: string, providerMetadata?: ProviderOptions): void {
     const contentIndex = this.byStreamId.get(id)
     if (contentIndex === undefined) return
     this.merge(contentIndex, providerMetadata)
@@ -162,10 +162,10 @@ export class StepMessage {
     this.update({ type: 'text_end', contentIndex, content: part.text })
   }
 
-  thinkingStart(id: string, providerMetadata?: ProviderMetadata): void {
+  thinkingStart(id: string, providerMetadata?: ProviderOptions): void {
     const contentIndex = this.open(
       id,
-      { type: 'reasoning', text: '' },
+      { type: 'thinking', text: '' },
       providerMetadata,
     )
     this.update({ type: 'thinking_start', contentIndex })
@@ -174,7 +174,7 @@ export class StepMessage {
   thinkingDelta(
     id: string,
     delta: string,
-    providerMetadata?: ProviderMetadata,
+    providerMetadata?: ProviderOptions,
   ): void {
     if (!this.byStreamId.has(id)) this.thinkingStart(id)
     const contentIndex = this.byStreamId.get(id) as number
@@ -184,7 +184,7 @@ export class StepMessage {
     this.update({ type: 'thinking_delta', contentIndex, delta })
   }
 
-  thinkingEnd(id: string, providerMetadata?: ProviderMetadata): void {
+  thinkingEnd(id: string, providerMetadata?: ProviderOptions): void {
     const contentIndex = this.byStreamId.get(id)
     if (contentIndex === undefined) return
     this.merge(contentIndex, providerMetadata)
@@ -195,11 +195,11 @@ export class StepMessage {
   toolCallStart(
     id: string,
     toolName: string,
-    providerMetadata?: ProviderMetadata,
+    providerMetadata?: ProviderOptions,
     providerExecuted = false,
   ): void {
     const call: ToolCallPart = {
-      type: 'tool-call',
+      type: 'tool_call',
       toolCallId: id,
       toolName,
       input: {},
@@ -227,7 +227,7 @@ export class StepMessage {
     toolName: string
     input: unknown
     providerExecuted?: boolean
-    providerMetadata?: ProviderMetadata
+    providerMetadata?: ProviderOptions
   }): void {
     if (!this.byStreamId.has(call.toolCallId))
       this.toolCallStart(
@@ -345,7 +345,7 @@ export class StepMessage {
     const known = this.toolCalls.find((c) => c.toolCallId === call.toolCallId)
     if (!alreadyStarted)
       this.executionStart(
-        known ?? { type: 'tool-call', input: call.input, ...call },
+        known ?? { type: 'tool_call', input: call.input, ...call },
       )
     const startedAt = this.executionStarted.get(call.toolCallId)
     const isError = 'error' in outcome
@@ -364,7 +364,7 @@ export class StepMessage {
         : { durationMs: Math.round(performance.now() - startedAt) }),
     })
     this.results.set(call.toolCallId, {
-      type: 'tool-result',
+      type: 'tool_result',
       toolCallId: call.toolCallId,
       toolName: call.toolName,
       output: isError
@@ -401,12 +401,16 @@ export class StepMessage {
 
 /** Tool results in tool messages and provider-executed assistant content (for turn_end). */
 export function toolResultsOf(messages: ModelMessage[]): ToolResultPart[] {
-  return messages.flatMap((message) =>
-    (message.role === 'tool' || message.role === 'assistant') &&
-    typeof message.content !== 'string'
-      ? message.content.filter(
-          (part): part is ToolResultPart => part.type === 'tool-result',
-        )
-      : [],
-  )
+  const results: ToolResultPart[] = []
+  for (const message of messages) {
+    if (
+      (message.role === 'tool' || message.role === 'assistant') &&
+      typeof message.content !== 'string'
+    ) {
+      for (const part of message.content) {
+        if (part.type === 'tool_result') results.push(part)
+      }
+    }
+  }
+  return results
 }

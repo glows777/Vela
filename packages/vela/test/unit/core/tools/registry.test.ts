@@ -8,6 +8,8 @@ import type { ToolDefinition } from '../../../../src/driver/tools/registry.ts'
 import { ToolRegistry } from '../../../../src/driver/tools/registry.ts'
 import { registerToolSearchTool } from '../../../../src/driver/tools/tool-search.ts'
 
+const sdkTools = (r: ToolRegistry) =>
+  Object.fromEntries(r.toProviderTools().map((t) => [t.name, t]))
 const root = mkdtempSync(join(tmpdir(), 'vela-registry-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 function makeRegistry() {
@@ -97,7 +99,6 @@ test('exposure decides what the model sees, what tool_search finds and what exec
   for (const exposure of [
     'direct',
     'model-only',
-    'codemode',
     'deferred',
     'hidden',
   ] as const)
@@ -105,12 +106,12 @@ test('exposure decides what the model sees, what tool_search finds and what exec
   const active = () => registry.getActiveTools().map((t) => t.name)
   expect(active()).toEqual(['direct', 'model-only'])
   expect(
-    ['direct', 'model-only', 'codemode', 'deferred', 'hidden'].filter((n) =>
+    ['direct', 'model-only', 'deferred', 'hidden'].filter((n) =>
       registry.isCallable(n),
     ),
-  ).toEqual(['direct', 'codemode', 'deferred'])
+  ).toEqual(['direct', 'deferred'])
   expect(
-    (await registry.searchTools('codemode,hidden,deferred')).map((t) => t.name),
+    (await registry.searchTools('hidden,deferred')).map((t) => t.name),
   ).toEqual(['deferred'])
   expect(active()).toEqual(['direct', 'model-only', 'deferred'])
   registry.setDefaultToolModifiers(['-direct'])
@@ -228,7 +229,7 @@ test('toAISDKFormat includes only available tools', () => {
   const registry = makeRegistry()
   registry.register(tool('active-a'))
   registry.register(tool('lazy-b', { exposure: 'deferred' }))
-  expect(Object.keys(registry.toAISDKFormat())).toEqual(['active-a'])
+  expect(Object.keys(sdkTools(registry))).toEqual(['active-a'])
 })
 
 /** Waits until cond() holds; timing-free under a loaded test runner */
@@ -255,7 +256,7 @@ test('sequential tools run one at a time within a session', async () => {
       },
     }),
   )
-  const wrapped = registry.toAISDKFormat()
+  const wrapped = sdkTools(registry)
   const body = wrapped.exclusive
   if (!body) throw new Error('exclusive tool expected in tool set')
 
@@ -319,7 +320,7 @@ test('parallel tools run together; a sequential call waits for earlier calls and
   const par = blockingTool('par', order)
   const seq = blockingTool('seq', order, { executionMode: 'sequential' })
   registry.register(par.definition, seq.definition)
-  const tools = registry.toAISDKFormat()
+  const tools = sdkTools(registry)
   const run = (name: 'par' | 'seq', id: string) =>
     tools[name]!.execute!({ id }, callOptions(id))
 
@@ -360,11 +361,8 @@ test('a sequential call in one session does not hold back another session', asyn
   const one = base.fork(new ToolResultStore(join(root, 'one')))
   const two = base.fork(new ToolResultStore(join(root, 'two')))
 
-  const first = one.toAISDKFormat().seq!.execute!({ id: 'a' }, callOptions('a'))
-  const second = two.toAISDKFormat().seq!.execute!(
-    { id: 'b' },
-    callOptions('b'),
-  )
+  const first = sdkTools(one).seq!.execute!({ id: 'a' }, callOptions('a'))
+  const second = sdkTools(two).seq!.execute!({ id: 'b' }, callOptions('b'))
   await waitFor(() => order.length === 2)
   expect([...order].sort()).toEqual(['a-start', 'b-start'])
 
@@ -392,9 +390,9 @@ test("tool_search is model-only and lists the loaded tools with each namespace's
   )
   expect(registry.get('tool_search')?.exposure).toBe('model-only')
   const run = (query: string) =>
-    registry.toAISDKFormat().tool_search!.execute!(
+    sdkTools(registry).tool_search!.execute!(
       { query },
-      { toolCallId: 'search', messages: [], context: {} },
+      { toolCallId: 'search' },
     )
   expect(await run('mcp__docs__read, mcp__docs__search')).toBe(
     [

@@ -4,9 +4,11 @@ import {
   estimateRequestTokens,
 } from '../../../../src/driver/context/request.ts'
 import type { ModelMessage } from '../../../../src/driver/index.ts'
-import { toModelMessages } from '../../../../src/driver/messages.ts'
 import { estimateMessageTokens } from '../../../../src/driver/usage/tracker.ts'
+import { toAiModelMessages } from '../../../../src/providers/index.ts'
 import { createFauxModel } from '../../../../src/testing/core/faux.ts'
+
+const EMPTY_TOOLS = { sdkTools: {}, toolDefinitions: [], hasHostedTools: false }
 
 test('each image counts as 4800 characters, independent of base64 length', async () => {
   const messages = (data: string): ModelMessage[] => [
@@ -16,7 +18,12 @@ test('each image counts as 4800 characters, independent of base64 length', async
   const large = messages('A'.repeat(2_000_000))
   expect(estimateMessageTokens(small)).toBe(1440)
   expect(estimateMessageTokens(large)).toBe(1440)
-  const request = await createRequestSnapshot(createFauxModel(), '', {}, small)
+  const request = createRequestSnapshot(
+    createFauxModel(),
+    '',
+    EMPTY_TOOLS,
+    small,
+  )
   expect(estimateRequestTokens(request, small)).toBe(
     estimateRequestTokens(request, large),
   )
@@ -33,14 +40,14 @@ test('request-only non-vision fallback covers user and tool images without chang
     {
       role: 'assistant',
       content: [
-        { type: 'tool-call', toolName: 'picture', toolCallId: '1', input: {} },
+        { type: 'tool_call', toolName: 'picture', toolCallId: '1', input: {} },
       ],
     },
     {
       role: 'tool',
       content: [
         {
-          type: 'tool-result',
+          type: 'tool_result',
           toolName: 'picture',
           toolCallId: '1',
           output: {
@@ -54,7 +61,7 @@ test('request-only non-vision fallback covers user and tool images without chang
     },
   ]
   const before = JSON.stringify(messages)
-  const wire = toModelMessages(messages, false)
+  const wire = toAiModelMessages(messages, false)
   expect(JSON.stringify(wire)).toContain(
     '(image omitted: model does not support images)',
   )

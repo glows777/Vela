@@ -1,9 +1,9 @@
-import type { LanguageModel, ToolSet } from 'ai'
 import {
   applyLimits,
   DEFAULT_LIMITS,
   type VelaLimits,
 } from '../../shared/limits.ts'
+import type { ModelHandle, ModelInput } from '../../shared/provider-types.ts'
 import { resolveCredential } from '../auth/resolve.ts'
 import { memoryCredentialStore } from '../auth/store.ts'
 import type {
@@ -61,12 +61,14 @@ export interface ProviderContext {
 }
 
 /** Optional provider-hosted equivalents for Vela tools, resolved for each request. */
-export type HostedToolModel = Exclude<LanguageModel, string> & {
-  hostedTools?: (options?: { reasoning?: string }) => Promise<ToolSet>
+export type HostedToolModel = ModelHandle & {
+  hostedTools?: (options?: {
+    reasoning?: string
+  }) => Promise<Record<string, unknown>>
 }
 
 /**
- * A model provider: lists known models and creates AI SDK LanguageModels by id. Unlisted ids work too, with
+ * A model provider: lists known models and creates model handles by id. Unlisted ids work too, with
  * metadata from the built-in catalog when it knows the id.
  */
 export interface ProviderDefinition {
@@ -83,7 +85,7 @@ export interface ProviderDefinition {
    * Without this function a provider counts as always configured.
    */
   authSource?(credential: Credential | undefined): string | undefined
-  createModel(id: string, ctx: ProviderContext): LanguageModel | HostedToolModel
+  createModel(id: string, ctx: ProviderContext): ModelInput | HostedToolModel
 }
 
 /** A provider `/login` can sign in to. */
@@ -101,7 +103,7 @@ export interface LoginProvider {
 const DEFAULT_PROVIDER_ORDER = ['anthropic', 'openai', 'openrouter', 'deepseek']
 
 export interface ResolvedModel {
-  model: LanguageModel
+  model: ModelInput
   info: ModelInfo
 }
 
@@ -265,9 +267,23 @@ export class ModelRegistry {
   }
 }
 
-/** Metadata for a LanguageModel passed in directly (e.g. the test faux); no ref. */
-export function describeModel(model: LanguageModel): ModelInfo {
+/** Validate that a `ModelHandle` passed to the SDK is a runnable model instance. */
+function assertRunnableModelHandle(model: ModelHandle): void {
+  if (
+    !model ||
+    typeof model !== 'object' ||
+    typeof (model as { doStream?: unknown }).doStream !== 'function'
+  ) {
+    throw new Error(
+      'Invalid ModelHandle: pass a "provider/model" string, a handle returned by resolveModel()/loadModels(), or createFauxModel()',
+    )
+  }
+}
+
+/** Metadata for a model passed in directly (e.g. the test faux); no ref. */
+export function describeModel(model: ModelInput): ModelInfo {
   if (typeof model === 'string') return { provider: '', id: model, ref: model }
+  assertRunnableModelHandle(model)
   // AI SDK providers name themselves `anthropic.messages`, `openai.responses`, …: look the id up in the catalog
   const { api: _, ...known } = catalogLookup(
     model.provider.split('.')[0] as string,
@@ -341,17 +357,19 @@ export function limitsForModel(
 
 /** @experimental Resolve a model for recording without assembling sessions, tools or resources. */
 export function resolveModel(
-  ref: string | LanguageModel | undefined,
+  ref: ModelInput | undefined,
   options: {
     providers?: Record<string, ProviderDefinition>
     credentials?: CredentialStore
   } = {},
-): LanguageModel {
+): ModelInput {
   const registry = new ModelRegistry(options.providers, options.credentials)
   const choice = ref ?? registry.defaultRef()
   if (choice === undefined)
     throw new Error(
       'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock.',
     )
-  return typeof choice === 'string' ? registry.resolve(choice).model : choice
+  if (typeof choice === 'string') return registry.resolve(choice).model
+  assertRunnableModelHandle(choice)
+  return choice
 }

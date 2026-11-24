@@ -465,7 +465,7 @@ function storedToolPath(messages: ModelMessage[]): string {
   for (const message of messages) {
     if (message.role !== 'tool') continue
     for (const part of message.content) {
-      if (part.type !== 'tool-result') continue
+      if (part.type !== 'tool_result') continue
       if (part.output.type === 'text') {
         const path = part.output.value.match(/Full output: (.+)\]/)?.[1]
         if (path) return path
@@ -479,7 +479,7 @@ function latestToolText(messages: ModelMessage[]): string {
   for (const message of messages.toReversed()) {
     if (message.role !== 'tool') continue
     for (const part of message.content) {
-      if (part.type !== 'tool-result') continue
+      if (part.type !== 'tool_result') continue
       const { output } = part
       if (output.type === 'text' || output.type === 'error-text')
         return output.value

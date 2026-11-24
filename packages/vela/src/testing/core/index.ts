@@ -10,6 +10,7 @@ export {
   createFauxModel,
   type FauxModel,
   type FauxModelOptions,
+  type FauxPromptMessage,
   type FauxRequest,
   type FauxResponse,
   type FauxScenario,

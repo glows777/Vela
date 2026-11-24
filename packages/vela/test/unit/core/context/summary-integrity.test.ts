@@ -2,13 +2,14 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ModelMessage } from 'ai'
 import { summarize } from '../../../../src/driver/context/compressor.ts'
 import { createRequestSnapshot } from '../../../../src/driver/context/request.ts'
+import type { ModelMessage } from '../../../../src/driver/messages.ts'
 import { SessionStore } from '../../../../src/driver/session/index.ts'
 import { TokenTracker } from '../../../../src/driver/usage/tracker.ts'
 import { createFauxModel, fauxText } from '../../../../src/testing/core/faux.ts'
 
+const EMPTY_TOOLS = { sdkTools: {}, toolDefinitions: [], hasHostedTools: false }
 const dir = mkdtempSync(join(tmpdir(), 'vela-summary-integrity-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 const history = (): ModelMessage[] => [
@@ -42,7 +43,12 @@ test('summary sends only the dropped messages, under an explicit compaction scop
   })
   const messages = history()
   const result = await summarize(
-    await createRequestSnapshot(model, 'Regular execution agent', {}, messages),
+    await createRequestSnapshot(
+      model,
+      'Regular execution agent',
+      EMPTY_TOOLS,
+      messages,
+    ),
     new SessionStore('isolated', dir),
     new TokenTracker(),
   )
@@ -53,7 +59,7 @@ test('summary sends only the dropped messages, under an explicit compaction scop
   const last = request.prompt.at(-1)
   const part =
     last?.role === 'user'
-      ? last.content.find((part) => part.type === 'text')
+      ? last.content.find((part: { type: string }) => part.type === 'text')
       : undefined
   const control = JSON.parse(part?.type === 'text' ? part.text : '{}')
   expect(control.type).toBe('context_compaction')
@@ -90,7 +96,7 @@ test('an incomplete text summary fails closed and records usage', async () => {
   const before = JSON.stringify(messages)
   await expect(
     summarize(
-      await createRequestSnapshot(model, 'stable', {}, messages),
+      await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
       new SessionStore('partial', dir),
       tracker,
     ),

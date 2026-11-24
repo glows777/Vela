@@ -25,7 +25,7 @@ The built-in tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `g
 
 - The working directory is where relative paths resolve and where `bash` starts. It is not a jail: file tools accept absolute paths and `..`, and `bash` can reach anything your user can.
 - Vela does not filter `bash` commands: a command the model writes runs unless a user extension blocks the call. A pattern-based confirmation extension can catch mistakes, but is not a security control and is easy to get around.
-- Vela does not ask before tool calls unless you load a user extension that asks (see [Confirm before a call](#confirm-before-a-call)).
+- Vela does not block risky tool calls by default unless you load a user extension with a `tool_call` hook (see [Block dangerous calls](#block-dangerous-calls)).
 
 Anyone in an enabled chat can make Vela run `bash`. That shell runs as the Vela user with Vela's environment and working folder, so it can read `~/.vela/auth.json` (provider keys and OAuth tokens) and `~/.vela/settings.json`: group members can read Vela's keys. Run Vela as a dedicated user with its own home, or inside a container or virtual machine, holding only the files, credentials and network access the bot needs; the [`vela serve` deploy recipe](deploy.md) sets up such a user.
 
@@ -72,11 +72,11 @@ const noShell = vela.session('no-shell', { tools: ['-bash'] })
 
 This controls tool availability, not data access. For example, a session with `read_file` can still read any file accessible to the OS user, including other sessions and credentials. Removing `bash` does not isolate a session or make untrusted callers safe.
 
-### Confirm before a call
+### Block dangerous calls
 
-Confirmation is a user extension, not a built-in rule. In a `tool_call` handler, check `ctx.hasUI`, ask with `ctx.ui.confirm`, and return `{ block: true, reason }` when no UI is attached or the user declines. See [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts), which blocks matching commands when `!ctx.hasUI`.
+Blocking risky tool calls is a user extension, not a built-in rule. In a `tool_call` handler, inspect `event.toolName` and `event.input`, and return `{ block: true, reason }` to refuse matching calls. See [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
 
-Load the example with `vela -e ./examples/extensions/confirm-dangerous.ts`, or import it and pass it in `createVela({ extensions: [confirmDangerous] })`. An SDK host supplies a session `ui` to answer confirmation prompts. Print and channel sessions have no UI; RPC can forward confirmation requests to its frontend. The example's simple command pattern catches mistakes, not every dangerous action. Hooks can inspect other tools too; they do not restrict arbitrary extension code or provider-hosted execution. Matching `tool_call` handlers keep tools on the local execution path rather than using a provider-hosted equivalent.
+Load the example with `vela -e ./examples/extensions/confirm-dangerous.ts`, or import it and pass it in `createVela({ extensions: [confirmDangerous] })`. The example's simple command pattern catches mistakes, not every dangerous action. Hooks can inspect other tools too; they do not restrict arbitrary extension code or provider-hosted execution. Matching `tool_call` handlers keep tools on the local execution path rather than using a provider-hosted equivalent.
 
 ## Prompt injection
 

@@ -1,4 +1,3 @@
-import type { LanguageModel } from 'ai'
 import { clampThinkingLevel } from '../../providers/models/catalog.ts'
 import {
   DEFAULT_THINKING_LEVEL,
@@ -9,6 +8,7 @@ import {
   type ThinkingLevel,
 } from '../../providers/models/index.ts'
 import type { VelaLimits } from '../../shared/limits.ts'
+import type { ModelInput } from '../../shared/provider-types.ts'
 import type { ContextManager } from '../context/manager.ts'
 import type { SessionDeps } from './deps.ts'
 import type { SessionContext } from './entries.ts'
@@ -18,10 +18,10 @@ import type { SessionDefaults } from './resources.ts'
 
 /** Session-local selection provenance and the prepared project's default snapshot. */
 export class SessionDefaultState {
-  modelChoice: string | LanguageModel | undefined
+  modelChoice: ModelInput | undefined
   resolved?: ResolvedModel
   /** The selected model wrapped with extension provider hooks. */
-  hooked?: LanguageModel
+  hooked?: ModelInput
   thinking: ThinkingLevel
   modelPinned: boolean
   thinkingPinned: boolean
@@ -83,7 +83,7 @@ export class SessionDefaultState {
 
   applyOpenChoices(
     options: SessionOptions,
-    selectModel: (model: string | LanguageModel) => void,
+    selectModel: (model: ModelInput) => void,
   ) {
     // A model or thinking level given at open (a channel's current chat entry) wins over the saved choice
     if (options.thinkingLevel !== undefined)

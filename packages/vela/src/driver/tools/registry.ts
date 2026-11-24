@@ -1,6 +1,6 @@
-import type { FlexibleSchema, ToolSet } from 'ai'
-import { asSchema } from 'ai'
+import type { ProviderToolSpec } from '../../providers/index.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
+import { type ToolInputSchema, toJsonSchema } from '../../shared/tool-schema.ts'
 import type { VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import {
@@ -29,7 +29,7 @@ import {
   rejectDrainingCall,
   ToolRejection,
 } from './recovery.ts'
-import { countToolTokens, toAISDKTools } from './sdk-tools.ts'
+import { countToolTokens, toProviderTools } from './sdk-tools.ts'
 import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
 import {
   type ExecuteToolOptions,
@@ -83,7 +83,7 @@ export interface ToolDefinition {
   description: string
   // Input types differ per tool, so the registry stores them as any
   // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool inputs
-  inputSchema: FlexibleSchema<any>
+  inputSchema: ToolInputSchema<any>
   execute: (
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool inputs
     input: any,
@@ -290,12 +290,9 @@ export class ToolRegistry {
     return Array.from(this.tools.values())
   }
 
-  toAISDKFormat(hostedTools: ToolSet = {}): ToolSet {
-    return toAISDKTools(
-      this.getActiveTools(),
-      hostedTools,
-      (tool, input, options) =>
-        this.active.track(() => this.runCall(tool, input, options)),
+  toProviderTools(): ProviderToolSpec[] {
+    return toProviderTools(this.getActiveTools(), (tool, input, options) =>
+      this.active.track(() => this.runCall(tool, input, options)),
     )
   }
 
@@ -688,7 +685,7 @@ export class ToolRegistry {
         candidates.map(async (tool) =>
           createToolSearchDocument({
             ...tool,
-            jsonSchema: await asSchema(tool.inputSchema).jsonSchema,
+            jsonSchema: await toJsonSchema(tool.inputSchema),
           }),
         ),
       )

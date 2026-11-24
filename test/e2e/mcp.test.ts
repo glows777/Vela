@@ -2,7 +2,6 @@ import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { SessionUI } from '@glows777/vela'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -247,16 +246,8 @@ test('tools/list_changed registers new tools; a dropped connection reconnects on
 })
 
 test('configuration errors and failed servers are reported once; /mcp shows status; dispose closes connections', async () => {
-  const notes: string[] = []
-  const ui: SessionUI = {
-    notify: (message) => notes.push(message),
-    confirm: async () => false,
-    select: async () => undefined,
-    input: async () => undefined,
-  }
   const fake = servers({ docs })
   const t = createTestVela({
-    session: { ui },
     extensions: [
       mcp({
         servers: {
@@ -276,6 +267,7 @@ test('configuration errors and failed servers are reported once; /mcp shows stat
     ],
   })
   await t.run('hi')
+  const notes = t.eventsOf('notify').map((e) => e.message)
   const reports = notes.filter((note) => note.startsWith('[mcp]'))
   // Configuration errors right away, failed connections once they settle
   expect(reports).toHaveLength(2)
@@ -285,13 +277,13 @@ test('configuration errors and failed servers are reported once; /mcp shows stat
     '[mcp] MCP server "broken" failed to connect: no fake server broken\nRun /mcp for details.',
   )
 
-  notes.length = 0
   await t.run('/mcp')
-  expect(notes[0]).toContain(
+  const statusNote = t.eventsOf('notify').at(-1)?.message ?? ''
+  expect(statusNote).toContain(
     '- docs: connected, 2 tools, exposure deferred (options)',
   )
-  expect(notes[0]).toContain('- broken: failed, 0 tools')
-  expect(notes[0]).toContain('- off: disabled')
+  expect(statusNote).toContain('- broken: failed, 0 tools')
+  expect(statusNote).toContain('- off: disabled')
 
   const docsServer = fake.live.docs!
   let closed = false

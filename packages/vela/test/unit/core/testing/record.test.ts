@@ -144,7 +144,10 @@ test('generateText requests are recorded in the generate queue', async () => {
       createFauxModel({ responses: [], generate: [fauxText('Summary')] }),
       { path },
     )
-    const { text } = await generateText({ model: recorder.model, prompt: 'x' })
+    const { text } = await generateText({
+      model: recorder.model as Parameters<typeof generateText>[0]['model'],
+      prompt: 'x',
+    })
     expect(text).toBe('Summary')
     await recorder.flush()
     const scenario = (await Bun.file(path).json()) as FauxScenario

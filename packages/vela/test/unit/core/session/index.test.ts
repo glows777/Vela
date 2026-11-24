@@ -2,11 +2,11 @@ import { afterAll, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ModelMessage } from 'ai'
 import {
   memorySessionStorage,
   type SessionStorage,
 } from '../../../../src/driver/index.ts'
+import type { ModelMessage } from '../../../../src/driver/messages.ts'
 import {
   buildSessionContext,
   migrateSessionV1,
@@ -186,7 +186,7 @@ test('compaction and context edits are appended; the originals stay and the cont
     role: 'tool',
     content: [
       {
-        type: 'tool-result',
+        type: 'tool_result',
         toolCallId: 'c1',
         toolName: 'read_file',
         output: { type: 'text', value: 'long output' },
@@ -199,7 +199,7 @@ test('compaction and context edits are appended; the originals stay and the cont
     role: 'tool',
     content: [
       {
-        type: 'tool-result',
+        type: 'tool_result',
         toolCallId: 'c1',
         toolName: 'read_file',
         output: { type: 'text', value: '[folded]' },
