@@ -5,7 +5,7 @@ The design for the Vela desktop app. Use these files when you build or review an
 | File | What it is |
 |---|---|
 | `app.md` | The app's rules: layout, shape, states, motion, icons, voice, and how projects, sessions, Lark, routines and settings work. This is the source for app UI. |
-| `system.md` | The shared Vela design system (content, colour, themes, type, wordmark). It covers the website too; inside the app, `app.md` wins where they differ. |
+| `system.md` | The shared Vela design system (content, colour, themes, type, wordmark and portrait marks). It covers the website too; inside the app, `app.md` wins where they differ. |
 | `vela-app.html` | The design boards: 34 screens (home, local project, Lark project, topic, running session, routines, settings, first run, error states and more). Open it in a browser. It is a visual reference, not code to copy. |
 | `tokens.json` | The Vela design tokens the app uses: colours, fonts, control sizes, radii, spacing, and motion. Code reads this file, not the boards. |
 | `provenance.json` | Where adopted assets and components came from, and their licenses. |
