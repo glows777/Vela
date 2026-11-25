@@ -74,7 +74,7 @@ In the SDK these are `session.navigateTree(entryId, { summarize, focus, label })
 
 ## Export
 
-`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`) writes the branch in the [session file format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
+`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`, or `vela --export <id> branch.jsonl`) writes the branch in the [session file format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
 
 Review an export before you share it: it can contain your prompts, the model's answers, tool arguments, command output and file contents. Vela has no `/share` upload (pi's `/share` uploads to a gist).
 
@@ -100,26 +100,26 @@ In interactive mode the queue is shown above the editor. Alt+Up (macOS: Option+U
 
 ## Compaction
 
-Before every model request, including requests that continue after tool calls, Vela measures the context and compacts when it gets too large. The size is the prompt + completion tokens the provider reported for the latest response plus a calibrated delta for active tool definitions, context-hook modifications, and messages added since (like pi). Until a provider reports usage, Vela estimates the whole request from the system prompt, tool definitions and messages (ASCII `0.25` tokens/char, CJK `1.2` tokens/char, other non-ASCII `0.5` tokens/char, excluding opaque `providerOptions` / encrypted reasoning).
+Vela tracks context size before requests and compacts automatically after a turn completes when the calibrated size (reported prompt + completion tokens from the latest response plus active tool definitions, context-hook deltas, and newly appended messages) reaches `summaryThreshold`, and reactively recovers on context-overflow errors. Until a provider reports usage, Vela estimates tokens locally (ASCII `0.25` tokens/char, CJK `1.2` tokens/char, other non-ASCII `0.5` tokens/char, excluding opaque `providerOptions` / encrypted reasoning).
 
 ### Summary
 
-When the size reaches `summaryThreshold` and there is an earlier turn to summarize, Vela asks the model to summarize the earlier history:
+When compaction runs and there is earlier history beyond the recent budget (`KEEP_RECENT_TOKENS = 20_000`) to summarize, Vela asks the model to summarize the dropped portion:
 
-1. It picks a split point at a user message, at least six messages from the end, where every tool call before it has its result.
-2. It sends only the dropped messages, serialized as text in a `<conversation>` block, plus a `context_compaction` instruction. The instruction asks for a free-text checkpoint with Goal, Constraints & Preferences, Progress (Done / In Progress / Blocked), Key Decisions, Next Steps and Critical Context. The model synthesizes facts rather than selecting verbatim quotes.
-3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary. Code appends sorted, deduplicated `<read-files>` and `<modified-files>` lists from `read`, `write` and `edit` calls. A modified file appears only in the modified list; empty lists are omitted. Prior compacted calls and calls behind branch summaries are read from SQLite (`vela_tool_calls`) so the lists survive tree navigation, repeated compaction and resume.
+1. It picks the latest valid cut point keeping roughly `20_000` recent tokens (preferring a user message boundary where prior tool calls already have results, or splitting inside an oversized turn when needed).
+2. It sends only the dropped slice, serialized as text (`<conversation>` and optional `<current-turn-prefix>`), plus a `context_compaction` instruction asking for Goal, Constraints & Preferences, Progress (Done / In Progress / Blocked), Key Decisions, Next Steps and Critical Context (or updating `<previous-summary>` incrementally on subsequent compactions).
+3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary. Code appends sorted, deduplicated `<read-files>` and `<modified-files>` lists from `read`, `write` and `edit` calls, excluding failed or truncated calls. A modified file appears only in the modified list; empty lists are omitted. Prior compacted calls and calls behind branch summaries are read from SQLite (`vela_tool_calls`) so the lists survive tree navigation, repeated compaction and resume.
 4. Like pi, a `compaction` entry is appended to the session (summary and the first kept message); the summarized entries stay in `vela_messages`. `compaction_start` and `compaction_end` events (`reason: 'threshold'`) are emitted around it.
 
-If there is no earlier turn to summarize, the request is still sent to the provider (if it exceeds the provider's window, the provider reports overflow).
+If there is no cut point with earlier history to summarize, threshold compaction is skipped (and if a request exceeds the provider's window, the provider reports overflow).
 
-If the summary fails (a provider error, empty or incomplete output, or tool calls), the turn stops with an error and the original history is kept. Nothing is lost; fix the cause (for example switch to a model with a larger window) and try again.
+If the summary fails (a provider error, empty or incomplete output, or tool calls), the error is logged on post-turn threshold checks or stops the failing manual/overflow path while keeping the original history intact.
 
-The summary request uses the same model and system prompt as the main request. It leaves out the retained messages. It sends no tool definitions. It does not add `cache_control` breakpoints. It does not reuse the main request's prompt cache. It uses the model's `maxTokens` output limit when known; otherwise the provider chooses its output limit. Compaction thresholds only decide when to summarize. Its token usage is recorded with `kind: 'summary'`.
+The summary request uses the same model and system prompt as the main request. It leaves out the retained messages. It sends no tool definitions. It does not add `cache_control` breakpoints. It does not reuse the main request's prompt cache. It uses the capped summary output limit (`MAX_SUMMARY_OUTPUT_TOKENS` when the model allows it). Compaction thresholds only decide when to summarize. Its token usage is recorded with `kind: 'summary'`.
 
 ### Manual compaction
 
-`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary what to preserve. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When there is no earlier turn to summarize (an empty or short session: the split must be at a user message that is not the first message, with at least six messages from it to the end and every earlier tool call answered), it fails with `Nothing to compact (session too small)`, as in pi.
+`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary what to preserve. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When the conversation fits within the recent-token keep budget (`canSummarize` is false, e.g. only the initial message), it fails with `Nothing to compact (session too small)`.
 
 ### Turning automatic compaction off
 

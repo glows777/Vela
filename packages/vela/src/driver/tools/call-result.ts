@@ -30,6 +30,7 @@ export async function prepareCallResult({
       : {}
   const maxChars = maxResultChars ?? DEFAULT_MAX_RESULT_CHARS
   let stored = raw instanceof SpilledToolOutput ? raw : undefined
+  let spillCut: LineTruncation | undefined
   let spillFailed = false
   let warning =
     '[The tool already ran, but its full output could not be saved. Do not automatically rerun it.]'
@@ -87,11 +88,11 @@ export async function prepareCallResult({
             if (!removed)
               warning += ' The incomplete output file could not be removed.'
           } else {
-            const cut = truncateByLines(text, maxChars)
+            spillCut = truncateByLines(text, maxChars)
             stored = new SpilledToolOutput(
               temp.value,
               Buffer.byteLength(full),
-              cut.preview,
+              spillCut.preview,
               execution,
             )
           }
@@ -101,10 +102,6 @@ export async function prepareCallResult({
   } catch {
     spillFailed = true
   }
-  const cut =
-    stored && !(raw instanceof SpilledToolOutput)
-      ? truncateByLines(text, maxChars)
-      : undefined
   const output: string | ToolContent =
     raw instanceof ToolExecutionResult && raw.content
       ? stored || spillFailed
@@ -112,18 +109,30 @@ export async function prepareCallResult({
             raw.content,
             maxChars,
             stored
-              ? truncationNote(stored, cut ?? truncateByLines(text, maxChars))
+              ? multimodalTruncationNote(raw.content, stored, spillCut)
               : warning,
           )
         : raw.content
       : stored
         ? raw instanceof SpilledToolOutput
           ? stored.preview
-          : `${stored.preview}\n\n${truncationNote(stored, cut!)}`
+          : `${stored.preview}\n\n${truncationNote(stored, spillCut!)}`
         : spillFailed
           ? `${truncateByLines(text, maxChars).preview}\n\n${warning}`
           : text
   return { output, execution, stored, value }
+}
+
+function multimodalTruncationNote(
+  content: ToolContent,
+  stored: SpilledToolOutput,
+  cut: LineTruncation | undefined,
+): string {
+  const textParts = content.filter((part) => part.type === 'text')
+  if (textParts.length === 1 && cut) {
+    return truncationNote(stored, cut)
+  }
+  return `[Output truncated across text parts. Full output: ${stored.path}; use read to inspect the full text.]`
 }
 
 function previewToolContent(

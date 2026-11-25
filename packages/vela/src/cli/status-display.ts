@@ -32,7 +32,6 @@ export interface StatusPathInput {
 export function formatStatusPath(input: StatusPathInput): string {
   const where = input.persistence
   if (where.type === 'memory') return 'in-memory (not saved)'
-  if (where.type !== 'file') return 'custom storage (path unknown)'
   const shown = presentPath(where.path, input.homeDir, input.agentDir)
   if (input.isFile(where.path)) return shown
   return `${PENDING_OPEN}${shown})`

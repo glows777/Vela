@@ -29,7 +29,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--session <id>` | Open the session with this id, creating it if it does not exist. Ids use letters, digits, `.`, `_` and `-`, do not start with `.`, and are at most 128 characters; an invalid id is a usage error (exit code 2). |
 | `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Tool call history, usage records and long tool output are not written to the data directory (tool history and long output use a temporary directory removed when the session closes). Memory and the knowledge base are still written. |
 | `--fork <id>` | Copy the saved session `<id>` into a new session (with a new id) and start there, like pi. The original is not changed. |
-| `--export <id> [output]` | Write a saved session from `vela.db` (by id) as HTML and exit, like pi. `output` defaults to `vela-session-<id>…html` in the current folder. |
+| `--export <id> [output]` | Write a saved session from `vela.db` (by id) directly without initializing models or extensions and exit, like pi. Writes HTML by default (`vela-session-<id>…html` in the current folder), or JSONL when `output` ends with `.jsonl`. |
 | `--model <provider/id>` | Use this model. See [Models](models.md). |
 | `--thinking <level>` | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. |
 | `-e`, `--extension <path>` | Load an extension file or directory, or `builtin:<name>`. Repeatable. Relative paths resolve from the current folder. |

@@ -64,3 +64,11 @@ Update any `--tools` flags, `config.json` `tools` lists (for example `+ls` inste
 - **Removed config keys**: `bashForegroundTimeoutSeconds`, `bashForegroundTimeoutMaxSeconds`, `limits.microcompactThreshold`, `limits.minMicroSavings`.
 - **Execution environment access**: Tools that need command execution or environment file access call `ctx.requireEnv()` on demand instead of assuming an eager environment on every tool call.
 - **Normalizers & CLI hints**: Legacy content part tags (`reasoning`, `tool-call`, `tool-result`, `image-data`, `image-file-reference`) and `.sessions`/`.memory`/`.usage` CWD move hints are removed from runtime message normalization and CLI startup.
+
+## 4. SQLite Session Storage (`vela.db`)
+
+Vela v0.9 stores sessions, messages, tool call states, runs, approvals, and token usage in `<dataDir>/vela.db` (schema version `1`) instead of per-session `.jsonl` transcript files or `usage/requests.jsonl`:
+
+- **Clean break**: v0.9 does **not** automatically import v0.8 `.jsonl` transcripts into `vela.db`. Back up or export older conversations before upgrading if you need to keep an archive.
+- **Exporting branches**: Use `/export [path]`, `session.exportHtml()`, `session.exportJsonl()`, or `vela --export <id> [output]` (writes HTML by default, or JSONL when `output` ends with `.jsonl`) directly against `vela.db`.
+- **In-memory runs**: Pass `--no-session` (CLI) or `createVela({ ephemeralSessions: true })` (SDK) for `:memory:` SQLite storage. `createVela({ db })` is internal-only in v0.9; use `dataDir` to share persistent storage cleanly across restarts.

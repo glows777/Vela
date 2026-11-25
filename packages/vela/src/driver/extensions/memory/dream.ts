@@ -151,7 +151,7 @@ function replyError(error: unknown): string {
   ].join('; ')
 }
 
-/** A store-local inbox and one background call. Never reads a SessionStorage or writes conversation messages. */
+/** A store-local inbox and one background call. Never reads `vela.db` sessions or writes conversation messages. */
 export class MemoryDream {
   private readonly dir: string
   private running?: Promise<string>

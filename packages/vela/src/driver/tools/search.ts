@@ -212,6 +212,8 @@ export const createGrepTool = (
     }[] = []
     let matchCount = 0
     let hasMore = false
+    let lastMatchFile: string | undefined
+    let lastMatchLine: number | undefined
     const { code, stderr } = await runLines(
       env,
       rg,
@@ -240,8 +242,16 @@ export const createGrepTool = (
             return false
           }
           matchCount++
-        } else if (matchCount > limit) {
-          return false
+          lastMatchFile = file
+          lastMatchLine = lineNumber
+        } else if (
+          matchCount >= limit &&
+          (file !== lastMatchFile ||
+            lastMatchLine === undefined ||
+            lineNumber <= lastMatchLine ||
+            lineNumber > lastMatchLine + contextLines)
+        ) {
+          return true
         }
         entries.push({
           file,

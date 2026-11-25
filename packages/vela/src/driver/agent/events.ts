@@ -203,15 +203,6 @@ export type VelaEvent =
    * the `id` passed to `executeBash()` (the RPC command's id).
    */
   | { type: 'bash_execution_update'; id?: string; delta: string }
-  /**
-   * The context needs a summary that this request may not run (`summary-required`).
-   * Vela-specific; summaries are compaction_start / compaction_end.
-   */
-  | {
-      type: 'context_prepare'
-      action: 'summary-required'
-      before: number
-    }
   /** Summarizing earlier history starts (like pi): `threshold` before a request, `manual` from session.compact(), `overflow` after the provider said the context is too long. */
   | { type: 'compaction_start'; reason: CompactionReason }
   /**

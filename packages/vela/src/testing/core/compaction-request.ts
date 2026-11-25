@@ -1,7 +1,7 @@
 /**
  * Reading a compaction request, shared by the faux model and the demo model.
  *
- * `summarize()` (src/context/compressor.ts) sends the dropped messages as one `<conversation>` block
+ * `summarize()` (src/driver/context/compressor.ts) sends the dropped messages as one `<conversation>` block
  * and numbers each message in place: `[index] role` on its own line, then the message text.
  */
 

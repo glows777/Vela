@@ -51,9 +51,9 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `thinkingLevel` | `medium` | Thinking level for new sessions: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `autoCompaction` | `true` | Automatic compaction for new sessions (pi's `compaction.enabled`). `false`: no threshold summary or compact-and-retry on overflow; `compact()` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
 | `cwd` | `process.cwd()` | Working directory for file, search and bash tools and for skills. |
-| `dataDir` | temp dir | Project data directory: `sessions/`, `usage/` and extension data such as `memory/`. Relative paths resolve against `cwd`. Without it nothing persists: sessions stay in memory and long tool output goes to a temp dir that `dispose()` deletes. The CLI uses the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. |
+| `dataDir` | temp dir | Project data directory: `vela.db`, spilled tool outputs under `sessions/`, and extension data such as `memory/`. Relative paths resolve against `cwd`. Without it nothing persists: sessions stay in memory and long tool output goes to a temp dir that `dispose()` deletes. The CLI uses the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. |
 | `env` | local environment | Optional per-tool resolver `({ sessionId, location }) => ExecutionEnv \| undefined` (also async). File tools, search, bash (including user commands), and background jobs use the returned adapter. Resource preparation also resolves the session environment. A local location requires `node:local`. For a non-local location the trusted resolver supplies a distinct, stable adapter identity and the requested environment cwd. An adapter that implements `exec` keeps its existing contract: a background command passes `spill` like a foreground one, so the complete output lands in the adapter's own spill file, whose `spillPath` the exit delivery names. The first turn, fork or compaction that needs to prepare workspace instructions fails before contacting the model if the resolver is unavailable, even for plain text. Retry after the environment returns. Later tool calls still resolve independently. The default session shell is a login shell; a custom adapter made with `createLocalExecutionEnv` runs commands with `bash -c`. Local commands have the host user's authority. |
-| `sessionStorage` | see [Session storage](#session-storage) | Where session history is stored. |
+| `ephemeralSessions` | `false` | Keep session history and usage in an in-memory SQLite DB even when `dataDir` is configured. See [Session storage](#session-storage). |
 | `skillDirs` | `<cwd>/.vela/skills`, `<cwd>/.skills` | Skill directories or files in the [Agent Skills format](settings.md#skills). The first skill with a name wins. |
 | `promptTemplateDirs` | `<cwd>/.vela/prompts` | Prompt template directories or files; `/<name> args` expands one. See [Prompt templates](settings.md#prompt-templates). |
 | `contextFiles` | `loadContextFiles({ cwd })` | `AGENTS.md` / `CLAUDE.md` files (`{ path, content }[]`) put into the system prompt; `false` for none. `loadContextFiles({ cwd, agentDir })` finds them like the CLI. See [Context files](settings.md#context-files). |
@@ -287,7 +287,6 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `queue_update` | `steering` | The queue changed; holds the full current steering queue as strings |
 | `agent_settled` | | All work from `prompt()` is done and the session is idle |
 | `bash_execution_update` | `id?`, `delta` | New output of a running `executeBash()` command (like pi); the `delta`s add up to all of its output. `id` is the one passed to `executeBash()` |
-| `context_prepare` | `action`, `before`, `after?`, `saved?`, `calls?` | Vela-specific context management (`summary-required`: the summary threshold was reached but this run may not summarize). Token counts are estimates. See [Sessions](sessions.md#compaction). |
 | `compaction_start` | `reason` (`threshold`, `manual`, `overflow`) | Summarizing earlier history starts (like pi): before a request that is too large, from `session.compact()`, or after the provider said the context is too long |
 | `compaction_end` | `reason`, `result?` (`summary`, `firstKeptEntryId`, `tokensBefore`, `tokensAfter`, `messages`), `aborted`, `willRetry`, `errorMessage?` | Summarizing ended (like pi). `result` is set when it succeeded, `aborted` when it was interrupted, otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again |
 | `audit` | `toolName`, `path` | Before `write` or `edit` writes `path` |
@@ -330,7 +329,6 @@ Sessions in one Vela run concurrently. Tool definitions, extensions, skills, mem
 
 | Setup | Storage |
 |---|---|
-| `db` given | Uses that caller-owned SQLite `VelaDatabase` (not closed by `dispose()`) |
 | `ephemeralSessions: true` (or no `dataDir`) | In-memory SQLite (`:memory:`), gone when the process exits |
 | `dataDir` given (default) | Persistent SQLite WAL DB at `<dataDir>/vela.db` |
 
@@ -458,7 +456,7 @@ Disposal waits for extension factories to settle, then attempts channel shutdown
 | [01-minimal.ts](../examples/sdk/01-minimal.ts) | One session, one prompt, print the answer |
 | [02-events.ts](../examples/sdk/02-events.ts) | Subscribe to events, including a tool call |
 | [03-multi-session.ts](../examples/sdk/03-multi-session.ts) | Two sessions running concurrently in one Vela |
-| [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts) | Sharing a caller-owned SQLite `VelaDatabase` across instances |
+| [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts) | Persistent SQLite sessions across instances using `dataDir` |
 
 ## API stability
 

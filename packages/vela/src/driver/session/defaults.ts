@@ -1,6 +1,8 @@
+import type { ProviderToolSpec } from '../../providers/index.ts'
 import { clampThinkingLevel } from '../../providers/models/catalog.ts'
 import {
   DEFAULT_THINKING_LEVEL,
+  describeModel,
   limitsForModel,
   type ModelInfo,
   type ResolvedModel,
@@ -9,17 +11,31 @@ import {
 } from '../../providers/models/index.ts'
 import type { VelaLimits } from '../../shared/limits.ts'
 import type { ModelInput } from '../../shared/provider-types.ts'
+import type { CustomMessage, CustomMessageInfo } from '../agent/events.ts'
+import { canSummarize } from '../context/compressor.ts'
 import type { ContextManager } from '../context/manager.ts'
+import {
+  type RequestSnapshot,
+  resolveRequestSnapshot,
+} from '../context/request.ts'
+import type { ExecutionLocation } from '../execution/types.ts'
+import type { BeforeAgentStartResult } from '../extensions/events.ts'
+import type { ImageContent, ModelMessage, TextContent } from '../messages.ts'
+import { estimateMessagesTokens } from '../messages.ts'
+import type { TokenTracker } from '../usage/tracker.ts'
 import type { SessionDeps } from './deps.ts'
 import type { SessionContext } from './entries.ts'
 import type { SessionStore } from './index.ts'
-import type { SessionOptions } from './options.ts'
+import { messageText } from './message-queue.ts'
+import type { LoadedSessionContext, SessionOptions } from './options.ts'
 import type { SessionDefaults } from './resources.ts'
 
 /** Session-local selection provenance and the prepared project's default snapshot. */
 export class SessionDefaultState {
   modelChoice: ModelInput | undefined
   resolved?: ResolvedModel
+  /** Last resolved model ref (retained when defaults clear `resolved` so switching models resets calibration). */
+  lastResolvedRef?: string
   /** The selected model wrapped with extension provider hooks. */
   hooked?: ModelInput
   thinking: ThinkingLevel
@@ -146,5 +162,227 @@ export class SessionDefaultState {
     if (!this.compactionPinned)
       context.autoCompaction = defaults.autoCompaction ?? true
     this.prepared = defaults
+  }
+}
+
+export function buildForkSessionOptions(
+  defaults: SessionDefaultState,
+  store: Pick<SessionStore, 'modelAt' | 'thinkingAt'>,
+  options: SessionOptions,
+  location: ExecutionLocation,
+  autoCompaction: boolean,
+  leafId: string | null,
+  unrouted: (opts: SessionOptions) => SessionOptions,
+): SessionOptions {
+  const branchModel =
+    typeof defaults.modelChoice === 'string'
+      ? (store.modelAt(leafId) ?? defaults.modelChoice)
+      : defaults.modelChoice
+  return {
+    ...unrouted(options),
+    location,
+    model: branchModel,
+    thinkingLevel: store.thinkingAt(leafId) ?? defaults.thinking,
+    autoCompaction,
+  }
+}
+
+export function resolveRunProducer(
+  servingModel: ModelInput,
+  modelChoice: ModelInput | undefined,
+  provider: string,
+  channel: string | undefined,
+  authMode?: (
+    provider: string,
+    channel?: string,
+  ) => 'api_key' | 'oauth' | undefined,
+): string {
+  const base = describeModel(servingModel).ref
+  const mode =
+    typeof modelChoice === 'string' ? authMode?.(provider, channel) : undefined
+  return mode === 'oauth' ? `${base}:oauth` : base
+}
+
+function syncTrackerFromContext(
+  tracker: TokenTracker,
+  context: SessionContext,
+  messages: ModelMessage[],
+): void {
+  const latest = (context as LoadedSessionContext).latestAssistantUsage
+  if (latest) {
+    tracker.restoreCalibration(
+      latest.inputTokens,
+      latest.outputTokens,
+      latest.trailingMessages,
+    )
+  } else {
+    tracker.setEstimatedTokens(estimateMessagesTokens(messages))
+  }
+}
+
+export async function summarizeEntriesForTree(
+  contextManager: ContextManager,
+  model: ModelInput,
+  system: string,
+  tools: ProviderToolSpec[],
+  messages: ModelMessage[],
+  maxTokens: number | undefined,
+  focus: string | undefined,
+  signal: AbortSignal,
+): Promise<string> {
+  const request: RequestSnapshot = await resolveRequestSnapshot(
+    model,
+    system,
+    tools,
+    messages,
+    signal,
+    maxTokens,
+  )
+  return contextManager.summarizeBranch(request, 0, focus)
+}
+
+export async function runLoopCompaction(
+  contextManager: ContextManager,
+  request: RequestSnapshot,
+  maxInputTokens: number,
+  reason: 'manual' | 'overflow',
+  focus?: string,
+): Promise<void> {
+  if (!canSummarize(request.messages, maxInputTokens))
+    throw new Error('Nothing to compact (session too small)')
+  await contextManager.compact(request, focus, reason)
+}
+
+export async function runPostTurnCompaction(params: {
+  enabled: boolean
+  signal: AbortSignal
+  isDraining: () => boolean
+  buildSnapshot: () => Promise<RequestSnapshot>
+  compactIfNeeded: (request: RequestSnapshot) => Promise<unknown>
+  warn: (msg: string) => void
+}): Promise<void> {
+  if (!params.enabled || params.signal.aborted || params.isDraining()) return
+  try {
+    await params.compactIfNeeded(await params.buildSnapshot())
+  } catch (error) {
+    if (params.signal.aborted || params.isDraining()) throw error
+    params.warn(error instanceof Error ? error.message : String(error))
+  }
+}
+
+export async function restoreBranchState(params: {
+  context: SessionContext
+  contextManager: ContextManager
+  registry: { discoveredTools: Set<string> }
+  store: SessionStore
+  customMessages: WeakMap<ModelMessage, CustomMessageInfo>
+  defaults: SessionDefaultState
+  deps: {
+    extensions: { ready: Promise<void> }
+    logger: SessionDeps<unknown>['logger']
+  }
+  id: string
+  selectModel: (model: string) => void
+  tracker: TokenTracker
+  messages: ModelMessage[]
+}): Promise<void> {
+  params.contextManager.restore(params.context)
+  params.registry.discoveredTools = new Set(await params.store.loadedTools())
+  for (const [message, info] of params.context.custom)
+    params.customMessages.set(message, info)
+  await params.defaults.restore(
+    params.context,
+    params.deps,
+    params.id,
+    params.selectModel,
+  )
+  syncTrackerFromContext(params.tracker, params.context, params.messages)
+}
+
+export async function prepareAgentTurn(params: {
+  inputs: ModelMessage[]
+  signal: AbortSignal
+  recoverPending: boolean
+  normalizeInput: (m: ModelMessage) => Promise<ModelMessage>
+  beforeAgentStart: (input: string) => Promise<BeforeAgentStartResult>
+  setTurn: (turn: BeforeAgentStartResult) => void
+  toCustomMessage: (m: CustomMessage) => ModelMessage
+  emitStart: (input: string) => void
+  flushBash: () => void
+  flushPendingCustom: (append: (m: ModelMessage) => void) => void
+  nextTurnMessages: ModelMessage[]
+  append: (m: ModelMessage) => void
+}): Promise<{ newMessages: ModelMessage[]; flushAndAppend: () => void }> {
+  const normalized = await Promise.all(
+    params.inputs.map((m) => params.normalizeInput(m)),
+  )
+  params.signal.throwIfAborted()
+  const input = normalized.map(messageText).join('\n\n')
+  params.setTurn({ sections: {}, messages: [] })
+  const started = await params.beforeAgentStart(input)
+  params.setTurn(started)
+  const added = started.messages.map((m) => params.toCustomMessage(m))
+  params.emitStart(input)
+  const newMessages: ModelMessage[] = []
+  const flushAndAppend = () => {
+    params.flushBash()
+    params.flushPendingCustom((m) => params.append(m))
+    for (const m of [
+      ...normalized,
+      ...params.nextTurnMessages.splice(0),
+      ...added,
+    ]) {
+      params.append(m)
+      newMessages.push(m)
+    }
+  }
+  if (!params.recoverPending) flushAndAppend()
+  return { newMessages, flushAndAppend }
+}
+
+export const defaultAbortError = () =>
+  new DOMException('User cancelled the current operation', 'AbortError')
+
+export function linkAbortSignal(signal?: AbortSignal): {
+  controller: AbortController
+  unlink: () => void
+} {
+  const controller = new AbortController()
+  const forward = () => controller.abort(signal?.reason)
+  signal?.addEventListener('abort', forward, { once: true })
+  if (signal?.aborted) forward()
+  return {
+    controller,
+    unlink: () => signal?.removeEventListener('abort', forward),
+  }
+}
+
+export function userPromptMessage(
+  input: string,
+  images?: readonly ImageContent[],
+): ModelMessage {
+  return {
+    role: 'user',
+    content: images?.length
+      ? [
+          { type: 'text' as const, text: input },
+          ...images.map((img) => ({ ...img })),
+        ]
+      : input,
+  }
+}
+
+export function splitUserMessageContent(
+  content: string | (TextContent | ImageContent)[],
+): { text: string; images?: ImageContent[] } {
+  if (typeof content === 'string') return { text: content }
+  return {
+    text: content
+      .filter((part): part is TextContent => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n'),
+    images: content.filter(
+      (part): part is ImageContent => part.type === 'image',
+    ),
   }
 }

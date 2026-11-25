@@ -114,8 +114,8 @@ The running process keeps the old code until the restart. A run in progress is s
 |---|---|
 | `config.json`, `trust.json` | Unified configuration (model, channels, providers) and saved project-trust answers |
 | `auth.json` | Provider credentials saved by `/login`, mode `0600` |
-| `projects/<working folder>/sessions/` | Every conversation, mode `0600` in `0700` directories |
-| `projects/<working folder>/usage/requests.jsonl` | Token usage |
+| `projects/<working folder>/vela.db` | SQLite WAL database holding conversations, tool calls, runs, approvals, and usage records (mode `0600` in `0700` directories) |
+| `projects/<working folder>/sessions/` | Per-session spilled long tool outputs (`tool-results/`) and upload metadata |
 | `projects/<working folder>/channels/<chat>/` | Each group's shared `workspace/`, `memory/` and attachments |
 
 Back up that directory rather than the workspace alone: it holds the credentials and the full transcripts, including tool output.

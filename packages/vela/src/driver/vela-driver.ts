@@ -9,7 +9,6 @@ import { classifyAgentError } from './agent/retry.ts'
 import {
   ABORTED_RESULT,
   CONTENT_FILTER_ERROR,
-  errorMessageOf,
   failedToolCallResult,
   toolResultsOf,
   truncatedToolCallResult,
@@ -20,7 +19,6 @@ import {
   type RequestSnapshot,
 } from './context/request.ts'
 import {
-  filterHostedToolMessages,
   persistAssistantStepTx,
   streamSingleStepWithRetries,
 } from './driver-step.ts'
@@ -30,6 +28,15 @@ import {
   type ModelMessage,
   type ToolCallPart,
 } from './messages.ts'
+import {
+  type DriverCapabilities,
+  type DriverRunClaim,
+  finishRunInDb,
+  isOwnerLive,
+  PROCESS_OWNER_PREFIX,
+  pendingApprovalState,
+  type RunTrigger,
+} from './run-store.ts'
 import type { SessionStore } from './session/index.ts'
 import {
   assembleCompletedToolMessage,
@@ -40,32 +47,11 @@ import { executeStepCalls } from './tool-executor.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import { normalizeUsage, type TokenTracker } from './usage/tracker.ts'
 
-type RunTrigger =
-  | 'user'
-  | 'channel'
-  | 'timer'
-  | 'webhook'
-  | 'approval'
-  | 'job'
-  | 'handoff'
-  | 'session'
-
-export interface DriverCapabilities {
-  readonly recovery: 'step'
-  readonly executionEnv: 'managed'
-  readonly steer: boolean
-  readonly approval: boolean
-}
-
-export interface DriverRunClaim {
-  runId: string
-  ownerToken: string
-  resumedFromWaitingHuman: boolean
-  release: (rollbackStatus?: 'stopped' | 'waiting_human') => void
-}
+export type { DriverCapabilities, DriverRunClaim }
 
 export interface VelaDriverRunOptions {
   model: ModelInput
+  producer?: string | (() => string)
   systemPrompt: string | (() => string)
   messages: ModelMessage[]
   newMessages?: ModelMessage[]
@@ -89,28 +75,6 @@ export interface VelaDriverRunOptions {
   allowWaitingHuman?: boolean
   onRecoveryComplete?: () => Promise<void> | void
   appendInput?: (message: ModelMessage) => void
-}
-
-const PROCESS_OWNER_PREFIX = crypto.randomUUID()
-
-function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-function isOwnerLive(
-  ownerToken: string | null,
-  activeOwners: ReadonlySet<string>,
-): boolean {
-  if (!ownerToken) return false
-  const [prefix, pidText] = ownerToken.split(':')
-  if (prefix === PROCESS_OWNER_PREFIX) return activeOwners.has(ownerToken)
-  return isPidAlive(Number(pidText))
 }
 
 /**
@@ -151,19 +115,6 @@ export class VelaDriver {
     this.deps.onEvent?.(event)
   }
 
-  private setSessionState(
-    state: 'idle' | 'running' | 'waiting_human' | 'stopped',
-    waitingReason: string | null = null,
-  ): void {
-    this.deps.db.run(
-      'UPDATE sessions SET state = ?, waiting_reason = ?, updated_at = ? WHERE id = ?',
-      state,
-      waitingReason,
-      new Date().toISOString(),
-      this.deps.sessionId,
-    )
-  }
-
   private finishRun(
     runId: string,
     ownerToken: string,
@@ -174,25 +125,17 @@ export class VelaDriver {
       | 'failed'
       | 'interrupted',
     error?: unknown,
+    sessionState?: 'idle' | 'waiting_human',
   ): void {
-    const now = new Date().toISOString()
-    this.deps.db.transaction(() => {
-      const res = this.deps.db.run(
-        'UPDATE runs SET status = ?, error = ?, finished_at = ?, updated_at = ? WHERE id = ? AND owner_token = ?',
-        status,
-        error === undefined ? null : errorMessageOf(error),
-        status === 'waiting_human' ? null : now,
-        now,
-        runId,
-        ownerToken,
-      )
-      if (res.changes === 1) {
-        this.setSessionState(
-          status === 'waiting_human' ? 'waiting_human' : 'idle',
-          status === 'waiting_human' ? 'approval' : null,
-        )
-      }
-    })
+    finishRunInDb(
+      this.deps.db,
+      this.deps.sessionId,
+      runId,
+      ownerToken,
+      status,
+      error,
+      sessionState,
+    )
   }
 
   claim(options: {
@@ -249,7 +192,7 @@ export class VelaDriver {
         if (existingState === 'running' || runningRows.length > 0) {
           db.run(
             `UPDATE runs
-             SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
+             SET status = 'interrupted', finished_at = COALESCE(finished_at, ?), updated_at = ?
              WHERE session_id = ? AND status = 'running'`,
             now,
             now,
@@ -342,7 +285,10 @@ export class VelaDriver {
   }> {
     const { db, store, registry, tracker, sessionId } = this.deps
     const limits = resolveLimits(options.limits)
-    const producer = describeModel(options.model).ref
+    const resolveProducer = () =>
+      typeof options.producer === 'function'
+        ? options.producer()
+        : (options.producer ?? describeModel(options.model).ref)
     const claim =
       options.claim ??
       this.claim({
@@ -388,6 +334,11 @@ export class VelaDriver {
           signal: options.abortSignal,
         })
         if (rec.waitingHuman) {
+          if (!options.allowWaitingHuman) {
+            throw new Error(
+              `Session ${sessionId} is awaiting human approval on a pending tool call; resolve pending approvals and call continueInterrupted() first`,
+            )
+          }
           this.finishRun(runId, ownerToken, 'waiting_human')
           this.emit({
             type: 'agent_end',
@@ -439,9 +390,10 @@ export class VelaDriver {
           resolvedTools.toolDefinitions,
         )
         tracker.syncToolTokens(requestToolTokens)
-        const refreshMessages = async () => {
+        const stepProducer = resolveProducer()
+        const refreshMessages = async (producerForStep = stepProducer) => {
           const transformed = options.transformContext
-            ? await options.transformContext(options.messages, producer)
+            ? await options.transformContext(options.messages, producerForStep)
             : options.messages
           if (options.transformContext) {
             tracker.setContextDelta(
@@ -451,37 +403,43 @@ export class VelaDriver {
           }
           return transformed
         }
-        let requestMessages = await refreshMessages()
+        let requestMessages = await refreshMessages(stepProducer)
         await options.prepareContext?.(request)
         options.abortSignal?.throwIfAborted()
 
-        const { finalStep, sources, startedAt, sdkToolErrors } =
-          await streamSingleStepWithRetries({
-            model: options.model,
-            sessionId,
-            systemPrompt: currentSystem(),
-            supportsImages: options.supportsImages ?? true,
-            reasoning: requestReasoning,
-            maxOutputTokens: currentMaxOutputTokens(),
-            tools: request.tools,
-            messages: options.messages,
-            newMessages,
-            getMessages: () => requestMessages,
-            refreshMessages: async () => {
-              requestMessages = await refreshMessages()
-              return requestMessages
-            },
-            abortSignal: options.abortSignal,
-            isDraining: options.isDraining,
-            compactOnOverflow: options.compactOnOverflow,
-            limits,
-            tracker,
-            emit: (event) => this.emit(event),
-            turn,
-            runId,
-            store,
-            hostedCalls,
-          })
+        const {
+          finalStep,
+          sources,
+          startedAt,
+          sdkToolErrors,
+          producer: winningProducer,
+        } = await streamSingleStepWithRetries({
+          model: options.model,
+          sessionId,
+          systemPrompt: currentSystem(),
+          supportsImages: options.supportsImages ?? true,
+          reasoning: requestReasoning,
+          maxOutputTokens: currentMaxOutputTokens(),
+          tools: request.tools,
+          messages: options.messages,
+          newMessages,
+          getMessages: () => requestMessages,
+          refreshMessages: async (producerForAttempt) => {
+            requestMessages = await refreshMessages(producerForAttempt)
+            return requestMessages
+          },
+          resolveProducer,
+          abortSignal: options.abortSignal,
+          isDraining: options.isDraining,
+          compactOnOverflow: options.compactOnOverflow,
+          limits,
+          tracker,
+          emit: (event) => this.emit(event),
+          turn,
+          runId,
+          store,
+          hostedCalls,
+        })
 
         for (const sdkErr of sdkToolErrors) {
           this.emit({
@@ -594,21 +552,22 @@ export class VelaDriver {
                   : failedToolCallResult(CONTENT_FILTER_ERROR)
             : undefined
 
-        const assistantEntry = persistAssistantStepTx({
-          db,
-          store,
-          registry,
-          sessionId,
-          runId,
-          producer,
-          assistant,
-          responseMessages,
-          clientCalls,
-          stepRecord,
-          rawUsage: finalStep.usage,
-          sdkToolErrors: sdkErrorMap,
-          terminalError,
-        })
+        const { entry: assistantEntry, hostedMessages } =
+          persistAssistantStepTx({
+            db,
+            store,
+            registry,
+            sessionId,
+            runId,
+            producer: winningProducer ?? stepProducer,
+            assistant,
+            responseMessages,
+            clientCalls,
+            stepRecord,
+            rawUsage: finalStep.usage,
+            sdkToolErrors: sdkErrorMap,
+            terminalError,
+          })
 
         options.messages.push(assistant)
         newMessages.push(assistant)
@@ -617,10 +576,7 @@ export class VelaDriver {
           tracker.updateFromAPI(inputToken, outputToken, requestToolTokens)
         }
         if (pendingClientCalls.length === 0) emitUsage()
-        for (const hostedMsg of filterHostedToolMessages(
-          responseMessages,
-          clientCalls,
-        )) {
+        for (const hostedMsg of hostedMessages) {
           options.messages.push(hostedMsg)
           newMessages.push(hostedMsg)
           tracker.addMessage(hostedMsg)
@@ -675,6 +631,30 @@ export class VelaDriver {
             })
             if (execResult.waitingHuman) {
               emitUsage()
+              const settledRows = loadStepToolCallRows(
+                db,
+                sessionId,
+                assistantEntry.id,
+              ).filter(
+                (row) =>
+                  row.result_json !== null &&
+                  (row.status === 'completed' ||
+                    row.status === 'failed' ||
+                    row.status === 'skipped'),
+              )
+              const completedResults = toolResultsOf([
+                assistant,
+                ...hostedMessages,
+                ...(settledRows.length > 0
+                  ? [assembleCompletedToolMessage(settledRows).message]
+                  : []),
+              ])
+              this.emit({
+                type: 'turn_end',
+                turn,
+                message: assistant,
+                toolResults: completedResults,
+              })
               this.finishRun(runId, ownerToken, 'waiting_human')
               this.emit({
                 type: 'agent_end',
@@ -777,10 +757,23 @@ export class VelaDriver {
       })
       return { reason: 'done' }
     } catch (error) {
-      const aborted = Boolean(
-        options.abortSignal?.aborted || options.isDraining?.(),
+      const draining = Boolean(options.isDraining?.())
+      const aborted = Boolean(options.abortSignal?.aborted || draining)
+      const { hasRunPendingApproval, hasSessionPendingApproval } =
+        pendingApprovalState(db, sessionId, runId)
+      this.finishRun(
+        runId,
+        ownerToken,
+        hasRunPendingApproval
+          ? 'waiting_human'
+          : options.abortSignal?.aborted
+            ? 'stopped'
+            : draining
+              ? 'interrupted'
+              : 'failed',
+        error,
+        hasSessionPendingApproval ? 'waiting_human' : 'idle',
       )
-      this.finishRun(runId, ownerToken, aborted ? 'stopped' : 'failed', error)
       this.emit({
         type: 'agent_end',
         messages: newMessages,

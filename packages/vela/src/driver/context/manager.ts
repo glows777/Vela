@@ -47,7 +47,11 @@ export class ContextManager {
   }
 
   /** Replaces the context in memory with `messages` (already recorded in the session). */
-  private replace(messages: ModelMessage[], summary = this.state.summary) {
+  private replace(
+    messages: ModelMessage[],
+    summary = this.state.summary,
+    syncTracker = true,
+  ) {
     const timestamps = new Map(
       messages.map((message) => [
         message,
@@ -56,7 +60,7 @@ export class ContextManager {
     )
     const previous = this.state.messages.slice()
     this.restore({ messages, timestamps, summary })
-    this.tracker.replaceMessages(previous, this.state.messages)
+    if (syncTracker) this.tracker.replaceMessages(previous, this.state.messages)
   }
 
   /**
@@ -101,9 +105,14 @@ export class ContextManager {
   ): Promise<void> {
     this.onEvent?.({ type: 'compaction_start', reason })
     try {
+      const estimate = Math.max(
+        0,
+        estimateRequestTokens(request) + this.tracker.contextDelta,
+      )
       const before = contextRequestTokens(
         request,
         this.tracker.reportedContextTokens,
+        estimate,
       )
       const compacted = await summarize(
         request,
@@ -121,7 +130,7 @@ export class ContextManager {
         firstKept,
         before,
       )
-      this.replace(compacted.messages, compacted.summary)
+      this.replace(compacted.messages, compacted.summary, false)
       this.tracker.setEstimatedTokens(after)
       this.onEvent?.({
         type: 'compaction_end',
@@ -163,30 +172,10 @@ export class ContextManager {
     await this.summarizeHistory(request, reason, focus)
   }
 
-  async prepare(
-    request: RequestSnapshot,
-    options: { allowSummary?: boolean } = {},
-  ): Promise<void> {
+  async prepare(request: RequestSnapshot): Promise<void> {
     request.abortSignal?.throwIfAborted()
     const rawEstimate = estimateRequestTokens(request)
     this.syncContextEstimate(rawEstimate)
-    if (options.allowSummary === false && this.autoCompaction) {
-      const before = contextRequestTokens(
-        request,
-        this.tracker.reportedContextTokens,
-        Math.max(0, rawEstimate + this.tracker.contextDelta),
-      )
-      if (
-        before >= this.limits.summaryThreshold &&
-        canSummarize(request.messages, this.limits.maxInputTokens)
-      ) {
-        this.onEvent?.({
-          type: 'context_prepare',
-          action: 'summary-required',
-          before,
-        })
-      }
-    }
   }
 
   /** Post-turn threshold auto-compaction (runs after `agent_end` so mid-turn prompt prefixes stay cached). */

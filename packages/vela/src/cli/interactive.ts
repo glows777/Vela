@@ -15,6 +15,7 @@ import {
   branchSummaryMessageText,
   contextEntries,
   inspectSession,
+  isToolResultError,
   summaryMessageText,
 } from '../driver/diagnostics.ts'
 import type {
@@ -43,7 +44,6 @@ import { commandCompletions, HOTKEYS } from './tui/commands.ts'
 import {
   agentEndNotice,
   compactionLine,
-  contextLine,
   errorMessage,
   isDeadTerminalError,
   lastAnswer,
@@ -397,7 +397,7 @@ export class InteractiveMode {
         this.log.settleTool(
           block,
           part.output,
-          part.output.type.startsWith('error'),
+          isToolResultError(part.output),
           entry.details?.[part.toolCallId],
         )
       }
@@ -485,11 +485,6 @@ export class InteractiveMode {
         break
       case 'queue_update':
         this.updatePending()
-        break
-      case 'context_prepare':
-        this.addNotice(contextLine(event), 'dim')
-        if (event.action === 'summary-required')
-          this.statusLine.set('Compacting context…')
         break
       case 'compaction_start':
         this.statusLine.set('Compacting context…')
@@ -1136,5 +1131,3 @@ export class InteractiveMode {
     process.exit(129)
   }
 }
-
-/** Footer (like pi): directory and session name; usage, context percentage, model and thinking; extension statuses. */

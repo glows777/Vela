@@ -753,7 +753,8 @@ function prepareResponsesPrompt(
           statelessTarget &&
           typeof ns.itemId === 'string' &&
           ns.itemId.startsWith('rs_') &&
-          ns.reasoningEncryptedContent === undefined,
+          (typeof ns.reasoningEncryptedContent !== 'string' ||
+            ns.reasoningEncryptedContent.length === 0),
         true,
       )
       if (next === part.providerOptions) return [part]

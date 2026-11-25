@@ -51,9 +51,19 @@ type ClonedToolCallRow = {
   updated_at: string
 }
 
+type ClonedMessageUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  costUsd?: number
+  durationMs?: number
+}
+
 export interface PreparedSeedBranch {
   entries: SessionEntry[]
   parentCalls: ClonedToolCallRow[]
+  messageUsage: Map<string, ClonedMessageUsage>
   rewrites: [string, string][]
   spillRewrites: Map<string, string>
 }
@@ -78,6 +88,38 @@ export async function prepareSeedBranch(params: {
     throw new Error('Cannot fork or clone through unresolved tool calls')
   }
   const branchIds = new Set(branch.map((entry) => entry.id))
+  const messageUsage = new Map<string, ClonedMessageUsage>()
+  if (branchIds.size) {
+    const usageRows = db.all<{
+      id: string
+      input_tokens: number | null
+      output_tokens: number | null
+      cache_read_tokens: number | null
+      cache_write_tokens: number | null
+      cost_usd: number | null
+      duration_ms: number | null
+    }>(
+      'SELECT id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms FROM vela_messages WHERE session_id = ? AND input_tokens IS NOT NULL',
+      parentId,
+    )
+    for (const row of usageRows) {
+      if (!branchIds.has(row.id)) continue
+      messageUsage.set(row.id, {
+        ...(row.input_tokens === null ? {} : { inputTokens: row.input_tokens }),
+        ...(row.output_tokens === null
+          ? {}
+          : { outputTokens: row.output_tokens }),
+        ...(row.cache_read_tokens === null
+          ? {}
+          : { cacheReadTokens: row.cache_read_tokens }),
+        ...(row.cache_write_tokens === null
+          ? {}
+          : { cacheWriteTokens: row.cache_write_tokens }),
+        ...(row.cost_usd === null ? {} : { costUsd: row.cost_usd }),
+        ...(row.duration_ms === null ? {} : { durationMs: row.duration_ms }),
+      })
+    }
+  }
   const parentCalls = branchIds.size
     ? db
         .all<ClonedToolCallRow>(
@@ -269,6 +311,7 @@ export async function prepareSeedBranch(params: {
   return {
     entries: copyBranch(cloned),
     parentCalls,
+    messageUsage,
     rewrites,
     spillRewrites,
   }
@@ -319,7 +362,9 @@ export function insertClonedToolCalls(
       row.tool_call_id,
       row.call_index,
       row.tool_name,
-      rewrites.length ? rewriteText(row.input_json, rewrites) : row.input_json,
+      rewrites.length
+        ? rewriteJsonText(row.input_json, rewrites)
+        : row.input_json,
       row.execution_mode,
       row.replay,
       row.location_json,
@@ -330,10 +375,12 @@ export function insertClonedToolCalls(
         ? rewriteText(row.preview, rewrites)
         : row.preview,
       row.result_json !== null && rewrites.length
-        ? rewriteText(row.result_json, rewrites)
+        ? rewriteJsonText(row.result_json, rewrites)
         : row.result_json,
       rewrittenSpill,
-      row.details_json,
+      row.details_json !== null && rewrites.length
+        ? rewriteJsonText(row.details_json, rewrites)
+        : row.details_json,
       row.duration_ms,
       row.started_at,
       row.finished_at,
@@ -354,6 +401,46 @@ function rewriteText(
   return out
 }
 
+function rewriteJsonValue(
+  value: unknown,
+  rewrites: readonly [string, string][],
+): unknown {
+  if (typeof value === 'string') return rewriteText(value, rewrites)
+  if (Array.isArray(value)) {
+    let changed = false
+    const next = value.map((item) => {
+      const updated = rewriteJsonValue(item, rewrites)
+      if (updated !== item) changed = true
+      return updated
+    })
+    return changed ? next : value
+  }
+  if (value !== null && typeof value === 'object') {
+    let changed = false
+    const next: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value)) {
+      const updated = rewriteJsonValue(entry, rewrites)
+      if (updated !== entry) changed = true
+      next[key] = updated
+    }
+    return changed ? next : value
+  }
+  return value
+}
+
+function rewriteJsonText(
+  raw: string,
+  rewrites: readonly [string, string][],
+): string {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    const updated = rewriteJsonValue(parsed, rewrites)
+    return updated === parsed ? raw : JSON.stringify(updated)
+  } catch {
+    return rewriteText(raw, rewrites)
+  }
+}
+
 function rewriteEntryStrings(
   entries: SessionEntry[],
   rewrites: readonly [string, string][],
@@ -367,6 +454,8 @@ function rewriteEntryStrings(
         for (const part of content) {
           if ('text' in part && typeof part.text === 'string') {
             part.text = rewriteText(part.text, rewrites)
+          } else if (part.type === 'tool_call') {
+            part.input = rewriteJsonValue(part.input, rewrites)
           } else if (part.type === 'tool_result') {
             if (
               (part.output.type === 'text' ||
@@ -374,6 +463,14 @@ function rewriteEntryStrings(
               typeof part.output.value === 'string'
             ) {
               part.output.value = rewriteText(part.output.value, rewrites)
+            } else if (
+              part.output.type === 'json' ||
+              part.output.type === 'error-json'
+            ) {
+              part.output.value = rewriteJsonValue(
+                part.output.value,
+                rewrites,
+              ) as typeof part.output.value
             } else if (part.output.type === 'content') {
               for (const item of part.output.value) {
                 if (item.type === 'text' && typeof item.text === 'string') {
@@ -383,6 +480,12 @@ function rewriteEntryStrings(
             }
           }
         }
+      }
+      if (entry.details) {
+        entry.details = rewriteJsonValue(entry.details, rewrites) as Record<
+          string,
+          unknown
+        >
       }
     } else if (entry.type === 'bash_execution') {
       entry.output = rewriteText(entry.output, rewrites)

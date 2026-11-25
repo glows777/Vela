@@ -118,7 +118,8 @@ export async function streamSingleStepWithRetries(options: {
   messages?: ModelMessage[]
   newMessages?: ModelMessage[]
   getMessages: () => ModelMessage[]
-  refreshMessages: () => Promise<ModelMessage[]>
+  refreshMessages: (producer?: string) => Promise<ModelMessage[]>
+  resolveProducer?: () => string
   abortSignal?: AbortSignal
   isDraining?: () => boolean
   compactOnOverflow?: (signal?: AbortSignal) => Promise<void>
@@ -134,6 +135,7 @@ export async function streamSingleStepWithRetries(options: {
   sources: Map<string, string>
   startedAt: number
   sdkToolErrors: SdkToolError[]
+  producer?: string
 }> {
   const {
     model,
@@ -180,17 +182,23 @@ export async function streamSingleStepWithRetries(options: {
 
   let retried = 0
   let compactedForOverflow = false
+  let attemptProducer = options.resolveProducer?.()
   const recoverOverflow = async () => {
     compactedForOverflow = true
     await compactOnOverflow?.(abortSignal)
-    requestMessages = await options.refreshMessages()
+    attemptProducer = options.resolveProducer?.() ?? attemptProducer
+    requestMessages = await options.refreshMessages(attemptProducer)
   }
 
   const startedAt = performance.now()
   for (;;) {
     if (isDraining?.()) throw shutdownError()
     abortSignal?.throwIfAborted()
+    sources.clear()
+    sourcesShown = false
     let stepHostedStarted = false
+    let contextWindowExceeded = false
+    let finalStep!: ProviderStepFinal
     const sdkToolErrors: SdkToolError[] = []
     step = new StepMessage(emit)
     try {
@@ -284,48 +292,27 @@ export async function streamSingleStepWithRetries(options: {
         }
       }
 
-      const finalStep = await result.getFinalStep()
+      finalStep = await result.getFinalStep()
       abortSignal?.throwIfAborted()
 
       if (finalStep.rawFinishReason === 'model_context_window_exceeded') {
-        const norm = normalizeUsage(finalStep.usage)
-        const modelId = typeof model === 'string' ? model : model.modelId
-        const rec = tracker.record(modelId || 'mock-model', norm, {
-          kind: 'main',
-          usage: finalStep.usage,
-          durationMs: performance.now() - startedAt,
-        })
-        emit({
-          type: 'usage',
-          modelId: modelId || 'mock-model',
-          usage: norm,
-          record: rec,
-        })
-        if (!compactedForOverflow && compactOnOverflow) {
-          step.endInterrupted('error', 'model_context_window_exceeded')
-          try {
-            await recoverOverflow()
-          } catch (compactError) {
-            emitEmptyTurnEnd()
-            abortSignal?.throwIfAborted()
-            throw new Error(
-              `model_context_window_exceeded (compacting the context to recover failed: ${errorMessageOf(compactError)})`,
-            )
-          }
-          continue
+        contextWindowExceeded = true
+      } else {
+        if (streamFinishReason !== undefined) {
+          showSources()
+          step.end(streamFinishReason, false)
         }
-        step.endInterrupted('error', 'model_context_window_exceeded')
-        throw new Error('Context overflow: model_context_window_exceeded')
+        if (retried) {
+          emit({ type: 'auto_retry_end', success: true, attempt: retried })
+        }
+        return {
+          finalStep,
+          sources,
+          startedAt,
+          sdkToolErrors,
+          producer: attemptProducer,
+        }
       }
-
-      if (streamFinishReason !== undefined) {
-        showSources()
-        step.end(streamFinishReason, false)
-      }
-      if (retried) {
-        emit({ type: 'auto_retry_end', success: true, attempt: retried })
-      }
-      return { finalStep, sources, startedAt, sdkToolErrors }
     } catch (error) {
       if (abortSignal?.aborted) {
         recordMidStreamAbort({
@@ -360,10 +347,13 @@ export async function streamSingleStepWithRetries(options: {
       const errorMessage = errorMessageOf(error)
       const canResend = !tools.hasHostedTools && !stepHostedStarted
       const apiError = inspectProviderApiError(error)
-      if (
+      const canRecoverOverflow =
         (canResend ||
-          (apiError &&
+          (apiError !== undefined &&
             (apiError.statusCode === 400 || apiError.statusCode === 413))) &&
+        !stepHostedStarted
+      if (
+        canRecoverOverflow &&
         !compactedForOverflow &&
         compactOnOverflow &&
         isContextOverflow(error)
@@ -372,12 +362,18 @@ export async function streamSingleStepWithRetries(options: {
         try {
           await recoverOverflow()
         } catch (compactError) {
+          const message = `${errorMessage} (compacting the context to recover failed: ${errorMessageOf(compactError)})`
+          if (retried) {
+            emit({
+              type: 'auto_retry_end',
+              success: false,
+              attempt: retried,
+              finalError: message,
+            })
+          }
           emitEmptyTurnEnd()
           abortSignal?.throwIfAborted()
-          throw new Error(
-            `${errorMessage} (compacting the context to recover failed: ${errorMessageOf(compactError)})`,
-            { cause: error },
-          )
+          throw new Error(message, { cause: error })
         }
         continue
       }
@@ -401,6 +397,11 @@ export async function streamSingleStepWithRetries(options: {
           emitEmptyTurnEnd()
           throw sleepError
         })
+        const nextProducer = options.resolveProducer?.()
+        if (nextProducer !== undefined && nextProducer !== attemptProducer) {
+          attemptProducer = nextProducer
+          requestMessages = await options.refreshMessages(nextProducer)
+        }
         continue
       }
       if (retried) {
@@ -425,10 +426,56 @@ export async function streamSingleStepWithRetries(options: {
       })
       throw error
     }
+
+    if (contextWindowExceeded) {
+      const norm = normalizeUsage(finalStep.usage)
+      const modelId = typeof model === 'string' ? model : model.modelId
+      const rec = tracker.record(modelId || 'mock-model', norm, {
+        kind: 'main',
+        usage: finalStep.usage,
+        durationMs: performance.now() - startedAt,
+      })
+      emit({
+        type: 'usage',
+        modelId: modelId || 'mock-model',
+        usage: norm,
+        record: rec,
+      })
+      step.endInterrupted('error', 'model_context_window_exceeded')
+      if (!stepHostedStarted && !compactedForOverflow && compactOnOverflow) {
+        try {
+          await recoverOverflow()
+        } catch (compactError) {
+          const message = `model_context_window_exceeded (compacting the context to recover failed: ${errorMessageOf(compactError)})`
+          if (retried) {
+            emit({
+              type: 'auto_retry_end',
+              success: false,
+              attempt: retried,
+              finalError: message,
+            })
+          }
+          emitEmptyTurnEnd()
+          abortSignal?.throwIfAborted()
+          throw new Error(message)
+        }
+        continue
+      }
+      if (retried) {
+        emit({
+          type: 'auto_retry_end',
+          success: false,
+          attempt: retried,
+          finalError: 'Context overflow: model_context_window_exceeded',
+        })
+      }
+      emitEmptyTurnEnd()
+      throw new Error('Context overflow: model_context_window_exceeded')
+    }
   }
 }
 
-export function filterHostedToolMessages(
+function filterHostedToolMessages(
   responseMessages: readonly ModelMessage[],
   clientCalls: readonly ToolCallPart[],
 ): ModelMessage[] {
@@ -461,7 +508,7 @@ export function persistAssistantStepTx(options: {
   rawUsage: ProviderUsage
   sdkToolErrors?: ReadonlyMap<string, string>
   terminalError?: (toolName: string) => string
-}): SessionMessageEntry {
+}): { entry: SessionMessageEntry; hostedMessages: ModelMessage[] } {
   const {
     db,
     store,
@@ -535,7 +582,7 @@ export function persistAssistantStepTx(options: {
     )
     for (const [idx, call] of clientCalls.entries()) {
       const def = registry.get(call.toolName)
-      const execMode = def?.executionMode ?? 'parallel'
+      const execMode = def?.executionMode ?? 'sequential'
       const replay = def?.replay === 'safe' ? 'safe' : 'none'
       const failureText =
         sdkToolErrors?.get(call.toolCallId) ?? terminalError?.(call.toolName)
@@ -566,12 +613,13 @@ export function persistAssistantStepTx(options: {
         txNow,
       )
     }
-    for (const hostedMsg of filterHostedToolMessages(
+    const hostedMessages = filterHostedToolMessages(
       responseMessages,
       clientCalls,
-    )) {
+    )
+    for (const hostedMsg of hostedMessages) {
       store.appendMessage(hostedMsg, { runId })
     }
-    return entry
+    return { entry, hostedMessages }
   })
 }

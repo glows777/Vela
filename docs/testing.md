@@ -107,7 +107,7 @@ The built-in memory extension is always loaded, like in the CLI; the RAG extensi
 | `skills` | Skills to write to `cwd/.skills/<name>/SKILL.md` (`name`, `description`, `body`, `disableModelInvocation?`). |
 | `embedder` | `true` loads RAG with the faux embedder, or pass your own. |
 | `cwd`, `dataDir` | Reuse a directory (for resume tests); `dataDir` is relative to `cwd`, default `.vela-data`. |
-| `sessionStorage` | Where session history is stored; default is files under `dataDir` (same as `createVela`). |
+| `ephemeralSessions` | Keep session history in an in-memory SQLite DB instead of writing `vela.db` under `dataDir` (default `false`). |
 | `thinkingLevel`, `limits`, `logger` | Same as `createVela()`. `limits.retryBaseMs` defaults to 0 so retries don't wait. |
 | `allowPendingResponses` | Don't fail cleanup when script responses are left over. |
 

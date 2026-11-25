@@ -54,6 +54,12 @@ function deepMergeOptions(
   const merged: Record<string, unknown> = { ...target }
   for (const [key, value] of Object.entries(patch)) {
     const existing = merged[key]
+    if (
+      (value === undefined || value === null) &&
+      existing !== undefined &&
+      existing !== null
+    )
+      continue
     merged[key] =
       isPlainRecord(existing) && isPlainRecord(value)
         ? deepMergeOptions(existing, value)

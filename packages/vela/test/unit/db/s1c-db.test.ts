@@ -103,10 +103,7 @@ test('openDatabase initializes WAL, pragmas, 0700/0600 permissions without mutat
   const migrations = db.all<{ version: number; name: string }>(
     'SELECT version, name FROM schema_migrations',
   )
-  expect(migrations).toEqual([
-    { version: 1, name: '001_initial' },
-    { version: 2, name: '002_s2b_columns' },
-  ])
+  expect(migrations).toEqual([{ version: 1, name: '001_initial' }])
   expect(Object.getPrototypeOf(migrations[0])).toBe(Object.prototype)
 
   db.close()
@@ -617,50 +614,38 @@ test('s1c audit schema fixes: oauth_registrations, ON DELETE SET NULL, run trigg
   expect(() => applyMigrations(db)).toThrow(/newer/i)
 })
 
-test('R2: upgrading existing v1 database applies 002_s2b_columns cleanly', () => {
-  const dir = tempDir('vela-v1-upgrade-')
-  const dbPath = join(dir.path, 'v1.db')
-  const raw = new DatabaseSync(dbPath)
-  try {
-    raw.exec(INITIAL_SCHEMA_SQL)
-    raw.exec('PRAGMA user_version = 1')
-    raw.exec(`
-      INSERT INTO schema_migrations (version, name, applied_at)
-      VALUES (1, '001_initial', '2026-11-24T00:00:00Z');
-      INSERT INTO sessions (id, kind, state, created_at, updated_at)
-      VALUES ('v1-s', 'chat', 'idle', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z');
-      INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at)
-      VALUES ('v1-r', 'v1-s', 'vela', 'user', 'completed', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z');
-    `)
-  } finally {
-    raw.close()
-  }
-
-  const migrated = openDatabase({ path: dbPath })
-  cleanup.push({ dir, db: migrated })
-  expect(migrated.schemaVersion).toBe(SCHEMA_VERSION)
-  const versions = migrated
-    .all<{ version: number; name: string }>(
-      'SELECT version, name FROM schema_migrations ORDER BY version',
-    )
-    .map((r) => [r.version, r.name])
-  expect(versions).toEqual([
-    [1, '001_initial'],
-    [2, '002_s2b_columns'],
-  ])
-  migrated.run("UPDATE runs SET owner_token = 'tok-1' WHERE id = 'v1-r'")
-  migrated.run(
-    "INSERT INTO vela_messages (session_id, id, seq, kind, role, content_json, choice_json, location_json, created_at) VALUES ('v1-s', 'm-v2', 1, 'message', 'user', '{}', '{\"model\":\"openai/gpt-5\"}', '{\"environment\":\"local\",\"cwd\":\"/tmp\"}', '2026-11-24T00:00:00Z')",
+test('fresh v1 database includes s2b columns (owner_token, tool_call_row_id, choice_json, location_json)', () => {
+  const { db } = openTempDb('v1-s2b-columns.db')
+  expect(db.schemaVersion).toBe(1)
+  expect(SCHEMA_VERSION).toBe(1)
+  expect(INITIAL_SCHEMA_SQL).toContain('owner_token')
+  const now = '2026-11-24T00:00:00Z'
+  db.run(
+    "INSERT INTO sessions (id, kind, state, created_at, updated_at) VALUES ('v1-s', 'chat', 'idle', ?, ?)",
+    now,
+    now,
   )
-  migrated.run(
-    "INSERT INTO vela_tool_calls (id, run_id, session_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc-v2', 'v1-r', 'v1-s', 'm-v2', 'c1', 0, 'bash', '{}', 'awaiting_approval', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')",
+  db.run(
+    "INSERT INTO runs (id, session_id, driver, trigger, status, owner_token, started_at, updated_at) VALUES ('v1-r', 'v1-s', 'vela', 'user', 'completed', 'tok-1', ?, ?)",
+    now,
+    now,
   )
-  migrated.run(
-    "INSERT INTO approvals (id, session_id, run_id, tool_call_row_id, tool_call_id, tool_name, summary, status, created_at) VALUES ('ap-v2', 'v1-s', 'v1-r', 'tc-v2', 'c1', 'bash', 'ok', 'pending', '2026-11-24T00:00:00Z')",
+  db.run(
+    "INSERT INTO vela_messages (session_id, id, seq, kind, role, content_json, choice_json, location_json, created_at) VALUES ('v1-s', 'm-v1', 1, 'message', 'user', '{}', '{\"model\":\"openai/gpt-5\"}', '{\"environment\":\"local\",\"cwd\":\"/tmp\"}', ?)",
+    now,
+  )
+  db.run(
+    "INSERT INTO vela_tool_calls (id, run_id, session_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc-v1', 'v1-r', 'v1-s', 'm-v1', 'c1', 0, 'bash', '{}', 'awaiting_approval', ?, ?)",
+    now,
+    now,
+  )
+  db.run(
+    "INSERT INTO approvals (id, session_id, run_id, tool_call_row_id, tool_call_id, tool_name, summary, status, created_at) VALUES ('ap-v1', 'v1-s', 'v1-r', 'tc-v1', 'c1', 'bash', 'ok', 'pending', ?)",
+    now,
   )
   expect(
-    migrated.get<{ tool_call_row_id: string | null }>(
-      "SELECT tool_call_row_id FROM approvals WHERE id = 'ap-v2'",
+    db.get<{ tool_call_row_id: string | null }>(
+      "SELECT tool_call_row_id FROM approvals WHERE id = 'ap-v1'",
     ),
-  ).toEqual({ tool_call_row_id: 'tc-v2' })
+  ).toEqual({ tool_call_row_id: 'tc-v1' })
 })

@@ -338,7 +338,6 @@ test('with automatic compaction off nothing compacts on its own and an overflow 
   t.session.autoCompaction = false
   for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
   expect(t.eventsOf('compaction_start')).toEqual([])
-  expect(t.eventsOf('context_prepare')).toEqual([])
 
   await expect(t.run('Question 4')).rejects.toThrow('prompt is too long')
   expect(t.eventsOf('compaction_start')).toEqual([])

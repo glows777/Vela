@@ -81,7 +81,7 @@ async function invoke(
     call_index: 0,
     tool_name: name,
     input_json: JSON.stringify(input),
-    execution_mode: fx.registry.get(name)?.executionMode ?? 'parallel',
+    execution_mode: fx.registry.get(name)?.executionMode ?? 'sequential',
     replay: fx.registry.get(name)?.replay === 'safe' ? 'safe' : 'none',
     location_json: null,
     status: 'pending',

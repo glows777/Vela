@@ -4,7 +4,7 @@ import {
   estimateRequestTokens,
 } from '../../../../src/driver/context/request.ts'
 import type { ModelMessage } from '../../../../src/driver/index.ts'
-import { estimateMessageTokens } from '../../../../src/driver/usage/tracker.ts'
+import { estimateMessagesTokens } from '../../../../src/driver/messages.ts'
 import { toAiModelMessages } from '../../../../src/providers/index.ts'
 import { createFauxModel } from '../../../../src/testing/core/faux.ts'
 
@@ -16,9 +16,9 @@ test('each image counts as 1200 tokens, independent of base64 length', async () 
   ]
   const small = messages('AAAA')
   const large = messages('A'.repeat(2_000_000))
-  expect(estimateMessageTokens(small)).toBeGreaterThanOrEqual(1200)
-  expect(estimateMessageTokens(small)).toBeLessThan(1260)
-  expect(estimateMessageTokens(large)).toBe(estimateMessageTokens(small))
+  expect(estimateMessagesTokens(small)).toBeGreaterThanOrEqual(1200)
+  expect(estimateMessagesTokens(small)).toBeLessThan(1260)
+  expect(estimateMessagesTokens(large)).toBe(estimateMessagesTokens(small))
   const request = createRequestSnapshot(
     createFauxModel(),
     '',

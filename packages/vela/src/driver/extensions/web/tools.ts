@@ -16,6 +16,7 @@ type SearchInput = z.infer<typeof searchInputSchema>
 export function tavilySearchTool(apiKey: string): ToolDefinition {
   return {
     name: 'search',
+    executionMode: 'parallel',
     description:
       'Search the web for up-to-date information. Returns titles, links and content summaries of relevant pages',
     inputSchema: searchInputSchema,
@@ -61,6 +62,7 @@ export function tavilySearchTool(apiKey: string): ToolDefinition {
 export function serperSearchTool(apiKey: string): ToolDefinition {
   return {
     name: 'search',
+    executionMode: 'parallel',
     description:
       'Search the web for up-to-date information. Returns titles, links and snippets of Google search results',
     inputSchema: searchInputSchema,
@@ -137,6 +139,7 @@ const fetchInputSchema = z.object({
 
 export const webFetchTool: ToolDefinition = {
   name: 'fetch',
+  executionMode: 'parallel',
   description: 'Fetch the web page at a URL and convert it to Markdown',
   inputSchema: fetchInputSchema,
   annotations: { readOnlyHint: true, openWorldHint: true },

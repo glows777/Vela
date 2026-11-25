@@ -499,7 +499,7 @@ process.wait()
 
 | | pi | Vela |
 |---|---|---|
-| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are Vela `ModelMessage`s (an inline image part is `{ "type": "image", "data", "mimeType" }`) and the stop reason is on `message_end`; the same `compaction_start` / `compaction_end`; Vela adds `context_prepare` (`summary-required`), `usage` and others. See [SDK events](sdk.md#events). |
+| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are Vela `ModelMessage`s (an inline image part is `{ "type": "image", "data", "mimeType" }`) and the stop reason is on `message_end`; the same `compaction_start` / `compaction_end`; Vela adds `usage`, `approval_requested`, `notify` and others. See [SDK events](sdk.md#events). |
 | `prompt` / `steer` | Accept `images` | Accept `images` as `{ "type": "image", "data", "mimeType" }`. See [Image attachments](#image-attachments). |
 | `steer` when idle | Queued | Start a run (`disposition: "started"`) |
 | `new_session`, `switch_session` | Return `{ cancelled }`; `switch_session` takes `sessionPath` | Return `{ sessionId }`; `switch_session` takes `sessionId` |

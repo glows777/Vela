@@ -44,6 +44,7 @@ export const createBashTool = (
   { shellPath }: BashToolOptions = {},
 ): ToolDefinition => ({
   name: 'bash',
+  executionMode: 'parallel',
   description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read can page through. With run_in_background the command starts as a background task: the call returns at once with its id, and its result arrives here when it exits.`,
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },

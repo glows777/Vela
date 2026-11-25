@@ -9,14 +9,13 @@ import {
   type ThinkingLevel,
 } from '../providers/models/index.ts'
 import type { VelaLimits } from '../shared/limits.ts'
-import type { ModelInput } from '../shared/provider-types.ts'
+import type { ModelInput, ReasoningOption } from '../shared/provider-types.ts'
 import type {
   CustomMessage,
   CustomMessageInfo,
   VelaEvent,
   VelaEventListener,
 } from './agent/events.ts'
-import { canSummarize } from './context/compressor.ts'
 import { ContextManager } from './context/manager.ts'
 import {
   type RequestSnapshot,
@@ -28,12 +27,7 @@ import type {
   BeforeAgentStartResult,
   InputSource,
 } from './extensions/events.ts'
-import {
-  estimateMessagesTokens,
-  type ImageContent,
-  type ModelMessage,
-  type TextContent,
-} from './messages.ts'
+import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
 import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
 import {
   cloneLeaf,
@@ -42,7 +36,20 @@ import {
   forkPoint,
 } from './session/branch-selection.ts'
 import { extractToolMessageDetails } from './session/db-store.ts'
-import { SessionDefaultState } from './session/defaults.ts'
+import {
+  buildForkSessionOptions,
+  defaultAbortError,
+  linkAbortSignal,
+  prepareAgentTurn,
+  resolveRunProducer,
+  restoreBranchState,
+  runLoopCompaction,
+  runPostTurnCompaction,
+  SessionDefaultState,
+  splitUserMessageContent,
+  summarizeEntriesForTree,
+  userPromptMessage,
+} from './session/defaults.ts'
 import type {
   SessionDeps as SessionDependencies,
   ForkResult as SessionForkResult,
@@ -56,8 +63,8 @@ import {
   type SessionTreeNode,
 } from './session/entries.ts'
 import { exportBranch } from './session/export.ts'
-import { type LoadedSessionContext, SessionStore } from './session/index.ts'
-import { MessageQueue, messageText } from './session/message-queue.ts'
+import { SessionStore } from './session/index.ts'
+import { MessageQueue } from './session/message-queue.ts'
 import {
   assertSessionId,
   type ForkOptions,
@@ -316,7 +323,9 @@ export class VelaSession {
   }
 
   private applyModel(resolved: ResolvedModel): void {
+    const previousRef = this.defaults.lastResolvedRef
     this.defaults.resolved = resolved
+    this.defaults.lastResolvedRef = resolved.info.ref
     this.defaults.hooked = undefined
     const limits = limitsForModel(
       resolved.info,
@@ -325,7 +334,10 @@ export class VelaSession {
     Object.assign(this.limits, limits)
     Object.assign(this.contextManager.limits, limits)
     const window = resolved.info.contextWindow ?? CONTEXT_WINDOW
-    this.tracker.setModel(window, resolved.info.cost)
+    this.tracker.setModel(window, resolved.info.cost, {
+      keepCalibration:
+        previousRef === undefined || previousRef === resolved.info.ref,
+    })
   }
 
   /** Emit a notification event on this session's event stream. */
@@ -348,6 +360,15 @@ export class VelaSession {
         }),
     })
     return this.defaults.hooked
+  }
+
+  /** @internal Hook-wrapped model and reasoning level as sent in requests. */
+  inspectToolOptions(): { model: ModelInput; reasoning?: ReasoningOption } {
+    const { info } = this.resolveModel()
+    return {
+      model: this.requestModel(),
+      reasoning: reasoningOption(this.defaults.thinkingLevelFor(info), info),
+    }
   }
 
   /** Current model handle. Throws if the name cannot be resolved. */
@@ -530,14 +551,14 @@ export class VelaSession {
     return this.deps.extensions.beforeAgentStart(this, '')
   }
 
-  /** @internal Prepares the context before a request (threshold summary). */
+  /** @internal Prepares the context before a request. */
   prepareContext(
     request: RequestSnapshot,
-    options?: { allowSummary?: boolean; maxOutputTokens?: number },
+    options?: { maxOutputTokens?: number },
   ): Promise<void> {
     request.maxOutputTokens =
       options?.maxOutputTokens ?? this.modelInfo.maxTokens
-    return this.contextManager.prepare(request, options)
+    return this.contextManager.prepare(request)
   }
 
   /** Flushes pending storage operations. */
@@ -664,15 +685,16 @@ export class VelaSession {
         summarizeBranch: async (entries, focus, sig) => {
           const branchMessages = entriesToMessages(entries)
           if (!branchMessages.length) return undefined
-          const request = await resolveRequestSnapshot(
+          return summarizeEntriesForTree(
+            this.contextManager,
             this.model,
             this.buildSystem(),
             this.registry.toProviderTools(),
             branchMessages,
-            sig,
             this.modelInfo.maxTokens,
+            focus,
+            sig,
           )
-          return this.contextManager.summarizeBranch(request, 0, focus)
         },
         loadBranch: (ctx) => this.loadBranch(ctx),
         save: () => this.save(),
@@ -681,24 +703,20 @@ export class VelaSession {
   }
 
   /** Makes the store's current branch the session's context, model and thinking level. */
-  private async loadBranch(context: SessionContext): Promise<void> {
-    this.contextManager.restore(context)
-    this.registry.discoveredTools = new Set(await this.store.loadedTools())
-    for (const [message, info] of context.custom)
-      this.messageQueue.customMessages.set(message, info)
-    await this.defaults.restore(context, this.deps, this.id, (model) =>
-      this.selectModel(model, false),
-    )
-    const latest = (context as LoadedSessionContext).latestAssistantUsage
-    if (latest) {
-      this.tracker.restoreCalibration(
-        latest.inputTokens,
-        latest.outputTokens,
-        latest.trailingMessages,
-      )
-    } else {
-      this.tracker.setEstimatedTokens(estimateMessagesTokens(this.messages))
-    }
+  private loadBranch(context: SessionContext): Promise<void> {
+    return restoreBranchState({
+      context,
+      contextManager: this.contextManager,
+      registry: this.registry,
+      store: this.store,
+      customMessages: this.messageQueue.customMessages,
+      defaults: this.defaults,
+      deps: this.deps,
+      id: this.id,
+      selectModel: (model) => this.selectModel(model, false),
+      tracker: this.tracker,
+      messages: this.messages,
+    })
   }
 
   /**
@@ -714,18 +732,21 @@ export class VelaSession {
       await this.start(signal)
       if (await this.deps.extensions.beforeFork(this, entryId, position))
         return { cancelled: true }
-      const branchModel =
-        typeof this.defaults.modelChoice === 'string'
-          ? (this.store.modelAt(point.leafId) ?? this.defaults.modelChoice)
-          : this.defaults.modelChoice
-      return copyFork(this, point, options.sessionId, this.deps.openSession, {
-        ...routing.unroutedOptions(this.options),
-        location: this.location,
-        model: branchModel,
-        thinkingLevel:
-          this.store.thinkingAt(point.leafId) ?? this.defaults.thinking,
-        autoCompaction: this.autoCompaction,
-      })
+      return copyFork(
+        this,
+        point,
+        options.sessionId,
+        this.deps.openSession,
+        buildForkSessionOptions(
+          this.defaults,
+          this.store,
+          this.options,
+          this.location,
+          this.autoCompaction,
+          point.leafId,
+          (opts) => routing.unroutedOptions(opts),
+        ),
+      )
     })
   }
 
@@ -772,6 +793,8 @@ export class VelaSession {
       entries: this.store.getBranch(),
       name: this.name,
       model: this.defaults.modelChoice,
+      channel: this.channel,
+      parentSession: this.parentSession,
       format,
     })
   }
@@ -1020,17 +1043,7 @@ export class VelaSession {
   ): Promise<void> {
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
-    const text =
-      typeof content === 'string'
-        ? content
-        : content
-            .filter((part) => part.type === 'text')
-            .map((part) => part.text)
-            .join('\n')
-    const images =
-      typeof content === 'string'
-        ? undefined
-        : content.filter((part) => part.type === 'image')
+    const { text, images } = splitUserMessageContent(content)
     return this.promptInput(
       text,
       {
@@ -1096,13 +1109,7 @@ export class VelaSession {
 
   /** `/xxx` that is not an extension command, or plain input: runs when idle, queued by streamingBehavior while running. */
   private promptModel(input: string, options: PromptOptions): Promise<void> {
-    const content = options.images?.length
-      ? [
-          { type: 'text' as const, text: input },
-          ...options.images.map((image) => ({ ...image })),
-        ]
-      : input
-    return this.promptMessage({ role: 'user', content }, options)
+    return this.promptMessage(userPromptMessage(input, options.images), options)
   }
 
   private promptMessage(
@@ -1152,6 +1159,10 @@ export class VelaSession {
 
   private prompting = false
 
+  private flushCustom(): void {
+    this.messageQueue.flushPendingCustom((m) => this.append(m))
+  }
+
   private async run(
     input: ModelMessage | undefined,
     options: PromptOptions,
@@ -1159,11 +1170,8 @@ export class VelaSession {
     const busy = this.busy
     busy.locked = true
     this.prompting = true
-    const controller = new AbortController()
+    const { controller, unlink } = linkAbortSignal(options.signal)
     busy.controller = controller
-    const forward = () => controller.abort(options.signal?.reason)
-    options.signal?.addEventListener('abort', forward, { once: true })
-    if (options.signal?.aborted) forward()
     let failure: { error: unknown } | undefined
     const next = () => this.dequeueSteering()
     try {
@@ -1186,27 +1194,21 @@ export class VelaSession {
             input === undefined,
           )
           stopForHuman = outcome.reason === 'waiting_human'
-          if (
-            !stopForHuman &&
-            !controller.signal.aborted &&
-            !this.draining &&
-            this.autoCompaction
-          ) {
-            try {
-              const { info } = this.resolveModel()
-              await this.contextManager.compactIfNeeded(
-                await this.buildSnapshot(controller.signal, {
-                  model: this.requestModel(),
-                  maxOutputTokens: info.maxTokens,
-                }),
-              )
-            } catch (error) {
-              if (controller.signal.aborted || this.draining) throw error
+          await runPostTurnCompaction({
+            enabled: !stopForHuman && this.autoCompaction,
+            signal: controller.signal,
+            isDraining: () => this.draining,
+            buildSnapshot: () =>
+              this.buildSnapshot(controller.signal, {
+                model: this.requestModel(),
+                maxOutputTokens: this.resolveModel().info.maxTokens,
+              }),
+            compactIfNeeded: (req) => this.contextManager.compactIfNeeded(req),
+            warn: (msg) =>
               this.deps.logger.warn(
-                `[session:${this.id}] Post-turn compaction failed: ${error instanceof Error ? error.message : String(error)}`,
-              )
-            }
-          }
+                `[session:${this.id}] Post-turn compaction failed: ${msg}`,
+              ),
+          })
         } catch (error) {
           failure ??= { error }
         }
@@ -1214,24 +1216,20 @@ export class VelaSession {
         if (stopForHuman || controller.signal.aborted) break
         inputs = next()
         if (!inputs.length && !pendingToolCalls(this.messages).length) {
-          this.messageQueue.flushPendingCustom((message) =>
-            this.append(message),
-          )
+          this.flushCustom()
           inputs = next()
         }
       } while (inputs.length)
     } finally {
-      options.signal?.removeEventListener('abort', forward)
+      unlink()
       const hasPendingCalls = pendingToolCalls(this.messages).length > 0
-      if (!hasPendingCalls)
-        this.messageQueue.flushPendingCustom((message) => this.append(message))
+      if (!hasPendingCalls) this.flushCustom()
       this.toolDetails.clear()
       if (!hasPendingCalls) while (this.userBash.flush()) await this.save()
       busy.locked = false
       busy.controller = undefined
       this.prompting = false
-      if (!hasPendingCalls)
-        this.messageQueue.flushPendingCustom((message) => this.append(message))
+      if (!hasPendingCalls) this.flushCustom()
       this.emit({ type: 'agent_settled' })
     }
     if (failure) throw failure.error
@@ -1265,32 +1263,23 @@ export class VelaSession {
         this.defaults.modelChoice = info.ref
         this.store.setModelChoice(info.ref)
       }
-      inputs = await Promise.all(
-        inputs.map((m) => this.messageQueue.normalizeInput(m)),
-      )
-      signal.throwIfAborted()
-      const input = inputs.map(messageText).join('\n\n')
-      this.turn = { sections: {}, messages: [] }
-      const started = await this.deps.extensions.beforeAgentStart(this, input)
-      this.turn = started
-      const added = started.messages.map((m) =>
-        this.messageQueue.customMessage(m),
-      )
-      this.emit({ type: 'agent_start', input })
-      const newMessages: ModelMessage[] = []
-      const flushAndAppend = () => {
-        this.userBash.flush()
-        this.messageQueue.flushPendingCustom((m) => this.append(m))
-        for (const m of [
-          ...inputs,
-          ...this.messageQueue.nextTurnMessages.splice(0),
-          ...added,
-        ]) {
-          this.append(m)
-          newMessages.push(m)
-        }
-      }
-      if (!recoverPending) flushAndAppend()
+      const { newMessages, flushAndAppend } = await prepareAgentTurn({
+        inputs,
+        signal,
+        recoverPending,
+        normalizeInput: (m) => this.messageQueue.normalizeInput(m),
+        beforeAgentStart: (text) =>
+          this.deps.extensions.beforeAgentStart(this, text),
+        setTurn: (turn) => {
+          this.turn = turn
+        },
+        toCustomMessage: (m) => this.messageQueue.customMessage(m),
+        emitStart: (input) => this.emit({ type: 'agent_start', input }),
+        flushBash: () => this.userBash.flush(),
+        flushPendingCustom: (cb) => this.messageQueue.flushPendingCustom(cb),
+        nextTurnMessages: this.messageQueue.nextTurnMessages,
+        append: (m) => this.append(m),
+      })
       const { info: servingInfo } = this.resolveModel()
       serving.model = this.requestModel()
       serving.maxOutputTokens = servingInfo.maxTokens
@@ -1298,6 +1287,14 @@ export class VelaSession {
       return await this.driver.run({
         claim,
         model: serving.model,
+        producer: () =>
+          resolveRunProducer(
+            serving.model,
+            this.defaults.modelChoice,
+            servingInfo.provider,
+            this.channel,
+            this.deps.authMode,
+          ),
         trigger,
         maxOutputTokens: serving.maxOutputTokens,
         supportsImages: servingInfo.input?.includes('image') ?? true,
@@ -1326,6 +1323,7 @@ export class VelaSession {
         hasSteering: () => !this.draining && this.messageQueue.hasSteering,
         limits: this.limits,
         recoverPending,
+        allowWaitingHuman,
         onRecoveryComplete: recoverPending ? flushAndAppend : undefined,
         appendInput: (msg) => this.append(msg),
       })
@@ -1359,9 +1357,13 @@ export class VelaSession {
     serving?: { model?: ModelInput; maxOutputTokens?: number },
   ): Promise<void> {
     const request = await this.buildSnapshot(signal, serving)
-    if (!canSummarize(request.messages, this.limits.maxInputTokens))
-      throw new Error('Nothing to compact (session too small)')
-    await this.contextManager.compact(request, focus, reason)
+    await runLoopCompaction(
+      this.contextManager,
+      request,
+      this.limits.maxInputTokens,
+      reason,
+      focus,
+    )
   }
 
   /**
@@ -1381,12 +1383,7 @@ export class VelaSession {
    * Aborts the current agent loop and extension commands (if any) and waits until the agent loop actually stops
    * (like pi's `await abort()`). Queued messages stay in the queue; call clearQueue() first if needed.
    */
-  async abort(
-    reason: unknown = new DOMException(
-      'User cancelled the current operation',
-      'AbortError',
-    ),
-  ): Promise<void> {
+  async abort(reason: unknown = defaultAbortError()): Promise<void> {
     for (const controller of [this.busy.controller, ...this.commands.keys()])
       if (controller && !controller.signal.aborted) controller.abort(reason)
     await this.waitForIdle()

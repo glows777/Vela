@@ -95,6 +95,11 @@ export interface SessionDeps<Session> {
   ) => ResolvedModel
   /** Live subscription plan label for a provider/channel pair (reflects mid-session login/logout). */
   planLabel?: (provider: string, channel?: string) => string | undefined
+  /** Effective credential mode for a provider/channel pair (`oauth` vs `api_key`). */
+  authMode?: (
+    provider: string,
+    channel?: string,
+  ) => 'oauth' | 'api_key' | undefined
   thinkingLevel: ThinkingLevel
   /** Automatic compaction for new sessions */
   autoCompaction: boolean

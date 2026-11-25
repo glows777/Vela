@@ -70,6 +70,18 @@ function resolveKeepRecentTokens(maxInputTokens?: number): number {
   )
 }
 
+function findNextUserBoundary(
+  messages: readonly ModelMessage[],
+  afterIndex: number,
+): number {
+  for (let i = afterIndex + 1; i < messages.length; i++) {
+    if (messages[i]?.role === 'user' && isValidCutBoundary(messages, i)) {
+      return i
+    }
+  }
+  return -1
+}
+
 /**
  * Find the compaction boundary keeping `keepRecentTokens` of trailing messages without splitting
  * tool_call/tool_result pairs. Supports `isSplitTurn` when a single turn exceeds the budget.
@@ -81,15 +93,30 @@ export function findCompactionCut(
   if (messages.length < 2) {
     return { cutIndex: -1, turnStartIndex: 0, isSplitTurn: false }
   }
+  const hasPrevSummary = extractPreviousSummary(messages[0]) !== undefined
+  const minCutIndex = hasPrevSummary ? 2 : 1
+  if (messages.length <= minCutIndex) {
+    return { cutIndex: -1, turnStartIndex: 0, isSplitTurn: false }
+  }
+
   let accumulated = 0
   let fallbackUser = -1
   let fallbackAssistant = -1
   let budgetCut = -1
 
-  for (let i = messages.length - 1; i >= 1; i--) {
+  for (let i = messages.length - 1; i >= minCutIndex; i--) {
     accumulated += estimateMessagesTokens([messages[i]!])
     if (!isValidCutBoundary(messages, i)) continue
     const role = messages[i]!.role
+    if (
+      i === 1 &&
+      !hasPrevSummary &&
+      role === 'assistant' &&
+      estimateMessagesTokens([messages[0]!]) <= keepRecentTokens
+    ) {
+      // Avoid replacing a small initial user message with a larger summary while keeping huge tool results.
+      continue
+    }
     if (role === 'user' && fallbackUser === -1) fallbackUser = i
     if (role === 'assistant' && fallbackAssistant === -1) fallbackAssistant = i
     if (accumulated >= keepRecentTokens && budgetCut === -1) {
@@ -100,12 +127,20 @@ export function findCompactionCut(
     }
   }
 
-  // Prefer the turn's user boundary only if rewinding to it keeps total recent tokens
-  // within keepRecentTokens; otherwise split inside this turn at budgetCut (#536 #5).
+  // When budgetCut landed inside an assistant turn, prefer a clean user turn boundary
+  // if another user turn follows (normal multi-turn chat), or if rewinding to turnStart stays near budget.
   if (budgetCut > 0) {
+    const nextUser = findNextUserBoundary(messages, budgetCut)
+    if (nextUser !== -1) {
+      return {
+        cutIndex: nextUser,
+        turnStartIndex: nextUser,
+        isSplitTurn: false,
+      }
+    }
     const turnStart = turnStartBefore(messages, budgetCut)
     if (
-      turnStart > 0 &&
+      turnStart >= minCutIndex &&
       messages[turnStart]?.role === 'user' &&
       isValidCutBoundary(messages, turnStart) &&
       estimateMessagesTokens(messages.slice(turnStart)) <= keepRecentTokens
@@ -123,14 +158,17 @@ export function findCompactionCut(
     }
   }
 
-  if (fallbackUser > 0) {
+  if (fallbackUser >= minCutIndex) {
     return {
       cutIndex: fallbackUser,
       turnStartIndex: fallbackUser,
       isSplitTurn: false,
     }
   }
-  if (fallbackAssistant > 1) {
+  if (
+    fallbackAssistant >= minCutIndex &&
+    (hasPrevSummary || fallbackAssistant > 1)
+  ) {
     return {
       cutIndex: fallbackAssistant,
       turnStartIndex: turnStartBefore(messages, fallbackAssistant),
@@ -247,8 +285,11 @@ function buildCompactionMessages(
   removed: readonly ModelMessage[],
   splitPrefixStart: number | undefined,
   focus?: string,
+  isBranchSummary = false,
 ): ModelMessage[] {
-  const previousSummary = extractPreviousSummary(removed[0])
+  const previousSummary = isBranchSummary
+    ? undefined
+    : extractPreviousSummary(removed[0])
   const startOffset = previousSummary ? 1 : 0
   const historySlice =
     splitPrefixStart === undefined
@@ -320,7 +361,12 @@ export async function summarize(
     branchStart === undefined && cut.isSplitTurn
       ? cut.turnStartIndex
       : undefined
-  const messages = buildCompactionMessages(removed, splitPrefixStart, focus)
+  const messages = buildCompactionMessages(
+    removed,
+    splitPrefixStart,
+    focus,
+    branchStart !== undefined,
+  )
 
   const started = performance.now()
   const modelId =
@@ -356,13 +402,41 @@ export async function summarize(
   // Shared entries are visited once, including after resume.
   const read = new Set<string>()
   const modified = new Set<string>()
-  const calls: { toolName: string; input: unknown }[] = []
-  const fileMessages: ModelMessage[] = []
+  const calls: {
+    assistantMessageId?: string
+    toolCallId: string
+    toolName: string
+    input: unknown
+  }[] = []
+  const failedDbCalls = new Set<string>()
+  const lastCallById = new Map<string, number>()
+  const failedCallIndices = new Set<number>()
+  const unpairedFailedIds = new Set<string>()
+  if (store.db.open) {
+    const dbRows = store.db.all<{
+      assistant_message_id: string
+      tool_call_id: string
+      status: string
+      is_error: number
+    }>(
+      'SELECT assistant_message_id, tool_call_id, status, is_error FROM vela_tool_calls WHERE session_id = ?',
+      store.id,
+    )
+    for (const row of dbRows) {
+      if (row.status !== 'completed' || row.is_error === 1) {
+        failedDbCalls.add(`${row.assistant_message_id}:${row.tool_call_id}`)
+      }
+    }
+  }
+  const fileMessages: Array<{
+    entryId?: string
+    message: ModelMessage
+  }> = []
   const entries = removed.flatMap((message) => {
     const id = store.idOf(message)
     const entry = id ? store.getEntry(id) : undefined
     if (entry) return [entry]
-    fileMessages.push(message)
+    fileMessages.push({ entryId: id, message })
     return []
   })
   const extractFileTags = (summary: string) => {
@@ -373,7 +447,12 @@ export async function summarize(
       const list = summary.match(
         new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`),
       )?.[1]
-      if (list) for (const path of list.split('\n')) files.add(path)
+      if (list) {
+        for (const path of list.split('\n')) {
+          const trimmed = path.trim()
+          if (trimmed) files.add(trimmed)
+        }
+      }
     }
   }
   const visited = new Set<string>()
@@ -389,10 +468,10 @@ export async function summarize(
     } else if (entry.type === 'branch_summary') {
       extractFileTags(entry.summary)
     } else if (entry.type === 'message' && !entry.stopReason) {
-      fileMessages.push(entry.message)
+      fileMessages.push({ entryId: entry.id, message: entry.message })
     }
   }
-  for (const message of fileMessages) {
+  for (const { entryId, message } of fileMessages) {
     if (
       message.role === 'user' &&
       typeof message.content === 'string' &&
@@ -402,12 +481,42 @@ export async function summarize(
       extractFileTags(message.content)
       continue
     }
+    if (message.role === 'tool' && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (part.type !== 'tool_result') continue
+        const out = part.output
+        if (
+          out.type === 'error-text' ||
+          out.type === 'error-json' ||
+          out.type === 'execution-denied' ||
+          (out.type === 'content' && out.isError === true)
+        ) {
+          const matched = lastCallById.get(part.toolCallId)
+          if (matched !== undefined) failedCallIndices.add(matched)
+          else unpairedFailedIds.add(part.toolCallId)
+        }
+      }
+      continue
+    }
     if (message.role !== 'assistant' || !Array.isArray(message.content))
       continue
-    for (const part of message.content)
-      if (part.type === 'tool_call') calls.push(part)
+    const assistantMessageId = entryId ?? store.idOf(message)
+    for (const part of message.content) {
+      if (part.type !== 'tool_call') continue
+      const idx = calls.push({ ...part, assistantMessageId }) - 1
+      lastCallById.set(part.toolCallId, idx)
+    }
   }
-  for (const call of calls) {
+  for (let i = 0; i < calls.length; i++) {
+    const call = calls[i]!
+    if (
+      failedCallIndices.has(i) ||
+      unpairedFailedIds.has(call.toolCallId) ||
+      (call.assistantMessageId &&
+        failedDbCalls.has(`${call.assistantMessageId}:${call.toolCallId}`))
+    ) {
+      continue
+    }
     const input = call.input as { path?: unknown } | undefined
     if (typeof input?.path !== 'string' || !input.path) continue
     if (call.toolName === 'read') read.add(input.path)

@@ -14,6 +14,7 @@ import {
   type SessionMessageEntry,
   type SessionSummary,
 } from './entries.ts'
+import type { LoadedSessionContext } from './options.ts'
 import { type SessionSearchHit, searchSessionText } from './search.ts'
 
 export type SessionRow = {
@@ -380,13 +381,13 @@ export function queryBranchRows(
        include_in_context, stop_reason, produced_by, first_kept_id,
        tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
        cache_write_tokens, cost_usd, duration_ms, details_json, choice_json,
-       location_json, created_at
+       location_json, created_at, path
      ) AS (
        SELECT session_id, id, parent_id, seq, run_id, kind, role, content_json,
               include_in_context, stop_reason, produced_by, first_kept_id,
               tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
               cache_write_tokens, cost_usd, duration_ms, details_json, choice_json,
-              location_json, created_at
+              location_json, created_at, ',' || id || ','
        FROM vela_messages
        WHERE session_id = ? AND id = ?
        UNION ALL
@@ -394,11 +395,17 @@ export function queryBranchRows(
               m.include_in_context, m.stop_reason, m.produced_by, m.first_kept_id,
               m.tokens_before, m.label, m.input_tokens, m.output_tokens, m.cache_read_tokens,
               m.cache_write_tokens, m.cost_usd, m.duration_ms, m.details_json, m.choice_json,
-              m.location_json, m.created_at
+              m.location_json, m.created_at, b.path || m.id || ','
        FROM vela_messages m
        JOIN branch b ON m.session_id = b.session_id AND m.id = b.parent_id
+       WHERE instr(b.path, ',' || m.id || ',') = 0
      )
-     SELECT * FROM branch ORDER BY seq ASC`,
+     SELECT session_id, id, parent_id, seq, run_id, kind, role, content_json,
+            include_in_context, stop_reason, produced_by, first_kept_id,
+            tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
+            cache_write_tokens, cost_usd, duration_ms, details_json, choice_json,
+            location_json, created_at
+     FROM branch ORDER BY seq ASC`,
     sessionId,
     fromId,
   )
@@ -567,6 +574,19 @@ export function computeLatestAssistantUsage(
     outputTokens: latestRow.output_tokens ?? 0,
     trailingMessages: messages.slice(idx + 1),
   }
+}
+
+export function computeBranchUsage(
+  db: VelaDatabase,
+  sessionId: string,
+  leafId: string | null,
+  messages: readonly ModelMessage[],
+  ids: ReadonlyMap<ModelMessage, string>,
+): LoadedSessionContext['latestAssistantUsage'] {
+  if (!db.open || leafId === null) return undefined
+  const rows = queryBranchRows(db, sessionId, leafId)
+  const activeIds = new Set(rows.map((r) => r.id))
+  return computeLatestAssistantUsage(rows, activeIds, messages, ids)
 }
 
 export function searchSessionsInDb(
