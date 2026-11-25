@@ -562,9 +562,16 @@ test('bash run_in_background returns at once with its id, then the exit starts i
     'Background command bg-1 finished with exit code 0.',
   )
   expect(delivery).toContain('READY')
-  expect(
-    await Bun.file(t.session.registry.results.history.path).text(),
-  ).toContain('"backgroundTaskId":"bg-1"')
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+  try {
+    const row = db.get<{ details_json: string | null }>(
+      'SELECT details_json FROM vela_tool_calls ORDER BY created_at DESC LIMIT 1',
+    )
+    expect(row?.details_json).toContain('bg-1')
+  } finally {
+    db.close()
+  }
 })
 
 test('a long background command spills in the session environment, and read pages it', async () => {
@@ -599,7 +606,7 @@ test('a long background command spills in the session environment, and read page
   expect(delivery).not.toContain('\n1\n')
   log = /Full output: (\S+)/.exec(delivery)![1]!
   // The file is the environment's own spill file, inside the session, so read pages all of it.
-  expect(log).toStartWith(t.session.registry.results.dir)
+  expect(log).toStartWith(t.session.registry.spillDir!)
   expect(await Bun.file(log).text()).toEndWith('20000\n')
   expect((await Bun.file(log).text()).split('\n').length).toBe(20001)
   await t.run('read the log')

@@ -65,8 +65,8 @@ test('free-text checkpoint appends tool-derived file lists and reaches a resumed
   expect(summary).toContain(
     '<modified-files>\nbeta.txt\nreport.txt\n</modified-files>',
   )
-  expect(summary.match(/Earlier tool output:/g)).toHaveLength(1)
-  expect(summary).toContain('/snapshots/through-')
+  expect(summary).not.toContain('Earlier tool output:')
+  expect(summary).not.toContain('/snapshots/through-')
   expect(await t.readFile('report.txt')).toBe('alpha passed')
   const generated = t.model.calls.find((call) => call.kind === 'generate')!
   expect(generated.responseFormat?.type).not.toBe('json')
@@ -84,7 +84,7 @@ test('free-text checkpoint appends tool-derived file lists and reaches a resumed
   expect(again).toContain(
     '<modified-files>\nbeta.txt\nreport.txt\n</modified-files>',
   )
-  expect(again.match(/Earlier tool output:/g)).toHaveLength(1)
+  expect(again).not.toContain('Earlier tool output:')
   const resumed = createTestVela({
     cwd: t.cwd,
     responses: [fauxText('Repair beta next.')],
@@ -158,7 +158,7 @@ for (const nestedBranch of [false, true]) {
     expect(first).toContain('<modified-files>\nx.txt\n</modified-files>')
     if (nestedBranch)
       expect(first).toContain('<read-files>\nreference.txt\n</read-files>')
-    expect(first.match(/Earlier tool output:/g)).toHaveLength(1)
+    expect(first).not.toContain('Earlier tool output:')
     // A compaction entry must keep the branch-summary provenance on the next compaction.
     await resumed.run('Continue')
     await resumed.session.compact()
@@ -242,11 +242,11 @@ for (const [label, response, error] of [
     for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
     const messages = JSON.stringify(t.messages)
     const entries = t.session.getEntries()
-    const saved = await t.readData('sessions/default/transcript.jsonl')
+    const saved = entries.length
     await expect(t.session.compact()).rejects.toThrow(error)
     expect(JSON.stringify(t.messages)).toBe(messages)
     expect(t.session.getEntries()).toEqual(entries)
-    expect(await t.readData('sessions/default/transcript.jsonl')).toBe(saved)
+    expect(t.session.getEntries()).toHaveLength(saved)
     expect(t.session.contextManager.state.summary).toBe('')
     expect(t.eventsOf('compaction_end').at(-1)).toMatchObject({
       reason: 'manual',
@@ -282,7 +282,7 @@ test('interrupting a summary preserves history and a later prompt still works', 
   const t = createTestVela({ model })
   for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
   const messages = JSON.stringify(t.messages)
-  const saved = await t.readData('sessions/default/transcript.jsonl')
+  const saved = t.session.getEntries()
   const compacting = t.session.compact()
   const rejected = compacting.catch((error: unknown) => error)
   await generating
@@ -291,7 +291,7 @@ test('interrupting a summary preserves history and a later prompt still works', 
   await aborting
   expect(await rejected).toBeInstanceOf(Error)
   expect(JSON.stringify(t.messages)).toBe(messages)
-  expect(await t.readData('sessions/default/transcript.jsonl')).toBe(saved)
+  expect(t.session.getEntries()).toEqual(saved)
   expect(t.eventsOf('compaction_end').at(-1)).toMatchObject({
     aborted: true,
     willRetry: false,
@@ -350,7 +350,7 @@ for (const mode of ['manual', 'threshold', 'overflow', 'branch'] as const) {
         .find((entry) => entry.type === 'message')!
       await t.session.navigateTree(target.id, { summarize: true })
     } else await t.session.compact()
-    expect(outputLimit).toBe(32000)
+    expect(outputLimit).toBe(8192)
     expect(model.calls.filter((call) => call.kind === 'generate')).toHaveLength(
       1,
     )

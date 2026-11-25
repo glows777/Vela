@@ -62,8 +62,8 @@ test('summary sends only the dropped messages as text, without tool definitions'
       )
     }) as typeof fetch,
   }).chat('test-model')
-  const store = new SessionStore('prefix', dir)
-  const registry = new ToolRegistry(store.results)
+  const store = new SessionStore('prefix', join(dir, 'vela.db'))
+  const registry = new ToolRegistry(join(dir, 'results'))
   registry.register(
     {
       name: 'read',
@@ -127,16 +127,16 @@ test('summary sends only the dropped messages as text, without tool definitions'
   expect(requests[1]!.messages.slice(0, requests[0]!.messages.length)).toEqual(
     requests[0]!.messages,
   )
-  // The summary request does not reuse the main prefix: the conversation and the control message only
-  expect(requests[2]!.messages).toHaveLength(3)
-  expect(requests[2]!.tools).toBeUndefined()
-  expect(requests[2]!.tool_choice).toBeUndefined()
-  const conversation = JSON.stringify(requests[2]!.messages[1])
+  const summaryReq = requests[2]!
+  expect(summaryReq.messages).toHaveLength(2)
+  expect(summaryReq.tools).toBeUndefined()
+  expect(summaryReq.tool_choice).toBeUndefined()
+  expect(JSON.stringify(summaryReq.messages[0])).not.toContain('preamble')
+  const conversation = JSON.stringify(summaryReq.messages[1])
   expect(conversation).toContain('old')
   expect(conversation).toContain('response')
-  expect(conversation).not.toContain('next-0')
   expect(requests[1]!.response_format).toBeUndefined()
-  expect(requests[2]!.response_format).toBeUndefined()
+  expect(summaryReq.response_format).toBeUndefined()
   await registry.searchTools('later')
   const discoveredTools = await resolveProviderTools(
     model,

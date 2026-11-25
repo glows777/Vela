@@ -7,6 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { MemoryStore } from '../../packages/vela/src/driver/extensions/memory/store.ts'
 import {
   fauxText,
@@ -92,9 +93,16 @@ test('a real memory save and later correction consolidate offline with provenanc
     'Corrected deployment day',
   )
   expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
-  const ledger = records(t.dataPath('usage/requests.jsonl'))
-  expect(ledger.filter((row) => row.kind === 'dream')).toHaveLength(1)
-  expect(ledger.at(-1).inputTokens).toBe(123)
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const ledger = db.all<{ kind: string; input_tokens: number }>(
+      "SELECT kind, input_tokens FROM usage_records WHERE kind = 'dream' ORDER BY created_at",
+    )
+    expect(ledger).toHaveLength(1)
+    expect(ledger.at(-1)!.input_tokens).toBe(123)
+  } finally {
+    db.close()
+  }
   const { output } = await captureConsole(() => {
     t.ctx.session = second
     return t.command('/usage')
@@ -531,11 +539,16 @@ test('a rejected reply is corrected once with its own text and a one-line error'
   expect(existsSync(t.dataPath('escape.md'))).toBe(false)
   expect(text(t.dataPath('memory/project_deploy-day.md'))).toContain('Monday')
   expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
-  expect(
-    records(t.dataPath('usage/requests.jsonl')).filter(
-      (record) => record.kind === 'dream',
-    ),
-  ).toHaveLength(2)
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    expect(
+      db.all<{ id: string }>(
+        "SELECT id FROM usage_records WHERE kind = 'dream'",
+      ),
+    ).toHaveLength(2)
+  } finally {
+    db.close()
+  }
 })
 
 test('an empty reply is corrected once instead of failing the run', async () => {

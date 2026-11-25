@@ -1,10 +1,11 @@
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createSessionLocalExecutionEnv } from '../execution/local.ts'
 import type {
   ExecutionError,
   Result,
   ShellExecResult,
 } from '../execution/types.ts'
-import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
 import type { BackgroundAdmission, BackgroundCommands } from './background.ts'
 import {
   OUTPUT_MAX_BYTES,
@@ -12,7 +13,7 @@ import {
   OutputTail,
 } from './output-tail.ts'
 import type { ToolContext } from './registry.ts'
-import { ToolExecutionResult } from './types.ts'
+import { SpilledToolOutput, ToolExecutionResult } from './types.ts'
 
 /** The result of a call the user moved to the background while it ran. */
 function movedToBackground({
@@ -42,7 +43,6 @@ export async function environmentBash(
   shellPath: string | undefined,
   context: ToolContext | undefined,
 ) {
-  const results = context?.results ?? new ToolResultStore()
   const env =
     context?.execution ??
     (context?.requireEnv
@@ -50,7 +50,7 @@ export async function environmentBash(
       : createSessionLocalExecutionEnv({
           cwd: cwd ?? process.cwd(),
           shellPath,
-          tempRoot: results.dir,
+          tempRoot: context?.spillDir ?? join(tmpdir(), 'vela-tool-results'),
         }))
   const tail = new OutputTail()
   let updateTimer: ReturnType<typeof setTimeout> | undefined
@@ -183,14 +183,12 @@ export async function environmentBash(
     if (result.error.spillPath && result.error.code !== 'unknown') {
       const path = result.error.spillPath
       const info = await env.fileInfo(path)
-      const stored = new StoredToolResult(
+      return new SpilledToolOutput(
         path,
-        results.indexPath,
         info.ok ? info.value.size : tail.bytes,
         `${output}\n\n[Full output: ${path}]\n\n${message}`,
+        execution,
       )
-      stored.execution = execution
-      return stored
     }
     return new ToolExecutionResult(output, `${output}\n\n${message}`, execution)
   }
@@ -202,14 +200,12 @@ export async function environmentBash(
   let preview = fit.text || '(no output)'
   if (spillPath) {
     preview += `\n\n[Showing the last ${fit.lines} lines${fit.partialLine ? ' (the last line is cut)' : ''} of ${tail.bytes} bytes of output. Full output: ${spillPath}]`
-    const stored = new StoredToolResult(
+    return new SpilledToolOutput(
       spillPath,
-      results.indexPath,
       tail.bytes,
       preview + status,
+      execution,
     )
-    stored.execution = execution
-    return stored
   }
   preview += status
   return new ToolExecutionResult(preview, preview, execution)
@@ -228,7 +224,6 @@ export async function backgroundBash(
   context: ToolContext | undefined,
   commands: BackgroundCommands,
 ): Promise<ToolExecutionResult> {
-  const results = context?.results ?? new ToolResultStore()
   const env =
     context?.execution ??
     (context?.requireEnv
@@ -236,7 +231,7 @@ export async function backgroundBash(
       : createSessionLocalExecutionEnv({
           cwd: cwd ?? process.cwd(),
           shellPath,
-          tempRoot: results.dir,
+          tempRoot: context?.spillDir ?? join(tmpdir(), 'vela-tool-results'),
         }))
   const { id, output, truncated } = await commands.adopt({
     command,

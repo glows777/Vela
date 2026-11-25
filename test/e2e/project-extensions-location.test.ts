@@ -16,11 +16,11 @@ import {
   loadCliExtensions,
   parseArgs,
 } from '../../packages/vela/src/cli/setup.ts'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
 import {
   createLocalExecutionEnv,
   loadConfig,
-  memorySessionStorage,
   type VelaOptions,
 } from '../../packages/vela/src/driver/index.ts'
 import { loadConfig as loadCliConfig } from '../../packages/vela/src/load-config.ts'
@@ -34,7 +34,7 @@ interface Record {
 }
 function setup(
   denied = false,
-  host: Pick<VelaOptions, 'env' | 'sessionStorage'> = {},
+  host: Pick<VelaOptions, 'env' | 'db' | 'ephemeralSessions'> = {},
 ) {
   const dir = tempDir()
   const a = join(dir.path, 'A'),
@@ -562,9 +562,9 @@ test('CLI memory and RAG stay host-owned across two projects and project idle cl
 })
 
 test('preparing a same-cwd nonlocal target cannot inherit local project authority or prematurely replace its tools', async () => {
-  const storage = memorySessionStorage()
+  const db = openDatabase({ path: ':memory:' })
   const t = setup(false, {
-    sessionStorage: storage,
+    db,
     env: ({ location }) => {
       const env = createLocalExecutionEnv({ cwd: location.cwd })
       if (location.environment !== 'local')
@@ -582,12 +582,14 @@ test('preparing a same-cwd nonlocal target cannot inherit local project authorit
       fauxText('moved'),
     )
     await session.prompt('source')
-    const append = storage.append.bind(storage)
-    storage.append = async () => {
-      throw Error('write refused')
-    }
+    db.exec(`
+      CREATE TRIGGER refuse_location_update BEFORE UPDATE OF location_json ON sessions
+      BEGIN
+        SELECT RAISE(ABORT, 'write refused');
+      END;
+    `)
     await expect(session.setLocation(target)).rejects.toThrow('write refused')
-    storage.append = append
+    db.exec('DROP TRIGGER refuse_location_update;')
     await session.prompt('which project')
     expect(t.model.calls[2]!.toolResults[0]!.output).toContain('A_TOOL_1')
     expect(t.model.calls[2]!.system).toBe(t.model.calls[0]!.system)
@@ -607,6 +609,7 @@ test('preparing a same-cwd nonlocal target cannot inherit local project authorit
     )
   } finally {
     await t.vela.dispose()
+    db.close()
     t.dir.cleanup()
   }
 })

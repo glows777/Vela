@@ -85,9 +85,9 @@ test('MCP tools are deferred under mcp__<server>__<tool>; tool_search loads them
         return fauxToolCall('tool_search', { query: 'search pages', limit: 1 })
       },
       (req) => {
-        // The system prompt lists the server once, with the first line of its instructions
+        // The system prompt lists the server once, keeping deferred_tools immutable for prefix caching
         expect(req.system).toContain(
-          '- mcp__docs (1 tool) — Use docs tools for docs things.',
+          '- mcp__docs (2 tools) — Use docs tools for docs things.',
         )
         expect(req.system).not.toContain('mcp__docs__delete_page')
         expect(req.toolResults[0]!.output).toContain(

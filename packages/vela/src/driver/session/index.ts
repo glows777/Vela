@@ -1,14 +1,27 @@
-import { rmSync } from 'node:fs'
-import { copyFile, mkdir, readFile } from 'node:fs/promises'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { openDatabase, VelaDatabase } from '../../db/index.ts'
 import type { ThinkingLevel } from '../../providers/models/index.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import { validateStoredLocation } from '../execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
 import type { ModelMessage } from '../messages.ts'
-import { loadedToolNames } from '../tools/tool-search.ts'
+import type { StepRecord } from '../usage/tracker.ts'
+import {
+  computeLatestAssistantUsage,
+  entryToRowParams,
+  getSessionChannel,
+  insertUsageRecord,
+  loadAllSessionRows,
+  loadSessionMeta,
+  queryBranchRows,
+  rowToEntry,
+  setSessionChannel,
+  updateArchivedInDb,
+  upsertSessionRecord,
+} from './db-store.ts'
 import {
   type BashExecutionEntry,
   type BranchSummaryEntry,
@@ -18,25 +31,14 @@ import {
   type CompactionEntry,
   type CustomEntry,
   type CustomMessageEntry,
-  copyBranch,
   createEntryId,
   type NewEntry,
-  SESSION_FORMAT_VERSION,
   type SessionContext,
   type SessionEntry,
-  type SessionFileEntry,
-  type SessionHeader,
   type SessionMessageEntry,
   type SessionTreeNode,
-  summarizeSession,
 } from './entries.ts'
-import { inheritToolResultPaths } from './fork-files.ts'
-import {
-  fileSessionStorage,
-  type SessionStorage,
-  sessionArtifactsUseDataDir,
-} from './storage.ts'
-import { getStoredResult, ToolResultStore } from './tool-results.ts'
+import { insertClonedToolCalls, prepareSeedBranch } from './seed-clone.ts'
 import { SessionUploads } from './uploads.ts'
 
 export interface SessionState {
@@ -45,207 +47,301 @@ export interface SessionState {
   summary: string
 }
 
-const SESSION_DIR = 'sessions'
+export interface LoadedSessionContext extends SessionContext {
+  channel?: string
+  location?: ExecutionLocation
+  name?: string
+  model?: string
+  thinkingLevel?: ThinkingLevel
+  discoveredTools: string[]
+  latestAssistantUsage?: {
+    inputTokens: number
+    outputTokens: number
+    trailingMessages: ModelMessage[]
+  }
+}
+
+export interface SessionStoreOptions {
+  uploadsDir?: string
+  logger?: VelaLogger
+  ephemeral?: boolean
+  cwd?: string
+  location?: ExecutionLocation
+  onSaved?: () => void
+}
+
+const INSERT_MESSAGE_SQL = `INSERT INTO vela_messages (
+  session_id, id, parent_id, seq, run_id, kind, role, content_json,
+  include_in_context, stop_reason, produced_by, first_kept_id,
+  tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
+  cache_write_tokens, cost_usd, duration_ms, details_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 /**
- * One session's append-only entry log (like pi's SessionManager). Entries are kept in memory and appended
- * to SessionStorage (file / memory / custom) in order. Like pi, nothing is written until the session has
- * a user or assistant message; then the header and everything so far go out together.
- * Long tool output and tool call history are written under `<dir>/<id>/` so the model can read them,
- * except for an in-memory session on a durable data directory (`--no-session`): those go to a temporary
- * directory removed by `releaseTransient()` when the session closes.
+ * One session's durable SQLite store (`vela.db`: `sessions`, `vela_messages`, `usage_records`).
+ * Like pi, nothing is written to `vela.db` until the session has conversation content (or an
+ * explicit location relocation / archive operation).
  */
 export class SessionStore {
-  readonly results: ToolResultStore
+  readonly db: VelaDatabase
   readonly uploads: SessionUploads
-  /** Tool history and long output for `--no-session`, outside the data directory. */
+  private readonly ownsDb: boolean
   private transientDir?: string
-  private readonly storage: SessionStorage
-  private header?: SessionHeader
-  /** Channel whose host opened the session; written into the header when it is created */
+  private readonly logger: VelaLogger
+  private readonly cwd?: string
+  private location?: ExecutionLocation
+  private readonly onSaved?: () => void
+
+  private started = false
+  private checked = false
+  private seq = 0
   private channel?: string
+  private sessionName?: string
+  private modelName?: string
+  private thinking?: ThinkingLevel
+  private parentSessionId?: string
+  private archivedFlag = false
+  private discovered: string[] = []
+
   private readonly entries: SessionEntry[] = []
   private readonly entryIds = new Set<string>()
   private readonly byId = new Map<string, SessionEntry>()
-  /** The entry new entries are appended under (like pi's leaf pointer); null before the first entry */
   private leafId: string | null = null
-  /** Entry id of each message in the model context */
   private readonly ids = new Map<ModelMessage, string>()
-  /** The model (`provider/id`) that produced each assistant message in the model context */
+  private readonly entryModel = new Map<string, string>()
+  private readonly entryThinking = new Map<string, ThinkingLevel>()
   producers = new Map<ModelMessage, string>()
-  /** The header has gone into the write queue */
-  private started = false
-  /** Whether storage was checked for (or loaded) an earlier session with this id */
-  private checked = false
-  private unknownLocation?: Error
-  /** Entries waiting to be written, in order */
-  private readonly pending: SessionFileEntry[] = []
-  private writing: Promise<void> = Promise.resolve()
-  private lastError: unknown
 
   constructor(
     private readonly sessionId: string,
-    dir: string = SESSION_DIR,
-    private readonly logger: VelaLogger = silentLogger,
-    storage?: SessionStorage,
-    /** Tool history lives in a temp dir (custom storage without dataDir): if it is gone on resume, start over instead of failing */
-    private readonly temporaryResults = false,
-    private readonly cwd?: string,
-    private location?: ExecutionLocation,
-    /** Internal notification after an actual storage write (not an empty flush). */
-    private readonly onSaved?: () => void,
+    dbOrDir: VelaDatabase | string = ':memory:',
+    optionsOrLogger?: SessionStoreOptions | VelaLogger,
+    extra?: SessionStoreOptions,
   ) {
-    this.storage = storage ?? fileSessionStorage(dir, logger)
-    // --no-session keeps the transcript in memory but still has a real data directory.
-    // Tool history and long output must not appear there; a temp dir is removed on close.
-    if (sessionArtifactsUseDataDir(this.storage, sessionId, temporaryResults)) {
-      this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'))
+    const opts: SessionStoreOptions =
+      optionsOrLogger && 'debug' in optionsOrLogger
+        ? { logger: optionsOrLogger, ...extra }
+        : { ...(optionsOrLogger ?? {}), ...extra }
+
+    this.logger = opts.logger ?? silentLogger
+    this.cwd = opts.cwd
+    this.location = opts.location
+    this.onSaved = opts.onSaved
+
+    if (dbOrDir instanceof VelaDatabase) {
+      this.db = dbOrDir
+      this.ownsDb = false
     } else {
-      this.transientDir = join(
-        tmpdir(),
-        `vela-nosession-${crypto.randomUUID()}`,
-      )
-      this.results = new ToolResultStore(
-        join(this.transientDir, 'tool-results'),
+      const dbPath =
+        dbOrDir === ':memory:' ? ':memory:' : join(dbOrDir, 'vela.db')
+      this.db = openDatabase({ path: dbPath })
+      this.ownsDb = true
+    }
+
+    if (opts.uploadsDir && !opts.ephemeral) {
+      this.uploads = new SessionUploads(sessionId, opts.uploadsDir)
+    } else {
+      this.transientDir = mkdtempSync(join(tmpdir(), `vela-nosession-`))
+      this.uploads = new SessionUploads(
+        sessionId,
+        join(this.transientDir, 'upload-sources'),
       )
     }
-    this.uploads = new SessionUploads(
-      sessionId,
-      join(dirname(this.results.dir), 'upload-sources'),
-    )
   }
 
-  /** Deletes tool history and long output kept outside the data directory. */
+  get persistencePath(): string {
+    return this.db.path
+  }
+
+  get isMemory(): boolean {
+    return this.db.path === ':memory:'
+  }
+
+  /** Transient tool-result spill directory for ephemeral sessions, deleted on close. */
+  get transientSpillDir(): string | undefined {
+    return this.transientDir
+      ? join(this.transientDir, 'tool-results')
+      : undefined
+  }
+
+  /** Deletes transient upload metadata directory (and closes owned DB). */
   releaseTransient(): void {
     const dir = this.transientDir
-    if (!dir) return
-    this.transientDir = undefined
-    rmSync(dir, { recursive: true, force: true })
+    if (dir) {
+      this.transientDir = undefined
+      rmSync(dir, { recursive: true, force: true })
+    }
+    if (this.ownsDb && this.db.open) this.db.close()
   }
 
-  /** A copy of the session's entries in append order (header excluded). */
   getEntries(): SessionEntry[] {
     return structuredClone(this.entries)
   }
 
-  /**
-   * Binds the session to a channel (`applySessionRouting`). A new session records it in its header; when the
-   * session is already written, its header is final, so the binding is appended as a `session_channel` entry.
-   */
   setChannel(name: string): void {
     if (this.channel === name) return
     this.channel = name
-    if (this.started && this.header?.channel !== name)
-      this.append({ type: 'session_channel', channel: name })
-  }
-
-  /**
-   * Archives or unarchives the session (`Vela.setSessionArchived()`). Appends a `session_archived` entry and saves
-   * now; a session whose history was never loaded is updated in storage instead.
-   */
-  async setArchived(archived: boolean): Promise<void> {
-    if (!this.started) {
-      if (await setSavedSessionArchived(this.storage, this.sessionId, archived))
-        this.saved()
-      return
+    if (this.started) {
+      this.db.transaction(() =>
+        setSessionChannel(this.db, this.sessionId, name),
+      )
+      this.saved()
     }
-    const last = this.entries.at(-1)
-    // Already the last entry: only retry what an earlier failed write left pending
-    if (last?.type === 'session_archived' && last.archived === archived)
-      return this.flush()
-    this.append({ type: 'session_archived', archived })
-    await this.flush()
   }
 
-  assertLocationKnown(): void {
-    if (this.unknownLocation) throw this.unknownLocation
-  }
-
-  /** Write a relocation outside the normal retry queue: a rejected move must never replay on save. */
-  async persistLocation(location: ExecutionLocation): Promise<void> {
-    if (!this.started) {
-      await this.checkNew()
-      if (!this.started) this.startTranscript()
+  setModelChoice(model: string): void {
+    if (this.modelName === model) return
+    this.modelName = model
+    if (this.started) {
+      this.db.transaction(() => {
+        this.db.run(
+          'UPDATE sessions SET model = ?, updated_at = ? WHERE id = ?',
+          model,
+          new Date().toISOString(),
+          this.sessionId,
+        )
+      })
+      this.saved()
     }
-    // Reserve a slot on the same write chain as names, routing and transcript entries.
-    // A rejected move releases that slot without adding its marker to the retry queue.
-    const parentId = this.leafId
-    const commit = this.flush().then(() =>
-      this.appendLocation(location, parentId),
+  }
+
+  setThinkingLevelChoice(level: ThinkingLevel): void {
+    if (this.thinking === level) return
+    this.thinking = level
+    if (this.started) {
+      this.db.transaction(() => {
+        this.db.run(
+          'UPDATE sessions SET thinking_level = ?, updated_at = ? WHERE id = ?',
+          level,
+          new Date().toISOString(),
+          this.sessionId,
+        )
+      })
+      this.saved()
+    }
+  }
+
+  setSessionName(name: string | undefined): void {
+    if (this.sessionName === name) return
+    this.sessionName = name
+    if (this.started) {
+      this.db.transaction(() => {
+        this.db.run(
+          'UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?',
+          name ?? null,
+          new Date().toISOString(),
+          this.sessionId,
+        )
+      })
+      this.saved()
+    }
+  }
+
+  setDiscoveredTools(tools: Iterable<string>): void {
+    const list = [...tools]
+    if (JSON.stringify(list) === JSON.stringify(this.discovered)) return
+    this.discovered = list
+    if (this.started) {
+      this.db.transaction(() => {
+        this.db.run(
+          'UPDATE sessions SET discovered_tools_json = ?, updated_at = ? WHERE id = ?',
+          JSON.stringify(list),
+          new Date().toISOString(),
+          this.sessionId,
+        )
+      })
+      this.saved()
+    }
+  }
+
+  /** Updates `sessions.discovered_tools_json` inside an existing DB transaction and syncs memory. */
+  syncDiscoveredToolsInTx(
+    tools: Iterable<string>,
+    now = new Date().toISOString(),
+  ): void {
+    const list = [...tools]
+    this.discovered = list
+    if (!this.started) return
+    this.db.run(
+      'UPDATE sessions SET discovered_tools_json = ?, updated_at = ? WHERE id = ?',
+      JSON.stringify(list),
+      now,
+      this.sessionId,
     )
-    this.writing = commit.catch(() => {})
-    await commit
   }
 
-  private async appendLocation(
-    location: ExecutionLocation,
-    parentId: string | null,
-  ): Promise<void> {
-    // Session-wide metadata uses a separate ID namespace from ordinary branch entries.
-    const marker = {
-      type: 'custom' as const,
-      customType: 'vela.session.location',
-      data: location,
-      id: `location:${crypto.randomUUID()}`,
-      parentId,
-      timestamp: new Date().toISOString(),
-    }
-    try {
-      await this.storage.append(this.sessionId, [marker])
-    } catch (error) {
-      // A storage implementation can lose the acknowledgement after a successful write.
-      const saved = await this.storage
-        .load(this.sessionId)
-        .catch((readError) => {
-          this.unknownLocation = new Error(
-            'Session location is unknown. Call resume() when storage is available.',
-            { cause: new AggregateError([error, readError]) },
-          )
-          throw this.unknownLocation
-        })
-      if (!saved?.some((entry) => entry.id === marker.id)) throw error
-    }
+  async setArchived(archived: boolean): Promise<void> {
+    const changed = this.db.transaction(() =>
+      updateArchivedInDb(this.db, this.sessionId, archived, !this.started),
+    )
+    this.archivedFlag = archived
+    if (changed) this.saved()
+  }
+
+  async persistLocation(location: ExecutionLocation): Promise<void> {
     this.location = location
+    if (!this.started) {
+      await this.assertNew()
+      this.db.transaction(() => {
+        this.insertSessionAndBufferedEntries()
+      })
+    } else {
+      this.db.transaction(() => {
+        this.db.run(
+          'UPDATE sessions SET location_json = ?, updated_at = ? WHERE id = ?',
+          JSON.stringify(location),
+          new Date().toISOString(),
+          this.sessionId,
+        )
+      })
+    }
     this.saved()
   }
 
-  /** The current leaf (like pi's getLeafId); null when the session has no entries or the leaf was reset. */
   getLeafId(): string | null {
     return this.leafId
   }
 
-  /** A copy of one entry. */
   getEntry(id: string): SessionEntry | undefined {
     const entry = this.byId.get(id)
     return entry && structuredClone(entry)
   }
 
-  /** Copies of the entries from the root to `fromId` (default: the current leaf), like pi's getBranch. */
   getBranch(fromId: string | null = this.leafId): SessionEntry[] {
+    if (this.started && this.db.open) {
+      const rows = queryBranchRows(this.db, this.sessionId, fromId)
+      if (rows.length || fromId === null) {
+        return structuredClone(rows.map(rowToEntry))
+      }
+    }
     return structuredClone(buildSessionPath(this.entries, fromId, this.byId))
   }
 
-  /** The session as a tree (copies), like pi's getTree. */
   getTree(): SessionTreeNode[] {
     return buildSessionTree(structuredClone(this.entries))
   }
 
-  /** Session id this one was forked from, if any. */
   get parentSession(): string | undefined {
-    return this.header?.parentSession
+    return this.parentSessionId
   }
 
-  /**
-   * Moves the leaf (like pi's branch / resetLeaf): the next entry becomes a child of `id`, or a new root
-   * when `id` is null. Entries are never changed or removed.
-   */
   branch(id: string | null): void {
     if (id !== null && !this.byId.has(id))
       throw new Error(`Entry ${id} is not in the session`)
     this.leafId = id
+    if (this.started) {
+      this.db.transaction(() => {
+        this.db.run(
+          'UPDATE sessions SET leaf_message_id = ?, updated_at = ? WHERE id = ?',
+          id,
+          new Date().toISOString(),
+          this.sessionId,
+        )
+      })
+      this.saved()
+    }
   }
 
-  /** Moves the leaf to `id` and appends a summary of the branch left there (like pi's branchWithSummary). */
   branchWithSummary(id: string | null, summary: string): BranchSummaryEntry {
     const fromId = this.leafId ?? 'root'
     this.branch(id)
@@ -256,14 +352,30 @@ export class SessionStore {
     })
   }
 
-  /** Sets or clears (undefined / empty) the label of an entry (like pi's appendLabelChange). */
   appendLabelChange(targetId: string, label: string | undefined): void {
-    if (!this.byId.has(targetId))
-      throw new Error(`Entry ${targetId} is not in the session`)
-    this.append({ type: 'label', targetId, label: label || undefined })
+    const entry = this.byId.get(targetId)
+    if (!entry) throw new Error(`Entry ${targetId} is not in the session`)
+    const normalized = label || undefined
+    if (normalized) entry.label = normalized
+    else delete entry.label
+    if (this.started) {
+      this.db.transaction(() => {
+        this.db.run(
+          'UPDATE vela_messages SET label = ? WHERE session_id = ? AND id = ?',
+          normalized ?? null,
+          this.sessionId,
+          targetId,
+        )
+        this.db.run(
+          'UPDATE sessions SET updated_at = ? WHERE id = ?',
+          new Date().toISOString(),
+          this.sessionId,
+        )
+      })
+      this.saved()
+    }
   }
 
-  /** Rebuilds the model context of the current branch and points context messages at their entries. */
   buildContext(): SessionContext {
     const context = buildSessionContext(this.entries, this.leafId, this.byId)
     this.ids.clear()
@@ -272,105 +384,57 @@ export class SessionStore {
     return context
   }
 
-  /** Deferred tools the branch's recorded `tool_search` results loaded (a resumed session declares them again). */
-  async loadedTools(): Promise<string[]> {
-    const names: string[] = []
-    for (const entry of buildSessionPath(
-      this.entries,
-      this.leafId,
-      this.byId,
-    )) {
-      if (entry.type !== 'message' || entry.message.role !== 'tool') continue
-      for (const part of entry.message.content) {
-        if (part.type !== 'tool_result' || part.toolName !== 'tool_search')
-          continue
-        if (part.output.type === 'text') {
-          const path = part.output.value.match(
-            /\n\n\[(?:[^\]]* )?Full output: (.+?); use read with offset[^\]]*\]$/,
-          )?.[1]
-          const text = path ? await readFile(path, 'utf8') : part.output.value
-          names.push(...loadedToolNames(text))
-          continue
-        }
-        const stored = getStoredResult(part.output)
-        if (!stored) continue
-        // The saved file has the complete list.
-        const text = await readFile(stored.path, 'utf8').catch(
-          () => stored.preview,
-        )
-        names.push(...loadedToolNames(text))
-      }
+  modelAt(entryId: string | null): string | undefined {
+    if (entryId === null) return undefined
+    const branch = this.getBranch(entryId)
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const model = this.entryModel.get(branch[i]!.id)
+      if (model !== undefined) return model
     }
-    return names
+    return undefined
   }
 
-  /**
-   * Starts this (new, never written) session as a copy of another session's branch (fork / clone, like
-   * pi's createBranchedSession). The parent's tool call history is copied so summaries that point into it
-   * keep working. Written right away when the branch has a conversation.
-   */
+  thinkingAt(entryId: string | null): ThinkingLevel | undefined {
+    if (entryId === null) return undefined
+    const branch = this.getBranch(entryId)
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const level = this.entryThinking.get(branch[i]!.id)
+      if (level !== undefined) return level
+    }
+    return undefined
+  }
+
+  loadedTools(): string[] {
+    return [...this.discovered]
+  }
+
   async seedFrom(
     branch: SessionEntry[],
     parent: { id: string; store: SessionStore },
     resolveEnv: () => Promise<ExecutionEnv>,
+    spillOptions: { parentSpillDir?: string; spillDir?: string } = {},
   ): Promise<void> {
-    // Setup entries the new session holds in memory are replaced by the branch's own
     if (this.started)
       throw new Error('Only a new session can be seeded from another branch')
-    await this.checkNew()
-    const uploads = await this.uploads.inherit(
-      parent.store.uploads,
+    await this.assertNew()
+    const prepared = await prepareSeedBranch({
+      db: this.db,
       branch,
+      parentId: parent.id,
+      parentUploads: parent.store.uploads,
+      targetUploads: this.uploads,
       resolveEnv,
-    )
-    const entries = copyBranch(structuredClone(branch))
-    const context = buildSessionContext(entries)
-    const source = parent.store.results.history.path
-    const target = join(
-      this.results.dir,
-      '..',
-      this.results.historyId,
-      'tool-history.jsonl',
-    )
-    let copiedHistory: string | undefined
-    try {
-      await mkdir(join(target, '..'), { recursive: true, mode: 0o700 })
-      await copyFile(source, target)
-      copiedHistory = await readFile(target, 'utf8')
-    } catch (error) {
-      // The parent has not run a tool yet: nothing to copy
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-    const inherited = await inheritToolResultPaths(
-      entries,
-      parent.store.results,
-      this.results.dir,
-      resolve(target),
-      copiedHistory,
-      target,
-      uploads,
-    )
-    await this.results.resumeHistory(
-      this.results.historyId,
-      0,
-      context.toolHistoryViewSeq,
-    )
-    this.header = {
-      type: 'session',
-      version: SESSION_FORMAT_VERSION,
-      id: this.sessionId,
-      timestamp: new Date().toISOString(),
-      ...(this.cwd ? { cwd: this.cwd } : {}),
-      ...(this.location ? { location: this.location } : {}),
-      ...(this.channel ? { channel: this.channel } : {}),
-      toolHistoryId: this.results.historyId,
-      parentSession: parent.id,
-    }
-    this.replaceEntries(inherited)
-    if (inherited.some(startsConversation)) {
-      this.started = true
-      this.pending.push(this.header, ...this.entries)
-      this.writing = this.writing.then(() => this.write())
+      ...spillOptions,
+    })
+    this.parentSessionId = parent.id
+    this.discovered = [...parent.store.discovered]
+    this.replaceEntries(prepared.entries)
+    if (prepared.entries.some(startsConversation)) {
+      this.db.transaction(() => {
+        this.insertSessionAndBufferedEntries()
+        insertClonedToolCalls(this.db, this.sessionId, this.modelName, prepared)
+      })
+      this.saved()
     }
   }
 
@@ -385,12 +449,22 @@ export class SessionStore {
     this.leafId = entries.at(-1)?.id ?? null
   }
 
-  /** Entry id of a message in the current context. */
   idOf(message: ModelMessage): string | undefined {
     return this.ids.get(message)
   }
 
-  private append<T extends SessionEntry>(input: NewEntry<T>): T {
+  private append<T extends SessionEntry>(
+    input: NewEntry<T>,
+    extra: {
+      runId?: string
+      inputTokens?: number
+      outputTokens?: number
+      cacheReadTokens?: number
+      cacheWriteTokens?: number
+      costUsd?: number
+      durationMs?: number
+    } = {},
+  ): T {
     const id = createEntryId(this.entryIds)
     this.entryIds.add(id)
     const entry = {
@@ -402,53 +476,99 @@ export class SessionStore {
     this.entries.push(entry)
     this.byId.set(id, entry)
     this.leafId = id
-    this.persist(entry)
+    if (this.modelName !== undefined) {
+      this.entryModel.set(id, this.modelName)
+    }
+    if (this.thinking !== undefined) {
+      this.entryThinking.set(id, this.thinking)
+    }
+    this.persistEntry(entry, extra)
     return entry
   }
 
-  private persist(entry: SessionEntry): void {
+  private persistEntry(
+    entry: SessionEntry,
+    extra: {
+      runId?: string
+      inputTokens?: number
+      outputTokens?: number
+      cacheReadTokens?: number
+      cacheWriteTokens?: number
+      costUsd?: number
+      durationMs?: number
+    } = {},
+  ): void {
     if (!this.started) {
-      // Like pi: setup entries (model, thinking level, name) and extension state stay in memory until there is
-      // a conversation
       if (!startsConversation(entry)) return
-      this.startTranscript()
-    } else this.pending.push(entry)
-    this.writing = this.writing.then(() => this.write())
-  }
-
-  private startTranscript() {
-    this.started = true
-    this.header ??= {
-      type: 'session',
-      version: SESSION_FORMAT_VERSION,
-      id: this.sessionId,
-      timestamp: new Date().toISOString(),
-      ...(this.cwd ? { cwd: this.cwd } : {}),
-      ...(this.location ? { location: this.location } : {}),
-      ...(this.channel ? { channel: this.channel } : {}),
-      toolHistoryId: this.results.historyId,
-    }
-    this.pending.push(this.header, ...this.entries)
-  }
-
-  /** Appends what is pending; on failure keeps it for the next attempt (never rejects). */
-  private async write(): Promise<void> {
-    const batch = this.pending.splice(0)
-    if (!batch.length) return
-    try {
-      // A header starts a new session: check storage first (also when messages were appended without prompt())
-      if (batch[0]?.type === 'session') await this.checkNew()
-      await this.storage.append(this.sessionId, batch)
-      this.lastError = undefined
-    } catch (error) {
-      this.pending.unshift(...batch)
-      this.lastError = error
+      this.checkNewSync()
+      this.db.transaction(() => {
+        this.insertSessionAndBufferedEntries()
+      })
+      this.saved()
       return
     }
+    this.db.transaction(() => {
+      const seq = ++this.seq
+      this.db.run(
+        INSERT_MESSAGE_SQL,
+        ...entryToRowParams(this.sessionId, entry, seq, extra),
+      )
+      this.db.run(
+        'UPDATE sessions SET leaf_message_id = ?, updated_at = ? WHERE id = ?',
+        this.leafId,
+        entry.timestamp,
+        this.sessionId,
+      )
+    })
     this.saved()
   }
 
-  /** Tells the save observer about a committed write; its failure is logged, never thrown. */
+  /** Ensure the `sessions` row exists (used by VelaDriver before writing `runs` / `vela_tool_calls`). */
+  ensureSessionRow(): void {
+    if (this.started) return
+    this.checkNewSync()
+    this.db.transaction(() => {
+      this.insertSessionAndBufferedEntries()
+    })
+    this.saved()
+  }
+
+  private insertSessionAndBufferedEntries(): void {
+    this.started = true
+    this.checked = true
+    const location =
+      this.location ??
+      (this.cwd ? { environment: 'local' as const, cwd: this.cwd } : undefined)
+    upsertSessionRecord(this.db, {
+      sessionId: this.sessionId,
+      name: this.sessionName,
+      archived: this.archivedFlag,
+      model: this.modelName,
+      thinkingLevel: this.thinking,
+      location,
+      leafId: this.leafId,
+      discoveredTools: this.discovered,
+      parentSessionId: this.parentSessionId,
+      channel: this.channel,
+    })
+    for (const entry of this.entries) {
+      const seq = ++this.seq
+      this.db.run(
+        INSERT_MESSAGE_SQL,
+        ...entryToRowParams(this.sessionId, entry, seq),
+      )
+    }
+  }
+
+  recordUsageRecord(
+    record: StepRecord,
+    options: { runId?: string; messageId?: string } = {},
+  ): void {
+    if (!this.db.open) return
+    this.ensureSessionRow()
+    insertUsageRecord(this.db, this.sessionId, record, options)
+  }
+
   private saved(): void {
     try {
       this.onSaved?.()
@@ -459,64 +579,63 @@ export class SessionStore {
     }
   }
 
-  /**
-   * Waits until every entry so far is written (retrying ones that failed before). Rejects with the
-   * storage error if some are still unwritten.
-   */
   async flush(): Promise<void> {
-    this.writing = this.writing.then(() => this.write())
-    await this.writing
-    // Entries appended while flushing are not failures; they go out with the next write
-    if (this.pending.length && this.lastError !== undefined)
-      throw this.lastError
+    // SQLite WAL writes commit synchronously per statement/transaction.
   }
 
-  /**
-   * Before the first message of a session that was not resumed: storage must not already hold a session
-   * with this id (appending to it would mix two conversations).
-   */
   async assertNew(): Promise<void> {
-    // Already writing this session (started by append() before the first prompt): the write checks before the header
     if (this.started) return
-    await this.checkNew()
+    this.checkNewSync()
   }
 
-  private async checkNew(): Promise<void> {
+  private checkNewSync(): void {
     if (this.checked) return
-    if (await this.storage.load(this.sessionId))
+    const existing = this.db.get<{ id: string }>(
+      'SELECT id FROM sessions WHERE id = ?',
+      this.sessionId,
+    )
+    if (existing) {
       throw new Error(
         `Session ${this.sessionId} already has saved history: call resume() to continue it, or use another session id`,
       )
+    }
     this.checked = true
   }
 
-  /** Appends a message (with the stop reason of an aborted / failed assistant message, or a tool message's nested calls and details). */
   appendMessage(
     message: ModelMessage,
     extra: {
       stopReason?: 'aborted' | 'error'
       details?: Record<string, unknown>
-      /** On an assistant message: the model that produced it */
       producedBy?: string
+      runId?: string
+      inputTokens?: number
+      outputTokens?: number
+      cacheReadTokens?: number
+      cacheWriteTokens?: number
+      costUsd?: number
+      durationMs?: number
     } = {},
   ): SessionMessageEntry {
-    const entry = this.append<SessionMessageEntry>({
-      type: 'message',
-      message,
-      ...(message.role === 'assistant' && extra.producedBy
-        ? { producedBy: extra.producedBy }
-        : {}),
-      ...(extra.stopReason ? { stopReason: extra.stopReason } : {}),
-      ...(extra.details && Object.keys(extra.details).length
-        ? { details: extra.details }
-        : {}),
-    })
+    const entry = this.append<SessionMessageEntry>(
+      {
+        type: 'message',
+        message,
+        ...(message.role === 'assistant' && extra.producedBy
+          ? { producedBy: extra.producedBy }
+          : {}),
+        ...(extra.stopReason ? { stopReason: extra.stopReason } : {}),
+        ...(extra.details && Object.keys(extra.details).length
+          ? { details: extra.details }
+          : {}),
+      },
+      extra,
+    )
     if (!extra.stopReason) this.ids.set(message, entry.id)
     if (entry.producedBy) this.producers.set(message, entry.producedBy)
     return entry
   }
 
-  /** Appends an extension's custom message (pi's `custom_message`); `message` is the user message the model sees. */
   appendCustomMessage(
     message: ModelMessage & { role: 'user' },
     info: CustomMessageInfo,
@@ -532,7 +651,6 @@ export class SessionStore {
     return entry
   }
 
-  /** Appends extension state (pi's `custom` entry); not part of the model context. */
   appendCustom(customType: string, data?: unknown): CustomEntry {
     return this.append<CustomEntry>({
       type: 'custom',
@@ -541,7 +659,6 @@ export class SessionStore {
     })
   }
 
-  /** Appends a `!` command; `message` is what it put in the context (none for `!!`). */
   appendBashExecution(
     execution: NewEntry<BashExecutionEntry>,
     message?: ModelMessage,
@@ -551,25 +668,11 @@ export class SessionStore {
     return entry
   }
 
-  appendModelChange(model: string): void {
-    this.append({ type: 'model_change', model })
-  }
-
-  appendThinkingLevelChange(thinkingLevel: ThinkingLevel): void {
-    this.append({ type: 'thinking_level_change', thinkingLevel })
-  }
-
-  appendSessionInfo(name: string | undefined): void {
-    this.append({ type: 'session_info', ...(name ? { name } : {}) })
-  }
-
-  /** Records a summary: the context becomes `summaryMessage` followed by the messages from `firstKept` on. */
   appendCompaction(
     summaryMessage: ModelMessage,
     summary: string,
     firstKept: ModelMessage | undefined,
     tokensBefore: number,
-    toolHistoryViewSeq?: number,
   ): CompactionEntry {
     const firstKeptEntryId = firstKept ? this.ids.get(firstKept) : undefined
     if (firstKept && !firstKeptEntryId)
@@ -579,105 +682,81 @@ export class SessionStore {
       summary,
       firstKeptEntryId: firstKeptEntryId ?? '',
       tokensBefore,
-      ...(toolHistoryViewSeq === undefined ? {} : { toolHistoryViewSeq }),
     })
-    // Kept nothing: the compaction keeps itself (like pi); set before the queued write runs
-    if (!firstKeptEntryId) entry.firstKeptEntryId = entry.id
+    if (!firstKeptEntryId) {
+      entry.firstKeptEntryId = entry.id
+      if (this.started) {
+        this.db.run(
+          'UPDATE vela_messages SET first_kept_id = ? WHERE session_id = ? AND id = ?',
+          entry.id,
+          this.sessionId,
+          entry.id,
+        )
+      }
+    }
     this.ids.set(summaryMessage, entry.id)
     return entry
   }
 
-  /** Loads the saved session; returns undefined if it was never saved. Replaces the entries in memory. */
-  async loadSaved(): Promise<
-    | (SessionContext & { channel?: string; location?: ExecutionLocation })
-    | undefined
-  > {
-    const loaded = await this.storage.load(this.sessionId)
-    if (!loaded?.length) {
-      this.assertLocationKnown()
+  async loadSaved(): Promise<LoadedSessionContext | undefined> {
+    const meta = loadSessionMeta(this.db, this.sessionId)
+    if (!meta.row) {
       this.checked = true
-      return
+      return undefined
     }
-    const header = loaded[0] as SessionHeader
-    if (header.type !== 'session')
-      throw new Error(`Session ${this.sessionId} has no session header`)
-    const version = header.version ?? 1
-    if (version > SESSION_FORMAT_VERSION)
-      throw new Error(
-        `Session ${this.sessionId} uses file format version ${version}, but this Vela only supports up to ${SESSION_FORMAT_VERSION}; upgrade Vela`,
-      )
-    if (version < SESSION_FORMAT_VERSION)
-      throw new Error(
-        `Session ${this.sessionId} uses file format version ${version}; its storage must convert it before loading`,
-      )
-    if ('location' in header) validateStoredLocation(header.location)
-    // A write retried after it failed part way can repeat entries: the first copy of each id counts
-    let location = header.location
-    const seen = new Set<string>()
-    const markerParents = new Map<string, string | null>()
-    const entries: SessionEntry[] = []
-    for (const entry of loaded.slice(1) as SessionEntry[]) {
-      if (typeof entry.id === 'string') {
-        if (seen.has(entry.id)) continue
-        seen.add(entry.id)
-      }
-      // External storage consumers (such as archive) may append under the last physical
-      // record. Reconnect that edge when removing session metadata from the branch.
-      const parentId =
-        entry.parentId && markerParents.has(entry.parentId)
-          ? markerParents.get(entry.parentId)!
-          : entry.parentId
-      if (
-        entry.type === 'custom' &&
-        entry.customType === 'vela.session.location' &&
-        entry.id?.startsWith('location:')
-      ) {
-        validateStoredLocation(entry.data)
-        location = entry.data
-        markerParents.set(entry.id, parentId)
-      } else {
-        entries.push(
-          entry.parentId === parentId ? entry : { ...entry, parentId },
-        )
-      }
-    }
-    // Like pi: the leaf is the last entry
-    const context = buildSessionContext(entries, entries.at(-1)?.id ?? null)
-    if (header.toolHistoryId) {
-      try {
-        await this.results.resumeHistory(
-          header.toolHistoryId,
-          0,
-          context.toolHistoryViewSeq,
-        )
-      } catch (error) {
-        // The previous Vela instance's temp dir is gone: restore messages as usual, start tool call history over
-        if (!this.temporaryResults) throw error
-        this.logger.warn(
-          `[session] Tool call history for ${this.sessionId} was in the previous temp dir and no longer exists; pass dataDir to keep it`,
-        )
-      }
-    }
-    this.header = header
+    const rows = loadAllSessionRows(this.db, this.sessionId)
+    const entries = rows.map(rowToEntry)
+    this.seq = rows.reduce((max, r) => Math.max(max, r.seq), 0)
+
+    const location = meta.row.location_json
+      ? (JSON.parse(meta.row.location_json) as ExecutionLocation)
+      : undefined
+    if (location !== undefined) validateStoredLocation(location)
+
+    const leaf = meta.row.leaf_message_id ?? entries.at(-1)?.id ?? null
+    const byId = new Map(entries.map((e) => [e.id, e]))
+    const context = buildSessionContext(entries, leaf, byId)
+
+    // Restore latest assistant usage along the active branch for TokenTracker calibration (#536 #3)
+    const activeIds = new Set(
+      buildSessionPath(entries, leaf, byId).map((e) => e.id),
+    )
+    const latestAssistantUsage = computeLatestAssistantUsage(
+      rows,
+      activeIds,
+      context.messages,
+      context.ids,
+    )
+
     this.location = location
-    const channel = summarizeSession(this.sessionId, [
-      header,
-      ...entries,
-    ]).channel
-    if (channel !== undefined) this.channel = channel
+    this.sessionName = meta.row.name ?? undefined
+    this.modelName = meta.model
+    this.thinking = meta.thinkingLevel
+    this.archivedFlag = meta.row.archived === 1
+    this.parentSessionId = meta.row.parent_session_id ?? undefined
+    this.discovered = meta.discoveredTools
+    this.channel = meta.channel ?? getSessionChannel(this.db, this.sessionId)
     this.replaceEntries(entries)
+    this.leafId = leaf
     this.ids.clear()
     for (const [message, id] of context.ids) this.ids.set(message, id)
     this.producers = context.producers
     this.started = true
     this.checked = true
-    this.unknownLocation = undefined
-    this.pending.length = 0
-    return { ...context, channel, location }
+
+    return {
+      ...context,
+      channel: this.channel,
+      location,
+      name: this.sessionName,
+      model: this.modelName,
+      thinkingLevel: this.thinking,
+      discoveredTools: [...this.discovered],
+      latestAssistantUsage,
+    }
   }
 }
 
-/** Whether an entry is conversation: a user or assistant message, or what enters the context like one (an extension's custom message, a `!` command). */
 function startsConversation(entry: SessionEntry): boolean {
   return (
     entry.type === 'custom_message' ||
@@ -685,32 +764,4 @@ function startsConversation(entry: SessionEntry): boolean {
     (entry.type === 'message' &&
       (entry.message.role === 'user' || entry.message.role === 'assistant'))
   )
-}
-
-/**
- * Appends an archive marker to a saved session that no `SessionStore` has loaded. Opens nothing, so an SDK
- * host can archive a session it does not want to resume; the entry joins the file's current branch.
- */
-export async function setSavedSessionArchived(
-  storage: SessionStorage,
-  id: string,
-  archived: boolean,
-): Promise<boolean> {
-  const entries = await storage.load(id)
-  const last = entries?.at(-1)
-  if (!entries || !last || last.type === 'session')
-    throw new Error(`Session ${id} has nothing saved to archive`)
-  if (last.type === 'session_archived' && last.archived === archived)
-    return false
-  const ids = new Set(entries.slice(1).map((entry) => entry.id))
-  await storage.append(id, [
-    {
-      type: 'session_archived',
-      archived,
-      id: createEntryId(ids),
-      parentId: last.id,
-      timestamp: new Date().toISOString(),
-    },
-  ])
-  return true
 }

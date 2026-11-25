@@ -3,7 +3,6 @@ import type {
   LanguageModelV3StreamPart,
 } from '@ai-sdk/provider'
 import { type LanguageModel, simulateReadableStream } from 'ai'
-import { getStoredResult } from '../../driver/session/tool-results.ts'
 import { compactionSources, findConversation } from './compaction-request.ts'
 
 /**
@@ -157,13 +156,7 @@ function getToolResultContent(prompt: Prompt): string {
       for (const c of m.content) {
         if (c.type !== 'tool-result') continue
         const val = ('value' in c.output && c.output.value) || c.output || ''
-        const stored = getStoredResult(
-          c.output as Parameters<typeof getStoredResult>[0],
-        )
-        parts.push(
-          stored?.preview ??
-            (typeof val === 'string' ? val : JSON.stringify(val)),
-        )
+        parts.push(typeof val === 'string' ? val : JSON.stringify(val))
       }
     } else if (m?.role === 'user') break
   }
@@ -391,17 +384,11 @@ function pickTextResponse(prompt: Prompt): string {
 function checkpointSummary(prompt: Prompt): string | undefined {
   const last = prompt.at(-1)
   if (last?.role !== 'user') return undefined
-  let control: { type?: string; sourceMessageCount: number }
-  try {
-    control = JSON.parse(messageText(last))
-  } catch {
-    return undefined
-  }
-  if (control?.type !== 'context_compaction') return undefined
   const conversation = findConversation(
     prompt.filter((m) => m.role === 'user').map(messageText),
   )
-  const sources = conversation ? compactionSources(conversation) : []
+  if (!conversation) return undefined
+  const sources = compactionSources(conversation)
   const goal = sources.find((source) => source.role === 'user') ?? sources[0]
   if (!goal) return undefined
   return [

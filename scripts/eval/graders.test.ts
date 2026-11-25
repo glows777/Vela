@@ -923,7 +923,8 @@ const exitRuntime =
 const exitHelperName = existsSync(join(exitRuntime, 'test/support/lark.ts'))
   ? 'fakeLark'
   : 'fakeFeishu'
-const exitSessions = runtimePaths(exitRuntime).sessionTranscript
+const exitLayout = runtimePaths(exitRuntime)
+const exitSessions = exitLayout.sessionTranscript
 const exitHelpers: typeof larkHelpers & {
   fakeFeishu: typeof larkHelpers.fakeLark
 } = await import(
@@ -1172,8 +1173,12 @@ test('G6 worker starts B first, then A reads the real group fixture; no unsuppor
     'g6_b',
     'g6_a',
   ])
-  expect(result.sessionFiles.some((file) => file.includes('g6_b'))).toBe(true)
-  expect(result.sessionFiles.some((file) => file.includes('g6_a'))).toBe(true)
+  if (exitLayout.sqliteSessions) {
+    expect(result.sessionFiles).toContain('data/vela.db')
+  } else {
+    expect(result.sessionFiles.some((file) => file.includes('g6_b'))).toBe(true)
+    expect(result.sessionFiles.some((file) => file.includes('g6_a'))).toBe(true)
+  }
   expect(pending).toBe(0)
 })
 test('G6 worker passes when topic A hands the fact to B with channel_message_topic', async () => {
@@ -1273,12 +1278,16 @@ test('G7 worker snapshots real group memory after topic 1 and recalls in an isol
     'g7_store',
     'g7_recall',
   ])
-  expect(result.sessionFiles.some((file) => file.includes('g7_store'))).toBe(
-    true,
-  )
-  expect(result.sessionFiles.some((file) => file.includes('g7_recall'))).toBe(
-    true,
-  )
+  if (exitLayout.sqliteSessions) {
+    expect(result.sessionFiles).toContain('data/vela.db')
+  } else {
+    expect(result.sessionFiles.some((file) => file.includes('g7_store'))).toBe(
+      true,
+    )
+    expect(result.sessionFiles.some((file) => file.includes('g7_recall'))).toBe(
+      true,
+    )
+  }
   expect(pending).toBe(0)
 })
 test('G7 worker does not credit a memory written only during recall to topic 1', async () => {
@@ -1490,8 +1499,14 @@ test('G8 worker snapshots actual task memory then recalls in a fresh same-group 
     'g8_store',
     'g8_recall',
   ])
-  for (const topic of ['g8_store', 'g8_recall'])
-    expect(result.sessionFiles.some((file) => file.includes(topic))).toBe(true)
+  if (exitLayout.sqliteSessions) {
+    expect(result.sessionFiles).toContain('data/vela.db')
+  } else {
+    for (const topic of ['g8_store', 'g8_recall'])
+      expect(result.sessionFiles.some((file) => file.includes(topic))).toBe(
+        true,
+      )
+  }
   expect(result.evidence!.calls.every((call) => call.success)).toBe(true)
   expect(pending).toBe(0)
 })
@@ -1710,7 +1725,9 @@ for (const id of ['G7', 'G8'] as const) {
     [
       'read_file',
       {
-        path: `../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-g8_store`)}`,
+        path: exitLayout.sqliteSessions
+          ? '../../../vela.db'
+          : `../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-g8_store`)}`,
       },
     ],
     ['bash', { command: 'grep -R kestrel ../../../sessions' }],
@@ -1794,12 +1811,15 @@ for (const id of ['G7', 'G8'] as const) {
 
   test(`${id} worker rejects successful raw-session reads and later memory saves as fail`, async () => {
     const topic = id.toLowerCase()
+    const targetPath = exitLayout.sqliteSessions
+      ? '../../../vela.db*'
+      : `../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${topic}_store`)}`
     const { result, calls, pending } = await exitAttempt(id, [
       fauxText('Kestrel.'),
       fauxToolCall('bash', { command: 'pwd' }),
-      fauxToolCall('read', {
-        path: `../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${topic}_store`)}`,
-      }),
+      exitLayout.sqliteSessions
+        ? fauxToolCall('bash', { command: `grep -ai kestrel ${targetPath}` })
+        : fauxToolCall('read', { path: targetPath }),
       fauxToolCall('memory', stagingMemory),
       fauxText('Kestrel.'),
     ])
@@ -1819,6 +1839,9 @@ for (const id of ['G7', 'G8'] as const) {
     expect(pending).toBe(0)
   })
   test(`${id} worker rejects bash grep of the store transcript even after valid memory retrieval`, async () => {
+    const targetPath = exitLayout.sqliteSessions
+      ? '../../../vela.db*'
+      : `../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${id.toLowerCase()}_store`)}`
     const { result, calls, pending } = await exitAttempt(id, [
       fauxToolCall('memory', stagingMemory),
       fauxText('Saved.'),
@@ -1827,7 +1850,7 @@ for (const id of ['G7', 'G8'] as const) {
         filename: 'project_staging-server.md',
       }),
       fauxToolCall('bash', {
-        command: `grep -i kestrel ../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${id.toLowerCase()}_store`)}`,
+        command: `grep -${exitLayout.sqliteSessions ? 'ai' : 'i'} kestrel ${targetPath}`,
       }),
       fauxText('Kestrel.'),
     ])

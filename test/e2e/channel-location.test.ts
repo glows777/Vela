@@ -12,6 +12,7 @@ import {
   BUILTIN_EXTENSIONS,
   parseArgs,
 } from '../../packages/vela/src/cli/setup.ts'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { createLocalExecutionEnv } from '../../packages/vela/src/driver/index.ts'
 import { lark } from '../../packages/vela/src/lark/index.ts'
 import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
@@ -418,22 +419,25 @@ test.each([false, true])(
       expect(s.location.environment).toBe('blue')
       await h.vela.dispose()
       if (expired) {
-        const path = join(dir.path, 'sessions', s.id, 'transcript.jsonl')
-        const lines = readFileSync(path, 'utf8')
-          .trim()
-          .split('\n')
-          .map((line) => JSON.parse(line))
-        const intent = lines.find(
-          (e) =>
-            e.customType === 'channel.lark_delivery' &&
-            e.data?.identity?.startsWith('move:'),
-        )
-        expect(intent).toBeDefined()
-        intent.data.startedAt -= 2 * 60 * 60 * 1000
-        writeFileSync(
-          path,
-          lines.map((e) => JSON.stringify(e)).join('\n') + '\n',
-        )
+        const db = openDatabase({ path: join(dir.path, 'vela.db') })
+        try {
+          const row = db.get<{ id: string; content_json: string | null }>(
+            "SELECT id, content_json FROM vela_messages WHERE session_id = ? AND kind = 'custom' AND content_json LIKE '%channel.lark_delivery%' AND content_json LIKE '%\"move:%' LIMIT 1",
+            s.id,
+          )
+          expect(row).toBeDefined()
+          const parsed = JSON.parse(row!.content_json!) as {
+            data: { startedAt: number }
+          }
+          parsed.data.startedAt -= 2 * 60 * 60 * 1000
+          db.run(
+            'UPDATE vela_messages SET content_json = ? WHERE id = ?',
+            JSON.stringify(parsed),
+            row!.id,
+          )
+        } finally {
+          db.close()
+        }
       }
       h = host(dir.path, 'blue', resolve)
       intercept(false)

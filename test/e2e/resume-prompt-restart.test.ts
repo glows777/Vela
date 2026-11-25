@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -11,6 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 
 const roots: string[] = []
@@ -62,27 +62,30 @@ function verify(cwd: string) {
   expect(readFileSync(join(cwd, 'first-count'), 'utf8')).toBe('first\n')
   expect(readFileSync(join(cwd, 'sideeffects'), 'utf8')).toBe('started\n')
   expect(existsSync(join(cwd, 'finished'))).toBe(false)
-  const transcript = readFileSync(
-    join(
-      projectDataDir(join(cwd, 'agent'), cwd),
-      'sessions/resume-prompt/transcript.jsonl',
-    ),
-    'utf8',
-  )
-  const entries = transcript
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  const users = entries.filter(
-    (entry) =>
-      entry.type === 'message' &&
-      entry.message.role === 'user' &&
-      entry.message.content === followup,
-  )
-  expect(users).toHaveLength(1)
-  expect(transcript).toContain('FINISHED_FIRST')
-  expect(transcript).toContain('interrupted by a restart')
-  expect(transcript).toContain('may have partially run')
+  const db = openDatabase({
+    path: join(projectDataDir(join(cwd, 'agent'), cwd), 'vela.db'),
+    readonly: true,
+  })
+  try {
+    const rows = db.all<{ content_json: string }>(
+      "SELECT content_json FROM vela_messages WHERE session_id = 'resume-prompt' AND kind = 'message' ORDER BY seq",
+    )
+    const users = rows
+      .map(
+        (row) =>
+          JSON.parse(row.content_json) as { role: string; content: unknown },
+      )
+      .filter(
+        (message) => message.role === 'user' && message.content === followup,
+      )
+    expect(users).toHaveLength(1)
+    const dump = JSON.stringify(rows)
+    expect(dump).toContain('FINISHED_FIRST')
+    expect(dump).toContain('interrupted by a restart')
+    expect(dump).toContain('may have partially run')
+  } finally {
+    db.close()
+  }
 }
 
 test('SIGKILL then SDK resume and normal prompt repairs the interrupted unsafe tail before adding one new user message', async () => {
@@ -172,30 +175,35 @@ for (const mode of ['text', 'json', 'rpc']) {
 
 test('historically saved user input after an unresolved tool call is rejected without changing history or replaying effects', async () => {
   const cwd = await crash()
-  const transcriptPath = join(
-    projectDataDir(join(cwd, 'agent'), cwd),
-    'sessions/resume-prompt/transcript.jsonl',
+  const dbPath = join(projectDataDir(join(cwd, 'agent'), cwd), 'vela.db')
+  const db = openDatabase({ path: dbPath })
+  const countRows = () =>
+    db.all<{ id: string }>(
+      "SELECT id FROM vela_messages WHERE session_id = 'resume-prompt' ORDER BY seq",
+    )
+  const parent = db.get<{ id: string; seq: number }>(
+    "SELECT id, seq FROM vela_messages WHERE session_id = 'resume-prompt' ORDER BY seq DESC LIMIT 1",
+  )!
+  const corruptId = crypto.randomUUID().slice(0, 8)
+  db.run(
+    `INSERT INTO vela_messages (
+      id, session_id, parent_id, seq, kind, role, content_json, include_in_context, created_at
+    ) VALUES (?, 'resume-prompt', ?, ?, 'message', 'user', ?, 1, ?)`,
+    corruptId,
+    parent.id,
+    parent.seq + 1,
+    JSON.stringify({
+      role: 'user',
+      content: 'Previously saved follow-up from the broken version',
+    }),
+    new Date().toISOString(),
   )
-  const entries = readFileSync(transcriptPath, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  // This is the ordinary SessionMessageEntry emitted by the old broken prompt path:
-  // a user child of the unresolved assistant call, without its required tool result.
-  appendFileSync(
-    transcriptPath,
-    `${JSON.stringify({
-      type: 'message',
-      id: crypto.randomUUID().slice(0, 8),
-      parentId: entries.at(-1).id,
-      timestamp: new Date().toISOString(),
-      message: {
-        role: 'user',
-        content: 'Previously saved follow-up from the broken version',
-      },
-    })}\n`,
+  db.run(
+    "UPDATE sessions SET leaf_message_id = ? WHERE id = 'resume-prompt'",
+    corruptId,
   )
-  const before = readFileSync(transcriptPath)
+  const before = countRows()
+  db.close()
   const child = Bun.spawn([process.execPath, fixture, cwd, 'historical'], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -214,7 +222,16 @@ test('historically saved user input after an unresolved tool call is rejected wi
   expect(rejected.error).toContain('Open a new session')
   expect(rejected.modelCalls).toBe(0)
   expect(existsSync(join(cwd, 'request.json'))).toBe(false)
-  expect(readFileSync(transcriptPath)).toEqual(before)
+  const check = openDatabase({ path: dbPath, readonly: true })
+  try {
+    expect(
+      check.all<{ id: string }>(
+        "SELECT id FROM vela_messages WHERE session_id = 'resume-prompt' ORDER BY seq",
+      ),
+    ).toEqual(before)
+  } finally {
+    check.close()
+  }
   expect(readFileSync(join(cwd, 'sideeffects'), 'utf8')).toBe('started\n')
   expect(readFileSync(join(cwd, 'first-count'), 'utf8')).toBe('first\n')
   expect(existsSync(join(cwd, 'finished'))).toBe(false)

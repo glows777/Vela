@@ -65,7 +65,7 @@ export class SessionDefaultState {
   }
 
   async restore(
-    context: SessionContext,
+    context: SessionContext & { model?: string; thinkingLevel?: ThinkingLevel },
     deps: {
       extensions: { ready: Promise<void> }
       logger: SessionDeps<unknown>['logger']
@@ -120,12 +120,12 @@ export class SessionDefaultState {
       this.resolved = undefined
       this.hooked = undefined
       if (typeof defaults.model === 'string')
-        store.appendModelChange(defaults.model)
+        store.setModelChoice(defaults.model)
     }
     const thinking = defaults.thinkingLevel ?? DEFAULT_THINKING_LEVEL
     if (!this.thinkingPinned && thinking !== this.thinking) {
       this.thinking = thinking
-      store.appendThinkingLevelChange(this.thinking)
+      store.setThinkingLevelChoice(this.thinking)
     }
     this.effectiveLimitOverrides = { ...(defaults.limits ?? {}) }
     const effective = limitsForModel(

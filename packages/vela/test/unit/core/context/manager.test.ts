@@ -54,11 +54,13 @@ function history(count: number, size: number): ModelMessage[] {
 const EMPTY_TOOLS = { sdkTools: {}, toolDefinitions: [], hasHostedTools: false }
 const model = createFauxModel()
 
-test('old timestamps do not change history or create files below capacity', async () => {
+test('prepare() syncs estimate below capacity without modifying history or running summary mid-turn', async () => {
   const store = new SessionStore('age', dir)
   const messages = history(2, 50)
   const timestamps = new Map(messages.map((m) => [m, Date.now() - 86400000]))
-  const manager = new ContextManager(store, new TokenTracker(), {
+  const tracker = new TokenTracker()
+  tracker.setContextDelta(25)
+  const manager = new ContextManager(store, tracker, {
     messages,
     timestamps,
     summary: '',
@@ -68,7 +70,8 @@ test('old timestamps do not change history or create files below capacity', asyn
     await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
   )
   expect(JSON.stringify(messages)).toBe(before)
-  expect(await Bun.file(store.results.indexPath).exists()).toBe(false)
+  // P2 #5: pre-API setEstimatedTokens preserves extension contextHookDeltaTokens
+  expect(tracker.contextDelta).toBe(25)
 })
 
 /** Summary model: by default produces a structured free-text summary; with '' it returns empty text. */
@@ -78,7 +81,7 @@ function summaryModel(text?: string) {
   })
 }
 
-test('summary compacts earlier history and records tool history snapshot', async () => {
+test('compactIfNeeded() compacts earlier history post-turn and persists compaction summary usage', async () => {
   const m = summaryModel()
   const messages = history(10, 16000)
   messages[0] = {
@@ -91,26 +94,35 @@ test('summary compacts earlier history and records tool history snapshot', async
       (): ModelMessage => ({ role: 'user', content: 'recent' }),
     ),
   )
-  const store = new SessionStore('summary', dir)
+  const dbPath = join(dir, 'summary.db')
+  const store = new SessionStore('summary', dbPath)
   for (const message of messages) store.appendMessage(message)
-  const tracker = new TokenTracker()
+  const tracker = new TokenTracker((rec) => store.recordUsageRecord(rec))
   const manager = new ContextManager(store, tracker, {
     messages,
     timestamps: new Map(),
     summary: '',
   })
-  await manager.prepare(
-    await createRequestSnapshot(m, 'stable', EMPTY_TOOLS, messages),
+  const request = await createRequestSnapshot(
+    m,
+    'stable',
+    EMPTY_TOOLS,
+    messages,
   )
+  // Mid-turn prepare() does not compact threshold automatically so prompt cache prefixes hold.
+  await manager.prepare(request)
+  expect(m.calls).toHaveLength(0)
+
+  const compacted = await manager.compactIfNeeded(request)
+  expect(compacted).toBe(true)
   expect(m.calls).toHaveLength(1)
   expect(JSON.stringify(m.calls[0]!.prompt)).not.toContain(
     'tool result preview omitted',
   )
   expect(manager.state.summary).toContain('preserved decisions')
-  expect(manager.state.summary).toContain('/snapshots/through-')
-  expect(store.results.historyViewSequence).toBeDefined()
+  expect(manager.state.summary).not.toContain('Earlier tool output:')
   await manager.save()
-  expect((await new SessionStore('summary', dir).loadSaved())?.summary).toBe(
+  expect((await new SessionStore('summary', dbPath).loadSaved())?.summary).toBe(
     manager.state.summary,
   )
   expect(tracker.recent(1)[0]!.kind).toBe('summary')
@@ -150,7 +162,7 @@ test('summary cannot execute tools and rejected summary leaves original history'
   )
   const before = JSON.stringify(messages)
   await expect(
-    manager.prepare(
+    manager.compactIfNeeded(
       createRequestSnapshot(
         m,
         'stable',
@@ -165,7 +177,7 @@ test('summary cannot execute tools and rejected summary leaves original history'
   expect(m.calls).toHaveLength(1)
 })
 
-test('a request with nothing to summarize is passed through without a pre-flight throw', async () => {
+test('a request with nothing to summarize skips compaction cleanly', async () => {
   const m = summaryModel()
   const messages: ModelMessage[] = [
     { role: 'user', content: 'x'.repeat(520000) },
@@ -184,11 +196,11 @@ test('a request with nothing to summarize is passed through without a pre-flight
   const before = JSON.stringify(messages)
   await manager.prepare(request, { allowSummary: false })
   expect(m.calls).toHaveLength(0)
-  await manager.prepare(request)
+  await manager.compactIfNeeded(request)
   expect(m.calls).toHaveLength(0)
   expect(JSON.stringify(messages)).toBe(before)
   messages[0] = { role: 'user', content: 'x'.repeat(800000) }
-  await manager.prepare(
+  await manager.compactIfNeeded(
     await createRequestSnapshot(m, 'stable', EMPTY_TOOLS, messages),
   )
   expect(m.calls).toHaveLength(0)
@@ -210,7 +222,7 @@ test('empty summary is rejected without changing the live summary or messages', 
   )
   const before = JSON.stringify(messages)
   await expect(
-    manager.prepare(
+    manager.compactIfNeeded(
       await createRequestSnapshot(m, 'stable', EMPTY_TOOLS, messages),
     ),
   ).rejects.toThrow('Summary was not fully generated')

@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs'
 import type { VelaSettings } from '../../config/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
 import type { ConfigResourceSplit } from '../config/runtime-resources.ts'
@@ -128,4 +129,52 @@ export async function loadWorkspaceInventory(
           ? host.contextFiles
           : workspace,
   }
+}
+
+/** Shared shutdown helper for createVela(). */
+export async function disposeVelaRuntime(options: {
+  settled: Promise<unknown>
+  shutdownRunner: () => Promise<void>
+  sessions: Iterable<{ close(): Promise<void> | void }>
+  listeners: { clear(): void }
+  db: { close(): void }
+  ownsDb: boolean
+  ephemeral: boolean
+  dataDir: string
+  beforeDispose?: () => Promise<void> | void
+}): Promise<void> {
+  await options.settled
+  const errors: unknown[] = []
+  try {
+    await options.beforeDispose?.()
+  } catch (error) {
+    errors.push(error)
+  }
+  const closed = await Promise.allSettled(
+    [...options.sessions].map((s) => Promise.resolve().then(() => s.close())),
+  )
+  for (const result of closed) {
+    if (result.status === 'rejected') errors.push(result.reason)
+  }
+  try {
+    await options.shutdownRunner()
+  } catch (error) {
+    errors.push(error)
+  }
+  options.listeners.clear()
+  if (options.ownsDb) {
+    try {
+      options.db.close()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (options.ephemeral) {
+    try {
+      rmSync(options.dataDir, { recursive: true, force: true })
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, 'Vela disposal failed')
 }

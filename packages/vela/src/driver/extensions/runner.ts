@@ -495,7 +495,7 @@ export class ExtensionRunner {
     session: VelaSession,
     text: string,
     source: InputSource,
-    streamingBehavior?: 'steer' | 'followUp',
+    streamingBehavior?: 'steer',
     images?: ImageContent[],
   ): Promise<{ text: string; images?: ImageContent[] } | undefined> {
     let current = text
@@ -631,6 +631,7 @@ export class ExtensionRunner {
       input: structuredClone(input) as Record<string, unknown>,
     }
     const ctx = this.context(session)
+    let approval: { summary: string } | undefined
     for (const { extension, fn } of handlers) {
       try {
         const result = (await fn(event, ctx)) as ToolCallEventResult | undefined
@@ -640,6 +641,10 @@ export class ExtensionRunner {
             reason: result.reason ?? 'Blocked by an extension',
             input,
           }
+        if (result?.approval && !approval) {
+          const summary = result.approval.summary?.trim()
+          if (summary) approval = { summary }
+        }
       } catch (error) {
         this.report(extension, event.type, error)
         return {
@@ -650,6 +655,7 @@ export class ExtensionRunner {
       }
     }
     return {
+      ...(approval ? { approval } : {}),
       input: JSON.stringify(event.input) === before ? input : event.input,
     }
   }

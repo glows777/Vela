@@ -4,10 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { LarkMessageEvent } from '@glows777/vela'
-import {
-  fileSessionStorage,
-  silentLogger,
-} from '../../packages/vela/src/driver/index.ts'
+import { silentLogger } from '../../packages/vela/src/driver/index.ts'
 import { messageTime } from '../../packages/vela/src/lark/history.ts'
 import { type LarkOptions, lark } from '../../packages/vela/src/lark/index.ts'
 import { UNTAGGED_INPUT } from '../../packages/vela/src/legacy-channels/input.ts'
@@ -247,6 +244,7 @@ test('a passive input rejected by the context guard leaves the session usable', 
     ],
   })
   await run.start()
+  run.t.vela.session('lark-oc_group').autoCompaction = false
   // Each input is inside the merge budget, but together with the answered one it exceeds the
   // request limit; the rejected input must not stay at the leaf.
   run.fake.deliver(passive('big-1', 'x'.repeat(390_000)))
@@ -478,8 +476,8 @@ test('default-on intake merges queued discussion, treats commands as discussion 
   expect(first.t.events.filter((e) => e.type === 'channel_reply')).toHaveLength(
     2,
   )
-  const stored = await first.t.readData(
-    'sessions/lark-oc_group/transcript.jsonl',
+  const stored = JSON.stringify(
+    first.t.vela.session('lark-oc_group').getEntries(),
   )
   expect(stored).toContain('Alice: colleagues discussing lunch')
   expect(stored).toContain('Alice: /danger')
@@ -548,9 +546,7 @@ test('off, disabled groups, self and other bots, and unsupported passive message
     existsSync(join(run.t.vela.dataDir, 'channels', 'lark-oc_disabled')),
   ).toBe(false)
   expect(
-    existsSync(
-      join(run.t.vela.dataDir, 'sessions', 'lark-oc_on', 'transcript.jsonl'),
-    ),
+    (await run.t.vela.listSessions()).some((s) => s.id === 'lark-oc_on'),
   ).toBe(false)
 })
 
@@ -697,41 +693,6 @@ test.each([true, false])(
     expect(input).not.toContain('already answered discussion')
   },
 )
-
-test('a passive session blocked by repeated storage failures stays operator-only', async () => {
-  const cwd = await root()
-  const storage = fileSessionStorage(join(cwd, 'sessions'))
-  let failing = true
-  const run = setup({
-    cwd,
-    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
-    sessionStorage: {
-      ...storage,
-      append: async (...args) => {
-        if (failing) throw new Error('disk full')
-        await storage.append(...args)
-      },
-    },
-  })
-  await run.start()
-  try {
-    // Delivered while no run is working, so each message gets its own evaluation.
-    for (const id of ['first', 'second', 'third', 'blocked'])
-      run.fake.deliver(passive(id, id))
-    await until(
-      () =>
-        run.fake.sent.some((item) => item.text.includes("can't be saved")) ||
-        run.logs.some((line) => line.includes('Passive evaluation paused')),
-    )
-    // The channel's stop waits for all accepted queue entries and operator diagnostics.
-    await run.t.internals.gateway.stopAll()
-    expect(run.t.model.calls).toHaveLength(3)
-    expect(run.fake.sent).toEqual([])
-    expect(run.logs.join('\n')).toContain('disk full')
-  } finally {
-    failing = false
-  }
-})
 
 test('a passive evaluation that stays silent never marks its trigger', async () => {
   const run = setup({

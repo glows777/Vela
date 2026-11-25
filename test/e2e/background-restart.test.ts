@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 
 const roots: string[] = []
 const children: ReturnType<typeof Bun.spawn>[] = []
@@ -107,15 +108,46 @@ for (const mode of ['normal', 'stopped'])
     await child.exited
     await restart(cwd, 'topic', 0)
   }, 30000)
+function readSessionRows(cwd: string, sessionId = 'lark-oc_group-root') {
+  const db = openDatabase({
+    path: join(cwd, '.vela-data/vela.db'),
+    readonly: true,
+  })
+  try {
+    return db
+      .all<{
+        id: string
+        kind: string
+        content_json: string
+      }>(
+        'SELECT id, kind, content_json FROM vela_messages WHERE session_id = ? ORDER BY seq',
+        sessionId,
+      )
+      .map((row) => {
+        const parsed = JSON.parse(row.content_json) as {
+          customType?: string
+          data?: unknown
+        }
+        return {
+          id: row.id,
+          kind: row.kind,
+          custom_type:
+            row.kind === 'custom' ? (parsed.customType ?? null) : null,
+          data_json:
+            row.kind === 'custom' ? JSON.stringify(parsed.data ?? null) : null,
+        }
+      })
+  } finally {
+    db.close()
+  }
+}
+
 test('normal result lost before input save is rebuilt as unknown, not the old answer', async () => {
   const { cwd, child } = await fixture('before-save')
   await until(() => existsSync(join(cwd, 'save-gate.json')), child)
   // A delayed kill must still be before every background input write, not merely before save() returns.
   await Bun.sleep(250)
-  const disk = readFileSync(
-    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
-    'utf8',
-  )
+  const disk = JSON.stringify(readSessionRows(cwd))
   expect(disk).toBe(read(cwd, 'before-notice-transcript.json'))
   expect(disk).not.toContain('backgroundJobToken')
   expect(disk).not.toContain('NORMAL RESULT')
@@ -123,19 +155,13 @@ test('normal result lost before input save is rebuilt as unknown, not the old an
   await child.exited
   await restart(cwd, 'topic', 1)
   await restart(cwd, 'topic', 0)
-  const entries = readFileSync(
-    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
-    'utf8',
-  )
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
+  const rows = readSessionRows(cwd)
   expect(
-    entries.filter(
-      (entry) =>
-        entry.type === 'custom' &&
-        entry.customType === 'channel.input' &&
-        entry.data?.backgroundJobToken,
+    rows.filter(
+      (row) =>
+        row.custom_type === 'channel.input' &&
+        row.data_json &&
+        JSON.parse(row.data_json).backgroundJobToken,
     ),
   ).toHaveLength(1)
 }, 45000)
@@ -153,19 +179,13 @@ test('saved notification input survives another kill before directory acknowledg
   await recovering.child.exited
   await restart(cwd, 'topic', 1)
   await restart(cwd, 'topic', 0)
-  const entries = readFileSync(
-    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
-    'utf8',
-  )
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
+  const rows = readSessionRows(cwd)
   expect(
-    entries.filter(
-      (entry) =>
-        entry.type === 'custom' &&
-        entry.customType === 'channel.input' &&
-        entry.data?.backgroundJobToken,
+    rows.filter(
+      (row) =>
+        row.custom_type === 'channel.input' &&
+        row.data_json &&
+        JSON.parse(row.data_json).backgroundJobToken,
     ),
   ).toHaveLength(1)
 }, 45000)
@@ -189,21 +209,11 @@ test('two outstanding jobs each produce one durable notice without clearing the 
     ),
   ).toHaveLength(2)
   await restart(cwd, 'topic', 0)
-  const entries = readFileSync(
-    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
-    'utf8',
-  )
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  const tokens = entries
-    .filter(
-      (entry) =>
-        entry.type === 'custom' &&
-        entry.customType === 'channel.input' &&
-        entry.data?.backgroundJobToken,
-    )
-    .map((entry) => entry.data.backgroundJobToken)
+  const rows = readSessionRows(cwd)
+  const tokens = rows
+    .filter((row) => row.custom_type === 'channel.input' && row.data_json)
+    .map((row) => JSON.parse(row.data_json!).backgroundJobToken as string)
+    .filter(Boolean)
   expect(tokens.sort()).toEqual(
     jobs.map((job: { token: string }) => job.token).sort(),
   )
@@ -241,28 +251,25 @@ test('unknown notice accepted before SIGKILL reuses its final UUID without anoth
     read(cwd, '.vela-data/channels/index.json').records[0].outstandingJobs ??
       [],
   ).toHaveLength(0)
-  const entries = readFileSync(
-    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
-    'utf8',
-  )
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
+  const rows = readSessionRows(cwd)
   expect(
-    entries.filter(
-      (entry) =>
-        entry.type === 'custom' &&
-        entry.customType === 'channel.input' &&
-        entry.data?.backgroundJobToken,
+    rows.filter(
+      (row) =>
+        row.custom_type === 'channel.input' &&
+        row.data_json &&
+        JSON.parse(row.data_json).backgroundJobToken,
     ),
   ).toHaveLength(1)
-  const intents = entries.filter(
-    (entry) =>
-      entry.type === 'custom' &&
-      entry.customType === 'channel.lark_delivery' &&
-      entry.data?.uuid === accepted.attempts[0].uuid,
-  )
-  expect(intents.some((entry) => entry.data.confirmed === true)).toBe(true)
+  const intents = rows
+    .filter(
+      (row) => row.custom_type === 'channel.lark_delivery' && row.data_json,
+    )
+    .map(
+      (row) =>
+        JSON.parse(row.data_json!) as { uuid?: string; confirmed?: boolean },
+    )
+    .filter((data) => data.uuid === accepted.attempts[0].uuid)
+  expect(intents.some((data) => data.confirmed === true)).toBe(true)
   const again = await fixture('restart-ledger', 'topic', cwd)
   await until(() => again.child.exitCode !== null, again.child)
   expect(again.child.exitCode).toBe(0)
@@ -276,10 +283,7 @@ test('restart of an unsaved background result preserves the topic waiting decisi
   await until(() => existsSync(join(cwd, 'save-gate.json')), child)
   // A delayed kill must still be before every background input write, not merely before save() returns.
   await Bun.sleep(250)
-  const disk = readFileSync(
-    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
-    'utf8',
-  )
+  const disk = JSON.stringify(readSessionRows(cwd))
   expect(disk).toBe(read(cwd, 'before-notice-transcript.json'))
   expect(disk).not.toContain('backgroundJobToken')
   expect(disk).not.toContain('NORMAL RESULT')

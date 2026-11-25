@@ -178,16 +178,24 @@ export type VelaEvent =
   | {
       type: 'agent_end'
       messages: ModelMessage[]
-      reason: 'done' | 'aborted' | 'error'
+      reason: 'done' | 'aborted' | 'error' | 'waiting_human'
       error?: unknown
       /** Present on failed runs; the original error and prompt rejection stay unchanged. */
       errorKind?: AgentErrorKind
     }
-  /** Queued messages changed (steer / followUp enqueued, dequeued, cleared); both fields hold the full current queue */
-  | { type: 'queue_update'; steering: string[]; followUp: string[] }
+  /** Queued steer messages changed; holds the full current steering queue. */
+  | { type: 'queue_update'; steering: string[] }
+  /** A tool call was suspended awaiting human approval. */
+  | {
+      type: 'approval_requested'
+      approvalId: string
+      toolCallId: string
+      toolName: string
+      summary: string
+    }
   /**
-   * All work from prompt() is done (including the loops run for steer / followUp queued after it)
-   * and the session is idle again. Same as pi's agent_settled.
+   * All work from prompt() is done (including loops run for steer queued after it)
+   * and the session is idle (or waiting for human approval). Same as pi's agent_settled.
    */
   | { type: 'agent_settled' }
   /**
@@ -218,8 +226,6 @@ export type VelaEvent =
       willRetry: boolean
       errorMessage?: string
     }
-  /** Writing the session's entries failed; they are kept and written with the next entry or at the end of the run. */
-  | { type: 'session_save_failed'; error: unknown }
   /** Audit record before a file-writing tool call (emitted by a pre hook) */
   | { type: 'audit'; toolName: string; path: string }
   /** An extension called ui.notify() in a session without a UI */

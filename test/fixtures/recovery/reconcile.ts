@@ -1,7 +1,8 @@
-import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
 import { z } from 'zod'
+import { openDatabase } from '../../../packages/vela/src/db/sqlite.ts'
 import {
   createFauxModel,
   fauxHang,
@@ -78,11 +79,6 @@ const t = createTestVela({
         if (event.toolName === 'probe_finish')
           return { output: 'EXACT POST-HOOK RESPONSE' }
       })
-      if (phase === 'repair')
-        api.on('before_agent_start', () => {
-          console.log('CRASH_READY')
-          return new Promise(() => {})
-        })
     },
   ],
 })
@@ -94,27 +90,28 @@ if (hosted) {
   console.log('CRASH_READY')
 } else if (phase?.startsWith('repair')) {
   await t.session.resume()
-  if (phase === 'repair-first') {
-    const save = t.session.save.bind(t.session)
-    t.session.save = async (options) => {
-      await save(options)
-      if (t.session.messages.some((message) => message.role === 'tool')) {
-        console.log('CRASH_READY')
-        await new Promise(() => {})
-      }
-    }
+  t.model.doStream = () => {
+    console.log('CRASH_READY')
+    return new Promise<never>(() => {})
   }
   void t.session.continueInterrupted()
 } else {
   void t.run('Finish both siblings exactly once')
-  const historySaved = () =>
-    readdirSync(t.vela.dataDir, { recursive: true, encoding: 'utf8' }).some(
-      (file) =>
-        file.endsWith('tool-history.jsonl') &&
-        readFileSync(join(t.vela.dataDir, file), 'utf8').includes(
-          'EXACT POST-HOOK RESPONSE',
-        ),
-    )
+  const historySaved = () => {
+    const dbPath = join(t.vela.dataDir, 'vela.db')
+    if (!existsSync(dbPath)) return false
+    const db = openDatabase({ path: dbPath, readonly: true })
+    try {
+      const row = db.get<{ c: number }>(
+        "SELECT COUNT(*) AS c FROM vela_tool_calls WHERE status = 'completed' AND result_json LIKE '%EXACT POST-HOOK RESPONSE%'",
+      )
+      return (row?.c ?? 0) > 0
+    } catch {
+      return false
+    } finally {
+      db.close()
+    }
+  }
   while (!existsSync(join(cwd!, 'started.txt')) || !historySaved())
     await Bun.sleep(5)
   console.log('CRASH_READY')

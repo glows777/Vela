@@ -529,7 +529,7 @@ export class BackgroundJobs implements BackgroundCommands {
         else
           await this.session.sendMessage(
             { customType: 'background', content: message, display: false },
-            { triggerTurn: true, deliverAs: 'followUp' },
+            { triggerTurn: true, deliverAs: 'steer' },
           )
       } catch (error) {
         this.logger.error(

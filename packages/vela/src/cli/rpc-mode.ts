@@ -115,16 +115,9 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     async prompt(command) {
       const message = String(command.message ?? '')
       const images = readImages(command.images)
-      const behavior = command.streamingBehavior as
-        | 'steer'
-        | 'followUp'
-        | undefined
-      if (
-        behavior !== undefined &&
-        behavior !== 'steer' &&
-        behavior !== 'followUp'
-      )
-        throw new Error('streamingBehavior must be steer or followUp')
+      const behavior = command.streamingBehavior as 'steer' | undefined
+      if (behavior !== undefined && behavior !== 'steer')
+        throw new Error('streamingBehavior must be steer')
       if (isExtensionCommand(message)) {
         await session.prompt(message, { source: 'rpc', images })
         return { disposition: 'handled' }
@@ -140,8 +133,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       start(session.prompt(message, { source: 'rpc', images }), command)
       return { disposition: 'started' }
     },
-    steer: (command) => enqueue(command, 'steer'),
-    follow_up: (command) => enqueue(command, 'followUp'),
+    steer: (command) => enqueue(command),
     async abort() {
       await session.abort()
     },
@@ -254,10 +246,9 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         thinkingLevel: session.thinkingLevel,
         isStreaming: session.isRunning,
         steeringMode: session.steeringMode,
-        followUpMode: session.followUpMode,
         messageCount: session.messages.length,
         autoCompactionEnabled: session.autoCompaction,
-        pendingMessageCount: queue.steering.length + queue.followUp.length,
+        pendingMessageCount: queue.steering.length,
       }
     },
     get_messages: () => ({ messages: session.messages }),
@@ -309,9 +300,6 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     set_steering_mode(command) {
       session.steeringMode = queueMode(command.mode)
     },
-    set_follow_up_mode(command) {
-      session.followUpMode = queueMode(command.mode)
-    },
     async compact(command) {
       let result: unknown
       const off = session.subscribe((event) => {
@@ -359,7 +347,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     },
   }
 
-  async function enqueue(command: RpcCommand, behavior: 'steer' | 'followUp') {
+  async function enqueue(command: RpcCommand) {
     const message = String(command.message ?? '')
     const images = readImages(command.images)
     if (message.startsWith('/') && isExtensionCommand(message))
@@ -368,9 +356,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       start(session.prompt(message, { source: 'rpc', images }), command)
       return { disposition: 'started' }
     }
-    await (behavior === 'steer'
-      ? session.steer(message, { source: 'rpc', images })
-      : session.followUp(message, { source: 'rpc', images }))
+    await session.steer(message, { source: 'rpc', images })
     return { disposition: 'queued' }
   }
 

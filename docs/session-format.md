@@ -31,7 +31,6 @@ interface SessionHeader {
   cwd?: string             // working directory
   location?: ExecutionLocation
   channel?: string         // channel the session answers on, when a host opened it for one
-  toolHistoryId?: string   // @internal: the tool call history directory
   parentSession?: string   // id of the session this one was forked or cloned from
 }
 ```
@@ -80,7 +79,7 @@ The model and thinking level are the latest `model_change` and `thinking_level_c
 
 `session.fork()`, `session.clone()` and `--fork` write a new session file holding one branch of the original: the entries from the root to the fork point, re-chained without `label`, `session_archived` and `session_channel` entries (the copy starts active and unbound), followed by fresh `label` entries for the labels on that path (pi's `createBranchedSession`). The header's `parentSession` is the original's id, and `location` is kept (see [Header](#header)). The tool call history is copied into the new session's directory under a new `toolHistoryId`; long tool output files are not copied, and references to them keep pointing into the original session's directory.
 
-`session.exportJsonl()` writes the same kind of file for the current branch (header and entries, re-chained), without `toolHistoryId`, and keeps `location`.
+`session.exportJsonl()` writes the same kind of file for the current branch (header and entries, re-chained), keeping `location`.
 
 ## Versions
 
@@ -168,14 +167,4 @@ A session where the user asked one question and the model read a file:
 
 ## Reading sessions from code
 
-Use the storage functions instead of parsing files yourself; they handle versions and the version 1 format:
-
-```typescript
-import { fileSessionStorage } from '@glows777/vela'
-
-const storage = fileSessionStorage('/home/me/.vela/projects/--home-me-app--1a2b3c4d/sessions')
-for (const summary of await storage.list!()) console.log(summary.id, summary.messageCount)
-const entries = await storage.load('20261008-081441-da14') // header first, then the entries
-```
-
-An open session returns its entries with `session.getEntries()`, its current branch with `session.getBranch()` and the whole tree with `session.getTree()`.
+Sessions are persisted in SQLite (`<dataDir>/vela.db`). An open session returns its entries with `session.getEntries()`, its current branch with `session.getBranch()`, and the whole tree with `session.getTree()`; exported `.jsonl` branches can still be written with `session.exportJsonl(path)`.

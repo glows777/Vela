@@ -5,7 +5,6 @@ import { hostname, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { APICallError } from '@ai-sdk/provider'
 import { z } from 'zod'
-import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
 import { local } from '../../packages/vela/src/legacy-channels/index.ts'
 import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
@@ -523,19 +522,24 @@ function latch() {
 test('Local SSE offers Stop during preparation and reports its queued successor without polling', async () => {
   const held = latch()
   const entered = latch()
-  const storage = memorySessionStorage()
   const { t, client } = await setup({
+    ephemeralSessions: true,
     responses: [fauxText('Queued after preparation Stop')],
     allowPendingResponses: true,
-    sessionStorage: {
-      ...storage,
-      async load(id) {
-        if (id.startsWith('local-')) {
+  })
+  const origSession = t.vela.session.bind(t.vela)
+  Object.defineProperty(t.vela, 'session', {
+    value: (id: string, opts?: Parameters<typeof origSession>[1]) => {
+      const s = origSession(id, opts)
+      if (id.startsWith('local-')) {
+        const origResume = s.resume.bind(s)
+        s.resume = async () => {
           entered.release()
           await held.promise
+          return origResume()
         }
-        return storage.load(id)
-      },
+      }
+      return s
     },
   })
   const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })
@@ -598,15 +602,19 @@ test('Local SSE offers Stop during preparation and reports its queued successor 
 })
 
 test('Local SSE finishes a preparation failure before any model event', async () => {
-  const storage = memorySessionStorage()
   const { t, client } = await setup({
-    sessionStorage: {
-      ...storage,
-      async load(id) {
-        if (id.startsWith('local-'))
+    ephemeralSessions: true,
+  })
+  const origSession = t.vela.session.bind(t.vela)
+  Object.defineProperty(t.vela, 'session', {
+    value: (id: string, opts?: Parameters<typeof origSession>[1]) => {
+      const s = origSession(id, opts)
+      if (id.startsWith('local-')) {
+        s.resume = async () => {
           throw new Error('Project session storage unavailable')
-        return storage.load(id)
-      },
+        }
+      }
+      return s
     },
   })
   const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })

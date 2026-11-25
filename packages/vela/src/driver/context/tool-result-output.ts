@@ -1,11 +1,8 @@
 import type { ToolResultPart } from '../messages.ts'
-import { getStoredResult } from '../session/tool-results.ts'
 
 export type ToolResultOutput = ToolResultPart['output']
 
 export function toolResultOutputToText(output: ToolResultOutput): string {
-  const stored = getStoredResult(output)
-  if (stored) return stored.preview
   switch (output.type) {
     case 'text':
     case 'error-text':

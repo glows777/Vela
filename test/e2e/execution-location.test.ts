@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 
 test('saved local execution location survives session restart and clone', async () => {
   const dir = tempDir()
@@ -16,13 +17,22 @@ test('saved local execution location survives session restart and clone', async 
       location: { environment: 'local', cwd: workspace },
     })
     await session.prompt('Remember this workspace')
-    const header = JSON.parse(
-      readFileSync(
-        join(vela.dataDir, 'sessions/location/transcript.jsonl'),
-        'utf8',
-      ).split('\n')[0]!,
-    )
-    expect(header.location).toEqual({ environment: 'local', cwd: workspace })
+    const db = openDatabase({
+      path: join(vela.dataDir, 'vela.db'),
+      readonly: true,
+    })
+    try {
+      const row = db.get<{ location_json: string | null }>(
+        'SELECT location_json FROM sessions WHERE id = ?',
+        'location',
+      )
+      expect(JSON.parse(row!.location_json!)).toEqual({
+        environment: 'local',
+        cwd: workspace,
+      })
+    } finally {
+      db.close()
+    }
     const cloned = (await session.clone({ sessionId: 'location-clone' }))
       .session!
     expect((await cloned.executeBash('cat marker.txt')).output).toBe(
@@ -107,13 +117,22 @@ test('new sessions persist their default local location', async () => {
   })
   try {
     await vela.session('default-location').prompt('hello')
-    const header = JSON.parse(
-      readFileSync(
-        join(vela.dataDir, 'sessions/default-location/transcript.jsonl'),
-        'utf8',
-      ).split('\n')[0]!,
-    )
-    expect(header.location).toEqual({ environment: 'local', cwd: dir.path })
+    const db = openDatabase({
+      path: join(vela.dataDir, 'vela.db'),
+      readonly: true,
+    })
+    try {
+      const row = db.get<{ location_json: string | null }>(
+        'SELECT location_json FROM sessions WHERE id = ?',
+        'default-location',
+      )
+      expect(JSON.parse(row!.location_json!)).toEqual({
+        environment: 'local',
+        cwd: dir.path,
+      })
+    } finally {
+      db.close()
+    }
   } finally {
     await vela.dispose()
     dir.cleanup()
@@ -351,12 +370,9 @@ test('legacy session without location retains existing cwd fallback', async () =
     const session = vela.session('legacy', { cwd: workspace })
     await session.prompt('hello')
     await session.close()
-    const transcript = join(vela.dataDir, 'sessions/legacy/transcript.jsonl')
-    const lines = readFileSync(transcript, 'utf8').split('\n')
-    const header = JSON.parse(lines[0]!)
-    delete header.location
-    lines[0] = JSON.stringify(header)
-    writeFileSync(transcript, lines.join('\n'))
+    const db = openDatabase({ path: join(vela.dataDir, 'vela.db') })
+    db.run("UPDATE sessions SET location_json = NULL WHERE id = 'legacy'")
+    db.close()
     const resumed = vela.session('legacy')
     expect(await resumed.resume()).toBe(true)
     expect((await resumed.executeBash('cat marker.txt')).output).toBe('host')
@@ -505,12 +521,13 @@ test('malformed stored locations fail closed instead of falling back to the host
     const initial = vela.session('malformed')
     await initial.prompt('hello')
     await initial.close()
-    const transcript = join(vela.dataDir, 'sessions/malformed/transcript.jsonl')
-    const lines = readFileSync(transcript, 'utf8').split('\n')
-    const header = JSON.parse(lines[0]!)
-    header.location = { environment: 'local' }
-    lines[0] = JSON.stringify(header)
-    writeFileSync(transcript, lines.join('\n'))
+    const db = openDatabase({ path: join(vela.dataDir, 'vela.db') })
+    db.run(
+      'UPDATE sessions SET location_json = ? WHERE id = ?',
+      JSON.stringify({ environment: 'local' }),
+      'malformed',
+    )
+    db.close()
     const reopened = vela.session('malformed')
     await expect(reopened.resume()).rejects.toThrow('location')
     await expect(reopened.executeBash('touch must-not-run')).rejects.toThrow()

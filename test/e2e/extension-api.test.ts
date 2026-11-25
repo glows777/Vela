@@ -201,7 +201,7 @@ test('a custom message alone starts the session file; earlier entries are writte
   first.session.appendEntry('state', { n: 1 })
   await first.session.save()
   // Extension state alone is not a conversation (like pi)
-  expect(first.exists('sessions/default/transcript.jsonl')).toBe(false)
+  expect(await first.vela.listSessions()).toEqual([])
   await first.session.sendMessage({
     customType: 'note',
     content: 'Saved note',
@@ -232,7 +232,7 @@ test('sendMessage and appendEntry reject a missing customType', async () => {
   ).rejects.toThrow('customType')
 })
 
-test('while running, deliverAs followUp waits until the model would stop', async () => {
+test('while running, deliverAs steer queues until after the current step', async () => {
   let session: VelaSession | undefined
   function ext(vela: ExtensionAPI) {
     vela.on('session_start', (_event, ctx) => {
@@ -244,8 +244,8 @@ test('while running, deliverAs followUp waits until the model would stop', async
       inputSchema: z.object({}),
       execute: async () => {
         await session!.sendMessage(
-          { customType: 'later', content: 'Follow-up note', display: false },
-          { deliverAs: 'followUp' },
+          { customType: 'later', content: 'Steer note', display: false },
+          { deliverAs: 'steer' },
         )
         return 'worked'
       },
@@ -253,16 +253,12 @@ test('while running, deliverAs followUp waits until the model would stop', async
   }
   const t = createTestVela({
     extensions: [ext],
-    responses: [fauxToolCall('ext_work', {}), fauxText('done'), fauxText('ok')],
+    responses: [fauxToolCall('ext_work', {}), fauxText('done')],
   })
   await t.run('Do the work')
-  // Not added after the tool result: only once the model answered without tool calls
-  expect(transcript(t.model.calls[1]!).at(-1)).toBe(
+  expect(transcript(t.model.calls[1]!).slice(-2)).toEqual([
     'tool: [tool-result ext_work]',
-  )
-  expect(transcript(t.model.calls[2]!).slice(-2)).toEqual([
-    'assistant: done',
-    'user: Follow-up note',
+    'user: Steer note',
   ])
 })
 

@@ -237,7 +237,6 @@ export class ChannelGateway {
 
   /** Internal storage-success notification, including saves outside a channel prompt. */
   sessionSaved(id: string): void {
-    this.run.saved(id)
     this.handoff.saved(id)
   }
 
@@ -483,7 +482,6 @@ export class ChannelGateway {
       ...this.routines.active,
       ...this.events.active,
     ])
-    this.run.clearSaveFailures()
     for (const result of [...(draining ?? []), ...drained])
       if (result.status === 'rejected') errors.push(result.reason)
 
@@ -495,6 +493,7 @@ export class ChannelGateway {
         errors.push(error)
       }
     }
+    await this.recovery.settledAll()
     try {
       if (this.channels.size) await this.directory.flush()
     } catch (error) {

@@ -206,17 +206,7 @@ test('mixed known and unknown prices remain visible without pretending to be a c
 test('an unmentioned status in an unowned topic writes no session, directory or ledger', async () => {
   const fake = fakeLark()
   let loads = 0
-  let writes = 0
   const t = createTestVela({
-    sessionStorage: {
-      load: async () => {
-        loads++
-        return undefined
-      },
-      append: async () => {
-        writes++
-      },
-    },
     extensions: [
       lark({
         owners: ['ou_alice'],
@@ -225,6 +215,18 @@ test('an unmentioned status in an unowned topic writes no session, directory or 
       }),
     ],
   })
+  const origSession = t.vela.session.bind(t.vela)
+  Object.defineProperty(t.vela, 'session', {
+    value: (id: string, opts?: Parameters<typeof origSession>[1]) => {
+      const s = origSession(id, opts)
+      const origResume = s.resume.bind(s)
+      s.resume = async () => {
+        loads++
+        return origResume()
+      }
+      return s
+    },
+  })
   await t.vela.startChannels()
   fake.deliver(message('!status', false))
   await until(() => loads === 1)
@@ -232,7 +234,7 @@ test('an unmentioned status in an unowned topic writes no session, directory or 
   expect(fake.sent).toEqual([])
   expect(fake.reactions).toEqual([])
   expect(t.model.calls).toEqual([])
-  expect(writes).toBe(0)
+  expect(await t.vela.listSessions()).toEqual([])
   expect(existsSync(t.dataPath('channels/index.json'))).toBe(false)
   expect(existsSync(t.dataPath('channels/usage.jsonl'))).toBe(false)
 })

@@ -4,7 +4,6 @@ import {
   toJsonSchemaSync,
 } from '../../shared/tool-schema.ts'
 import { estimateTextTokens } from '../messages.ts'
-import { ToolRejection } from './recovery.ts'
 
 interface RegistryTool {
   name: string
@@ -17,23 +16,12 @@ interface RegistryTool {
 
 export function toProviderTools<T extends RegistryTool>(
   tools: T[],
-  execute: (
-    tool: T,
-    input: unknown,
-    options: { toolCallId?: string; abortSignal?: AbortSignal },
-  ) => Promise<unknown>,
 ): ProviderToolSpec[] {
   return tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
     inputSchema: tool.inputSchema,
     hostedOnly: tool.hostedOnly,
-    execute: async (input, options) => {
-      const output = await execute(tool, input, options)
-      // Preserve the same error text for model-issued and nested calls.
-      if (output instanceof ToolRejection) throw output.reason
-      return output
-    },
   }))
 }
 

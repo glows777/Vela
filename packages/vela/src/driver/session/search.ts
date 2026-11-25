@@ -1,4 +1,4 @@
-import { messageText, type SessionFileEntry } from './entries.ts'
+import { messageText, type SessionEntry } from './entries.ts'
 
 /** One session a `Vela.searchSessions()` query matched. */
 export interface SessionSearchHit {
@@ -18,7 +18,7 @@ const MAX_MATCH = 120
  * with a little context around it. Tool output, `!` commands, summaries and custom messages are not searched.
  */
 export function searchSessionText(
-  entries: SessionFileEntry[],
+  entries: SessionEntry[],
   query: string,
 ): string | undefined {
   const needle = query.trim().replace(/\s+/g, ' ').toLowerCase()

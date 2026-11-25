@@ -1,5 +1,3 @@
-import { appendFileSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
 import type { ModelPricing } from '../../shared/pricing.ts'
 import type { ProviderUsage } from '../../shared/provider-types.ts'
 import { toolResultOutputToText } from '../context/tool-result-output.ts'
@@ -98,10 +96,9 @@ export class TokenTracker {
     }
   }
 
-  /** Usage details of each successful model request, accumulated across agentLoops. */
+  /** Usage details of each successful model request, accumulated across runs. */
   private steps: StepRecord[] = []
-  /** Optional JSONL usage log path. */
-  private logPath?: string
+  private readonly onRecord?: (record: StepRecord) => void
   /** Full context token count from the last API response (inputTokens + outputTokens). */
   private lastPreciseCount = 0
   /** Prompt+output tokens of the latest response, while the estimate is anchored to a provider report. */
@@ -116,18 +113,17 @@ export class TokenTracker {
   private contextHookDeltaTokens = 0
   /** Context hook token delta already included in the latest calibrated API usage. */
   private baselineContextHookDeltaTokens = 0
-  /** Price from the current model config (cost in models.json); overrides the built-in table and updates on model switch. */
+  /** Price from the current model config; overrides the built-in table and updates on model switch. */
   private pricing?: ModelPricing
-  /** Sum of each step's hypothetical no-cache cost, at the price in effect at request time (old requests are not repriced after a model switch). */
+  /** Sum of each step's hypothetical no-cache cost, at the price in effect at request time. */
   private baselineCost = 0
   /** Whether any recorded request had a known price. */
   private priced = false
   /** Current model's context window, used for the status percentage. */
   contextWindow = CONTEXT_WINDOW
 
-  constructor(logPath?: string) {
-    this.logPath = logPath
-    if (logPath) mkdirSync(dirname(logPath), { recursive: true })
+  constructor(onRecord?: (record: StepRecord) => void) {
+    this.onRecord = onRecord
   }
 
   /** Calibrates the current context baseline with `inputTokens + outputTokens` from the API. */
@@ -145,6 +141,17 @@ export class TokenTracker {
       this.baselineToolTokens = toolTokens
       this.currentToolTokens = toolTokens
     }
+  }
+
+  /** Restores API calibration on resume from the latest saved assistant usage plus trailing messages. */
+  restoreCalibration(
+    inputTokens: number,
+    outputTokens: number,
+    trailingMessages: readonly ModelMessage[],
+    toolTokens?: number,
+  ): void {
+    this.updateFromAPI(inputTokens, outputTokens, toolTokens)
+    for (const message of trailingMessages) this.addMessage(message)
   }
 
   /** Tracks active tool schema tokens so newly discovered tools update the reported estimate. */
@@ -170,12 +177,12 @@ export class TokenTracker {
   }
 
   /** Builds a local context estimate (e.g. from loaded history); the request estimate is used until a provider reports usage. */
-  setEstimatedTokens(tokens: number): void {
+  setEstimatedTokens(tokens: number, preserveContextDelta = false): void {
     this.reportedPromptTokens = undefined
     this.lastPreciseCount = Math.max(0, tokens)
     this.pendingTokens = 0
     this.baselineToolTokens = undefined
-    this.contextHookDeltaTokens = 0
+    if (!preserveContextDelta) this.contextHookDeltaTokens = 0
     this.baselineContextHookDeltaTokens = 0
   }
 
@@ -225,9 +232,7 @@ export class TokenTracker {
   }
 
   /**
-   * Switches to the model with this window and price (undefined uses the built-in table). Its tokenizer may
-   * count differently, so the previous model's reported prompt size is dropped: thresholds fall back to the
-   * local request estimate until this model reports usage. Only later requests are priced with it.
+   * Switches to the model with this window and price (undefined uses the built-in table).
    */
   setModel(contextWindow: number, pricing: ModelPricing | undefined): void {
     this.contextWindow = contextWindow
@@ -257,6 +262,7 @@ export class TokenTracker {
       kind: 'main',
     },
     capturedPricing?: { value: ModelPricing | undefined },
+    persist = true,
   ): StepRecord {
     const price =
       (capturedPricing ? capturedPricing.value : this.pricing) ??
@@ -279,10 +285,7 @@ export class TokenTracker {
       ...details,
     }
     this.steps.push(record)
-
-    if (this.logPath) {
-      appendFileSync(this.logPath, `${JSON.stringify(record)}\n`)
-    }
+    if (persist) this.onRecord?.(record)
     return record
   }
 
@@ -307,7 +310,6 @@ export class TokenTracker {
     const totalInputLike =
       t.inputTokens + t.cacheReadTokens + t.cacheWriteTokens
     const hitRate = totalInputLike > 0 ? t.cacheReadTokens / totalInputLike : 0
-    // Hypothetical no-cache cost: pay full price for every input-like token as a miss
     const { cost, ...tokens } = t
     if (!this.priced) return { ...tokens, hitRate, steps: this.steps.length }
     const baselineCost = this.baselineCost
@@ -395,10 +397,6 @@ function computeCost(usage: StepUsage, p: ModelPricing): number {
 
 /**
  * Normalizes the AI SDK usage object into four token kinds.
- *
- * The AI SDK splits input tokens in `inputTokenDetails` into uncached, cache read and cache write.
- * Its `inputTokens` is the total of all three; this keeps the tracker's four-kind billing scheme,
- * so `StepUsage.inputTokens` means uncached input tokens.
  */
 export function normalizeUsage(usage: ProviderUsage | undefined): StepUsage {
   if (!usage)

@@ -9,7 +9,7 @@
  *   connection for atomic step-level durability without leaking Vela internals into Runtime.
  */
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 1
 
 export const INITIAL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -328,7 +328,7 @@ CREATE TABLE IF NOT EXISTS vela_messages (
   parent_id TEXT,
   seq INTEGER NOT NULL,
   run_id TEXT,
-  kind TEXT NOT NULL CHECK (kind IN ('message', 'compaction', 'branch_summary', 'bash_execution', 'custom_message', 'custom', 'context_edit')),
+  kind TEXT NOT NULL CHECK (kind IN ('message', 'compaction', 'branch_summary', 'bash_execution', 'custom_message', 'custom')),
   role TEXT,
   content_json TEXT NOT NULL,
   include_in_context INTEGER NOT NULL DEFAULT 1 CHECK (include_in_context IN (0, 1)),

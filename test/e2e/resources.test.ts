@@ -74,12 +74,12 @@ test('prompt templates from .vela/prompts expand with arguments; unknown /names 
   expect(t.model.calls[1]!.lastUserText).toBe('/nothing here')
 })
 
-test('templates expand before steer / followUp queue them', async () => {
+test('templates expand before steer queues them', async () => {
   const t = createTestVela({
     files: { '.vela/prompts/next.md': 'Then do $1' },
     responses: [
       () => {
-        void t.session.followUp('/next cleanup')
+        void t.session.steer('/next cleanup')
         return fauxText('first')
       },
       fauxText('done'),

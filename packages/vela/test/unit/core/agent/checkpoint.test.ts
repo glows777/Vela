@@ -3,11 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { agentLoop } from '../../../../src/driver/agent/index.ts'
+import { openDatabase } from '../../../../src/db/index.ts'
 import type { ModelMessage } from '../../../../src/driver/messages.ts'
-import { ToolResultStore } from '../../../../src/driver/session/tool-results.ts'
+import { SessionStore } from '../../../../src/driver/session/index.ts'
 import { ToolRegistry } from '../../../../src/driver/tools/registry.ts'
 import { TokenTracker } from '../../../../src/driver/usage/tracker.ts'
+import { VelaDriver } from '../../../../src/driver/vela-driver.ts'
 import {
   createFauxModel,
   fauxText,
@@ -17,110 +18,95 @@ import {
 const dir = mkdtempSync(join(tmpdir(), 'vela-agent-checkpoint-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-// These tests do not assert on persistence, so their tool history goes to a temp directory.
-function makeRegistry() {
-  return new ToolRegistry(
-    new ToolResultStore(join(dir, crypto.randomUUID(), 'tool-results')),
-  )
-}
-
-test('the complete assistant checkpoint is awaited before any tool side effect, and added only once', async () => {
-  let flushed = false
+test('TX1 commits assistant message and pending vela_tool_calls before any tool side effect', async () => {
+  const db = openDatabase({ path: ':memory:' })
+  const store = new SessionStore('tx1', db, { ephemeral: true })
   let executions = 0
+  const registry = new ToolRegistry(join(dir, 'tx1-tools'))
+  registry.register({
+    name: 'write',
+    description: 'write marker',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const msgRows = db.all<{ kind: string; role: string | null }>(
+        'SELECT kind, role FROM vela_messages WHERE session_id = ? ORDER BY seq ASC',
+        'tx1',
+      )
+      expect(msgRows.at(-1)?.role).toBe('assistant')
+      const callRows = db.all<{ tool_name: string; status: string }>(
+        'SELECT tool_name, status FROM vela_tool_calls WHERE session_id = ?',
+        'tx1',
+      )
+      expect(callRows).toEqual([{ tool_name: 'write', status: 'running' }])
+      executions++
+      return 'saved'
+    },
+  })
   const messages: ModelMessage[] = [{ role: 'user', content: 'work' }]
-  const registry = makeRegistry()
-  registry.register({
-    name: 'write',
-    description: 'write marker',
-    inputSchema: z.object({}),
-    execute: async () => {
-      expect(flushed).toBe(true)
-      expect(messages.at(-1)?.role).toBe('assistant')
-      executions++
-      return 'saved'
-    },
+  store.ensureSessionRow()
+  store.appendMessage(messages[0]!)
+  const driver = new VelaDriver({
+    sessionId: 'tx1',
+    db,
+    store,
+    registry,
+    tracker: new TokenTracker(),
   })
-  await agentLoop({
-    model: createFauxModel({
-      responses: [fauxToolCall('write', {}), fauxText('done')],
-    }),
-    systemPrompt: '',
-    toolRegistry: registry,
-    messages,
-    tokenTracker: new TokenTracker(),
-    onCheckpoint: async () => {
-      expect(JSON.stringify(messages.at(-1))).toContain('write')
-      await Bun.sleep(10)
-      expect(executions).toBe(0)
-      flushed = true
-    },
-  })
-  expect(executions).toBe(1)
-  expect(messages.map((message) => message.role)).toEqual([
-    'user',
-    'assistant',
-    'tool',
-    'assistant',
-  ])
-})
-
-test('a rejected checkpoint never executes a tool or resends the model request', async () => {
-  let executions = 0
-  const registry = makeRegistry()
-  registry.register({
-    name: 'write',
-    description: 'write marker',
-    inputSchema: z.object({}),
-    execute: async () => {
-      executions++
-      return 'saved'
-    },
-  })
-  const model = createFauxModel({ responses: [fauxToolCall('write', {})] })
-  await expect(
-    agentLoop({
-      model,
+  try {
+    await driver.run({
+      model: createFauxModel({
+        responses: [fauxToolCall('write', {}), fauxText('done')],
+      }),
       systemPrompt: '',
-      toolRegistry: registry,
-      messages: [{ role: 'user', content: 'work' }],
-      tokenTracker: new TokenTracker(),
-      onCheckpoint: async () => {
-        throw new Error('checkpoint disk unavailable')
-      },
-    }),
-  ).rejects.toThrow('checkpoint disk unavailable')
-  expect(executions).toBe(0)
-  expect(model.calls).toHaveLength(1)
+      messages,
+    })
+    expect(executions).toBe(1)
+    expect(messages.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'tool',
+      'assistant',
+    ])
+  } finally {
+    db.close()
+  }
 })
 
-test('cancellation after a checkpoint answers its calls without duplicating the assistant', async () => {
+test('cancellation after TX1 pairs pending calls with aborted results without duplicating the assistant', async () => {
+  const db = openDatabase({ path: ':memory:' })
+  const store = new SessionStore('cancel-tx1', db, { ephemeral: true })
   const controller = new AbortController()
-  const registry = makeRegistry()
+  const registry = new ToolRegistry(join(dir, 'cancel-tools'))
   registry.register({
     name: 'wait',
     description: 'wait',
     inputSchema: z.object({}),
     execute: async () => {
-      controller.abort(new Error('stop after checkpoint'))
-      return 'stopped'
+      controller.abort(new Error('abort mid tool'))
+      return 'late'
     },
   })
   const messages: ModelMessage[] = [{ role: 'user', content: 'work' }]
-  await expect(
-    agentLoop({
-      model: createFauxModel({ responses: [fauxToolCall('wait', {})] }),
-      systemPrompt: '',
-      toolRegistry: registry,
-      messages,
-      tokenTracker: new TokenTracker(),
-      abortSignal: controller.signal,
-      onCheckpoint: async () => {},
-    }),
-  ).rejects.toThrow('stop after checkpoint')
-  expect(messages.map((message) => message.role)).toEqual([
-    'user',
-    'assistant',
-    'tool',
-  ])
-  expect(JSON.stringify(messages.at(-1))).toContain('Operation aborted')
+  store.ensureSessionRow()
+  store.appendMessage(messages[0]!)
+  const driver = new VelaDriver({
+    sessionId: 'cancel-tx1',
+    db,
+    store,
+    registry,
+    tracker: new TokenTracker(),
+  })
+  try {
+    await expect(
+      driver.run({
+        model: createFauxModel({ responses: [fauxToolCall('wait', {})] }),
+        systemPrompt: '',
+        messages,
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toThrow('abort mid tool')
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool'])
+  } finally {
+    db.close()
+  }
 })

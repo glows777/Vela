@@ -639,8 +639,18 @@ function findCompactionControl(
   for (let i = prompt.length - 1; i >= 0; i--) {
     const m = prompt[i]!
     if (m.role !== 'user') continue
+    const raw = textOf(m.content)
+    if (
+      raw.includes('<conversation>') ||
+      raw.includes('<current-turn-prefix>')
+    ) {
+      return {
+        sourceMessageCount: compactionSources(findConversation([raw]) ?? '')
+          .length,
+      }
+    }
     try {
-      const parsed = JSON.parse(textOf(m.content))
+      const parsed = JSON.parse(raw)
       if (parsed?.type === 'context_compaction') return parsed
     } catch {}
   }

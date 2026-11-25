@@ -317,10 +317,18 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
     type: 'agent_end',
     reason: 'done',
   })
-  // Rejected calls are also written to the tool history
-  const history = await Bun.file(t.session.registry.results.indexPath).text()
-  expect(history).toContain('no_such_tool')
-  expect(history).toContain('"status":"rejected"')
+  // Rejected calls are also written to vela_tool_calls
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+  try {
+    const row = db.get<{ tool_name: string; status: string }>(
+      'SELECT tool_name, status FROM vela_tool_calls WHERE tool_name = ?',
+      'no_such_tool',
+    )
+    expect(row).toEqual({ tool_name: 'no_such_tool', status: 'failed' })
+  } finally {
+    db.close()
+  }
 })
 
 test('a deferred tool only reaches the model after tool_search discovers it', async () => {

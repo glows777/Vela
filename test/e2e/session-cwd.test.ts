@@ -8,6 +8,7 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 
 test('SDK sessions use independent cwd for tools and context, preserving application resources and lifecycle', async () => {
   const dir = tempDir()
@@ -89,14 +90,19 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
       expect(model.calls[7]!.toolResults.at(-1)!.output).toContain(`${name}!`)
       expect(readFileSync(join(path, 'result.txt'), 'utf8')).toBe(`${name}!`)
       expect((await session.executeBash('cat same.txt')).output).toBe(name)
-      expect(
-        JSON.parse(
-          readFileSync(
-            join(vela.dataDir, 'sessions', session.id, 'transcript.jsonl'),
-            'utf8',
-          ).split('\n')[0]!,
-        ),
-      ).toMatchObject({ cwd: path })
+      const db = openDatabase({
+        path: join(vela.dataDir, 'vela.db'),
+        readonly: true,
+      })
+      try {
+        const row = db.get<{ location_json: string | null }>(
+          'SELECT location_json FROM sessions WHERE id = ?',
+          session.id,
+        )
+        expect(JSON.parse(row!.location_json!)).toMatchObject({ cwd: path })
+      } finally {
+        db.close()
+      }
     }
     expect(vela.cwd).toBe(host)
     expect(vela.dataDir).toBe(join(host, '.data'))

@@ -809,6 +809,9 @@ mock.module(${JSON.stringify(modulePath)}, () => ({ ...actual, sumPositive(numbe
       result.reason = `Cleanup: ${errorReason(error)}`
     })
     server?.stop(true)
+    const dbFile = join(config.artifactDir, 'data', 'vela.db')
+    if (existsSync(dbFile))
+      result.sessionFiles.push(relative(config.artifactDir, dbFile))
     const sessions = join(config.artifactDir, 'data', 'sessions')
     const entries = await readdir(sessions, { withFileTypes: true }).catch(
       () => [],

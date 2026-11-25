@@ -9,7 +9,7 @@ Programmatic use of Vela through `createVela()`. Each example is a single file t
 | `01-minimal.ts` | One session, one prompt, print the answer |
 | `02-events.ts` | Subscribe to session events; the model calls `read` in a temp directory |
 | `03-multi-session.ts` | Two sessions running concurrently in one Vela, with `vela.subscribe()` |
-| `04-custom-storage.ts` | A custom `SessionStorage`, and resuming a session from it in a second Vela |
+| `04-custom-storage.ts` | Sharing a caller-owned SQLite `VelaDatabase` across Vela instances (`createVela({ db })`) |
 
 ## Running
 

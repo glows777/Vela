@@ -28,7 +28,9 @@ const history = (): ModelMessage[] => [
       content:
         i === 5
           ? 'LIVE_ONLY_MARKER: reply only that the summary is ready.'
-          : `recent-${i}`,
+          : i === 0
+            ? `recent-0 ${'a'.repeat(80_000)}`
+            : `recent-${i}`,
     }),
   ),
 ]
@@ -53,29 +55,21 @@ test('summary sends only the dropped messages, under an explicit compaction scop
     new TokenTracker(),
   )
   const request = model.calls[0]!
-  // System prompt, the dropped messages as text, and the control message; the retained messages stay out
-  expect(request.prompt).toHaveLength(3)
+  expect(request.prompt).toHaveLength(2)
   expect(JSON.stringify(request.prompt)).not.toContain('LIVE_ONLY_MARKER')
-  const last = request.prompt.at(-1)
-  const part =
-    last?.role === 'user'
-      ? last.content.find((part: { type: string }) => part.type === 'text')
-      : undefined
-  const control = JSON.parse(part?.type === 'text' ? part.text : '{}')
-  expect(control.type).toBe('context_compaction')
-  expect(control.sourceMessageCount).toBe(2)
-  expect(control.retainedMessageCount).toBe(6)
-  expect(control.instruction).toContain('Do not run tools')
-  expect(control.instruction).toContain('## Progress')
-  expect(control.instruction).toContain('## Next Steps')
-  expect(control.outputSchema).toBeUndefined()
+  expect(JSON.stringify(request.prompt[0])).toContain(
+    'context summarization assistant',
+  )
+  const userText = JSON.stringify(request.prompt[1])
+  expect(userText).toContain('Summarize the conversation above.')
+  expect(userText).toContain('## Progress')
+  expect(userText).toContain('## Next Steps')
   expect(request.responseFormat?.type).not.toBe('json')
   // The old messages are numbered in place, so their text is sent once
-  const conversation = JSON.stringify(request.prompt[1])
-  expect(conversation).toContain('[0] user\\nCheck alpha and beta')
-  expect(conversation).toContain('[1] assistant\\nalpha exit 0')
-  expect(conversation).not.toContain('[2]')
-  expect(conversation.match(/Check alpha and beta/g)).toHaveLength(1)
+  expect(userText).toContain('[0] user\\nCheck alpha and beta')
+  expect(userText).toContain('[1] assistant\\nalpha exit 0')
+  expect(userText).not.toContain('[2]')
+  expect(userText.match(/Check alpha and beta/g)).toHaveLength(1)
   expect(JSON.stringify(request.prompt)).toContain('validation failed')
   expect(request.tools).toEqual([])
   expect(result.messages.slice(1)).toEqual(messages.slice(2))

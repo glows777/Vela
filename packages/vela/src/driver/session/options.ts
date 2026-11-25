@@ -5,7 +5,8 @@ import type { InputSource } from '../extensions/events.ts'
 import type { ImageContent } from '../messages.ts'
 import type { TokenStatus, UsageTotals } from '../usage/tracker.ts'
 import type { SessionScope } from './scope.ts'
-/** How queued messages are taken: one at a time (default, like pi) or all at once. */
+
+/** How queued steer messages are taken: one at a time (default, like pi) or all at once. */
 export type QueueMode = 'one-at-a-time' | 'all'
 
 export interface PromptOptions {
@@ -14,10 +15,9 @@ export interface PromptOptions {
   signal?: AbortSignal
   /**
    * How to handle this input while the session is running (like pi): `steer` joins the current task
-   * (after this step's tools finish, before the next model request); `followUp` runs after the current
-   * task ends. Required while running (throws otherwise); ignored when idle.
+   * (after the active tool step settles, before the next model request). Required while running; ignored when idle.
    */
-  streamingBehavior?: 'steer' | 'followUp'
+  streamingBehavior?: 'steer'
   /** Where the input came from, passed to `input` handlers (default `sdk`) */
   source?: InputSource
 }
@@ -40,7 +40,7 @@ export interface ForkOptions {
   sessionId?: string
 }
 
-/** Session ids become directory names: only letters, digits, `.`, `_` and `-`, and no leading `.`. */
+/** Session ids become safe identifiers: only letters, digits, `.`, `_` and `-`, and no leading `.`. */
 const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/
 
 /** @experimental Shared frontend contract. */
@@ -51,15 +51,15 @@ export function assertSessionId(id: string): void {
     )
 }
 
-/** How `session.sendMessage()` delivers a custom message (same as pi). */
+/** How `session.sendMessage()` delivers a custom message. */
 export interface SendMessageOptions {
   /** When idle: run the agent loop with the message as its input. Default false (the message is only appended) */
   triggerTurn?: boolean
   /**
-   * `steer` / `followUp`: while running, queue it like steer() / followUp() (default steer).
+   * `steer`: while running, queue it like steer().
    * `nextTurn`: hold it and add it after the user message of the next prompt.
    */
-  deliverAs?: 'steer' | 'followUp' | 'nextTurn'
+  deliverAs?: 'steer' | 'nextTurn'
 }
 
 /** @internal Transitional host callback for `legacy-channels` until S4b deletes it. */
@@ -102,6 +102,11 @@ export interface SessionOptions {
 export interface InternalSessionOptions extends SessionOptions {
   host?: SessionHost
 }
+
+export type SessionPersistence =
+  | { type: 'file'; path: string }
+  | { type: 'memory' }
+  | { type: 'unknown' }
 
 export interface SessionUsage extends TokenStatus {
   totals: UsageTotals

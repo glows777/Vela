@@ -2,10 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
-import {
-  fileSessionStorage,
-  silentLogger,
-} from '../../packages/vela/src/driver/index.ts'
+import { silentLogger } from '../../packages/vela/src/driver/index.ts'
 import { lark } from '../../packages/vela/src/lark/index.ts'
 import {
   fauxHang,
@@ -271,7 +268,6 @@ test('a topic answer does not advance the top-level group history boundary', asy
 test('unowned untagged topics serialize admission without preparation, saves or empty files', async () => {
   const fake = fakeLark()
   const logs: string[] = []
-  let storage: ReturnType<typeof fileSessionStorage>
   let release!: () => void
   const held = new Promise<void>((resolve) => {
     release = resolve
@@ -279,7 +275,6 @@ test('unowned untagged topics serialize admission without preparation, saves or 
   let loads = 0
   let activeLoads = 0
   let maximumLoads = 0
-  let saves = 0
   const t = createTestVela({
     responses: [],
     logger: {
@@ -287,22 +282,6 @@ test('unowned untagged topics serialize admission without preparation, saves or 
       info: (line) => logs.push(line),
       warn: (line) => logs.push(line),
       error: (line) => logs.push(line),
-    },
-    sessionStorage: {
-      load: async (id) => {
-        loads++
-        maximumLoads = Math.max(maximumLoads, ++activeLoads)
-        await held
-        try {
-          return await storage.load(id)
-        } finally {
-          activeLoads--
-        }
-      },
-      append: async (id, entries) => {
-        saves++
-        await storage.append(id, entries)
-      },
     },
     extensions: [
       lark({
@@ -313,8 +292,24 @@ test('unowned untagged topics serialize admission without preparation, saves or 
       }),
     ],
   })
-  const directory = join(t.cwd, 'probe-storage')
-  storage = fileSessionStorage(directory)
+  const origSession = t.vela.session.bind(t.vela)
+  Object.defineProperty(t.vela, 'session', {
+    value: (id: string, opts?: Parameters<typeof origSession>[1]) => {
+      const s = origSession(id, opts)
+      const origResume = s.resume.bind(s)
+      s.resume = async () => {
+        loads++
+        maximumLoads = Math.max(maximumLoads, ++activeLoads)
+        await held
+        try {
+          return await origResume()
+        } finally {
+          activeLoads--
+        }
+      }
+      return s
+    },
+  })
   await t.vela.ready()
   await t.vela.startChannels()
   const input = {
@@ -337,8 +332,7 @@ test('unowned untagged topics serialize admission without preparation, saves or 
   }
   await until(() => loads === 2 && t.vela.sessions().length === 1)
   expect(maximumLoads).toBe(1)
-  expect(saves).toBe(0)
-  expect(existsSync(directory)).toBe(false)
+  expect(await t.vela.listSessions()).toEqual([])
   expect(existsSync(join(t.vela.dataDir, 'channels', 'lark-oc_group'))).toBe(
     false,
   )

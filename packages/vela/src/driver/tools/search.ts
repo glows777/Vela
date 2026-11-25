@@ -155,6 +155,7 @@ export const createGrepTool = (
 ): ToolDefinition => ({
   name: 'grep',
   replay: 'safe',
+  executionMode: 'parallel',
   activeByDefault: false,
   description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is limited to ${GREP_DEFAULT_LIMIT} matches by default. Long lines are truncated to ${MAX_LINE_LENGTH} chars.`,
   inputSchema: grepToolParamSchema,
@@ -328,6 +329,7 @@ export const createFindTool = (
 ): ToolDefinition => ({
   name: 'find',
   replay: 'safe',
+  executionMode: 'parallel',
   activeByDefault: false,
   description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is limited to ${FIND_DEFAULT_LIMIT} results by default.`,
   inputSchema: findToolParamSchema,

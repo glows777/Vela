@@ -53,7 +53,7 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   },
 )
 
-test.each(['prompt', 'steer', 'followUp'] as const)(
+test.each(['prompt', 'steer'] as const)(
   'stopping a pending skill expansion via %s prevents the model turn',
   async (method) => {
     const dir = tempDir()
@@ -418,9 +418,7 @@ test('default local bash keeps spilled output under the session result root', as
     const path = output.match(/Full output: ([^\]\n]+)/)?.[1]
     expect(path).toBeDefined()
     expect(
-      path!.startsWith(
-        vela.session('spill-location').registry.results.dir + '/',
-      ),
+      path!.startsWith(vela.session('spill-location').registry.spillDir + '/'),
     ).toBe(true)
   } finally {
     await vela.dispose()
@@ -849,9 +847,6 @@ test('execution environment publishes a complete file by rename and removes stag
 test.each([false, true])(
   'memory session clone retains private spilled bash output after parent closes (custom local factory %p)',
   async (custom) => {
-    const { memorySessionStorage } = await import(
-      '../../packages/vela/src/driver/index.ts'
-    )
     const { readFileSync } = await import('node:fs')
     const dir = tempDir()
     const vela = createVela({
@@ -860,14 +855,14 @@ test.each([false, true])(
         ? ({ location }) => createLocalExecutionEnv({ cwd: location.cwd })
         : undefined,
       dataDir: '.data',
-      sessionStorage: memorySessionStorage(),
+      ephemeralSessions: true,
       model: createFauxModel({ responses: [] }),
     })
     try {
       const parent = vela.session('parent-spill')
       const result = await parent.executeBash("printf '%060000d' 0")
       expect(result.fullOutputPath).toBeDefined()
-      expect(dirname(result.fullOutputPath!)).toBe(parent.registry.results.dir)
+      expect(dirname(result.fullOutputPath!)).toBe(parent.registry.spillDir!)
       if (process.platform !== 'win32') {
         const { statSync } = await import('node:fs')
         expect(statSync(result.fullOutputPath!).mode & 0o777).toBe(0o600)

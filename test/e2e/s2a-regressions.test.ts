@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
 import z from 'zod'
@@ -412,21 +412,26 @@ test('scoped hooks match extension-local tool names and structured error hook re
     'call:mailer_send',
     'result:mailer_send',
   ])
-  const historyLines = readFileSync(
-    t.session.store.results.history.path,
-    'utf8',
-  )
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  const failedRecord = historyLines.find(
-    (entry) => entry.type === 'tool_result' && entry.status === 'failed',
-  )
-  expect(failedRecord?.modelOutput).toEqual({
-    type: 'content',
-    value: [{ type: 'text', text: 'structured-hook-error' }],
-    isError: true,
-  })
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+  try {
+    const row = db.get<{
+      status: string
+      is_error: number
+      result_json: string | null
+    }>(
+      'SELECT status, is_error, result_json FROM vela_tool_calls WHERE tool_name = ? AND is_error = 1 LIMIT 1',
+      'mailer_send',
+    )
+    expect(row?.status).toBe('failed')
+    expect(JSON.parse(String(row?.result_json))).toEqual({
+      type: 'content',
+      value: [{ type: 'text', text: 'structured-hook-error' }],
+      isError: true,
+    })
+  } finally {
+    db.close()
+  }
 })
 
 test('context hook growth is included in compaction threshold and mid-run setModel preserves serving maxOutputTokens', async () => {

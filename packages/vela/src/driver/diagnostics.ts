@@ -116,7 +116,6 @@ export {
   branchSummaryMessageText,
   buildSessionPath,
   contextEntries,
-  isSessionV1,
   messageText as sessionContentText,
   summaryMessageText,
 } from './session/entries.ts'

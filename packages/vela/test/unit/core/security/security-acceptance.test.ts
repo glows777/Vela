@@ -7,7 +7,12 @@ import {
   cleanupTestVelas,
   createTestVela,
 } from '../../../../../../test/support/vela.ts'
-import { ToolResultStore } from '../../../../src/driver/session/tool-results.ts'
+import { openDatabase, type VelaDatabase } from '../../../../src/db/index.ts'
+import { SessionStore } from '../../../../src/driver/session/index.ts'
+import {
+  executeStepCalls,
+  type VelaToolCallRow,
+} from '../../../../src/driver/tool-executor.ts'
 import {
   type ToolDefinition,
   ToolRegistry,
@@ -17,10 +22,12 @@ import { createJsonSchema } from '../../../../src/shared/tool-schema.ts'
 import { fauxText, fauxToolCall } from '../../../../src/testing/core/index.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-security-acceptance-'))
+const dbs: VelaDatabase[] = []
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 const spies: Array<{ mockRestore(): void }> = []
 afterEach(async () => {
   for (const spy of spies.splice(0)) spy.mockRestore()
+  for (const db of dbs.splice(0)) if (db.open) db.close()
   await cleanupTestVelas()
 })
 function quiet(method: 'log' | 'warn' | 'error') {
@@ -29,10 +36,12 @@ function quiet(method: 'log' | 'warn' | 'error') {
   return spy
 }
 function fixture() {
-  const registry = new ToolRegistry(
-    new ToolResultStore(join(root, crypto.randomUUID(), 'outputs')),
-  )
-  return { registry }
+  const db = openDatabase({ path: ':memory:' })
+  dbs.push(db)
+  const store = new SessionStore('sec-test', db, { ephemeral: true })
+  store.ensureSessionRow()
+  const registry = new ToolRegistry(join(root, crypto.randomUUID(), 'outputs'))
+  return { db, store, registry }
 }
 function fake(
   name: string,
@@ -46,42 +55,90 @@ function fake(
     ...overrides,
   }
 }
-function invoke(
-  registry: ToolRegistry,
+async function invoke(
+  fx: ReturnType<typeof fixture>,
   name: string,
   input: unknown = { command: 'echo hello' },
   signal?: AbortSignal,
-) {
-  const execute = registry
-    .toProviderTools()
-    .find((t) => t.name === name)?.execute
-  if (!execute) throw new Error(`Missing executable ${name}`)
-  return Promise.resolve(
-    execute(input, {
-      toolCallId: crypto.randomUUID(),
-      abortSignal: signal,
-    }),
+): Promise<VelaToolCallRow> {
+  const now = new Date().toISOString()
+  const runId = crypto.randomUUID()
+  fx.db.run(
+    `INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at)
+     VALUES (?, 'sec-test', 'vela', 'user', 'running', ?, ?)`,
+    runId,
+    now,
+    now,
   )
+  const id = crypto.randomUUID()
+  const toolCallId = crypto.randomUUID()
+  const row: VelaToolCallRow = {
+    id,
+    session_id: 'sec-test',
+    run_id: runId,
+    assistant_message_id: crypto.randomUUID(),
+    tool_call_id: toolCallId,
+    call_index: 0,
+    tool_name: name,
+    input_json: JSON.stringify(input),
+    execution_mode: fx.registry.get(name)?.executionMode ?? 'parallel',
+    replay: fx.registry.get(name)?.replay === 'safe' ? 'safe' : 'none',
+    location_json: null,
+    status: 'pending',
+    attempt: 0,
+    is_error: 0,
+    preview: null,
+    result_json: null,
+    spill_path: null,
+    details_json: null,
+    duration_ms: null,
+    started_at: null,
+    finished_at: null,
+    created_at: now,
+    updated_at: now,
+  }
+  fx.db.run(
+    `INSERT INTO vela_tool_calls (
+       id, session_id, run_id, assistant_message_id, tool_call_id, call_index,
+       tool_name, input_json, execution_mode, replay, status, attempt, is_error,
+       created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', 0, 0, ?, ?)`,
+    row.id,
+    row.session_id,
+    row.run_id,
+    row.assistant_message_id,
+    row.tool_call_id,
+    row.tool_name,
+    row.input_json,
+    row.execution_mode,
+    row.replay,
+    now,
+    now,
+  )
+  await executeStepCalls({
+    db: fx.db,
+    store: fx.store,
+    registry: fx.registry,
+    sessionId: 'sec-test',
+    rows: [row],
+    emit: () => {},
+    signal,
+  })
+  return fx.db.get<Record<string, unknown>>(
+    'SELECT * FROM vela_tool_calls WHERE id = ?',
+    id,
+  ) as unknown as VelaToolCallRow
 }
-type HistoryRow = { type: string; status?: string; input?: unknown } & Record<
-  string,
-  unknown
->
-async function rows(registry: ToolRegistry): Promise<HistoryRow[]> {
-  return (await Bun.file(registry.results.history.path).text())
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
-}
-async function rejected(registry: ToolRegistry, attempt: Promise<unknown>) {
-  await attempt.catch(() => {})
-  const records = await rows(registry)
-  expect(
-    records
-      .filter((row) => row.type === 'tool_result')
-      .map((row) => row.status),
-  ).toEqual(['rejected'])
+
+function sessionToolRows(dataDir: string) {
+  const db = openDatabase({ path: join(dataDir, 'vela.db'), readonly: true })
+  try {
+    return db.all<Record<string, unknown>>(
+      'SELECT * FROM vela_tool_calls ORDER BY created_at ASC',
+    ) as unknown as VelaToolCallRow[]
+  } finally {
+    db.close()
+  }
 }
 
 test('tool_call modifications chain through handlers into execution and history', async () => {
@@ -119,10 +176,11 @@ test('tool_call modifications chain through handlers into execution and history'
     { path: 'final.txt' },
   ])
   expect(t.model.calls[1]!.toolResults[0]!.output).toBe('done')
-  expect(
-    (await rows(t.session.registry)).find((row) => row.type === 'tool_call')
-      ?.input,
-  ).toEqual({ path: 'final.txt' })
+  expect(JSON.parse(String(sessionToolRows(t.dataDir)[0]?.input_json))).toEqual(
+    {
+      path: 'final.txt',
+    },
+  )
 })
 
 for (const throws of [false, true]) {
@@ -160,22 +218,20 @@ for (const throws of [false, true]) {
         ? 'Extension block check failed: acceptance failure'
         : 'acceptance block',
     )
-    expect(
-      (await rows(t.session.registry))
-        .filter((row) => row.type === 'tool_result')
-        .map((row) => row.status),
-    ).toEqual(['rejected'])
+    expect(sessionToolRows(t.dataDir).map((row) => row.status)).toEqual([
+      'failed',
+    ])
   })
 }
 
 for (const kind of ['zod', 'json'] as const) {
   test(`modified input is validated before execution (${kind} schema)`, async () => {
-    const { registry } = fixture()
+    const fx = fixture()
     let calls = 0
-    registry.setInterception({
+    fx.registry.setInterception({
       before: () => ({ input: { command: 42 } }),
     })
-    registry.register(
+    fx.registry.register(
       fake('read', {
         ...(kind === 'json'
           ? {
@@ -192,7 +248,9 @@ for (const kind of ['zod', 'json'] as const) {
         },
       }),
     )
-    await rejected(registry, invoke(registry, 'read'))
+    const row = await invoke(fx, 'read')
+    expect(row.status).toBe('failed')
+    expect(row.preview?.toLowerCase()).toContain('invalid')
     expect(calls).toBe(0)
   })
 }
@@ -231,79 +289,56 @@ test('tool_result chains modifications and preserves the previous output after e
   await t.run('Read the file')
   expect(seen).toEqual(['original', 'one', 'one', 'one'])
   expect(t.model.calls[1]!.toolResults[0]!.output).toBe('one-two')
-  expect(
-    (await rows(t.session.registry)).find((row) => row.type === 'tool_result')
-      ?.output,
-  ).toBe('original')
+  expect(sessionToolRows(t.dataDir)[0]?.status).toBe('completed')
 })
 
-test('post changes model text while history preserves native small result', async () => {
-  const { registry } = fixture()
-  registry.setInterception({
+test('post changes model text while details preserve native small result', async () => {
+  const fx = fixture()
+  fx.registry.setInterception({
     after: (_name, input, output) => {
       expect(input).toEqual({ command: 'echo hello' })
       expect(output).toBe('original')
       return 'decorated'
     },
   })
-  registry.register(
+  fx.registry.register(
     fake('read', {
       execute: async () =>
         new ToolExecutionResult({ native: true }, 'original', { exitCode: 0 }),
     }),
   )
-  expect(await invoke(registry, 'read')).toBe('decorated')
-  const record = (await rows(registry)).find(
-    (row) => row.type === 'tool_result',
-  )
-  expect(record?.output).toEqual({ native: true })
-  expect(record?.exitCode).toBe(0)
+  const row = await invoke(fx, 'read')
+  expect(row.preview).toBe('decorated')
+  expect(JSON.parse(String(row.details_json))).toEqual({ native: true })
+  expect(row.status).toBe('completed')
 })
 
-for (const preStored of [false, true]) {
-  test(`post preserves stored result metadata and original file (preStored=${preStored})`, async () => {
-    const { registry } = fixture()
-    const original = 'full output '.repeat(100)
-    registry.setInterception({
-      after: (_name, _input, output) => {
-        expect(typeof output).toBe('string')
-        return 'custom preview'
-      },
-    })
-    registry.register(
-      fake('read', {
-        maxResultChars: 30,
-        execute: async (_input, ctx) => {
-          if (!preStored)
-            return new ToolExecutionResult(original, original, { exitCode: 0 })
-          const stored = await ctx!.results.save(
-            original,
-            'read',
-            'initial preview',
-            ctx!.toolCallId,
-            ctx!.callId,
-          )
-          stored.execution = { exitCode: 0 }
-          return stored
-        },
-      }),
-    )
-    const result = await invoke(registry, 'read')
-    expect(result).toBe('custom preview')
-    const record = (await rows(registry)).find(
-      (row) => row.type === 'tool_result',
-    )
-    expect(record?.exitCode).toBe(0)
-    expect(record?.bytes).toBe(Buffer.byteLength(original))
-    expect(await Bun.file(String(record?.outputPath)).text()).toBe(original)
-    expect(record?.status).toBe('completed')
+test('post preserves spillPath and original file when output exceeds maxResultChars', async () => {
+  const fx = fixture()
+  const original = 'full output '.repeat(100)
+  fx.registry.setInterception({
+    after: (_name, _input, output) => {
+      expect(typeof output).toBe('string')
+      return 'custom preview'
+    },
   })
-}
+  fx.registry.register(
+    fake('read', {
+      maxResultChars: 30,
+      execute: async () =>
+        new ToolExecutionResult(original, original, { exitCode: 0 }),
+    }),
+  )
+  const row = await invoke(fx, 'read')
+  expect(row.preview).toBe('custom preview')
+  expect(await Bun.file(String(row.spill_path)).text()).toBe(original)
+  expect(row.status).toBe('completed')
+})
 
-test('pre-aborted call never executes and existing cancelled history survives', async () => {
-  const { registry } = fixture()
+test('pre-aborted call never executes and records aborted error result', async () => {
+  const fx = fixture()
   let calls = 0
-  registry.register(
+  fx.registry.register(
     fake('read', {
       execute: async () => {
         calls++
@@ -313,16 +348,15 @@ test('pre-aborted call never executes and existing cancelled history survives', 
   )
   const controller = new AbortController()
   controller.abort()
-  await invoke(
-    registry,
+  const row = await invoke(
+    fx,
     'read',
     { command: 'echo hello' },
     controller.signal,
-  ).catch(() => {})
+  )
   expect(calls).toBe(0)
-  expect(
-    (await rows(registry)).find((row) => row.type === 'tool_result')?.status,
-  ).toBe('cancelled')
+  expect(row.status).toBe('failed')
+  expect(row.preview).toContain('aborted')
 })
 
 test('/hooks lists registered hooks', async () => {

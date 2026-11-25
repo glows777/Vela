@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { z } from 'zod'
-import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
 import { messageTime } from '../../packages/vela/src/lark/history.ts'
 import { lark } from '../../packages/vela/src/lark/index.ts'
 import type { ChannelExtension as VelaExtension } from '../../packages/vela/src/legacy-channels/index.ts'
@@ -36,15 +35,13 @@ function setup(
   responses: NonNullable<Parameters<typeof createTestVela>[0]>['responses'],
   extensions: VelaExtension[] = [],
   cwd?: string,
-  sessionStorage?: NonNullable<
-    Parameters<typeof createTestVela>[0]
-  >['sessionStorage'],
+  ephemeralSessions?: boolean,
 ) {
   const fake = fakeLark()
   const t = createTestVela({
     responses,
     cwd,
-    sessionStorage,
+    ephemeralSessions,
     allowPendingResponses: true,
     extensions: [
       lark({
@@ -810,7 +807,6 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
   const held = new Promise<void>((resolve) => {
     release = resolve
   })
-  const storage = memorySessionStorage()
   const { fake, t, start } = setup(
     [
       fauxToolCall('channel_start_topic', {
@@ -826,17 +822,23 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
     ],
     [],
     undefined,
-    {
-      ...storage,
-      load: async (id) => {
-        if (id === 'lark-oc_group-source') {
+    true,
+  )
+  const origSession = t.vela.session.bind(t.vela)
+  Object.defineProperty(t.vela, 'session', {
+    value: (id: string, opts?: Parameters<typeof origSession>[1]) => {
+      const s = origSession(id, opts)
+      if (id === 'lark-oc_group-source') {
+        const origResume = s.resume.bind(s)
+        s.resume = async () => {
           entered = true
           await held
+          return origResume()
         }
-        return storage.load(id)
-      },
+      }
+      return s
     },
-  )
+  })
   await start()
   try {
     fake.deliver(larkEvent({ message_id: 'source' }))

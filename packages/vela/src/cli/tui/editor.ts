@@ -5,7 +5,6 @@ export type AppAction =
   | 'interrupt'
   | 'clear'
   | 'exit'
-  | 'followUp'
   | 'dequeue'
   | 'cycleThinking'
   | 'selectModel'
@@ -24,7 +23,6 @@ const APP_KEYS: Record<AppAction, KeyId> = {
   interrupt: 'escape',
   clear: 'ctrl+c',
   exit: 'ctrl+d',
-  followUp: 'alt+enter',
   dequeue: 'alt+up',
   cycleThinking: 'shift+tab',
   selectModel: 'ctrl+l',

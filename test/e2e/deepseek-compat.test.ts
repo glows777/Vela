@@ -139,9 +139,7 @@ test('explicit gateway flags preserve reasoning, system role and inline tool his
   ).toBe(false)
   expect(t.eventsOf('tool_execution_end')[0]?.isError).toBe(false)
   expect(t.lastAssistantText()).toBe('OK')
-  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
-    'Check the result.',
-  )
+  expect(JSON.stringify(t.session.getEntries())).toContain('Check the result.')
 })
 
 test.each(['deepseek-flash', 'deepseek-v4-pro'])(
@@ -222,7 +220,7 @@ test('v4-pro search response keeps its source link in the saved conversation', a
   await t.run('Find a source')
   expect(f.requests).toHaveLength(1)
   expect(t.lastAssistantText()).toContain('Found it.')
-  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
+  expect(JSON.stringify(t.session.getEntries())).toContain(
     'https://example.com/source',
   )
 })

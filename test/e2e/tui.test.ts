@@ -54,29 +54,27 @@ const altLabel = process.platform === 'darwin' ? 'Option' : 'Alt'
 const blueImage = () =>
   readFileSync(new URL('../fixtures/images/blue.png', import.meta.url))
 
-for (const key of [KEYS.enter, KEYS.altEnter]) {
-  test(`clipboard insertion leaves ${key === KEYS.enter ? 'Enter' : 'Alt+Enter'} independent of the read`, async () => {
-    let release!: (image: Uint8Array) => void
-    const clipboard = new Promise<Uint8Array>((resolve) => {
-      release = resolve
-    })
-    const t = createTestVela({
-      responses: [fauxText('Submitted before clipboard finished')],
-    })
-    const tui = await startTui(t.vela, { readClipboardImage: () => clipboard })
-    await tui.started
-    tui.terminal.type('Send now')
-    tui.terminal.press(pasteImageKey)
-    tui.terminal.press(key)
-    await tui.until('Submitted before clipboard finished')
-    expect(t.model.calls[0]!.lastUserText).toBe('Send now')
-    release(blueImage())
-    await tui.until(() =>
-      Reflect.get(tui.mode, 'editor').getText().includes('vela-clipboard-'),
-    )
-    expect(t.model.calls).toHaveLength(1)
+test('clipboard insertion leaves Enter independent of the read', async () => {
+  let release!: (image: Uint8Array) => void
+  const clipboard = new Promise<Uint8Array>((resolve) => {
+    release = resolve
   })
-}
+  const t = createTestVela({
+    responses: [fauxText('Submitted before clipboard finished')],
+  })
+  const tui = await startTui(t.vela, { readClipboardImage: () => clipboard })
+  await tui.started
+  tui.terminal.type('Send now')
+  tui.terminal.press(pasteImageKey)
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Submitted before clipboard finished')
+  expect(t.model.calls[0]!.lastUserText).toBe('Send now')
+  release(blueImage())
+  await tui.until(() =>
+    Reflect.get(tui.mode, 'editor').getText().includes('vela-clipboard-'),
+  )
+  expect(t.model.calls).toHaveLength(1)
+})
 
 test('a clipboard image read that finishes after shutdown does not write to the deleted temp directory', async () => {
   let release!: (image: Uint8Array) => void
@@ -644,23 +642,19 @@ test('Enter while running steers, Alt+Enter queues a follow-up, Esc puts the que
   expect(session.isRunning).toBe(true)
 
   tui.submit('one more thing')
-  tui.terminal.type('do this later')
-  tui.terminal.press(KEYS.altEnter)
-  await tui.until('Follow-up: do this later')
+  tui.submit('do this later')
+  await tui.until('Steering: one more thing')
   expect(session.queue).toEqual({
-    steering: ['one more thing'],
-    followUp: ['do this later'],
+    steering: ['one more thing', 'do this later'],
   })
-  expect(tui.screen()).toContain('Steering: one more thing')
 
   tui.terminal.press(KEYS.escape)
   await tui.until('Interrupted')
   await tui.until(() => !session.isRunning)
-  expect(session.queue).toEqual({ steering: [], followUp: [] })
+  expect(session.queue).toEqual({ steering: [] })
   // The queued messages are back in the editor
   expect(tui.screen()).toContain('one more thing')
   expect(tui.screen()).toContain('do this later')
-  expect(tui.screen()).not.toContain('Follow-up:')
 })
 
 test('a steer typed while the model streams is answered in the same run', async () => {
@@ -720,17 +714,15 @@ test('the queue shortcut moves queued messages back into the editor, and the hin
   await tui.until('Working on it')
 
   tui.submit('steer this')
-  tui.terminal.type('do this later')
-  tui.terminal.press(KEYS.altEnter)
-  await tui.until('Follow-up: do this later')
+  tui.submit('do this later')
+  await tui.until('Steering: steer this')
   await tui.until(`${altLabel}+Up to edit queued messages`)
 
   tui.terminal.press(KEYS.altUp)
-  await tui.until(() => t.vela.session('tui').queue.followUp.length === 0)
+  await tui.until(() => t.vela.session('tui').queue.steering.length === 0)
   const editor = Reflect.get(tui.mode, 'editor') as { getText(): string }
   expect(editor.getText()).toContain('steer this')
   expect(editor.getText()).toContain('do this later')
-  expect(tui.screen()).not.toContain('Follow-up:')
 
   tui.terminal.press(KEYS.escape)
   await tui.until('Interrupted')

@@ -1,3 +1,4 @@
+import type { VelaDatabase } from '../../db/index.ts'
 import type {
   ResolvedModel,
   ThinkingLevel,
@@ -24,7 +25,6 @@ import type { SystemPromptBuilder } from '../prompt/index.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { SessionOptions } from './options.ts'
 import type { PreparedSessionResources } from './resources.ts'
-import type { SessionStorage } from './storage.ts'
 
 /** What the extension runtime does during the session lifecycle (provided by createVela). */
 interface SessionExtensionHooks<Session> {
@@ -63,7 +63,7 @@ interface SessionExtensionHooks<Session> {
     session: Session,
     text: string,
     source: InputSource,
-    streamingBehavior?: 'steer' | 'followUp',
+    streamingBehavior?: 'steer',
     images?: ImageContent[],
   ): Promise<{ text: string; images?: ImageContent[] } | undefined>
   transformContext(
@@ -108,10 +108,16 @@ export interface SessionDeps<Session> {
   cwd?: string
   /** Shell for `executeBash()` (settings `shellPath`); default bash on PATH, or bash.exe on Windows */
   shellPath?: string
-  /** Where session history is stored (file / memory / custom) */
-  sessionStorage: SessionStorage
-  /** dataDir is a temp dir that dispose() deletes (no dataDir given): tool history may be gone on resume */
+  /** Shared Vela SQLite database */
+  db: VelaDatabase
+  /** When true, sessions run against an in-memory DB without disk persistence */
+  ephemeral?: boolean
+  /** dataDir is a temp dir that dispose() deletes */
   temporaryDataDir?: boolean
+  /** Per-session root for uploaded attachments */
+  uploadsRoot: (sessionId: string) => string
+  /** Per-session directory for spilled large tool outputs */
+  spillRoot: (sessionId: string) => string
   /** Vela-level tool registry; each session forks its own from it */
   registry: ToolRegistry
   builder: SystemPromptBuilder

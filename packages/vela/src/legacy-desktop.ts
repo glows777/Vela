@@ -4,9 +4,6 @@
  * @internal
  */
 export {
-  type LegacyMigrationResult,
-  type LegacyMigrationSummary,
-  migrateLegacyVelaDir,
   type OpenDatabaseOptions,
   openDatabase,
   type RunResult,

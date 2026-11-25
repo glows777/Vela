@@ -83,8 +83,8 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `loginProviders()`, `login(provider, method, interaction, options?)`, `logout(provider)` | What `/login` and `/logout` do: list the providers that take a sign-in, run one (`method` `oauth` or `api_key`; `interaction` shows links and asks for input) and store the credential, or remove it. See [Models](models.md#credentials-and-login). |
 | `session(id?, options?)` | Opens a session, or returns it if it is already open. `id` defaults to `default`. |
 | `sessions()` | Open sessions |
-| `listSessions(options?)` | Saved sessions, newest first, from `SessionStorage.list()` (empty if the storage has no `list`). The built-in storages leave out sessions without messages; a custom storage's `list()` is passed through as is. Sessions archived with `setSessionArchived()` are left out unless `options.includeArchived` is true. A summary has `id`, `name?`, `updatedAt`, `messageCount` and `firstMessage`, plus `cwd` and `channel` when the session has them (the channel is the header's or, for a first binding that arrived after the session was written, an appended `session_channel` entry) and `archived: true` when archived. |
-| `setSessionArchived(id, archived)` | Archives or unarchives a saved session without opening it: appends a `session_archived` entry to its file, so the flag survives a restart and no message is deleted. Resolves when the entry is written; rejects when nothing is saved under `id`. |
+| `listSessions(options?)` | Saved sessions, newest first, from `vela.db`. Leaves out sessions without messages. Sessions archived with `setSessionArchived()` are left out unless `options.includeArchived` is true. A summary has `id`, `name?`, `updatedAt`, `messageCount` and `firstMessage`, plus `cwd` and `channel` when the session has them, and `archived: true` when archived. |
+| `setSessionArchived(id, archived)` | Archives or unarchives a saved session in `vela.db` without opening it: updates `sessions.archived` so no message is deleted. Rejects when nothing is saved under `id`. |
 | `searchSessions(query, options?)` | Searches the user and assistant message text of saved sessions (tool output, `!` commands, summaries and extension messages are not searched), newest first. Returns `{ id, match }[]`: one hit per session, with the first matching text shortened around the query. `options.includeArchived` as in `listSessions()`. |
 | `subscribe(listener)` | Events from all sessions: `(event, sessionId) => void`. Returns an unsubscribe function. |
 | `ready()` | Resolves when host extensions (including async factories) have loaded; rejects if one failed. Session project preparation is awaited separately |
@@ -142,12 +142,11 @@ const image: ImageContent = {
 await session.prompt('What is in this picture?', { images: [image] })
 // While a prompt is running:
 await session.steer('Focus on this area', { images: [image] })
-await session.followUp('Compare this afterwards', { images: [image] })
 ```
 
 Images keep the same `{ type: 'image', data, mimeType }` shape in input hooks, events and saved history. Vela detects PNG, JPEG, GIF, WebP and BMP by their bytes, applies EXIF orientation and uses Photon WASM to reduce images to a longest side of 2000 pixels and at most 4.5 MiB of base64. When an image needs conversion, Vela encodes it as PNG if any pixel is not fully opaque before orientation. Vela does not encode that PNG as JPEG. Vela encodes it as JPEG at quality 80 if every pixel is fully opaque. If either encoding exceeds 4.5 MiB of base64, Vela shrinks the bitmap further and repeats that encoding until the base64 is at most 4.5 MiB. Small supported images stay unchanged. Invalid images or images beyond the safe decoding limits (128 MiB encoded input or 67,108,864 decoded pixels) are omitted with a text reason, so the rest of the prompt can continue.
 
-Images are normalized once, when they enter: `prompt`, `steer`, `followUp`, `sendUserMessage` and tool results. Saved history, and messages an extension adds with `append()`, a `sendMessage()` that does not trigger a turn, or a `context` hook, are sent as given and never decoded again (like pi), so an extension that supplies images is responsible for their format and size. Normalized images are saved inline in session JSONL and survive resume, clone and forks that include the image message. If the selected model's `input` metadata excludes `image`, its request gets `(image omitted: model does not support images)` instead. Saved history keeps the image for a later vision model. When input metadata is unknown (including a directly supplied `LanguageModel`), images are forwarded; set provider model metadata when you know it is text-only. Context estimates count each image as 4800 characters. Summary requests omit image payloads instead of treating base64 as prose.
+Images are normalized once, when they enter: `prompt`, `steer`, `sendUserMessage` and tool results. Saved history, and messages an extension adds with `append()`, a `sendMessage()` that does not trigger a turn, or a `context` hook, are sent as given and never decoded again (like pi), so an extension that supplies images is responsible for their format and size. Normalized images are saved inline in SQLite (`vela.db`) and survive resume, clone and forks that include the image message. If the selected model's `input` metadata excludes `image`, its request gets `(image omitted: model does not support images)` instead. Saved history keeps the image for a later vision model. When input metadata is unknown (including a directly supplied `LanguageModel`), images are forwarded; set provider model metadata when you know it is text-only. Context estimates count each image as 4800 characters. Summary requests omit image payloads instead of treating base64 as prose.
 
 `ModelMessage`, `UserContent` and `ToolModelMessage` exported by Vela extend the existing AI SDK message types with inline image content. Use these types for session history and extension context; existing text-only messages remain valid. The provider edge converts inline images to AI SDK image files.
 
@@ -159,13 +158,13 @@ Images are normalized once, when they enter: `prompt`, `steer`, `followUp`, `sen
 | `messages` | History (Vela `ModelMessage[]`, exported by this package). Treat it as read-only. |
 | `append(message)` | Appends a message without calling the model |
 | `prompt(input, options?)` | Appends a user message and runs the agent loop until it settles, then saves. See [Prompting](#prompting). |
-| `steer(input, options?)`, `followUp(input, options?)` | Queue input while running; same as `prompt()` when idle. `options.source` as in `PromptOptions` |
+| `steer(input, options?)` | Queue input while running; same as `prompt()` when idle. `options.source` as in `PromptOptions` |
 | `sendMessage(message, options?)`, `sendUserMessage(text, options?)` | Add an extension's custom message, or input as if typed (like pi). See [Extensions](extensions.md#messages) |
 | `appendEntry(customType, data?)` | Save extension state in the session (a `custom` entry, never sent to the model) |
 | `customMessageOf(message)` | `{ customType, display, details }` for a custom message in `messages`; `undefined` for other messages |
 | `getEntries()` | The session's entries in append order (see [Session format](session-format.md)) |
-| `queue`, `clearQueue()` | Copy of the queued user inputs; remove all queued messages and return the user inputs |
-| `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`: how many queued messages are taken at once |
+| `queue`, `clearQueue()` | Copy of the queued steering inputs (`{ steering: string[] }`); remove all queued messages and return the user inputs |
+| `steeringMode` | `one-at-a-time` (default) or `all`: how many queued messages are taken at once |
 | `abort(reason?)` | Aborts the running loop and extension commands, and waits until the loop has stopped. Queued messages stay queued. |
 | `drain()` | Permanently stops admitting new work, lets already-running tools finish and save, and interrupts before the next model/tool iteration. Does not close the session or impose a timeout; the host must enforce its deadline and then abort/close. |
 | `waitForIdle()` | Waits for the running loop (including queued messages and manual compaction) without aborting it |
@@ -185,7 +184,7 @@ Images are normalized once, when they enter: `prompt`, `steer`, `followUp`, `sen
 | `getActiveTools()` | Tool names the model can currently see (after selection and deferred loading) |
 | `setActiveTools(names)` | Enable only these tools; `undefined` restores all |
 | `name`, `setName(name)` | Display name, saved with the next save and shown in session lists |
-| `persistence` | Where history is kept: `{ type: 'file', path }` (the jsonl path; the file may not exist until the first message), `{ type: 'memory' }` when it is not saved, or `{ type: 'unknown' }` when a custom storage does not say |
+| `persistence` | Where history is kept: `{ type: 'file', path }` (the `vela.db` SQLite path; the file may not exist until the first message), or `{ type: 'memory' }` when running with `ephemeralSessions` or an in-memory `db` |
 | `autoCompaction` | Get or set automatic compaction (pi's `autoCompactionEnabled` / `setAutoCompactionEnabled`) |
 | `getEntries()` | Copies of all the session's entries in append order, every branch included |
 | `getTree()`, `getBranch(fromId?)`, `getLeafId()`, `parentSession` | The session tree; see [Session tree](#session-tree) |
@@ -230,20 +229,18 @@ const { session: copy, selectedText } = await session.fork(question.id, { sessio
 
 ### Prompting
 
-`prompt()` resolves when the run is done, including tool calls, retries and every `steer` or `followUp` message queued during the run. If the loop fails, queued messages still run, then the promise rejects.
+`prompt()` resolves when the run is done, including tool calls, retries and every `steer` message queued during the run (or when `waiting_human` suspends for tool approval). If the loop fails, queued messages still run, then the promise rejects.
 
-A session runs one loop at a time. Calling `prompt()` while it is running throws unless you say how to queue the input:
+A session runs one loop at a time. Calling `prompt()` while it is running throws unless you specify `streamingBehavior`:
 
 ```typescript
 await session.prompt('Refactor the parser')               // idle: runs
 session.prompt('Also update the tests', { streamingBehavior: 'steer' })    // running: queued
-session.prompt('Then write a changelog entry', { streamingBehavior: 'followUp' })
 ```
 
-- `steer` joins the current task: it is sent as a user message after the current step's tools finish, before the next model request.
-- `followUp` runs when the model would otherwise stop (no tool calls, no steer).
+- `steer` joins the current task: remaining queued tool calls in the current step are skipped, and the message is sent as a user message before the next model request.
 
-`steer(input)` and `followUp(input)` are shortcuts. While running they resolve as soon as the input is queued. `PromptOptions.signal` aborts the run like `abort()`. `PromptOptions.source` tells extensions' `input` handlers where the input came from (`interactive`, `rpc`, `extension`, `channel`; default `sdk`).
+`steer(input)` is a shortcut that resolves as soon as the input is queued. `PromptOptions.signal` aborts the run like `abort()`. `PromptOptions.source` tells extensions' `input` handlers where the input came from (`interactive`, `rpc`, `extension`, `channel`; default `sdk`).
 
 Input starting with `/` that names an extension command runs the command instead of going to the model, even while a loop is running. See [Extensions](extensions.md).
 
@@ -270,7 +267,7 @@ agent_end
 agent_settled
 ```
 
-Steered messages arrive as another `message_start` / `message_end` followed by another turn. Follow-ups are taken when the model would otherwise stop and continue in the same loop. `agent_end` closes one agent loop; if messages are still queued after an error or a loop-detection stop, a new loop starts; after an abort they stay queued for the next prompt. `agent_settled` comes last and means the session is idle and nothing else will run on its own.
+Steered messages arrive as another `message_start` / `message_end` followed by another turn. `agent_end` closes one agent loop; if messages are still queued after an error or a loop-detection stop, a new loop starts; after an abort they stay queued for the next prompt. `agent_settled` comes last and means the session is idle and nothing else will run on its own.
 
 | Type | Fields | When |
 |---|---|---|
@@ -286,14 +283,13 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `auto_retry_end` | `success`, `attempt`, `finalError?` | Retrying ended: the request succeeded, or failed for good |
 | `usage` | `modelId`, `usage` (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`), `record?` (adds `cost` in USD, absent when the model has no known price, `ts`, `model`, `kind` (`main` or `summary`), `durationMs` and the provider's raw `usage`) | After each model request |
 | `turn_end` | `turn`, `message` (the assistant message), `toolResults` (`tool-result` parts) | After each model request and its tools, including one that was aborted or failed |
-| `agent_end` | `messages` (the messages this loop added), `reason` (`done`, `aborted`, `error`), `error?`, `errorKind?` | The loop ended. Failed runs include a category (below); the original error stays available. Queued messages may still start another loop. |
-| `queue_update` | `steering`, `followUp` | The queues changed; both fields hold the full current queue as strings |
+| `agent_end` | `messages` (the messages this loop added), `reason` (`done`, `aborted`, `error`, `waiting_human`), `error?`, `errorKind?` | The loop ended. Failed runs include a category (below); `waiting_human` suspends until `resolveApproval()` + `continueInterrupted()`. Queued messages may still start another loop. |
+| `queue_update` | `steering` | The queue changed; holds the full current steering queue as strings |
 | `agent_settled` | | All work from `prompt()` is done and the session is idle |
 | `bash_execution_update` | `id?`, `delta` | New output of a running `executeBash()` command (like pi); the `delta`s add up to all of its output. `id` is the one passed to `executeBash()` |
 | `context_prepare` | `action`, `before`, `after?`, `saved?`, `calls?` | Vela-specific context management (`summary-required`: the summary threshold was reached but this run may not summarize). Token counts are estimates. See [Sessions](sessions.md#compaction). |
 | `compaction_start` | `reason` (`threshold`, `manual`, `overflow`) | Summarizing earlier history starts (like pi): before a request that is too large, from `session.compact()`, or after the provider said the context is too long |
 | `compaction_end` | `reason`, `result?` (`summary`, `firstKeptEntryId`, `tokensBefore`, `tokensAfter`, `messages`), `aborted`, `willRetry`, `errorMessage?` | Summarizing ended (like pi). `result` is set when it succeeded, `aborted` when it was interrupted, otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again |
-| `session_save_failed` | `error` | Writing the session's entries failed (the run itself continued). The entries are kept and written again with the next entry or at the end of the run |
 | `audit` | `toolName`, `path` | Before `write` or `edit` writes `path` |
 | `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ctx.notify()`. See [Extension Notifications](rpc.md#extension-notifications). |
 | `channel_message` | `channel`, `senderId`, `senderName`, `text` | A channel received a message for this session |
@@ -334,36 +330,22 @@ Sessions in one Vela run concurrently. Tool definitions, extensions, skills, mem
 
 | Setup | Storage |
 |---|---|
-| `sessionStorage` given | That storage |
-| `dataDir` given | `fileSessionStorage('<dataDir>/sessions')`: one `<id>/transcript.jsonl` per session |
-| neither | `memorySessionStorage()`: gone when the process exits |
+| `db` given | Uses that caller-owned SQLite `VelaDatabase` (not closed by `dispose()`) |
+| `ephemeralSessions: true` (or no `dataDir`) | In-memory SQLite (`:memory:`), gone when the process exits |
+| `dataDir` given (default) | Persistent SQLite WAL DB at `<dataDir>/vela.db` |
 
 ```typescript
-import { createVela, fileSessionStorage, memorySessionStorage } from '@glows777/vela'
+import { createVela } from '@glows777/vela'
 
-createVela({ dataDir: '.vela-data' })                          // files under .vela-data/sessions
-createVela({ dataDir: '.vela-data', sessionStorage: memorySessionStorage() }) // keep memory data, not sessions
-createVela({ sessionStorage: fileSessionStorage('/var/lib/app/sessions') })
+createVela({ dataDir: '.vela-data' })                     // persistent SQLite at .vela-data/vela.db
+createVela({ dataDir: '.vela-data', ephemeralSessions: true }) // keep memory data, not sessions
 ```
 
-A custom storage implements `SessionStorage`:
+`session.persistence` returns `{ type: 'file', path }` (the path to `vela.db`) or `{ type: 'memory' }`. A file path may not exist until the first message is persisted.
 
-```typescript
-interface SessionStorage {
-  load(id: string): Promise<SessionFileEntry[] | undefined> // header first, then entries, in append order
-  append(id: string, entries: SessionFileEntry[]): Promise<void>
-  list?(): Promise<SessionSummary[]> // optional, newest first
-  persistence?(id: string): SessionPersistence // optional; file, memory, or omit
-}
-```
+`session.getEntries()` returns a session's entries (from SQLite `vela_messages`), including messages that were summarized or are no longer sent to the model. See [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts).
 
-`persistence` is `{ type: 'file', path }`, `{ type: 'memory' }`, or omitted. The built-in file and memory storages set it. A custom storage that omits it is not treated as memory: `session.persistence` is `{ type: 'unknown' }`, because a `load` / `append` / `list` adapter can still be durable and there is no path to show. Return `{ type: 'memory' }` only when nothing is written. A file path may not exist until the first user or assistant message is persisted.
-
-A session is an append-only list of entries in pi's format: a header, then one entry per message, compaction, context edit or setting change (see [Session format](session-format.md)). Vela calls `append` as entries happen (the first call of a new session starts with the header) and never rewrites them; `load` returns everything appended, in order. Store entries as given. `summarizeSession(id, entries)` builds a `list()` row. See [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts).
-
-`session.getEntries()` returns a session's entries, including messages that were summarized or are no longer sent to the model.
-
-Long tool output and the tool call history are always written to files under `<dataDir>/sessions/<id>/`, whatever the storage. The session header refers to that history; resuming with a persistent `dataDir` where the history is missing throws instead of continuing with a broken reference. Without `dataDir` (temp dir), resume logs a warning and starts the tool history over.
+Long tool outputs are spilled to files under `<dataDir>/sessions/<id>/` (or a private temp directory when running in memory), with paths and previews recorded durably in SQLite `vela_tool_calls`.
 
 ## Sharing the CLI config
 
@@ -476,7 +458,7 @@ Disposal waits for extension factories to settle, then attempts channel shutdown
 | [01-minimal.ts](../examples/sdk/01-minimal.ts) | One session, one prompt, print the answer |
 | [02-events.ts](../examples/sdk/02-events.ts) | Subscribe to events, including a tool call |
 | [03-multi-session.ts](../examples/sdk/03-multi-session.ts) | Two sessions running concurrently in one Vela |
-| [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts) | A custom `SessionStorage` and resuming from it |
+| [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts) | Sharing a caller-owned SQLite `VelaDatabase` across instances |
 
 ## API stability
 
@@ -507,7 +489,7 @@ See [the offline tool-image example](../examples/sdk/06-tool-images.ts) and [too
 
 An existing unbound session accepts its first scope/channel binding while preserving object identity and its original cwd, tools and model. The binding is synchronous, and its `session_channel` entry is written like other session metadata: `listSessions()` shows the channel once that queued write completes (on `session.save()`, the next prompt, or `close()`). Repeating the same route is allowed. A channel already saved for the session is that binding after `resume()`, including when the new session was opened with a channel before `resume()`. A different channel throws an error named `SessionRoutingConflictError`, containing the session ID and both routes, without retry or rebinding. Other session options remain first-open-only.
 
-`session.getActiveTools()` returns the tools currently exposed to the model; use `tools` or `setActiveTools()` to control the selection. `session.save()` retains its flush-and-reject behavior; `session.save({ reportFailure: true })` additionally emits one existing `session_save_failed` event if that explicit flush fails. It does not close the session.
+`session.getActiveTools()` returns the tools currently exposed to the model; use `tools` or `setActiveTools()` to control the selection. `session.save()` flushes pending session updates to `vela.db` and rejects on error. It does not close the session.
 
 `createVela({ onSessionSaved(id), beforeDispose() })` supports host composition. A successful nonempty storage append calls `onSessionSaved`; no-op or failed saves do not. Observer errors are logged and cannot retry committed history. Disposal waits for extension factories, runs `beforeDispose` to stop ingress, attempts every session close, then shared extension shutdown and cleanup, aggregating errors.
 

@@ -1,8 +1,3 @@
-export {
-  type LegacyMigrationResult,
-  type LegacyMigrationSummary,
-  migrateLegacyVelaDir,
-} from './migrate-legacy.ts'
 export { SCHEMA_VERSION } from './schema.ts'
 export {
   type OpenDatabaseOptions,

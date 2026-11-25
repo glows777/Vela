@@ -35,11 +35,23 @@ export function runtimePaths(runtime: string) {
   const sessionDirectory =
     storage !== undefined &&
     readFileSync(storage, 'utf8').includes('transcript.jsonl')
+  const sqliteStore = [
+    'packages/vela/src/driver/session/db-store.ts',
+    'packages/vela/dist/driver/session/db-store.js',
+  ]
+    .map((p) => join(runtime, p))
+    .find((p) => existsSync(p))
+  const sqliteSessions = sqliteStore !== undefined
   return {
     channelName: lark ? ('lark' as const) : ('feishu' as const),
+    sqliteSessions,
     /** The transcript path of a session id, relative to the sessions directory. */
     sessionTranscript: (id: string) =>
-      sessionDirectory ? `${id}/transcript.jsonl` : `${id}.jsonl`,
+      sqliteSessions
+        ? '../vela.db'
+        : sessionDirectory
+          ? `${id}/transcript.jsonl`
+          : `${id}.jsonl`,
     helpers: `test/support/${lark ? 'lark' : 'feishu'}.ts`,
     workspace,
     source,

@@ -2,16 +2,11 @@ import { afterAll, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {
-  memorySessionStorage,
-  type SessionStorage,
-} from '../../../../src/driver/index.ts'
+import { openDatabase } from '../../../../src/db/index.ts'
 import type { ModelMessage } from '../../../../src/driver/messages.ts'
 import {
   buildSessionContext,
-  migrateSessionV1,
   type SessionEntry,
-  type SessionFileEntry,
   summaryMessageText,
 } from '../../../../src/driver/session/entries.ts'
 import { SessionStore } from '../../../../src/driver/session/index.ts'
@@ -32,35 +27,17 @@ const assistant = (text: string): ModelMessage => ({
   content: [{ type: 'text', text }],
 })
 
-test('entries are appended in order with ids and parents; loadSaved rebuilds the context and settings', async () => {
-  const dir = path.join(makeTempDir(), 'sessions')
-  const store = new SessionStore('default', dir)
-  store.appendModelChange('openai/gpt-x')
-  store.appendThinkingLevelChange('high')
+test('entries are appended in order with ids and parents; loadSaved rebuilds context and metadata', async () => {
+  const dbPath = path.join(makeTempDir(), 'vela.db')
+  const store = new SessionStore('default', dbPath)
+  store.setModelChoice('openai/gpt-x')
+  store.setThinkingLevelChoice('high')
   store.appendMessage(user('Hello'))
   store.appendMessage(assistant('Hi!'))
-  store.appendSessionInfo('Greeting')
+  store.setSessionName('Greeting')
   await store.flush()
 
-  const lines = fs
-    .readFileSync(path.join(dir, 'default', 'transcript.jsonl'), 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  expect(lines.map((line) => line.type)).toEqual([
-    'session',
-    'model_change',
-    'thinking_level_change',
-    'message',
-    'message',
-    'session_info',
-  ])
-  expect(lines[0]).toMatchObject({ version: 2, id: 'default' })
-  for (let i = 2; i < lines.length; i++)
-    expect(lines[i].parentId).toBe(lines[i - 1].id)
-  expect(lines[1].parentId).toBeNull()
-
-  const loaded = await new SessionStore('default', dir).loadSaved()
+  const loaded = await new SessionStore('default', dbPath).loadSaved()
   expect(loaded?.messages).toEqual([user('Hello'), assistant('Hi!')])
   expect(loaded?.model).toBe('openai/gpt-x')
   expect(loaded?.thinkingLevel).toBe('high')
@@ -68,201 +45,108 @@ test('entries are appended in order with ids and parents; loadSaved rebuilds the
   expect(loaded?.timestamps.size).toBe(2)
 })
 
-test('like pi, nothing is written until the session has a user or assistant message', async () => {
-  const dir = path.join(makeTempDir(), 'sessions')
-  const store = new SessionStore('default', dir)
-  store.appendThinkingLevelChange('low')
-  store.appendSessionInfo('Name')
+test('nothing is written to SQLite until the session has a user or assistant message', async () => {
+  const dbPath = path.join(makeTempDir(), 'vela.db')
+  const store = new SessionStore('default', dbPath)
+  store.setThinkingLevelChoice('low')
+  store.setSessionName('Name')
   await store.flush()
-  expect(fs.existsSync(path.join(dir, 'default', 'transcript.jsonl'))).toBe(
-    false,
-  )
   expect(await store.loadSaved()).toBeUndefined()
 })
 
-test('a failed write keeps the entries and writes them, in order, on the next attempt', async () => {
-  const inner = memorySessionStorage()
-  let fail = true
-  const storage: SessionStorage = {
-    load: inner.load,
-    append: async (id, entries) => {
-      if (fail) throw new Error('disk full')
-      await inner.append(id, entries)
-    },
-  }
-  const store = new SessionStore('s', 'unused', undefined, storage)
-  store.appendMessage(user('one'))
-  await expect(store.flush()).rejects.toThrow('disk full')
-  store.appendMessage(assistant('two'))
-  fail = false
-  await store.flush()
-  const saved = await inner.load('s')
-  expect(saved?.map((entry) => entry.type)).toEqual([
-    'session',
-    'message',
-    'message',
-  ])
-})
-
-test('a session written by a newer format version fails clearly instead of loading as empty', async () => {
-  const storage = memorySessionStorage()
-  await storage.append('newer', [
-    { type: 'session', version: 3, id: 'newer', timestamp: 't' },
-  ])
-  await expect(
-    new SessionStore('newer', 'unused', undefined, storage).loadSaved(),
-  ).rejects.toThrow('uses file format version 3')
-})
-
 test('assertNew refuses to start over a saved session that was not resumed', async () => {
-  const storage = memorySessionStorage()
-  const first = new SessionStore('s', 'unused', undefined, storage)
-  await first.assertNew()
-  first.appendMessage(user('hi'))
-  await first.flush()
-  await expect(
-    new SessionStore('s', 'unused', undefined, storage).assertNew(),
-  ).rejects.toThrow('already has saved history')
-  const resumed = new SessionStore('s', 'unused', undefined, storage)
-  await resumed.loadSaved()
-  await resumed.assertNew()
-})
-
-test('messages appended without prompt() do not go into a saved session that was not resumed', async () => {
-  const storage = memorySessionStorage()
-  const first = new SessionStore('s', 'unused', undefined, storage)
-  first.appendMessage(user('first conversation'))
-  await first.flush()
-  const second = new SessionStore('s', 'unused', undefined, storage)
-  second.appendMessage(user('second conversation'))
-  await expect(second.flush()).rejects.toThrow('already has saved history')
-  expect(await storage.load('s')).toHaveLength(2)
-})
-
-test('loadSaved keeps the first copy of entries repeated by a retried write', async () => {
-  const storage = memorySessionStorage()
-  const store = new SessionStore('s', 'unused', undefined, storage)
-  store.appendMessage(user('hi'))
-  store.appendMessage(assistant('hello'))
-  await store.flush()
-  const saved = (await storage.load('s')) as SessionFileEntry[]
-  // The first write failed after its first entries reached storage, then the whole batch was retried
-  await storage.append('s', saved.slice(1))
-  const loaded = await new SessionStore(
-    's',
-    'unused',
-    undefined,
-    storage,
-  ).loadSaved()
-  expect(loaded?.messages).toEqual([user('hi'), assistant('hello')])
-})
-
-test('entries appended while flushing are not reported as a failed write', async () => {
-  const inner = memorySessionStorage()
-  const storage: SessionStorage = {
-    load: inner.load,
-    append: async (id, entries) => {
-      await Bun.sleep(20)
-      await inner.append(id, entries)
-    },
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const first = new SessionStore('s', db)
+    await first.assertNew()
+    first.appendMessage(user('hi'))
+    await first.flush()
+    await expect(new SessionStore('s', db).assertNew()).rejects.toThrow(
+      'already has saved history',
+    )
+    const resumed = new SessionStore('s', db)
+    await resumed.loadSaved()
+    await resumed.assertNew()
+  } finally {
+    db.close()
   }
-  const store = new SessionStore('s', 'unused', undefined, storage)
-  store.appendMessage(user('one'))
-  const flushing = store.flush()
-  // `two` goes out with flush()'s own write; `three` lands while that write is still running
-  setTimeout(() => store.appendMessage(assistant('two')), 10)
-  setTimeout(() => store.appendMessage(user('three')), 30)
-  await flushing
-  await store.flush()
-  expect(await inner.load('s')).toHaveLength(4)
 })
 
-test('compaction and context edits are appended; the originals stay and the context is rebuilt from them', async () => {
-  const storage = memorySessionStorage()
-  const store = new SessionStore('s', 'unused', undefined, storage)
-  const old = user('old question')
-  const kept = user('recent question')
-  const tool: ModelMessage = {
-    role: 'tool',
-    content: [
-      {
-        type: 'tool_result',
-        toolCallId: 'c1',
-        toolName: 'read',
-        output: { type: 'text', value: 'long output' },
-      },
-    ],
+test('messages appended without resume() fail before overwriting a saved session', async () => {
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const first = new SessionStore('s', db)
+    first.appendMessage(user('first conversation'))
+    const second = new SessionStore('s', db)
+    expect(() => second.appendMessage(user('second conversation'))).toThrow(
+      'already has saved history',
+    )
+  } finally {
+    db.close()
   }
-  for (const message of [old, assistant('old answer'), kept, tool])
-    store.appendMessage(message)
-  const summary = user(summaryMessageText('S'))
-  store.appendCompaction(summary, 'S', kept, 1234, 7)
-  store.appendMessage(assistant('after'))
-  await store.flush()
-
-  const entries = (await storage.load('s')) as SessionFileEntry[]
-  expect(entries.map((entry) => entry.type)).toEqual([
-    'session',
-    'message',
-    'message',
-    'message',
-    'message',
-    'compaction',
-    'message',
-  ])
-  const context = buildSessionContext(entries.slice(1) as SessionEntry[])
-  expect(context.messages).toEqual([summary, kept, tool, assistant('after')])
-  expect(context.summary).toBe('S')
-  expect(context.toolHistoryViewSeq).toBe(7)
-  // Every message, including the summarized ones, is still in the session
-  expect(store.getEntries().filter((e) => e.type === 'message')).toHaveLength(5)
 })
 
-test('aborted or failed assistant messages are recorded but left out of the context (like pi)', () => {
-  const store = new SessionStore(
-    's',
-    'unused',
-    undefined,
-    memorySessionStorage(),
-  )
-  store.appendMessage(user('go'))
-  store.appendMessage(assistant('half an ans'), { stopReason: 'aborted' })
-  store.appendMessage(user('again'))
-  const entries = store.getEntries()
-  expect(entries[1]).toMatchObject({ type: 'message', stopReason: 'aborted' })
-  expect(buildSessionContext(entries).messages).toEqual([
-    user('go'),
-    user('again'),
-  ])
+test('compaction is appended in SQLite while originals stay on disk and context is rebuilt cleanly', async () => {
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const store = new SessionStore('s', db)
+    const old = user('old question')
+    const kept = user('recent question')
+    const tool: ModelMessage = {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool_result',
+          toolCallId: 'c1',
+          toolName: 'read',
+          output: { type: 'text', value: 'long output' },
+        },
+      ],
+    }
+    for (const message of [old, assistant('old answer'), kept, tool])
+      store.appendMessage(message)
+    const summary = user(summaryMessageText('S'))
+    store.appendCompaction(summary, 'S', kept, 1234)
+    store.appendMessage(assistant('after'))
+
+    const loaded = await new SessionStore('s', db).loadSaved()
+    expect(loaded?.messages).toEqual([summary, kept, tool, assistant('after')])
+    expect(loaded?.summary).toBe('S')
+    const allEntries = store.getEntries()
+    expect(allEntries.map((entry) => entry.type)).toEqual([
+      'message',
+      'message',
+      'message',
+      'message',
+      'compaction',
+      'message',
+    ])
+    expect(allEntries.filter((e) => e.type === 'message')).toHaveLength(5)
+  } finally {
+    db.close()
+  }
 })
 
-test('a compacted version-1 checkpoint migrates to a compaction entry that rebuilds the same context', () => {
-  const summary = 'User goal: ship it'
-  const messages = [
-    user(summaryMessageText(summary)),
-    user('recent'),
-    assistant('ok'),
-  ]
-  const migrated = migrateSessionV1('s', [
-    {
-      type: 'checkpoint',
-      version: 1,
-      timestamp: '2026-10-07T00:00:00.000Z',
-      summary,
-      toolHistoryViewSeq: 3,
-      messages: messages.map((message) => ({
-        timestamp: '2026-10-06T00:00:00.000Z',
-        message,
-      })),
-    },
-  ])
-  expect(migrated.map((entry) => entry.type)).toEqual([
-    'session',
-    'message',
-    'message',
-    'compaction',
-  ])
-  const context = buildSessionContext(migrated.slice(1) as SessionEntry[])
-  expect(context.messages).toEqual(messages)
-  expect(context.toolHistoryViewSeq).toBe(3)
+test('aborted or failed assistant messages are recorded with include_in_context=0 (like pi)', () => {
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const store = new SessionStore('s', db)
+    store.appendMessage(user('go'))
+    store.appendMessage(assistant('half an ans'), { stopReason: 'aborted' })
+    store.appendMessage(user('again'))
+    const entries: SessionEntry[] = store.getEntries()
+    expect(entries[1]).toMatchObject({ type: 'message', stopReason: 'aborted' })
+    expect(buildSessionContext(entries).messages).toEqual([
+      user('go'),
+      user('again'),
+    ])
+    const row = db.get<{ include_in_context: number }>(
+      'SELECT include_in_context FROM vela_messages WHERE session_id = ? AND stop_reason = ?',
+      's',
+      'aborted',
+    )
+    expect(row?.include_in_context).toBe(0)
+  } finally {
+    db.close()
+  }
 })

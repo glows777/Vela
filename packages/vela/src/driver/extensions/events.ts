@@ -15,7 +15,7 @@ export type InputSource =
   | 'sdk'
 
 /**
- * User input arrived (prompt / steer / followUp), after extension commands and before `/skill:` and prompt
+ * User input arrived (prompt / steer), after extension commands and before `/skill:` and prompt
  * template expansion (like pi).
  */
 export interface InputEvent {
@@ -24,7 +24,7 @@ export interface InputEvent {
   text: string
   source: InputSource
   /** How the input will be queued while the session is running; undefined when idle */
-  streamingBehavior?: 'steer' | 'followUp'
+  streamingBehavior?: 'steer'
 }
 
 /** `transform` replaces the text (later handlers see the new text); `handled` drops the input (prompt() resolves). */
@@ -75,7 +75,7 @@ export interface ProviderStreamEvent {
   data: unknown
 }
 
-/** Before a tool runs. A handler can mutate `input` in place or return `{ block: true, reason }` to block; a throwing handler also blocks. */
+/** Before a tool runs. A handler can mutate `input` in place, return `{ block: true, reason }`, or return `{ approval: { summary } }` to defer execution for human approval. */
 export interface ToolCallEvent {
   type: 'tool_call'
   toolCallId: string | undefined
@@ -86,6 +86,7 @@ export interface ToolCallEvent {
 export interface ToolCallEventResult {
   block?: boolean
   reason?: string
+  approval?: { summary: string }
 }
 
 /** After a tool runs, before the model sees the result. Return `{ output }` to replace the text the model sees; handlers chain. */

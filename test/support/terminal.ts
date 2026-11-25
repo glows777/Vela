@@ -96,7 +96,11 @@ export async function startTui(
     configure: options.configure ?? (() => true),
     copyToClipboard: options.copyToClipboard,
     readClipboardImage: options.readClipboardImage,
-    readClipboardFilePaths: options.readClipboardFilePaths,
+    readClipboardFilePaths:
+      options.readClipboardFilePaths ??
+      (options.readClipboardImage || options.readClipboardText
+        ? async () => undefined
+        : undefined),
     readClipboardText: options.readClipboardText,
     openBrowser: options.openBrowser ?? (() => {}),
     enabledModels: options.enabledModels,

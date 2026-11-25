@@ -87,7 +87,15 @@ test('manual backgroundTasks moves a running foreground command and delivers its
     'Background command bg-1 finished with exit code 0.',
   )
   expect(t.model.calls[2]!.lastUserText).toContain('\nEND\n')
-  const history = await Bun.file(t.session.registry.results.history.path).text()
-  expect(history).toContain('"backgroundedByUser":true')
-  expect(history).not.toContain('"timedOutAfterMs"')
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+  try {
+    const row = db.get<{ status: string; details_json: string | null }>(
+      'SELECT status, details_json FROM vela_tool_calls ORDER BY created_at DESC LIMIT 1',
+    )
+    expect(row?.status).toBe('completed')
+    expect(row?.details_json).toContain('bg-1')
+  } finally {
+    db.close()
+  }
 })

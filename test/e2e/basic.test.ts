@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
+import { join } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import {
   fauxText,
   fauxToolCall,
@@ -63,9 +65,17 @@ test('plain text reply streams, ends the loop and saves the session', async () =
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
   expect(t.lastAssistantText()).toBe('Hi, this is Vela.')
 
-  const session = await t.readData('sessions/default/transcript.jsonl')
-  expect(session).toContain('Hi, this is Vela')
-  expect(t.exists('usage/requests.jsonl')).toBe(true)
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const msgs = db.all<{ content_json: string }>(
+      "SELECT content_json FROM vela_messages WHERE session_id = 'default'",
+    )
+    expect(JSON.stringify(msgs)).toContain('Hi, this is Vela')
+    const usage = db.all<{ id: string }>('SELECT id FROM usage_records')
+    expect(usage.length).toBeGreaterThan(0)
+  } finally {
+    db.close()
+  }
 })
 
 test('the model receives the system prompt, the tool list and the user message', async () => {

@@ -9,6 +9,7 @@ import {
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import type { VelaDatabase } from '../../db/index.ts'
 import type { VelaEvent } from '../../driver/agent/events.ts'
 import { memory } from '../../driver/extensions/memory/index.ts'
 import type { VelaExtension } from '../../driver/extensions/types.ts'
@@ -17,7 +18,6 @@ import type {
   PromptOptions,
   SessionOptions,
 } from '../../driver/session/options.ts'
-import type { SessionStorage } from '../../driver/session/storage.ts'
 import { createVela, type Vela } from '../../driver/vela.ts'
 import type { VelaSession } from '../../driver/vela-session.ts'
 import type {
@@ -60,8 +60,10 @@ export interface TestVelaOptions {
   cwd?: string
   /** Data directory relative to cwd, default `.vela-data` (persistent: a new TestVela on the same cwd resumes sessions) */
   dataDir?: string
-  /** Where session history is stored; default is files under `dataDir` (same as createVela) */
-  sessionStorage?: SessionStorage
+  /** Optional pre-opened SQLite database to share */
+  db?: VelaDatabase
+  /** Force in-memory SQLite persistence (`--no-session`) */
+  ephemeralSessions?: boolean
   /** Shell for Bash tests; Windows fixtures detect Git for Windows automatically. */
   shellPath?: string
   /** Id of the default session (`t.session`), default 'default' */
@@ -115,7 +117,8 @@ export function createTestVela(
     model: options.model ?? (faux as FauxModel),
     cwd,
     dataDir: options.dataDir ?? '.vela-data',
-    sessionStorage: options.sessionStorage,
+    db: options.db,
+    ephemeralSessions: options.ephemeralSessions,
     shellPath: options.shellPath ?? resolveTestShellPath(),
     providers: options.providers,
     thinkingLevel: options.thinkingLevel,
@@ -220,7 +223,8 @@ export type TestVela = ReturnType<typeof createTestVela>
 /** Call in afterEach: cleans up any TestVela not yet cleaned up. */
 export async function cleanupTestVelas(): Promise<void> {
   const errors: unknown[] = []
-  for (const t of [...live]) await t.cleanup().catch((e) => errors.push(e))
+  for (const t of [...live].reverse())
+    await t.cleanup().catch((e) => errors.push(e))
   if (errors.length) throw errors[0]
 }
 

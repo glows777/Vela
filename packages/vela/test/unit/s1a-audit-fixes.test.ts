@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { generateText } from 'ai'
@@ -16,7 +16,6 @@ import {
 } from '../../src/driver/session/entries.ts'
 import { renderSessionHtml } from '../../src/driver/session/export-html.ts'
 import { SessionStore } from '../../src/driver/session/index.ts'
-import { fileSessionStorage } from '../../src/driver/session/storage.ts'
 import { ToolRegistry } from '../../src/driver/tools/registry.ts'
 import {
   fromAiResponseMessage,
@@ -281,32 +280,19 @@ test('driver messages helpers ignore thinking text, ignore image base64 size, an
   ).toBeLessThan(6000)
 
   const dir = tempDir('vela-s1-sess-')
-  const storage = fileSessionStorage(dir)
-  const file = join(dir, 'cm.jsonl')
-  const header = {
-    type: 'session',
-    version: 2,
-    id: 'cm',
-    timestamp: '2026-11-24T00:00:00.000Z',
-  }
-  const entry = {
-    type: 'custom_message',
-    id: 'e1',
-    parentId: null,
-    timestamp: '2026-11-24T00:00:01.000Z',
-    customType: 'note',
-    display: true,
-    content: [{ type: 'text', text: 'cm-note' }],
-  }
-  writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(entry)}\n`)
-  const store = new SessionStore('cm', dir, undefined, storage)
-  const saved = await store.loadSaved()
+  const dbPath = join(dir, 'vela.db')
+  const store = new SessionStore('cm', dbPath)
+  store.appendCustomMessage(
+    { role: 'user', content: [{ type: 'text', text: 'cm-note' }] },
+    { customType: 'note', display: true },
+  )
+  const saved = await new SessionStore('cm', dbPath).loadSaved()
   expect(saved).toBeDefined()
   expect(
     (saved!.messages[0] as { content: { type: string; text?: string }[] })
       .content[0],
   ).toEqual({ type: 'text', text: 'cm-note' })
-  const ctx = buildSessionContext([entry as never])
+  const ctx = buildSessionContext(store.getEntries())
   expect(
     (ctx.messages[0] as { content: { type: string }[] }).content[0]!.type,
   ).toBe('text')
@@ -333,7 +319,15 @@ test('driver messages helpers ignore thinking text, ignore image base64 size, an
           ],
         },
       },
-      entry as unknown as SessionEntry,
+      {
+        type: 'custom_message',
+        id: 'e1',
+        parentId: null,
+        timestamp: '2026-11-24T00:00:01.000Z',
+        customType: 'note',
+        display: true,
+        content: [{ type: 'text', text: 'cm-note' }],
+      } as SessionEntry,
     ],
   })
   expect(html).toContain('thought')
@@ -360,7 +354,6 @@ test('createJsonSchema detects schema drafts and resolveProviderTools extracts Z
       name: 'v3_tool',
       description: 'zod v3 test',
       inputSchema: zodV3Schema as never,
-      execute: async (input) => input,
     },
   ])
   expect(resolved.toolDefinitions).toHaveLength(1)

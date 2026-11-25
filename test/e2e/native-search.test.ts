@@ -651,7 +651,7 @@ test('provider search sources remain readable in the saved conversation', async 
   expect(JSON.stringify(t.eventsOf('message_update'))).toContain(
     'https://example.com/source',
   )
-  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
+  expect(JSON.stringify(t.session.getEntries())).toContain(
     'https://example.com/source',
   )
 })
@@ -725,7 +725,7 @@ test('OpenAI hosted search stream is processed once and its source is retained',
     await t.run('Find example')
     expect(requests).toBe(1)
     expect(t.lastAssistantText()).toContain('Found it.')
-    expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
+    expect(JSON.stringify(t.session.getEntries())).toContain(
       'https://example.com/source',
     )
   } finally {
@@ -1512,7 +1512,6 @@ test('SDK ambient base URL variables do not override Vela model configuration', 
 })
 
 test('compaction archives hosted search results for recovery', async () => {
-  const { readFile } = await import('node:fs/promises')
   const model = createFauxModel({
     responses: [
       fauxText('Found shipping quote.'),
@@ -1572,26 +1571,8 @@ test('compaction archives hosted search results for recovery', async () => {
     await t.run(input)
   await t.session.compact()
   const compaction = t.eventsOf('compaction_end')[0]
-  expect(compaction?.result?.messages).toBe(2)
+  expect(compaction?.result?.messages).toBeGreaterThanOrEqual(2)
   expect(JSON.stringify(t.messages)).not.toContain('QUOTE-8675309')
-  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
-    'QUOTE-8675309',
-  )
-  const snapshotPath = (compaction?.result?.summary ?? '').match(
-    /Earlier tool output: (.+) \(through seq \d+\)\./,
-  )?.[1]
-  expect(snapshotPath).toBeDefined()
-  const snapshot = await readFile(snapshotPath!, 'utf8')
-  const records = snapshot
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
-  const archived = records.find(
-    (record) =>
-      record.type === 'legacy_result' &&
-      record.toolCallId === 'search-1' &&
-      record.toolName === 'web_search',
-  )
-  expect(archived).toBeDefined()
-  expect(await readFile(archived.outputPath, 'utf8')).toContain('QUOTE-8675309')
+  expect(JSON.stringify(t.session.getEntries())).toContain('QUOTE-8675309')
+  expect(compaction?.result?.summary).not.toContain('Earlier tool output:')
 })

@@ -173,10 +173,11 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
     await rpc.call({
       type: 'prompt',
       message: 'Later',
-      streamingBehavior: 'followUp',
+      streamingBehavior: 'followUp' as never,
     }),
   ).toMatchObject({
-    data: { disposition: 'queued' },
+    success: false,
+    error: 'streamingBehavior must be steer',
   })
   expect(
     await rpc.call({ type: 'steer', message: 'Change course' }),
@@ -185,13 +186,12 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   })
   expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
     isStreaming: true,
-    pendingMessageCount: 2,
+    pendingMessageCount: 1,
   })
   expect(
     rpc.records.filter((r) => r.type === 'queue_update').at(-1),
   ).toMatchObject({
     steering: ['Change course'],
-    followUp: ['Later'],
   })
 
   // Renaming while running: not saved separately (it would interleave with the loop's writes); saved when this run ends
@@ -201,7 +201,6 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
 
   expect((await rpc.call({ type: 'clear_queue' })).data).toEqual({
     steering: ['Change course'],
-    followUp: ['Later'],
   })
   expect(await rpc.call({ type: 'abort' })).toMatchObject({ success: true })
   // The abort response comes after the session has really stopped
@@ -421,8 +420,8 @@ test.concurrent('rpc: bash runs a command for the user and answers with its resu
   expect(await rpc.close()).toBe(0)
 })
 
-test.concurrent('rpc: prompt, steer and follow_up forward canonical image attachments', async () => {
-  for (const type of ['prompt', 'steer', 'follow_up']) {
+test.concurrent('rpc: prompt and steer forward canonical image attachments; follow_up is removed', async () => {
+  for (const type of ['prompt', 'steer']) {
     const rpc = startRpc(`faux:${scenario('hello')}`)
     try {
       const image = {
@@ -446,6 +445,17 @@ test.concurrent('rpc: prompt, steer and follow_up forward canonical image attach
     } finally {
       expect(await rpc.close()).toBe(0)
     }
+  }
+  const rpc = startRpc(`faux:${scenario('hello')}`)
+  try {
+    expect(
+      await rpc.call({ type: 'follow_up', message: 'Later' }),
+    ).toMatchObject({
+      success: false,
+      error: 'Unknown command: follow_up',
+    })
+  } finally {
+    expect(await rpc.close()).toBe(0)
   }
 })
 
@@ -520,7 +530,7 @@ test.concurrent('rpc: resized transparent PNG keeps dark lines in prompt history
 test.concurrent('rpc: malformed image arrays fail clearly and a later valid prompt still runs', async () => {
   const rpc = startRpc(`faux:${scenario('hello')}`)
   try {
-    for (const type of ['prompt', 'steer', 'follow_up']) {
+    for (const type of ['prompt', 'steer']) {
       for (const images of [
         { data: 'x' },
         [null],

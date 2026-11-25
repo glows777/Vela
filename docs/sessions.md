@@ -40,13 +40,13 @@ In interactive mode:
 | `/context` | Show what fills the context window |
 | `/usage` | Show this session's token usage, cache hit rate and cost |
 
-In the SDK, `vela.session(id)` opens a session with an empty history; call `await session.resume()` to continue a saved one. Prompting a session whose id already has saved history without resuming it fails (`Session <id> already has saved history: call resume() to continue it, or use another session id`) rather than mixing two conversations in one file; messages added with `session.append()` to such a session are not written either (`session_save_failed`).
+In the SDK, `vela.session(id)` opens a session with an empty history; call `await session.resume()` to continue a saved one. Prompting a session whose id already has saved history without resuming it fails (`Session <id> already has saved history: call resume() to continue it, or use another session id`) rather than mixing two conversations in the database.
 
 The picker lists sessions newest first by name (or first message), id, message count and time. Sessions with no messages are not listed. Archived sessions are left out (see below).
 
 ## Archive and search saved sessions
 
-`vela.setSessionArchived(id, true)` takes a saved session out of `vela.listSessions()` and the interactive picker; `false` brings it back. The flag is an appended `session_archived` entry in the session file (see [Session format](session-format.md#entries)), so it survives a restart and no message is deleted. The session keeps its id and can still be opened and resumed by id; a fork or clone of it starts active. Archiving does not need the session to be opened.
+`vela.setSessionArchived(id, true)` takes a saved session out of `vela.listSessions()` and the interactive picker; `false` brings it back. The flag is persisted directly in SQLite (`sessions.archived`), so it survives a restart and no message is deleted. The session keeps its id and can still be opened and resumed by id; a fork or clone of it starts active. Archiving does not need the session to be opened.
 
 `vela.searchSessions(text)` scans the user and assistant message text of saved sessions and returns `{ id, match }[]`, newest first: one hit per session, with a short excerpt around the first match. Tool output, `!` commands, summaries and extension messages are not searched. There is no index: every saved session is read once per search. Pass `{ includeArchived: true }` to search archived sessions too.
 
@@ -74,7 +74,7 @@ In the SDK these are `session.navigateTree(entryId, { summarize, focus, label })
 
 ## Export
 
-`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id or file> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`) writes the branch in the [session file format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
+`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`) writes the branch in the [session file format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
 
 Review an export before you share it: it can contain your prompts, the model's answers, tool arguments, command output and file contents. Vela has no `/share` upload (pi's `/share` uploads to a gist).
 
@@ -84,16 +84,15 @@ One Vela can run many sessions at once. They share tool definitions, extensions,
 
 The CLI shows one session at a time; `vela serve` runs the channel sessions in its process instead. In the SDK, open as many as you need with `vela.session(id)`; see [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
 
-## Queueing: steer and follow-up
+## Queueing: steer
 
-A session runs one agent loop at a time. Input that arrives while it runs is queued in one of two ways:
+A session runs one agent loop at a time. Input that arrives while it runs can be queued as a steering message:
 
 | Mode | When it is sent | Interactive | SDK |
 |---|---|---|---|
-| steer | After the current step's tools finish, before the next model request | Enter | `session.steer(text)` |
-| follow-up | When the model would otherwise stop (no tool calls and no steer) | Alt+Enter (macOS: Option+Enter) | `session.followUp(text)` |
+| steer | After the current tool call finishes, skipping remaining queued calls in the step before the next model request | Enter | `session.steer(text)` |
 
-By default one queued message is taken at a time (`steeringMode` and `followUpMode` can be set to `all`). Steer messages go first. If the loop ends early (an error or loop detection), the remaining messages run in a new loop. After an abort the loop stops and the queue is kept.
+By default one queued message is taken at a time (`steeringMode` can be set to `all`). If the loop ends early (an error or loop detection), the remaining messages run in a new loop. After an abort the loop stops and the queue is kept.
 
 In interactive mode the queue is shown above the editor. Alt+Up (macOS: Option+Up) moves queued messages back into the editor; Esc aborts the run and moves them back too.
 

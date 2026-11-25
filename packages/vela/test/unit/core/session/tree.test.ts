@@ -28,18 +28,10 @@ const message = (
 // a ─ b ─┬─ c ─ d
 //        └─ e ─ (branch summary) ─ f
 const entries: SessionEntry[] = [
-  message('a', null, 'user', 'q1'),
+  { ...message('a', null, 'user', 'q1'), label: 'start' },
   message('b', 'a', 'assistant', 'a1'),
   message('c', 'b', 'user', 'q2'),
   message('d', 'c', 'assistant', 'a2'),
-  {
-    type: 'label',
-    id: 'l1',
-    parentId: 'd',
-    timestamp: time,
-    targetId: 'a',
-    label: 'start',
-  },
   message('e', 'b', 'user', 'q2b'),
   {
     type: 'branch_summary',
@@ -98,15 +90,14 @@ test('buildSessionTree nests branches, resolves labels and keeps orphans as root
   expect(b.children.map((n) => n.entry.id)).toEqual(['c', 'e'])
 })
 
-test('copyBranch re-chains the path without label entries and re-adds labels for entries on it', () => {
-  const path = buildSessionPath(entries, 'l1')
+test('copyBranch re-chains the path cleanly while keeping labels on entries', () => {
+  const path = buildSessionPath(entries, 'd')
   const copied = copyBranch(path)
   expect(copied.map((e) => e.type)).toEqual([
     'message',
     'message',
     'message',
     'message',
-    'label',
   ])
   expect(copied.slice(0, 4).map((e) => [e.id, e.parentId])).toEqual([
     ['a', null],
@@ -114,12 +105,7 @@ test('copyBranch re-chains the path without label entries and re-adds labels for
     ['c', 'b'],
     ['d', 'c'],
   ])
-  expect(copied[4]).toMatchObject({
-    type: 'label',
-    targetId: 'a',
-    label: 'start',
-    parentId: 'd',
-  })
+  expect(copied[0]!.label).toBe('start')
 })
 
 test('the HTML export escapes content and has no scripts or external resources', () => {
@@ -204,11 +190,18 @@ test('the HTML export escapes every kind of entry: thinking, tool calls and resu
         tokensBefore: 1,
       },
       { ...base('d', 'c'), type: 'branch_summary', fromId: 'b', summary: evil },
-      { ...base('e', 'd'), type: 'model_change', model: evil },
+      {
+        ...base('e', 'd'),
+        type: 'bash_execution',
+        command: evil,
+        output: evil,
+        cancelled: false,
+        truncated: false,
+      },
     ] as SessionEntry[],
   })
   expect(html).not.toContain('<img')
-  expect(html.match(/&lt;img src=x onerror=alert\(1\)&gt;/g)?.length).toBe(10)
+  expect(html.match(/&lt;img src=x onerror=alert\(1\)&gt;/g)?.length).toBe(11)
   expect(html).toContain('Thinking')
   expect(html).toContain('Summary of the earlier conversation')
   expect(html).toContain('(aborted while streaming)')

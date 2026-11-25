@@ -3,7 +3,12 @@ import {
   toolResultOutputToText,
 } from '../context/tool-result-output.ts'
 import type { ModelMessage } from '../messages.ts'
-import { messageText, type SessionEntry } from './entries.ts'
+import { sanitizeBashOutput } from '../tools/shell.ts'
+import {
+  bashExecutionToText,
+  messageText,
+  type SessionEntry,
+} from './entries.ts'
 
 /** What `renderSessionHtml()` renders. */
 export interface SessionHtmlInput {
@@ -101,10 +106,8 @@ function renderEntry(entry: SessionEntry): string {
         text(entry.summary),
         'summary',
       )
-    case 'model_change':
-      return text(`Model: ${entry.model}`, 'note')
-    case 'thinking_level_change':
-      return text(`Thinking level: ${entry.thinkingLevel}`, 'note')
+    case 'bash_execution':
+      return `<section class="message user"><div class="role">${entry.excludeFromContext ? 'bash (local)' : 'bash'}</div>${text(sanitizeBashOutput(bashExecutionToText(entry)), 'code')}</section>`
     default:
       return ''
   }

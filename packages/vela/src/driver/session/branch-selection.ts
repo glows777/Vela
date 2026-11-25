@@ -71,7 +71,7 @@ export function cloneLeaf(store: SessionStore): string {
 }
 
 /** The old branch and the part a tree move would leave behind. */
-export function prepareTree(
+function prepareTree(
   store: SessionStore,
   targetId: string,
   oldLeafId: string | null,
@@ -98,7 +98,89 @@ export function prepareTree(
   return { oldBranch, common, preparation }
 }
 
-export function selectTreeBranch(
+export async function executeTreeNavigation<S>(params: {
+  session: S
+  store: SessionStore
+  target: SessionEntry
+  oldLeafId: string | null
+  options: NavigateTreeOptions
+  signal: AbortSignal
+  beforeTree: (
+    session: S,
+    preparation: TreePreparation,
+    signal: AbortSignal,
+  ) => Promise<{
+    cancel?: boolean
+    focus?: string
+    label?: string
+    summary?: { summary: string }
+  }>
+  afterTree: (session: S, event: SessionTreeEvent) => Promise<void>
+  summarizeBranch: (
+    entries: SessionEntry[],
+    focus: string | undefined,
+    signal: AbortSignal,
+  ) => Promise<string | undefined>
+  loadBranch: (
+    context: ReturnType<SessionStore['buildContext']>,
+  ) => Promise<void>
+  save: () => Promise<void>
+}): Promise<{ editorText?: string; cancelled: boolean }> {
+  const {
+    session,
+    store,
+    target,
+    oldLeafId,
+    options,
+    signal,
+    beforeTree,
+    afterTree,
+    summarizeBranch,
+    loadBranch,
+    save,
+  } = params
+  const { preparation } = prepareTree(store, target.id, oldLeafId, options)
+  const hook = await beforeTree(session, preparation, signal)
+  if (hook.cancel) return { cancelled: true }
+  const focus = hook.focus ?? options.focus
+  const label = (hook.label ?? options.label)?.trim() || undefined
+  let summary: string | undefined
+  let fromExtension = false
+  if (options.summarize && preparation.entriesToSummarize.length) {
+    if (hook.summary) {
+      summary = hook.summary.summary
+      fromExtension = true
+    } else {
+      try {
+        summary = await summarizeBranch(
+          preparation.entriesToSummarize,
+          focus,
+          signal,
+        )
+      } catch (error) {
+        if (signal.aborted) return { cancelled: true }
+        throw error
+      }
+    }
+  }
+  const { editorText, event } = selectTreeBranch(
+    store,
+    target,
+    oldLeafId,
+    summary,
+    label,
+    fromExtension,
+  )
+  await loadBranch(store.buildContext())
+  await afterTree(session, event)
+  await save()
+  return {
+    ...(editorText === undefined ? {} : { editorText }),
+    cancelled: false,
+  }
+}
+
+function selectTreeBranch(
   store: SessionStore,
   target: SessionEntry,
   oldLeafId: string | null,
