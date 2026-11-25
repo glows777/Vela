@@ -640,6 +640,43 @@ test('a retried response keeps its partial text marked as failed, and the retry 
   expect(tui.screen()).not.toContain('Request failed, retrying')
 })
 
+test('the status line goes back to thinking once the compaction ended (like pi)', async () => {
+  const t = createTestVela({
+    // Summarize before every request that has an earlier turn to replace
+    limits: { microcompactThreshold: 1e9, summaryThreshold: 10 },
+    responses: [
+      fauxText('Answer 0', { usage: { input: 60_000 } }),
+      fauxText('Answer 1', { usage: { input: 60_000 } }),
+      fauxText('Answer 2', { usage: { input: 60_000 } }),
+      fauxText('Answer 3', { usage: { input: 60_000 } }),
+      // The request after the summary never answers, so the line stays as the summary left it
+      fauxHang(),
+    ],
+    generate: [fauxSummary()],
+    allowPendingResponses: true,
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  // A summary needs an earlier turn to replace (the last 6 messages stay), so build up history first
+  for (let i = 0; i < 4; i++) {
+    tui.submit(`question ${i}`)
+    await tui.until(`Answer ${i}`)
+    await tui.until(() => !t.vela.session('tui').isRunning)
+  }
+
+  tui.submit('question 4')
+  await tui.until(() => t.eventsOf('compaction_end').length > 0)
+  const spinner = () =>
+    tui
+      .screen()
+      .split('\n')
+      .find((line) => line.includes('(Esc to interrupt)'))
+  // The summary is done: the request it was waiting on is what the line must describe (#570)
+  await tui.until(() => spinner()?.includes('Thinking…') ?? false)
+  expect(spinner()).not.toContain('Compacting')
+})
+
 test('Enter while running steers, Alt+Enter queues a follow-up, Esc puts the queue back and aborts', async () => {
   const t = createTestVela({ responses: [fauxHang('Let me see')] })
   const tui = await startTui(t.vela)

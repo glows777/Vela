@@ -465,9 +465,7 @@ export class InteractiveMode {
         )
         break
       case 'auto_retry_start':
-        // Like pi: a retry is a status line, not a chat message. It is true only while the backoff
-        // runs, and a successful retry would otherwise leave a warning in the transcript for the
-        // rest of the session (#566).
+        // Like pi: a retry is a status line, and it ends with its backoff, not in the transcript (#566)
         this.statusLine.retry(
           `Request failed, retrying in ${Math.round(event.delayMs / 1000)}s (${event.attempt}/${event.maxAttempts}): ${sanitize(oneLine(event.errorMessage))}`,
           event.delayMs,
@@ -497,6 +495,8 @@ export class InteractiveMode {
         this.statusLine.set('Compacting context…')
         break
       case 'compaction_end':
+        // The request that waited on this summary is starting now (#570)
+        this.statusLine.set('Thinking…')
         if (event.result) this.addNotice(compactionLine(event), 'dim')
         else if (event.errorMessage)
           this.addNotice(
