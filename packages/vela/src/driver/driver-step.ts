@@ -508,6 +508,7 @@ export function persistAssistantStepTx(options: {
   rawUsage: ProviderUsage
   sdkToolErrors?: ReadonlyMap<string, string>
   terminalError?: (toolName: string) => string
+  onCommittedInTx?: (assistantEntryId: string) => void
 }): { entry: SessionMessageEntry; hostedMessages: ModelMessage[] } {
   const {
     db,
@@ -523,6 +524,7 @@ export function persistAssistantStepTx(options: {
     rawUsage,
     sdkToolErrors,
     terminalError,
+    onCommittedInTx,
   } = options
   const txNow = new Date().toISOString()
   return store.runInTransaction(() => {
@@ -620,6 +622,7 @@ export function persistAssistantStepTx(options: {
     for (const hostedMsg of hostedMessages) {
       store.appendMessage(hostedMsg, { runId })
     }
+    onCommittedInTx?.(entry.id)
     return { entry, hostedMessages }
   })
 }

@@ -1,4 +1,5 @@
 import type { VelaDatabase } from '../db/index.ts'
+import { syncToolCallForApprovalDecisionInTx } from '../runtime/approvals.ts'
 import type { VelaEvent } from './agent/events.ts'
 import type {
   AssistantModelMessage,
@@ -129,61 +130,16 @@ export function resolveApproval(
       now,
       approvalId,
     )
-    if (approval.tool_call_row_id || approval.tool_call_id) {
-      if (decision.approved) {
-        if (approval.tool_call_row_id) {
-          db.run(
-            `UPDATE vela_tool_calls
-             SET status = 'pending', updated_at = ?
-             WHERE id = ? AND status = 'awaiting_approval'`,
-            now,
-            approval.tool_call_row_id,
-          )
-        } else {
-          db.run(
-            `UPDATE vela_tool_calls
-             SET status = 'pending', updated_at = ?
-             WHERE session_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'awaiting_approval'`,
-            now,
-            sessionId,
-            approval.run_id,
-            approval.tool_call_id,
-          )
-        }
-      } else {
-        const reason = decision.reason
-          ? `[Denied] ${decision.reason}`
-          : `[Denied] ${approval.tool_name} was denied by user`
-        const out: ToolResultOutput = { type: 'error-text', value: reason }
-        if (approval.tool_call_row_id) {
-          db.run(
-            `UPDATE vela_tool_calls
-             SET status = 'failed', is_error = 1, preview = ?, result_json = ?,
-                 finished_at = ?, updated_at = ?
-             WHERE id = ? AND status = 'awaiting_approval'`,
-            reason,
-            JSON.stringify(out),
-            now,
-            now,
-            approval.tool_call_row_id,
-          )
-        } else {
-          db.run(
-            `UPDATE vela_tool_calls
-             SET status = 'failed', is_error = 1, preview = ?, result_json = ?,
-                 finished_at = ?, updated_at = ?
-             WHERE session_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'awaiting_approval'`,
-            reason,
-            JSON.stringify(out),
-            now,
-            now,
-            sessionId,
-            approval.run_id,
-            approval.tool_call_id,
-          )
-        }
-      }
-    }
+    syncToolCallForApprovalDecisionInTx(db, {
+      sessionId,
+      runId: approval.run_id,
+      toolCallRowId: approval.tool_call_row_id,
+      toolCallId: approval.tool_call_id,
+      toolName: approval.tool_name,
+      decision: nextStatus,
+      reason: decision.reason,
+      now,
+    })
     return {
       id: approval.id,
       runId: approval.run_id,

@@ -21,7 +21,7 @@ export async function materializeAttachments(
       const index = text.slice(0, end).lastIndexOf(marker)
       if (index < 0)
         throw new Error('Attachment marker missing from prepared message')
-      const path = await session.store.uploads.materialize(env, file, signal)
+      const path = await session.store.materializeUpload(env, file, signal)
       text = `${text.slice(0, index)}[file: ${file.name}, saved at ${path}]${text.slice(index + marker.length)}`
       end = index
     }

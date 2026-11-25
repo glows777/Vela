@@ -72,6 +72,7 @@ export class VelaDatabase {
   private closed = false
   private txDepth = 0
   private savepointSeq = 0
+  private commitHooks: Array<() => void> = []
 
   constructor(raw: DatabaseSync, path: string, readonly = false) {
     this.raw = raw
@@ -81,6 +82,19 @@ export class VelaDatabase {
 
   get open(): boolean {
     return !this.closed
+  }
+
+  get inTransaction(): boolean {
+    return this.txDepth > 0
+  }
+
+  /** Runs `fn` immediately if outside a transaction, or right after the outermost COMMIT succeeds. */
+  afterCommit(fn: () => void): void {
+    if (this.txDepth === 0) {
+      fn()
+      return
+    }
+    this.commitHooks.push(fn)
   }
 
   get schemaVersion(): number {
@@ -146,9 +160,11 @@ export class VelaDatabase {
     if (depth === 0) {
       this.raw.exec(`BEGIN ${mode}`)
       this.txDepth = 1
+      let committed = false
       try {
         const result = assertSyncResult(fn())
         this.raw.exec('COMMIT')
+        committed = true
         return result
       } catch (error) {
         try {
@@ -157,6 +173,10 @@ export class VelaDatabase {
         throw error
       } finally {
         this.txDepth = 0
+        const hooks = this.commitHooks.splice(0)
+        if (committed) {
+          for (const hook of hooks) hook()
+        }
       }
     }
 

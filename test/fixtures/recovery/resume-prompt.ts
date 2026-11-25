@@ -1,6 +1,5 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { projectDataDir } from '../../../packages/vela/src/driver/config/paths.ts'
 import {
   createTestVela,
   fauxText,
@@ -11,7 +10,7 @@ const [cwd, mode] = process.argv.slice(2) as [string, string]
 const t = createTestVela({
   cwd,
   allowPendingResponses: true,
-  dataDir: projectDataDir(join(cwd, 'agent'), cwd),
+  dataDir: join(cwd, 'agent'),
   sessionId: 'resume-prompt',
   responses:
     mode === 'start'

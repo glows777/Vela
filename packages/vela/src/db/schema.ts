@@ -99,9 +99,16 @@ CREATE TABLE IF NOT EXISTS channel_bindings (
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
   config_json TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (channel, external_id)
+  updated_at TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_bindings_root
+  ON channel_bindings (channel, external_id)
+  WHERE thread_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_bindings_thread
+  ON channel_bindings (channel, external_id, thread_id)
+  WHERE thread_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_channel_bindings_project
   ON channel_bindings (project_id);

@@ -136,7 +136,7 @@ export interface LoadedSessionContext extends SessionContext {
 }
 
 export interface SessionStoreOptions {
-  uploadsDir?: string
+  blobsDir?: string
   logger?: VelaLogger
   ephemeral?: boolean
   cwd?: string

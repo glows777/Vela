@@ -144,11 +144,13 @@ function assertSafeExportTarget(
 /** Exports a saved session directly from `vela.db` in read-only mode without starting extensions or models. */
 export async function exportSavedSession(options: {
   dataDir: string
+  agentDir?: string
   sessionId: string
   outputPath?: string
   baseCwd: string
 }): Promise<string> {
-  const dbPath = join(options.dataDir, 'vela.db')
+  const dbRoot = options.agentDir ?? options.dataDir
+  const dbPath = join(dbRoot, 'vela.db')
   if (!existsSync(dbPath)) {
     throw new Error(
       `Session ${options.sessionId} has no saved history in vela.db`,

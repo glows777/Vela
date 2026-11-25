@@ -9,7 +9,6 @@ import {
 import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
 import { z } from 'zod'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
-import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { SessionStore } from '../../packages/vela/src/driver/session/index.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
@@ -59,10 +58,9 @@ test('oauth producer suffix flows to context hooks and CLI --export reads vela.d
     ],
   })
 
-  // Seed a saved channel session with an inline user image directly into vela.db
-  const dataDir = projectDataDir(agentDir.path, project.path)
-  mkdirSync(dataDir, { recursive: true })
-  const db = openDatabase({ path: join(dataDir, 'vela.db') })
+  // Seed a saved channel session with an inline user image directly into <agentDir>/vela.db
+  mkdirSync(agentDir.path, { recursive: true })
+  const db = openDatabase({ path: join(agentDir.path, 'vela.db') })
   try {
     const store = new SessionStore('cli-export-s', db, { cwd: project.path })
     store.setChannel('lark')

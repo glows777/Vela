@@ -325,6 +325,24 @@ test('enforces NOT NULL primary keys, partial unique indexes, and CASCADE / SET 
       now,
     ),
   ).toThrow()
+  // Multiple topic bindings under the same group chat coexist while duplicate thread_ids fail
+  db.run(
+    "INSERT INTO channel_bindings (id, channel, external_id, thread_id, kind, project_id, session_id, created_at, updated_at) VALUES ('b_t1', 'lark', 'oc_1', 'om_thread_1', 'group', 'p1', 's1', ?, ?)",
+    now,
+    now,
+  )
+  db.run(
+    "INSERT INTO channel_bindings (id, channel, external_id, thread_id, kind, project_id, session_id, created_at, updated_at) VALUES ('b_t2', 'lark', 'oc_1', 'om_thread_2', 'group', 'p1', 's1', ?, ?)",
+    now,
+    now,
+  )
+  expect(() =>
+    db.run(
+      "INSERT INTO channel_bindings (id, channel, external_id, thread_id, kind, project_id, session_id, created_at, updated_at) VALUES ('b_t1_dup', 'lark', 'oc_1', 'om_thread_1', 'group', 'p1', 's1', ?, ?)",
+      now,
+      now,
+    ),
+  ).toThrow()
 
   db.run(
     "INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, status, created_at, updated_at) VALUES ('tc1', 's1', 'r1', 'm1', 'call_1', 0, 'read', '{}', 'pending', ?, ?)",

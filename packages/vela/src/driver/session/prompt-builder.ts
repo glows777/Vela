@@ -1,3 +1,4 @@
+import type { ExecutionEnv } from '../execution/types.ts'
 import {
   addendum,
   type DocsPaths,
@@ -13,8 +14,36 @@ import {
   toolList,
   workingDirectory,
 } from '../prompt/index.ts'
+import { expandPromptTemplate } from '../prompt/templates.ts'
+import { expandEnvironmentSkill } from '../skills/environment-skills.ts'
+import type { SkillLoader } from '../skills/loader.ts'
 import { formatSkillsForPrompt } from '../skills/loader.ts'
 import type { SessionResources } from './resources.ts'
+
+export async function expandSessionInput(params: {
+  text: string
+  snapshot: SessionResources
+  skillLoader: SkillLoader
+  resolveEnv: () => Promise<ExecutionEnv>
+  signal?: AbortSignal
+}): Promise<string> {
+  const { text, snapshot, skillLoader, resolveEnv, signal } = params
+  const name = /^\/skill:([^\s]+)/.exec(text)?.[1]
+  const skill = name && snapshot.skills.find((item) => item.name === name)
+  if (skill) {
+    const expanded =
+      skillLoader.get(skill.name) === skill
+        ? skillLoader.expand(text)
+        : await expandEnvironmentSkill(
+            text,
+            snapshot.skills,
+            await resolveEnv(),
+            signal,
+          )
+    if (expanded !== undefined) return expanded
+  }
+  return expandPromptTemplate(text, snapshot.promptTemplates) ?? text
+}
 
 /** Build stable named sections; their resources are selected by session identity. */
 export function createSessionPrompt(

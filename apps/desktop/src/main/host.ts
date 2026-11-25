@@ -88,6 +88,7 @@ export async function openHost(
       : undefined
   const vela = createChannelVela({
     cwd,
+    agentDir: config.agentDir,
     dataDir: config.dataDir,
     model,
     providers: config.providers,

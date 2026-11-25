@@ -1,3 +1,4 @@
+export { BlobStore } from './blobs.ts'
 export type {
   ChannelAdapter,
   ChannelAdapterContext,
@@ -15,3 +16,7 @@ export type {
   RuntimeEventPayload,
   StreamDeltaEvent,
 } from './events.ts'
+export {
+  VelaRuntimeEngine,
+  type VelaRuntimeEngineOptions,
+} from './runtime.ts'

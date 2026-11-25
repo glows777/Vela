@@ -121,8 +121,8 @@ export interface SessionDeps<Session> {
   ephemeral?: boolean
   /** dataDir is a temp dir that dispose() deletes */
   temporaryDataDir?: boolean
-  /** Per-session root for uploaded attachments */
-  uploadsRoot: (sessionId: string) => string
+  /** Shared directory for content-addressed host blobs */
+  blobsDir: string
   /** Per-session directory for spilled large tool outputs */
   spillRoot: (sessionId: string) => string
   /** Vela-level tool registry; each session forks its own from it */
