@@ -612,8 +612,10 @@ test('long streaming output follows the bottom, then preserves the reading posit
   expect(viewport.isFollowingOutput).toBe(true)
 })
 
-test('a retried response keeps its partial text marked as failed, and the retry is a new message (like pi)', async () => {
+test('a retried response keeps its partial text marked as failed, and the retry is a status line that clears (like pi)', async () => {
   const t = createTestVela({
+    // A backoff long enough to see the line before the attempt resumes
+    limits: { retryBaseMs: 800 },
     responses: [
       fauxStreamError('ECONNRESET', 'Half an ans'),
       fauxText('The full answer'),
@@ -623,15 +625,56 @@ test('a retried response keeps its partial text marked as failed, and the retry 
   await tui.started
 
   tui.submit('hi')
+  await tui.until('Request failed, retrying')
   await tui.until('The full answer')
 
   const screen = tui.screen()
   expect(screen).toContain('Half an ans')
   expect(screen).toContain('(response failed)')
-  expect(screen).toContain('Request failed, retrying')
+  // The retry was a wait, not a chat message: it is gone once the attempt resumed (#566)
+  expect(screen).not.toContain('Request failed, retrying')
   expect(screen.indexOf('(response failed)')).toBeLessThan(
     screen.indexOf('The full answer'),
   )
+  await tui.until(() => !t.vela.session('tui').isRunning)
+  expect(tui.screen()).not.toContain('Request failed, retrying')
+})
+
+test('the status line goes back to thinking once the compaction ended (like pi)', async () => {
+  const t = createTestVela({
+    // Summarize before every request that has an earlier turn to replace
+    limits: { summaryThreshold: 10 },
+    responses: [
+      fauxText('Answer 0', { usage: { input: 60_000 } }),
+      fauxText('Answer 1', { usage: { input: 60_000 } }),
+      fauxText('Answer 2', { usage: { input: 60_000 } }),
+      fauxText('Answer 3', { usage: { input: 60_000 } }),
+      // The request after the summary never answers, so the line stays as the summary left it
+      fauxHang(),
+    ],
+    generate: [fauxSummary()],
+    allowPendingResponses: true,
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  // A summary needs an earlier turn to replace (the last 6 messages stay), so build up history first
+  for (let i = 0; i < 4; i++) {
+    tui.submit(`question ${i}`)
+    await tui.until(`Answer ${i}`)
+    await tui.until(() => !t.vela.session('tui').isRunning)
+  }
+
+  tui.submit('question 4')
+  await tui.until(() => t.eventsOf('compaction_end').length > 0)
+  const spinner = () =>
+    tui
+      .screen()
+      .split('\n')
+      .find((line) => line.includes('(Esc to interrupt)'))
+  // The summary is done: the request it was waiting on is what the line must describe (#570)
+  await tui.until(() => spinner()?.includes('Thinking…') ?? false)
+  expect(spinner()).not.toContain('Compacting')
 })
 
 test('Enter while running steers, Alt+Enter queues a follow-up, Esc puts the queue back and aborts', async () => {

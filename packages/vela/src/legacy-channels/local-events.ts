@@ -23,7 +23,11 @@ export function localProgress(event: VelaEvent): LocalProgress | undefined {
             ? 'failed'
             : 'finished',
     }
-  if (event.type === 'auto_retry_start') return { stage: 'retry' }
+  // A retry ends with its own event, so a consumer never shows it after the attempt resumed (#571)
+  if (event.type === 'auto_retry_start')
+    return { stage: 'retry', state: 'started' }
+  if (event.type === 'auto_retry_end')
+    return { stage: 'retry', state: 'finished' }
   if (event.type === 'compaction_start' || event.type === 'compaction_end')
     return {
       stage: 'compaction',

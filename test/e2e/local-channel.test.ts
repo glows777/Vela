@@ -7,6 +7,7 @@ import { APICallError } from '@ai-sdk/provider'
 import { z } from 'zod'
 import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
 import { local } from '../../packages/vela/src/legacy-channels/index.ts'
+import type { LocalEventData } from '../../packages/vela/src/legacy-channels/local-protocol.ts'
 import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import {
   type FauxRequest,
@@ -509,6 +510,122 @@ test('Local provider failures keep actionable operator details in visible histor
     })
   } finally {
     await watch.close()
+  }
+})
+
+test('a retry ends with its backoff while the retried request is still running (#571)', async () => {
+  const { t, client } = await setup({
+    // A slow backoff, then a request that never answers: the two ends are far apart
+    limits: { retryBaseMs: 400, retryMaxMs: 400 },
+    responses: [
+      fauxError('429 Too Many Requests - Rate limit exceeded'),
+      fauxHang(),
+    ],
+    allowPendingResponses: true,
+  })
+  const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })
+  const watch = await watchLocal(client, project.id)
+  try {
+    await client.request(`${sessionPath(project)}/messages`, {
+      text: 'retry me',
+    })
+    const stages = () =>
+      watch.events
+        .map((event) => event.data as LocalEventData)
+        .filter((event) => event.type === 'progress')
+        .map((event) => event.data as { stage: string; state?: string })
+    await until(() =>
+      stages().some(
+        (stage) => stage.stage === 'retry' && stage.state === 'started',
+      ),
+    )
+    await until(() =>
+      stages().some(
+        (stage) => stage.stage === 'retry' && stage.state === 'finished',
+      ),
+    )
+    // The retried request is what runs now, and it has not answered: the label is already gone
+    expect(stages()).toEqual([
+      { stage: 'retry', state: 'started' },
+      { stage: 'retry', state: 'finished' },
+    ])
+    expect(t.model.calls.length).toBeGreaterThanOrEqual(2)
+    const session = (
+      await client.request<{ sessions: Snapshot[] }>(
+        `/v1/projects/${project.id}/sessions`,
+      )
+    ).sessions[0]!
+    expect(session.state).toBe('running')
+    await client.request(`${sessionPath(project)}/stop`, {
+      runId: session.runId,
+    })
+  } finally {
+    await watch.close()
+    await drainChannels(t.vela)
+  }
+})
+
+test('a backoff a Stop cut short never publishes into the next run (#571)', async () => {
+  const { t, client } = await setup({
+    // Long enough to stop inside it, then an answer for the run that follows
+    limits: { retryBaseMs: 500, retryMaxMs: 500 },
+    responses: [
+      fauxError('429 Too Many Requests - Rate limit exceeded'),
+      fauxText('Second run answered'),
+    ],
+  })
+  const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })
+  const watch = await watchLocal(client, project.id)
+  try {
+    await client.request(`${sessionPath(project)}/messages`, {
+      text: 'retry me',
+    })
+    const events = () =>
+      watch.events.map((event) => event.data as LocalEventData)
+    await until(() =>
+      events().some(
+        (event) =>
+          event.type === 'progress' &&
+          (event.data as { state?: string }).state === 'started',
+      ),
+    )
+    const session = (
+      await client.request<{ sessions: Snapshot[] }>(
+        `/v1/projects/${project.id}/sessions`,
+      )
+    ).sessions[0]!
+    await client.request(`${sessionPath(project)}/stop`, {
+      runId: session.runId,
+    })
+    await until(() => events().some((event) => event.type === 'run_finished'))
+    // A new run starts right away; the aborted backoff must not land inside it, or after its end
+    await client.request(`${sessionPath(project)}/messages`, {
+      text: 'ask again',
+    })
+    await until(() =>
+      events().some(
+        (event) =>
+          event.type === 'message' &&
+          (event.data as { text?: string }).text === 'Second run answered',
+      ),
+    )
+    // Past the moment the abandoned backoff would have ended
+    await Bun.sleep(700)
+    const finishedAt = events().findIndex(
+      (event) => event.type === 'run_finished',
+    )
+    expect(
+      events()
+        .slice(finishedAt + 1)
+        .filter(
+          (event) =>
+            event.type === 'progress' &&
+            (event.data as { stage?: string }).stage === 'retry',
+        ),
+    ).toEqual([])
+  } finally {
+    await watch.close()
+    await drainChannels(t.vela)
   }
 })
 

@@ -18,6 +18,7 @@ import type { Snapshot } from '../store.ts'
 import { loadSession, openLarkChat, sendInSession, stop } from '../store.ts'
 import { Button } from '../ui/button.tsx'
 import { velaMotion } from '../ui/motion.ts'
+import { currentStage } from './progress.ts'
 import styles from './session-panel.module.css'
 
 /**
@@ -190,10 +191,12 @@ function SessionDetail({
     return loadSession(project.id, session.sessionId, setNotice)
   }, [project.id, session.sessionId])
 
-  const progress = snapshot.progress[session.sessionId]
   const failure = snapshot.failures[session.sessionId]
   const status = snapshot.statuses[session.sessionId]
   const running = session.state === 'running'
+  const stage = running
+    ? currentStage(snapshot.progress[session.sessionId])
+    : undefined
   const lark = project.channel === 'lark'
   return (
     <>
@@ -233,12 +236,7 @@ function SessionDetail({
       <p className={styles.state}>
         <StateMark state={session.state} />
         <span>{stateWord[session.state]}</span>
-        {running && progress?.stage === 'tool' ? (
-          <span className={styles.progress}>{progress.tool}</span>
-        ) : null}
-        {running && progress?.stage === 'retry' ? (
-          <span className={styles.progress}>Retrying</span>
-        ) : null}
+        {stage ? <span className={styles.progress}>{stage}</span> : null}
       </p>
       {status ? <p className={styles.subtle}>{status}</p> : null}
       {lark ? (

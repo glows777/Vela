@@ -121,6 +121,8 @@ await Bun.write(
     ? '{ invalid'
     : JSON.stringify({
         shellPath: shell,
+        // A backoff long enough for the panel to show `Retrying` and then its own end
+        limits: { retryBaseMs: 3_000 },
         ...(disabledConfig
           ? { extensions: ['-builtin:web', '-builtin:lark'] }
           : {}),
@@ -186,7 +188,11 @@ await Bun.write(
       // the next step, and the hub's is suppressed on hand-off: same text either way.
       { text: 'I will read the retry module first.' },
       { text: 'I will read the retry module first.' },
-      { toolCalls: [{ name: 'bash', input: { command: 'printf retry' } }] },
+      // Slow enough for the panel to show the live tool before it ends
+      { toolCalls: [{ name: 'bash', input: { command: 'sleep 3' } }] },
+      { hang: true },
+      // A refused request, retried into one that stays in flight unanswered (#571)
+      { error: '429 Too Many Requests - Rate limit exceeded' },
       { hang: true },
       { text: 'Continued after the stop.' },
       { error: 'invalid api key' },
@@ -1021,6 +1027,13 @@ const journeyTwo = async (page: Page) => {
   await panel.getByText('Running', { exact: true }).waitFor()
   checks.push('A running session shows one state word, the live tool and Stop.')
 
+  // The tool ended and the request after it is what runs now: its name must not stay (#571)
+  await panel
+    .getByText('bash', { exact: true })
+    .waitFor({ state: 'detached', timeout: 30_000 })
+  await panel.getByText('Running', { exact: true }).waitFor()
+  checks.push('A finished tool leaves the panel: the state word alone remains.')
+
   await panel.getByRole('button', { name: 'Stop' }).click()
   await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'stopped')
   await waitForIdle(page, topic.sessionId)
@@ -1029,6 +1042,37 @@ const journeyTwo = async (page: Page) => {
   checks.push(
     'Stop ends the run: the state word says Stopped and Stop is gone.',
   )
+
+  await sendIn(page, 'Message in this session', 'Try that again')
+  await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'running')
+  await panel
+    .getByText('Retrying', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  checks.push('A retried request shows Retrying while it waits.')
+
+  // The backoff ended and the retried request is in flight, unanswered: the label must be gone (#571)
+  await panel
+    .getByText('Retrying', { exact: true })
+    .waitFor({ state: 'detached', timeout: 30_000 })
+  assert.equal(
+    await page.evaluate(
+      async ({ projectId }) => {
+        const sessions = await window.vela.sessions('local', projectId)
+        return sessions.find((item) => item.task === 'Fix the retry backoff')
+          ?.state
+      },
+      { projectId: alpha.id },
+    ),
+    'running',
+    'the retried request is still pending when Retrying is gone',
+  )
+  checks.push(
+    'Retrying ends with its backoff, while the retried request is still pending.',
+  )
+
+  await panel.getByRole('button', { name: 'Stop' }).click()
+  await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'stopped')
+  await waitForIdle(page, topic.sessionId)
 
   await sendIn(page, 'Message in this session', 'Continue')
   await panel

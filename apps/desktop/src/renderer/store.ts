@@ -12,14 +12,11 @@ import type {
 } from '../shared/bridge.ts'
 import { errorMessage } from './errors.ts'
 import { larkHistory } from './lark-history.ts'
+import type { SessionProgress } from './session/progress.ts'
 import { vela } from './vela.ts'
 
 /** The last progress a session reported while it ran. */
-type Progress = {
-  stage: 'tool' | 'retry' | 'compaction'
-  tool?: string
-  state?: 'started' | 'finished' | 'failed'
-}
+type Progress = SessionProgress
 
 export interface Snapshot {
   ready: boolean

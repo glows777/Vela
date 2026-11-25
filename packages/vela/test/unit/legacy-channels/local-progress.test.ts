@@ -50,7 +50,20 @@ describe('Local progress privacy', () => {
         delayMs: 10,
         errorMessage: 'SECRET',
       }),
-    ).toEqual({ stage: 'retry' })
+    ).toEqual({ stage: 'retry', state: 'started' })
+  })
+  test('a retry reports its end, so no consumer keeps showing it (#571)', () => {
+    expect(
+      localProgress({ type: 'auto_retry_end', success: true, attempt: 1 }),
+    ).toEqual({ stage: 'retry', state: 'finished' })
+    expect(
+      localProgress({
+        type: 'auto_retry_end',
+        success: false,
+        attempt: 3,
+        finalError: 'SECRET',
+      }),
+    ).toEqual({ stage: 'retry', state: 'finished' })
   })
   test('bounds custom tool names and removes control characters', () => {
     const progress = localProgress({

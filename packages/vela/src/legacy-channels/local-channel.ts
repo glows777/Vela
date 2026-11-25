@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { z } from 'zod'
-import type { VelaLogger } from '../extension-api.ts'
+import type { VelaEvent, VelaLogger } from '../extension-api.ts'
 import { LocalEvents, localProgress } from './local-events.ts'
 import { LocalHttp } from './local-http.ts'
 import type {
   LocalHost,
   LocalMessage,
   LocalOptions,
+  LocalProgress,
   LocalProject,
   LocalSession,
 } from './local-protocol.ts'
@@ -65,6 +66,11 @@ export class LocalChannel implements ChannelDefinition {
   private view?: LocalHost
   private unsubscribe?: () => void
   private readonly observed = new WeakSet<object>()
+  /** What each session's last progress said, and a retry's backoff waiting to end. */
+  private readonly progress = new Map<
+    string,
+    { data: LocalProgress; timer?: ReturnType<typeof setTimeout> }
+  >()
   private unsubscribeSession?: () => void
   private readonly epoch = new Date().toISOString()
 
@@ -105,6 +111,9 @@ export class LocalChannel implements ChannelDefinition {
         { type: 'session', data: { ...session, channel: 'local' } },
         { ...address, runId: session.runId },
       )
+      // A run boundary ends any stage the previous run left waiting: a backoff a Stop cut short must
+      // not publish into the run that follows, and an idle session keeps no stage at all (#571).
+      if (run) this.endProgress(session.sessionId)
       if (run?.type === 'started')
         this.events.publish(
           { type: 'run_started', data: {} },
@@ -150,6 +159,8 @@ export class LocalChannel implements ChannelDefinition {
   async stop(): Promise<void> {
     this.stopped = true
     this.started = false
+    for (const sessionId of [...this.progress.keys()])
+      this.endProgress(sessionId)
     this.unsubscribe?.()
     this.unsubscribeSession?.()
     try {
@@ -469,14 +480,50 @@ export class LocalChannel implements ChannelDefinition {
             { projectId, sessionId },
           )
         const data = localProgress(update.event)
-        if (data)
-          this.events.publish(
-            { type: 'progress', data },
-            { projectId, sessionId },
-          )
+        if (data) this.publishProgress(projectId, sessionId, data, update.event)
       },
       finish: async () => {}, // Gateway onSession owns preparation, execution and queue lifetimes.
     }
+  }
+
+  /**
+   * One progress stage per session. A retry is current only while its backoff runs: the attempt resumes when
+   * that ends, which is before `auto_retry_end` reports how it went, so the end is published here (#571).
+   */
+  private publishProgress(
+    projectId: string,
+    sessionId: string,
+    data: LocalProgress,
+    event: VelaEvent,
+  ): void {
+    const previous = this.progress.get(sessionId)
+    if (previous?.timer) clearTimeout(previous.timer)
+    const entry: {
+      data: LocalProgress
+      timer?: ReturnType<typeof setTimeout>
+    } = {
+      data,
+    }
+    this.progress.set(sessionId, entry)
+    this.events.publish({ type: 'progress', data }, { projectId, sessionId })
+    if (event.type !== 'auto_retry_start') return
+    entry.timer = setTimeout(() => {
+      if (this.progress.get(sessionId) !== entry) return
+      const finished: LocalProgress = { stage: 'retry', state: 'finished' }
+      this.progress.set(sessionId, { data: finished })
+      this.events.publish(
+        { type: 'progress', data: finished },
+        { projectId, sessionId },
+      )
+    }, event.delayMs)
+    entry.timer.unref?.()
+  }
+
+  /** A run boundary: nothing the previous stage would still publish, and no entry left behind. */
+  private endProgress(sessionId: string): void {
+    const entry = this.progress.get(sessionId)
+    if (entry?.timer) clearTimeout(entry.timer)
+    this.progress.delete(sessionId)
   }
 
   private visible(projectId: string, message: LocalMessage): void {
