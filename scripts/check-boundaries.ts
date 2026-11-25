@@ -16,7 +16,7 @@ const LAYER_ALLOWED: Record<string, readonly string[]> = {
   db: ['shared', 'config'],
   runtime: ['shared', 'config', 'db'],
   providers: ['shared', 'config'],
-  driver: ['shared', 'config', 'db', 'providers'],
+  driver: ['shared', 'config', 'db', 'providers', 'runtime'],
   mcp: ['shared', 'config', 'runtime', 'driver'],
   lark: ['shared', 'config', 'runtime', 'driver', 'legacy-channels'],
   'legacy-channels': ['shared', 'config', 'providers', 'driver'],

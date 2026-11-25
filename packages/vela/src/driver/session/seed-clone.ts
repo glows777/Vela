@@ -13,11 +13,16 @@ import {
 } from 'node:fs'
 import { basename, join, sep } from 'node:path'
 import type { VelaDatabase } from '../../db/index.ts'
+import type { BlobStore } from '../../runtime/blobs.ts'
 import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
 import { parseRowLocation } from './db-store.ts'
-import { copyBranch, entriesToMessages, type SessionEntry } from './entries.ts'
+import {
+  copyBranch,
+  entriesToMessages,
+  messageText,
+  type SessionEntry,
+} from './entries.ts'
 import { pendingToolCalls } from './recovery.ts'
-import type { SessionUploads } from './uploads.ts'
 
 const MAX_REMOTE_SPILL_COPY_BYTES = 20 * 1024 * 1024
 const TERMINAL_TOOL_STATUSES = new Set([
@@ -66,14 +71,15 @@ export interface PreparedSeedBranch {
   messageUsage: Map<string, ClonedMessageUsage>
   rewrites: [string, string][]
   spillRewrites: Map<string, string>
+  blobIds: string[]
 }
 
 export async function prepareSeedBranch(params: {
   db: VelaDatabase
   branch: SessionEntry[]
   parentId: string
-  parentUploads: SessionUploads
-  targetUploads: SessionUploads
+  targetId: string
+  targetBlobs: BlobStore
   resolveEnv: () => Promise<ExecutionEnv>
   resolveSourceEnv?: (location?: ExecutionLocation) => Promise<ExecutionEnv>
   parentLocation?: ExecutionLocation
@@ -82,8 +88,7 @@ export async function prepareSeedBranch(params: {
   parentSpillDir?: string
   spillDir?: string
 }): Promise<PreparedSeedBranch> {
-  const { db, branch, parentId, parentUploads, targetUploads, resolveEnv } =
-    params
+  const { db, branch, parentId, targetId, targetBlobs, resolveEnv } = params
   if (pendingToolCalls(entriesToMessages(branch)).length > 0) {
     throw new Error('Cannot fork or clone through unresolved tool calls')
   }
@@ -134,11 +139,17 @@ export async function prepareSeedBranch(params: {
     )
   }
 
-  const rewrites = await targetUploads.inherit(
-    parentUploads,
-    branch,
-    resolveEnv,
+  const branchTexts = branch.flatMap((e) =>
+    e.type === 'message' && e.message.role === 'user'
+      ? [messageText(e.message.content)]
+      : [],
   )
+  const { rewrites, blobIds } = await targetBlobs.inheritForFork({
+    parentSessionId: parentId,
+    targetSessionId: targetId,
+    branchTexts,
+    resolveEnv,
+  })
 
   const spillRewrites = new Map<string, string>()
   const targetSpillDir = params.spillDir
@@ -314,6 +325,7 @@ export async function prepareSeedBranch(params: {
     messageUsage,
     rewrites,
     spillRewrites,
+    blobIds,
   }
 }
 

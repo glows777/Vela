@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { BackgroundJobManager } from '../../../runtime/background-jobs.ts'
 import type { VelaLogger } from '../../../shared/logger.ts'
 import { errorMessage } from '../../../shared/logger.ts'
 import type {
@@ -113,13 +114,19 @@ class Foreground {
 export class BackgroundJobs implements BackgroundCommands {
   private readonly jobs = new Map<string, Job>()
   private readonly foreground = new Set<Foreground>()
+  private readonly manager?: BackgroundJobManager
   private sequence = 0
 
   constructor(
     private readonly session: VelaSession,
     private readonly logger: VelaLogger,
     private readonly shellPath?: string,
-  ) {}
+  ) {
+    const db = this.session?.store?.db
+    if (db) {
+      this.manager = new BackgroundJobManager(db)
+    }
+  }
 
   async adopt({
     command,
@@ -158,6 +165,7 @@ export class BackgroundJobs implements BackgroundCommands {
         id,
         commandHead: commandHead(command),
       })
+      this.persistJobStart(job)
       controller.signal.throwIfAborted()
     })
     job.finished = prepared.then(
@@ -294,6 +302,7 @@ export class BackgroundJobs implements BackgroundCommands {
         id,
         commandHead: commandHead(entry.command),
       })
+      this.persistJobStart(job)
     } catch (error) {
       // The host may already hold a start record it could not acknowledge, so clear it before
       // handing the command back to its call.
@@ -376,6 +385,7 @@ export class BackgroundJobs implements BackgroundCommands {
     job.endedAt = Date.now()
     job.fullOutputPath = exit.spillPath
     this.syncStatus()
+    this.persistJobFinish(job, exit)
     if (job.silent) return
     if (job.timedOut) {
       this.deliver(
@@ -487,7 +497,54 @@ export class BackgroundJobs implements BackgroundCommands {
     return job.stoppedNotice
   }
 
-  /** Kept as a no-op hook until S3b moves background job tracking into Runtime DB. */
+  private persistJobStart(job: Job): void {
+    try {
+      const db = this.session?.store?.db
+      if (!this.manager || !db?.open) return
+      const exists = db.get<{ id: string }>(
+        'SELECT id FROM sessions WHERE id = ?',
+        this.session.id,
+      )
+      if (!exists) return
+      this.manager.recordStart({
+        id: job.token,
+        sessionId: this.session.id,
+        command: job.command,
+        commandHead: commandHead(job.command),
+        location: this.session.location,
+        abort: () => job.controller.abort(),
+      })
+    } catch (error) {
+      this.logger.error(
+        `[background] Failed recording start for ${job.id}: ${errorMessage(error)}`,
+      )
+    }
+  }
+
+  private persistJobFinish(job: Job, exit: CommandExit): void {
+    try {
+      const db = this.session?.store?.db
+      if (!this.manager || !db?.open) return
+      const status = job.stopped
+        ? 'stopped'
+        : exit.error !== undefined || (exit.exitCode ?? 0) !== 0
+          ? 'failed'
+          : 'completed'
+      this.manager.recordFinish({
+        id: job.token,
+        status,
+        exitCode: exit.exitCode ?? null,
+        outputPath: job.fullOutputPath ?? null,
+        silent: true,
+      })
+    } catch (error) {
+      this.logger.error(
+        `[background] Failed recording exit for ${job.id}: ${errorMessage(error)}`,
+      )
+    }
+  }
+
+  /** Syncs background task status line if applicable. */
   private syncStatus(): void {}
 
   private job(id: string): Job {

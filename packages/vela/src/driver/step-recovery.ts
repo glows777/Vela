@@ -1,4 +1,5 @@
 import type { VelaDatabase } from '../db/index.ts'
+import { syncToolCallForApprovalDecisionInTx } from '../runtime/approvals.ts'
 import type { VelaEvent } from './agent/events.ts'
 import type {
   AssistantModelMessage,
@@ -129,61 +130,16 @@ export function resolveApproval(
       now,
       approvalId,
     )
-    if (approval.tool_call_row_id || approval.tool_call_id) {
-      if (decision.approved) {
-        if (approval.tool_call_row_id) {
-          db.run(
-            `UPDATE vela_tool_calls
-             SET status = 'pending', updated_at = ?
-             WHERE id = ? AND status = 'awaiting_approval'`,
-            now,
-            approval.tool_call_row_id,
-          )
-        } else {
-          db.run(
-            `UPDATE vela_tool_calls
-             SET status = 'pending', updated_at = ?
-             WHERE session_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'awaiting_approval'`,
-            now,
-            sessionId,
-            approval.run_id,
-            approval.tool_call_id,
-          )
-        }
-      } else {
-        const reason = decision.reason
-          ? `[Denied] ${decision.reason}`
-          : `[Denied] ${approval.tool_name} was denied by user`
-        const out: ToolResultOutput = { type: 'error-text', value: reason }
-        if (approval.tool_call_row_id) {
-          db.run(
-            `UPDATE vela_tool_calls
-             SET status = 'failed', is_error = 1, preview = ?, result_json = ?,
-                 finished_at = ?, updated_at = ?
-             WHERE id = ? AND status = 'awaiting_approval'`,
-            reason,
-            JSON.stringify(out),
-            now,
-            now,
-            approval.tool_call_row_id,
-          )
-        } else {
-          db.run(
-            `UPDATE vela_tool_calls
-             SET status = 'failed', is_error = 1, preview = ?, result_json = ?,
-                 finished_at = ?, updated_at = ?
-             WHERE session_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'awaiting_approval'`,
-            reason,
-            JSON.stringify(out),
-            now,
-            now,
-            sessionId,
-            approval.run_id,
-            approval.tool_call_id,
-          )
-        }
-      }
-    }
+    syncToolCallForApprovalDecisionInTx(db, {
+      sessionId,
+      runId: approval.run_id,
+      toolCallRowId: approval.tool_call_row_id,
+      toolCallId: approval.tool_call_id,
+      toolName: approval.tool_name,
+      decision: nextStatus,
+      reason: decision.reason,
+      now,
+    })
     return {
       id: approval.id,
       runId: approval.run_id,
@@ -467,4 +423,83 @@ export async function recoverPendingStep(options: {
 
   const { message, details } = assembleCompletedToolMessage(refreshed)
   return { recovered: true, waitingHuman: false, toolMessage: message, details }
+}
+
+/**
+ * Completes any unresolved assistant tool-call step left behind by a stopped or cancelled turn
+ * before accepting a fresh user message so provider message invariants always hold.
+ */
+export function repairStoppedPendingToolStepInTx(options: {
+  db: VelaDatabase
+  store: SessionStore
+  sessionId: string
+  messages: ModelMessage[]
+  runId: string
+  onMessageCommittedInTx?: (entryId: string, message: ModelMessage) => void
+}): boolean {
+  const { db, store, sessionId, messages, runId, onMessageCommittedInTx } =
+    options
+  const step = findUnresolvedAssistantStep(store, messages)
+  if (!step) return false
+  const stepRow = db.get<{ run_id: string | null }>(
+    'SELECT run_id FROM vela_messages WHERE session_id = ? AND id = ?',
+    sessionId,
+    step.entryId,
+  )
+  const repairRunId = stepRow?.run_id ?? undefined
+  void runId
+  const now = new Date().toISOString()
+
+  const appended = store.runInTransaction(() => {
+    let rows = loadStepToolCallRows(db, sessionId, step.entryId)
+    if (rows.length === 0) {
+      for (const [idx, call] of step.calls.entries()) {
+        const msg = `Tool ${call.toolName} was stopped before execution completed.`
+        db.run(
+          `INSERT INTO vela_tool_calls (
+             id, session_id, run_id, assistant_message_id, tool_call_id, call_index,
+             tool_name, input_json, execution_mode, replay, status, attempt,
+             is_error, preview, result_json, finished_at, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sequential', 'none', 'skipped', 0, 1, ?, ?, ?, ?, ?)`,
+          crypto.randomUUID(),
+          sessionId,
+          repairRunId ?? null,
+          step.entryId,
+          call.toolCallId,
+          idx,
+          call.toolName,
+          JSON.stringify(call.input ?? {}),
+          msg,
+          JSON.stringify({ type: 'error-text', value: msg }),
+          now,
+          now,
+          now,
+        )
+      }
+      rows = loadStepToolCallRows(db, sessionId, step.entryId)
+    } else {
+      for (const row of rows) {
+        if (TERMINAL_STATUSES.has(row.status)) continue
+        const msg = `Tool ${row.tool_name} was stopped before execution completed.`
+        db.run(
+          `UPDATE vela_tool_calls
+           SET status = 'skipped', is_error = 1, preview = ?, result_json = ?,
+               finished_at = COALESCE(finished_at, ?), updated_at = ?
+           WHERE id = ?`,
+          msg,
+          JSON.stringify({ type: 'error-text', value: msg }),
+          now,
+          now,
+          row.id,
+        )
+      }
+      rows = loadStepToolCallRows(db, sessionId, step.entryId)
+    }
+    const { message, details } = assembleCompletedToolMessage(rows)
+    const entry = store.appendMessage(message, { runId: repairRunId, details })
+    onMessageCommittedInTx?.(entry.id, message)
+    return message
+  })
+  messages.push(appended)
+  return true
 }

@@ -3,7 +3,6 @@ import { createHmac } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
-import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
@@ -270,7 +269,7 @@ test('serve answers a channel message on stderr and stops cleanly on SIGTERM', a
   expect(await Bun.file(replyFile).text()).toBe('pong\n')
   // The channel session was saved before the process exited
   const db = openDatabase({
-    path: join(projectDataDir(home.path, dir.path), 'vela.db'),
+    path: join(home.path, 'vela.db'),
     readonly: true,
   })
   try {

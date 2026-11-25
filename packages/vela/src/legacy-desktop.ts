@@ -14,6 +14,7 @@ export {
 export { defaultAgentDir } from './driver/config/paths.ts'
 export { resolveModel } from './driver/diagnostics.ts'
 export { loadModels } from './driver/index.ts'
+export { createVelaAgentDriver } from './driver/runtime-adapter.ts'
 export {
   connectLarkSetup,
   discoverLarkGroup,
@@ -24,4 +25,8 @@ export {
   createChannelVela,
 } from './legacy-channels/index.ts'
 export { loadConfig } from './load-config.ts'
+export {
+  VelaRuntimeEngine,
+  type VelaRuntimeEngineOptions,
+} from './runtime/index.ts'
 export { resolveShellPath } from './shared/shell-path.ts'

@@ -432,26 +432,24 @@ const bridgeJourney = async (page: Page) => {
   const deadline = Date.now() + 5000
   let savedImage = false
   while (!savedImage && Date.now() < deadline) {
-    for await (const file of new Bun.Glob('**/vela.db').scan(data)) {
-      let db: DatabaseSync | undefined
-      try {
-        db = new DatabaseSync(resolve(data, file), { readOnly: true })
-        const hit = db
-          .prepare(
-            `SELECT 1 AS ok FROM vela_messages
-             WHERE session_id = ? AND content_json LIKE '%"type":"image"%'
-             LIMIT 1`,
-          )
-          .get(created.sessionId)
-        if (hit) {
-          savedImage = true
-          break
-        }
-      } catch {
-        // vela.db may not be initialized yet while polling
-      } finally {
-        db?.close()
+    const candidateDb = resolve(data, 'vela.db')
+    let db: DatabaseSync | undefined
+    try {
+      db = new DatabaseSync(candidateDb, { readOnly: true })
+      const hit = db
+        .prepare(
+          `SELECT 1 AS ok FROM vela_messages
+           WHERE session_id = ? AND content_json LIKE '%"type":"image"%'
+           LIMIT 1`,
+        )
+        .get(created.sessionId)
+      if (hit) {
+        savedImage = true
       }
+    } catch {
+      // vela.db may not be initialized yet while polling
+    } finally {
+      db?.close()
     }
     if (!savedImage) await Bun.sleep(50)
   }

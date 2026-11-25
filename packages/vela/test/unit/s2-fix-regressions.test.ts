@@ -1090,7 +1090,7 @@ test('SessionStore, seedFrom, cycle CTE guard, and createVela cleanup on init fa
     writeFileSync(parentFile, 'uploaded content')
 
     const parentStore = new SessionStore('seed-parent', db, {
-      uploadsDir: parentUploadDir,
+      blobsDir: parentUploadDir,
     })
     const wrapEnv = (id: string, sub: string) => {
       const base = createLocalExecutionEnv({ cwd: envDir })
@@ -1109,7 +1109,7 @@ test('SessionStore, seedFrom, cycle CTE guard, and createVela cleanup on init fa
       })
     }
     const remoteLikeEnv = wrapEnv('docker:test', 'home-parent')
-    const materializedPath = await parentStore.uploads.materialize(
+    const materializedPath = await parentStore.materializeUpload(
       remoteLikeEnv,
       { name: 'upload.txt', hostPath: parentFile },
     )
@@ -1147,7 +1147,7 @@ test('SessionStore, seedFrom, cycle CTE guard, and createVela cleanup on init fa
     )
 
     const childStore = new SessionStore('seed-child', db, {
-      uploadsDir: childUploadDir,
+      blobsDir: childUploadDir,
     })
     const childEnv = wrapEnv('docker:child', 'home-child')
     await childStore.seedFrom(

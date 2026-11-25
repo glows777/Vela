@@ -233,7 +233,7 @@ export class VelaSession {
     this.defaults = new SessionDefaultState(deps, options)
     this.limits = limitsForModel({}, deps.limitOverrides)
     this.store = new SessionStore(id, deps.db, {
-      uploadsDir: deps.uploadsRoot(id),
+      blobsDir: deps.blobsDir,
       logger: deps.logger,
       ephemeral: deps.ephemeral,
       cwd: this.cwd,

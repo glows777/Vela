@@ -208,6 +208,7 @@ if (args.export) {
   try {
     const written = await exportSavedSession({
       dataDir: config.dataDir,
+      agentDir: config.agentDir,
       sessionId: args.export,
       outputPath: args.messages[0],
       baseCwd: cwd,
@@ -329,6 +330,7 @@ const vela = createVela({
   credentials: config.credentials,
   thinkingLevel: args.thinking,
   cwd,
+  agentDir: config.agentDir,
   dataDir: config.dataDir,
   ephemeralSessions: args.noSession,
   sessionResources: config.sessionResources && {

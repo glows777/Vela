@@ -318,8 +318,8 @@ test('R1 #10/#12/#14/#15: spill confinement + remote copy, fork/clone rejects wa
       db,
       branch,
       parentId: 'parent',
-      parentUploads: pStore.uploads,
-      targetUploads: cStore.uploads,
+      targetId: cStore.id,
+      targetBlobs: cStore.blobs,
       resolveEnv: async () => {
         throw new Error('local fork must not resolve remote env')
       },
@@ -367,8 +367,8 @@ test('R1 #10/#12/#14/#15: spill confinement + remote copy, fork/clone rejects wa
         },
       ],
       parentId: 'parent',
-      parentUploads: pStore.uploads,
-      targetUploads: cStore.uploads,
+      targetId: cStore.id,
+      targetBlobs: cStore.blobs,
       resolveEnv: async () => fakeRemoteEnv,
       parentLocation: { environment: 'docker', cwd: '/remote' },
       targetLocation: { environment: 'docker', cwd: '/remote' },
@@ -539,8 +539,8 @@ test('R2 #9/#10/#12/#13: cross-env spill clone after relocate, ephemeral+db guar
       db,
       branch,
       parentId: 'p-loc',
-      parentUploads: pStore.uploads,
-      targetUploads: cStore.uploads,
+      targetId: cStore.id,
+      targetBlobs: cStore.blobs,
       resolveEnv: async () => {
         throw new Error('local target env does not need remote')
       },
@@ -578,8 +578,8 @@ test('R2 #9/#10/#12/#13: cross-env spill clone after relocate, ephemeral+db guar
         },
       ],
       parentId: 'p-loc',
-      parentUploads: pStore.uploads,
-      targetUploads: cStore.uploads,
+      targetId: cStore.id,
+      targetBlobs: cStore.blobs,
       resolveEnv: async () => remoteTarget,
       parentLocation: { environment: 'local', cwd: dir },
       targetLocation: { environment: 'docker', cwd: '/remote2' },

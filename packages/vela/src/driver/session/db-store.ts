@@ -3,19 +3,16 @@ import type { ThinkingLevel } from '../../providers/models/index.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { StepRecord } from '../usage/tracker.ts'
-import {
-  type BashExecutionEntry,
-  type BranchSummaryEntry,
-  type CompactionEntry,
-  type CustomEntry,
-  type CustomMessageEntry,
-  messageText,
-  type SessionEntry,
-  type SessionMessageEntry,
-  type SessionSummary,
+import type {
+  BashExecutionEntry,
+  BranchSummaryEntry,
+  CompactionEntry,
+  CustomEntry,
+  CustomMessageEntry,
+  SessionEntry,
+  SessionMessageEntry,
 } from './entries.ts'
 import type { LoadedSessionContext } from './options.ts'
-import { type SessionSearchHit, searchSessionText } from './search.ts'
 
 export type SessionRow = {
   id: string
@@ -411,94 +408,6 @@ export function queryBranchRows(
   )
 }
 
-export function listSessionSummariesFromDb(
-  db: VelaDatabase,
-  includeArchived = false,
-): SessionSummary[] {
-  const sessions = db.all<SessionRow>(
-    `SELECT * FROM sessions
-     ${includeArchived ? '' : 'WHERE archived = 0'}
-     ORDER BY updated_at DESC`,
-  )
-  const summaries: SessionSummary[] = []
-  for (const session of sessions) {
-    const countRow = db.get<{ n: number }>(
-      "SELECT count(*) AS n FROM vela_messages WHERE session_id = ? AND kind IN ('message', 'bash_execution')",
-      session.id,
-    )
-    const messageCount = countRow?.n ?? 0
-    if (messageCount === 0) continue
-
-    const firstRow = db.get<MessageRow>(
-      `SELECT * FROM vela_messages
-       WHERE session_id = ?
-         AND ((kind = 'message' AND role = 'user') OR kind = 'bash_execution')
-       ORDER BY seq ASC
-       LIMIT 1`,
-      session.id,
-    )
-    let firstMessage = ''
-    if (firstRow) {
-      const entry = rowToEntry(firstRow)
-      if (entry.type === 'bash_execution') {
-        firstMessage =
-          `${entry.excludeFromContext ? '!!' : '!'}${entry.command}`
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 120)
-      } else if (entry.type === 'message') {
-        firstMessage = messageText(entry.message.content)
-          .replace(/\s+/g, ' ')
-          .trim()
-          .slice(0, 120)
-      }
-    }
-
-    const location = session.location_json
-      ? (JSON.parse(session.location_json) as { cwd?: string })
-      : undefined
-    const channel = getSessionChannel(db, session.id)
-    summaries.push({
-      id: session.id,
-      ...(session.name ? { name: session.name } : {}),
-      updatedAt: session.updated_at,
-      messageCount,
-      firstMessage,
-      ...(location?.cwd ? { cwd: location.cwd } : {}),
-      ...(channel ? { channel } : {}),
-      ...(session.archived ? { archived: true } : {}),
-    })
-  }
-  return summaries
-}
-
-export function setSavedSessionArchivedInDb(
-  db: VelaDatabase,
-  sessionId: string,
-  archived: boolean,
-): boolean {
-  const existing = db.get<{ archived: number }>(
-    'SELECT archived FROM sessions WHERE id = ?',
-    sessionId,
-  )
-  const hasMessages = db.get<{ n: number }>(
-    'SELECT count(*) AS n FROM vela_messages WHERE session_id = ?',
-    sessionId,
-  )?.n
-  if (!existing || !hasMessages) {
-    throw new Error(`Session ${sessionId} has nothing saved to archive`)
-  }
-  const flag = archived ? 1 : 0
-  if (existing.archived === flag) return false
-  db.run(
-    'UPDATE sessions SET archived = ?, updated_at = ? WHERE id = ?',
-    flag,
-    new Date().toISOString(),
-    sessionId,
-  )
-  return true
-}
-
 export function loadAllSessionRows(
   db: VelaDatabase,
   sessionId: string,
@@ -587,22 +496,6 @@ export function computeBranchUsage(
   const rows = queryBranchRows(db, sessionId, leafId)
   const activeIds = new Set(rows.map((r) => r.id))
   return computeLatestAssistantUsage(rows, activeIds, messages, ids)
-}
-
-export function searchSessionsInDb(
-  db: VelaDatabase,
-  query: string,
-  includeArchived: boolean,
-): SessionSearchHit[] {
-  const text = query.trim()
-  if (!text) return []
-  const hits: SessionSearchHit[] = []
-  for (const summary of listSessionSummariesFromDb(db, includeArchived)) {
-    const entries = loadAllSessionRows(db, summary.id).map(rowToEntry)
-    const match = entries.length ? searchSessionText(entries, text) : undefined
-    if (match) hits.push({ id: summary.id, match })
-  }
-  return hits
 }
 
 export function upsertSessionRecord(

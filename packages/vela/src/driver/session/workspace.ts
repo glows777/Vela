@@ -214,14 +214,17 @@ export async function disposeVelaRuntime(options: {
 
 export function openVelaStorage(options: {
   cwd?: string
+  agentDir?: string
   dataDir?: string
   db?: VelaDatabase
   ephemeralSessions?: boolean
 }): {
   cwd: string
+  agentDir?: string
   ephemeral: boolean
   ephemeralSessions: boolean
   dataDir: string
+  blobsDir: string
   ownsDb: boolean
   db: VelaDatabase
 } {
@@ -235,20 +238,35 @@ export function openVelaStorage(options: {
     )
   }
   const cwd = resolve(options.cwd ?? process.cwd())
+  const agentDir = options.agentDir ? resolve(options.agentDir) : undefined
   const ephemeral = options.dataDir === undefined
   const ephemeralSessions =
-    options.ephemeralSessions === true || (ephemeral && !options.db)
+    options.ephemeralSessions === true ||
+    (ephemeral && !options.db && !agentDir)
   const dataDir = ephemeral
     ? mkdtempSync(join(tmpdir(), 'vela-'))
     : resolve(cwd, options.dataDir as string)
+  const dbDir = agentDir ?? dataDir
+  const blobsDir = ephemeralSessions
+    ? join(dataDir, 'blobs')
+    : join(dbDir, 'blobs')
   const ownsDb = !options.db
   try {
     const db =
       options.db ??
       openDatabase({
-        path: ephemeralSessions ? ':memory:' : join(dataDir, 'vela.db'),
+        path: ephemeralSessions ? ':memory:' : join(dbDir, 'vela.db'),
       })
-    return { cwd, ephemeral, ephemeralSessions, dataDir, ownsDb, db }
+    return {
+      cwd,
+      agentDir,
+      ephemeral,
+      ephemeralSessions,
+      dataDir,
+      blobsDir,
+      ownsDb,
+      db,
+    }
   } catch (error) {
     if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
     throw error

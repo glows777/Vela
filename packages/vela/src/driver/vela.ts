@@ -32,16 +32,12 @@ import {
   localDateString,
   type SystemPromptBuilder,
 } from './prompt/index.ts'
-import {
-  expandPromptTemplate,
-  loadPromptTemplates,
-  type PromptTemplate,
-} from './prompt/templates.ts'
+import { loadPromptTemplates, type PromptTemplate } from './prompt/templates.ts'
 import {
   listSessionSummariesFromDb,
   searchSessionsInDb,
   setSavedSessionArchivedInDb,
-} from './session/db-store.ts'
+} from './session/db-queries.ts'
 import type { SessionSummary } from './session/entries.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
@@ -50,7 +46,10 @@ import {
   ProjectConfig,
 } from './session/project-config.ts'
 import { ProjectExtensions } from './session/project-extensions.ts'
-import { createSessionPrompt } from './session/prompt-builder.ts'
+import {
+  createSessionPrompt,
+  expandSessionInput,
+} from './session/prompt-builder.ts'
 import { WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
 import type { SessionSearchHit } from './session/search.ts'
@@ -62,7 +61,6 @@ import {
   resolveSessionExecution,
   workspaceKey,
 } from './session/workspace.ts'
-import { expandEnvironmentSkill } from './skills/environment-skills.ts'
 import { SkillLoader } from './skills/loader.ts'
 import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
@@ -108,7 +106,11 @@ export interface VelaOptions {
   /** Working directory for file, search and bash tools and skills; default process.cwd(). */
   cwd?: string
   /**
-   * Project data directory (sessions/, usage/, extension data such as memory/, rag/); relative paths resolve against cwd.
+   * @internal Root user agent directory (`~/.vela`) owning the shared `<agentDir>/vela.db` and `<agentDir>/blobs/`.
+   */
+  agentDir?: string
+  /**
+   * Project data directory (memory/, tool-results/, container workspace/); relative paths resolve against cwd.
    * Without it nothing persists: sessions stay in memory, long tool output etc. goes to a temp dir deleted by dispose().
    * The CLI uses `~/.vela/projects/<encoded cwd>` (see loadConfig).
    */
@@ -276,33 +278,34 @@ export function velaInternals(vela: Vela): VelaInternals {
 
 /** Assembles one host with per-session history, execution and location-bound project capabilities. */
 export function createVela(options: VelaOptions = {}): Vela {
-  const { cwd, ephemeral, ephemeralSessions, dataDir, ownsDb, db } =
-    openVelaStorage(options)
+  const storage = openVelaStorage(options)
   try {
-    return initVelaInstance(
-      options,
-      cwd,
-      ephemeral,
-      ephemeralSessions,
-      dataDir,
-      ownsDb,
-      db,
-    )
+    return initVelaInstance(options, storage)
   } catch (error) {
-    cleanupFailedVelaInit(ownsDb, db, ephemeral, dataDir)
+    cleanupFailedVelaInit(
+      storage.ownsDb,
+      storage.db,
+      storage.ephemeral,
+      storage.dataDir,
+    )
     throw error
   }
 }
 
 function initVelaInstance(
   options: VelaOptions,
-  cwd: string,
-  ephemeral: boolean,
-  ephemeralSessions: boolean,
-  dataDir: string,
-  ownsDb: boolean,
-  db: VelaDatabase,
+  storage: ReturnType<typeof openVelaStorage>,
 ): Vela {
+  const {
+    cwd,
+    agentDir,
+    ephemeral,
+    ephemeralSessions,
+    dataDir,
+    blobsDir,
+    ownsDb,
+    db,
+  } = storage
   let { model } = options
   let defaultsChanged = false
   let defaultThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL
@@ -458,8 +461,7 @@ function initVelaInstance(
         db,
         ephemeral: ephemeralSessions,
         temporaryDataDir: ephemeral,
-        uploadsRoot: (sessionId) =>
-          join(dataDir, 'sessions', sessionId, 'uploads'),
+        blobsDir,
         spillRoot: (sessionId) =>
           join(dataDir, 'sessions', sessionId, 'tool-results'),
         cwd,
@@ -468,25 +470,14 @@ function initVelaInstance(
         registry,
         builder,
         // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)
-        expandInput: async (text, owner, signal) => {
-          const snapshot = await prepareWorkspace(owner, signal)
-          const name = /^\/skill:([^\s]+)/.exec(text)?.[1]
-          const skill =
-            name && snapshot.skills.find((item) => item.name === name)
-          if (skill) {
-            const expanded =
-              skillLoader.get(skill.name) === skill
-                ? skillLoader.expand(text)
-                : await expandEnvironmentSkill(
-                    text,
-                    snapshot.skills,
-                    await abortable(resolveExecution(owner), signal),
-                    signal,
-                  )
-            if (expanded !== undefined) return expanded
-          }
-          return expandPromptTemplate(text, snapshot.promptTemplates) ?? text
-        },
+        expandInput: async (text, owner, signal) =>
+          expandSessionInput({
+            text,
+            snapshot: await prepareWorkspace(owner, signal),
+            skillLoader,
+            resolveEnv: () => abortable(resolveExecution(owner), signal),
+            signal,
+          }),
         get extensions() {
           return projects.runner(activeKey(id))
         },
@@ -735,7 +726,11 @@ function initVelaInstance(
     listSessions: async (listOptions) =>
       ephemeralSessions
         ? []
-        : listSessionSummariesFromDb(db, listOptions?.includeArchived ?? false),
+        : listSessionSummariesFromDb(
+            db,
+            listOptions?.includeArchived ?? false,
+            agentDir ? { cwd } : undefined,
+          ),
     setSessionArchived: async (id, archived) => {
       assertSessionId(id)
       const open = sessions.get(id)
@@ -757,6 +752,7 @@ function initVelaInstance(
             db,
             query,
             searchOptions?.includeArchived ?? false,
+            agentDir ? { cwd } : undefined,
           ),
     subscribe(listener) {
       listeners.add(listener)

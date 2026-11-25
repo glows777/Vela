@@ -72,6 +72,7 @@ export class VelaDatabase {
   private closed = false
   private txDepth = 0
   private savepointSeq = 0
+  private commitHooks: Array<() => void> = []
 
   constructor(raw: DatabaseSync, path: string, readonly = false) {
     this.raw = raw
@@ -81,6 +82,19 @@ export class VelaDatabase {
 
   get open(): boolean {
     return !this.closed
+  }
+
+  get inTransaction(): boolean {
+    return this.txDepth > 0
+  }
+
+  /** Runs `fn` immediately if outside a transaction, or right after the outermost COMMIT succeeds. */
+  afterCommit(fn: () => void): void {
+    if (this.txDepth === 0) {
+      fn()
+      return
+    }
+    this.commitHooks.push(fn)
   }
 
   get schemaVersion(): number {
@@ -146,9 +160,11 @@ export class VelaDatabase {
     if (depth === 0) {
       this.raw.exec(`BEGIN ${mode}`)
       this.txDepth = 1
+      let committed = false
       try {
         const result = assertSyncResult(fn())
         this.raw.exec('COMMIT')
+        committed = true
         return result
       } catch (error) {
         try {
@@ -157,9 +173,18 @@ export class VelaDatabase {
         throw error
       } finally {
         this.txDepth = 0
+        const hooks = this.commitHooks.splice(0)
+        if (committed) {
+          for (const hook of hooks) {
+            try {
+              hook()
+            } catch {}
+          }
+        }
       }
     }
 
+    const hookMark = this.commitHooks.length
     const sp = quoteSavepoint(`vela_sp_${++this.savepointSeq}`)
     this.raw.exec(`SAVEPOINT ${sp}`)
     this.txDepth = depth + 1
@@ -168,6 +193,7 @@ export class VelaDatabase {
       this.raw.exec(`RELEASE SAVEPOINT ${sp}`)
       return result
     } catch (error) {
+      this.commitHooks.length = hookMark
       try {
         this.raw.exec(`ROLLBACK TO SAVEPOINT ${sp}`)
         this.raw.exec(`RELEASE SAVEPOINT ${sp}`)
@@ -188,6 +214,71 @@ export class VelaDatabase {
     if (this.closed) {
       throw new Error(`SQLite database "${this.path}" is already closed`)
     }
+  }
+}
+
+/**
+ * Transparently repairs pre-S3b v1 databases whose `channel_bindings` table still carries
+ * the legacy table-level `UNIQUE (channel, external_id)` constraint without bumping SCHEMA_VERSION.
+ */
+function repairChannelBindingsPartialIndexes(db: VelaDatabase): void {
+  const table = db.get<{ sql: string }>(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channel_bindings'`,
+  )
+  const hasThreadIndex = db.get<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_channel_bindings_thread'`,
+  )
+  const hasRootIndex = db.get<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_channel_bindings_root'`,
+  )
+  if (
+    !table ||
+    (!/UNIQUE\s*\(\s*channel\s*,\s*external_id\s*\)/i.test(table.sql) &&
+      hasThreadIndex &&
+      hasRootIndex)
+  ) {
+    return
+  }
+  db.exec('PRAGMA foreign_keys = OFF')
+  try {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE channel_bindings_v1_repaired (
+          id TEXT PRIMARY KEY NOT NULL,
+          channel TEXT NOT NULL,
+          external_id TEXT NOT NULL,
+          thread_id TEXT,
+          kind TEXT NOT NULL CHECK (kind IN ('group', 'direct')),
+          project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+          session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          config_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO channel_bindings_v1_repaired (
+          id, channel, external_id, thread_id, kind, project_id,
+          session_id, enabled, config_json, created_at, updated_at
+        )
+        SELECT id, channel, external_id, thread_id, kind, project_id,
+               session_id, enabled, config_json, created_at, updated_at
+        FROM channel_bindings;
+        DROP TABLE channel_bindings;
+        ALTER TABLE channel_bindings_v1_repaired RENAME TO channel_bindings;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_bindings_root
+          ON channel_bindings (channel, external_id)
+          WHERE thread_id IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_bindings_thread
+          ON channel_bindings (channel, external_id, thread_id)
+          WHERE thread_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_bindings_project
+          ON channel_bindings (project_id);
+        CREATE INDEX IF NOT EXISTS idx_channel_bindings_session
+          ON channel_bindings (session_id);
+      `)
+    })
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON')
   }
 }
 
@@ -237,6 +328,9 @@ export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
     db.exec('PRAGMA temp_store = MEMORY')
 
     applyMigrations(db, { readonly })
+    if (!readonly) {
+      repairChannelBindingsPartialIndexes(db)
+    }
 
     if (!isMemory && !readonly) {
       chmodIfExists(options.path, 0o600)

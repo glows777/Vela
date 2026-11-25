@@ -3,21 +3,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, VelaDatabase } from '../../db/index.ts'
 import type { ThinkingLevel } from '../../providers/models/index.ts'
+import { BlobStore } from '../../runtime/blobs.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
 import type { CustomMessageInfo } from '../agent/events.ts'
-import { validateStoredLocation } from '../execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { StepRecord } from '../usage/tracker.ts'
+import { loadSavedSessionFromDb } from './db-queries.ts'
 import {
-  collectRowMetadata,
   computeBranchUsage,
-  computeLatestAssistantUsage,
-  getSessionChannel,
   insertMessageRow,
   insertUsageRecord,
-  loadAllSessionRows,
-  loadSessionMeta,
   queryBranchRows,
   rowToEntry,
   setSessionChannel,
@@ -54,7 +50,6 @@ import {
   restoreStoreSnapshot,
   type StoreSnapshotState,
 } from './store-snapshot.ts'
-import { SessionUploads } from './uploads.ts'
 
 export type { LoadedSessionContext, SessionState, SessionStoreOptions }
 
@@ -65,7 +60,7 @@ export type { LoadedSessionContext, SessionState, SessionStoreOptions }
  */
 export class SessionStore {
   readonly db: VelaDatabase
-  readonly uploads: SessionUploads
+  readonly blobs: BlobStore
   private readonly ownsDb: boolean
   private transientDir?: string
   private readonly logger: VelaLogger
@@ -86,6 +81,7 @@ export class SessionStore {
   private createdAt?: string
   private archivedFlag = false
   private discovered: string[] = []
+  private readonly pendingBlobIds: string[] = []
 
   private readonly entries: SessionEntry[] = []
   private readonly entryIds = new Set<string>()
@@ -132,14 +128,11 @@ export class SessionStore {
       this.ownsDb = true
     }
 
-    if (opts.uploadsDir && !opts.ephemeral) {
-      this.uploads = new SessionUploads(sessionId, opts.uploadsDir)
+    if (opts.blobsDir && !opts.ephemeral) {
+      this.blobs = new BlobStore(this.db, opts.blobsDir)
     } else {
       this.transientDir = mkdtempSync(join(tmpdir(), `vela-nosession-`))
-      this.uploads = new SessionUploads(
-        sessionId,
-        join(this.transientDir, 'upload-sources'),
-      )
+      this.blobs = new BlobStore(this.db, join(this.transientDir, 'blobs'))
     }
   }
 
@@ -437,8 +430,8 @@ export class SessionStore {
       db: this.db,
       branch,
       parentId: parent.id,
-      parentUploads: parent.store.uploads,
-      targetUploads: this.uploads,
+      targetId: this.sessionId,
+      targetBlobs: this.blobs,
       resolveEnv,
       resolveSourceEnv: spillOptions.resolveSourceEnv,
       parentLocation: parent.location,
@@ -461,8 +454,11 @@ export class SessionStore {
     if (prepared.entries.some(startsConversationEntry)) {
       this.runInTransaction(() => {
         this.insertSessionAndBufferedEntries(prepared.messageUsage)
+        this.blobs.bindSession(prepared.blobIds, this.sessionId)
         insertClonedToolCalls(this.db, this.sessionId, this.modelName, prepared)
       })
+    } else if (prepared.blobIds.length) {
+      this.pendingBlobIds.push(...prepared.blobIds)
     }
   }
 
@@ -557,6 +553,25 @@ export class SessionStore {
     this.saved()
   }
 
+  async materializeUpload(
+    env: ExecutionEnv,
+    file: { name: string; hostPath: string; mimeType?: string },
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const { blob, path } = await this.blobs.materializeChannelUpload(
+      env,
+      {
+        sessionId: this.sessionId,
+        name: file.name,
+        hostPath: file.hostPath,
+        mimeType: file.mimeType,
+      },
+      signal,
+    )
+    if (!blob.sessionId) this.pendingBlobIds.push(blob.id)
+    return path
+  }
+
   private insertSessionAndBufferedEntries(
     messageUsage?: ReadonlyMap<string, Parameters<typeof insertMessageRow>[4]>,
   ): void {
@@ -578,6 +593,10 @@ export class SessionStore {
       channel: this.channel,
       createdAt: this.createdAt,
     })
+    if (this.pendingBlobIds.length) {
+      this.blobs.bindSession(this.pendingBlobIds, this.sessionId)
+      this.pendingBlobIds.length = 0
+    }
     for (const entry of this.entries) {
       const extra =
         messageUsage?.get(entry.id) ?? this.pendingExtras.get(entry.id)
@@ -729,67 +748,31 @@ export class SessionStore {
   }
 
   async loadSaved(): Promise<LoadedSessionContext | undefined> {
-    const meta = loadSessionMeta(this.db, this.sessionId)
-    if (!meta.row) {
+    const loaded = loadSavedSessionFromDb(this.db, this.sessionId)
+    if (!loaded) {
       this.checked = true
       return undefined
     }
-    const rows = loadAllSessionRows(this.db, this.sessionId)
-    const entries = rows.map(rowToEntry)
-    this.seq = rows.reduce((max, r) => Math.max(max, r.seq), 0)
-
-    const location = meta.row.location_json
-      ? (JSON.parse(meta.row.location_json) as ExecutionLocation)
-      : undefined
-    if (location !== undefined) validateStoredLocation(location)
-
-    const leaf = meta.row.leaf_message_id
-    const byId = new Map(entries.map((e) => [e.id, e]))
-    const context = buildSessionContext(entries, leaf, byId)
-
-    // Restore latest assistant usage along the active branch for TokenTracker calibration (#536 #3)
-    const activeIds = new Set(
-      buildSessionPath(entries, leaf, byId).map((e) => e.id),
-    )
-    const latestAssistantUsage = computeLatestAssistantUsage(
-      rows,
-      activeIds,
-      context.messages,
-      context.ids,
-    )
-
-    this.location = location
-    this.sessionName = meta.row.name ?? undefined
-    this.modelName = meta.model
-    this.thinking = meta.thinkingLevel
-    this.archivedFlag = meta.row.archived === 1
-    this.parentSessionId = meta.row.parent_session_id ?? undefined
-    this.createdAt = meta.row.created_at
-    this.discovered = meta.discoveredTools
-    this.channel = meta.channel ?? getSessionChannel(this.db, this.sessionId)
-    this.replaceEntries(entries)
-    collectRowMetadata(
-      rows,
-      this.entryModel,
-      this.entryThinking,
-      this.entryLocations,
-    )
-    this.leafId = leaf
+    this.seq = loaded.seq
+    this.location = loaded.location
+    this.sessionName = loaded.name
+    this.modelName = loaded.model
+    this.thinking = loaded.thinkingLevel
+    this.archivedFlag = loaded.archived
+    this.parentSessionId = loaded.parentSessionId
+    this.createdAt = loaded.createdAt
+    this.discovered = loaded.discoveredTools
+    this.channel = loaded.channel
+    this.replaceEntries(loaded.entries)
+    for (const [k, v] of loaded.entryModel) this.entryModel.set(k, v)
+    for (const [k, v] of loaded.entryThinking) this.entryThinking.set(k, v)
+    for (const [k, v] of loaded.entryLocations) this.entryLocations.set(k, v)
+    this.leafId = loaded.leaf
     this.ids.clear()
-    for (const [message, id] of context.ids) this.ids.set(message, id)
-    this.producers = context.producers
+    for (const [message, id] of loaded.context.ids) this.ids.set(message, id)
+    this.producers = loaded.context.producers
     this.started = true
     this.checked = true
-
-    return {
-      ...context,
-      channel: this.channel,
-      location,
-      name: this.sessionName,
-      model: this.modelName,
-      thinkingLevel: this.thinking,
-      discoveredTools: [...this.discovered],
-      latestAssistantUsage,
-    }
+    return loaded.context
   }
 }

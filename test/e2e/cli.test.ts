@@ -57,7 +57,7 @@ test('owner environments warn on stderr when the previously effective project da
   )
   const seed = await cli(args, options)
   expect(seed.code).toBe(0)
-  expect(sessionFiles(legacy)).toHaveLength(1)
+  expect(sessionFiles(agentDir)).toHaveLength(1)
   const active = projectDataDir(agentDir, cwd)
   const settings = join(agentDir, 'config.json')
   await Bun.write(settings, JSON.stringify({ environments: {} }))
@@ -67,7 +67,7 @@ test('owner environments warn on stderr when the previously effective project da
   expect(changed.stderr).toContain(active)
   expect(changed.stderr).toMatch(/pin.*dataDir/i)
   expect(changed.stdout).not.toContain(legacy)
-  expect(sessionFiles(active)).toHaveLength(1)
+  expect(sessionFiles(agentDir)).toHaveLength(1)
   await Bun.write(
     settings,
     JSON.stringify({ environments: {}, dataDir: legacy }),
@@ -589,7 +589,7 @@ async function cli(
       code,
       cwd,
       agentDir,
-      dataDir: projectDataDir(agentDir, cwd),
+      dataDir: agentDir,
     }
   }
   const proc = Bun.spawn(command, {
@@ -616,7 +616,7 @@ async function cli(
     code,
     cwd,
     agentDir,
-    dataDir: projectDataDir(agentDir, cwd),
+    dataDir: agentDir,
   }
 }
 
@@ -2204,14 +2204,9 @@ test.concurrent('-p: SIGTERM stops a running bash command with its process group
     for (let i = 0; i < 100 && alive(pid); i++) await Bun.sleep(10)
     expect(alive(pid)).toBe(false)
     // The session was closed before exiting: the cancelled bash call is saved with its result
-    const dbs = await Array.fromAsync(
-      new Bun.Glob('projects/*/vela.db').scan({
-        cwd: home.path,
-        absolute: true,
-      }),
-    )
-    expect(dbs).toHaveLength(1)
-    const db = openDatabase({ path: dbs[0]!, readonly: true })
+    const dbPath = join(home.path, 'vela.db')
+    expect(existsSync(dbPath)).toBe(true)
+    const db = openDatabase({ path: dbPath, readonly: true })
     try {
       const dump = JSON.stringify(
         db.all('SELECT content_json FROM vela_messages ORDER BY seq'),

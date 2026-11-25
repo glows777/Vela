@@ -12,6 +12,7 @@ export interface StoreSnapshotState {
   checked: boolean
   location?: ExecutionLocation
   discovered: string[]
+  pendingBlobIds: string[]
   producers: Map<ModelMessage, string>
   ids: Map<ModelMessage, string>
   entryModel: Map<string, string>
@@ -31,6 +32,7 @@ export function captureStoreSnapshot(state: StoreSnapshotState) {
     checked: state.checked,
     location: state.location,
     discovered: [...state.discovered],
+    pendingBlobIds: [...state.pendingBlobIds],
     producers: new Map(state.producers),
     ids: new Map(state.ids),
     entryModel: new Map(state.entryModel),
@@ -53,6 +55,8 @@ export function restoreStoreSnapshot(
   state.checked = snap.checked
   state.location = snap.location
   state.discovered = snap.discovered
+  state.pendingBlobIds.length = 0
+  state.pendingBlobIds.push(...snap.pendingBlobIds)
   state.producers = snap.producers
   for (const [target, saved] of [
     [state.ids, snap.ids],

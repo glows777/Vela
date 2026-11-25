@@ -11,7 +11,6 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
-import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 
 const roots: string[] = []
 const entry = new URL('../../packages/vela/src/cli/main.ts', import.meta.url)
@@ -63,7 +62,7 @@ function verify(cwd: string) {
   expect(readFileSync(join(cwd, 'sideeffects'), 'utf8')).toBe('started\n')
   expect(existsSync(join(cwd, 'finished'))).toBe(false)
   const db = openDatabase({
-    path: join(projectDataDir(join(cwd, 'agent'), cwd), 'vela.db'),
+    path: join(cwd, 'agent', 'vela.db'),
     readonly: true,
   })
   try {
@@ -175,7 +174,7 @@ for (const mode of ['text', 'json', 'rpc']) {
 
 test('historically saved user input after an unresolved tool call is rejected without changing history or replaying effects', async () => {
   const cwd = await crash()
-  const dbPath = join(projectDataDir(join(cwd, 'agent'), cwd), 'vela.db')
+  const dbPath = join(cwd, 'agent', 'vela.db')
   const db = openDatabase({ path: dbPath })
   const countRows = () =>
     db.all<{ id: string }>(
