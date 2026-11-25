@@ -70,7 +70,7 @@ export interface CliArgs {
   noSession: boolean
   /** `--fork <id>`: start in a new session copied from this saved one (like pi) */
   fork?: string
-  /** `--export <id or .jsonl file> [output]`: write the session as HTML and exit (like pi) */
+  /** `--export <sessionId> [output]`: write the saved session as HTML and exit */
   export?: string
   /** `--approve` / `--no-approve`: trust / don't trust project config for this run, without saving */
   approve?: boolean
@@ -99,7 +99,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--system-prompt <text|file>]... [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--system-prompt <text|file>]... [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
@@ -131,7 +131,7 @@ Options:
   --session <id>                Open this session (created if missing)
   --no-session                  Keep the session in memory only, not on disk
   --fork <id>                   Start in a new session copied from a saved session
-  --export <id|file> [output]   Write a saved session (id or .jsonl file) as HTML and exit
+  --export <id> [output]        Write a saved session from vela.db as HTML and exit
   --model <provider/id>         Model to use (providers: built-in anthropic / openai / openrouter / deepseek,
                                 ~/.vela/config.json, extensions)
   --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}

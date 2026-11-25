@@ -24,7 +24,7 @@ export function preamble(systemPrompt?: string): SectionRender {
 export function toolList(): SectionRender {
   return (ctx) => {
     const lines = (ctx.activeTools ?? [])
-      .filter((tool) => tool.promptSnippet)
+      .filter((tool) => tool.exposure !== 'deferred' && tool.promptSnippet)
       .map((tool) => `- ${tool.name}: ${tool.promptSnippet}`)
     return lines.length ? lines.join('\n') : '(none)'
   }
@@ -73,8 +73,10 @@ export function rules(): SectionRender {
       lines.push(`- ${text}`)
     }
     add(FACTS_RULE)
-    for (const tool of ctx.activeTools ?? [])
+    for (const tool of ctx.activeTools ?? []) {
+      if (tool.exposure === 'deferred') continue
       for (const guideline of tool.promptGuidelines ?? []) add(guideline)
+    }
     for (const rule of STANDING_RULES) add(rule)
     return lines.join('\n')
   }

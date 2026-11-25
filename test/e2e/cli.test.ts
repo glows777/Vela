@@ -8,6 +8,7 @@ import {
 } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
@@ -618,15 +619,51 @@ async function cli(
   }
 }
 
-/** Session files saved in the data dir (each run starts a new session; the id is a timestamp + random suffix) */
+/** Session ids saved in vela.db (each run starts a new session; the id is a timestamp + random suffix) */
 function sessionFiles(dataDir: string): string[] {
+  const dbPath = join(dataDir, 'vela.db')
+  if (!existsSync(dbPath)) return []
+  const db = openDatabase({ path: dbPath, readonly: true })
   try {
-    return readdirSync(join(dataDir, 'sessions'), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => join(dataDir, 'sessions', entry.name, 'transcript.jsonl'))
-      .filter((path) => existsSync(path))
-  } catch {
-    return []
+    return db
+      .all<{ id: string }>('SELECT id FROM sessions ORDER BY created_at')
+      .map((row) => row.id)
+  } finally {
+    db.close()
+  }
+}
+
+function readSavedSession(dataDir: string, sessionId: string): string {
+  const db = openDatabase({ path: join(dataDir, 'vela.db'), readonly: true })
+  try {
+    return JSON.stringify({
+      session: db.get('SELECT * FROM sessions WHERE id = ?', sessionId),
+      messages: db.all(
+        'SELECT * FROM vela_messages WHERE session_id = ? ORDER BY seq',
+        sessionId,
+      ),
+      toolCalls: db.all(
+        'SELECT * FROM vela_tool_calls WHERE session_id = ? ORDER BY created_at',
+        sessionId,
+      ),
+    })
+  } finally {
+    db.close()
+  }
+}
+
+function readSessionParent(
+  dataDir: string,
+  sessionId: string,
+): string | null | undefined {
+  const db = openDatabase({ path: join(dataDir, 'vela.db'), readonly: true })
+  try {
+    return db.get<{ parent_session_id: string | null }>(
+      'SELECT parent_session_id FROM sessions WHERE id = ?',
+      sessionId,
+    )?.parent_session_id
+  } finally {
+    db.close()
   }
 }
 
@@ -951,59 +988,8 @@ test.concurrent('-p prints only the final answer to stdout and saves a new sessi
   expect(stdout).toBe('Hello, this is Vela (faux replay).\n')
   const files = sessionFiles(dataDir)
   expect(files).toHaveLength(1)
-  expect(files[0]).toMatch(/(^|\/)\d{8}-\d{6}-[0-9a-f]{4}\/transcript\.jsonl$/)
-  expect(await Bun.file(files[0]!).text()).toContain('faux replay')
-})
-
-test.concurrent('-p reports a session save failure on stderr while keeping the answer on stdout', async () => {
-  // Break the real session file only after the new-session guard, using an explicit test extension.
-  // A directory in place of the file fails on every OS/user, including root (unlike chmod).
-  const { stdout, stderr, code } = await cli(
-    ['-e', './fail-save.ts', '-p', 'hello'],
-    {
-      model: `faux:${scenario('hello')}`,
-      files: {
-        'fail-save.ts': `
-        import { mkdirSync, rmSync } from 'node:fs'
-        import { dirname } from 'node:path'
-        export default (vela) => vela.on('before_provider_request', (_event, ctx) => {
-          const { path } = ctx.session.persistence
-          mkdirSync(dirname(path), { recursive: true })
-          rmSync(path, { force: true })
-          mkdirSync(path)
-        })
-      `,
-      },
-    },
-  )
-  expect(code).toBe(0)
-  expect(stdout).toBe('Hello, this is Vela (faux replay).\n')
-  expect(stderr).toContain('Could not save session')
-  expect(stderr).toContain('EISDIR')
-})
-
-test.concurrent('-p reports session save failures during final shutdown on stderr', async () => {
-  const { stdout, stderr, code } = await cli(
-    ['-e', './fail-shutdown-save.ts', '-p', 'hello'],
-    {
-      model: `faux:${scenario('hello')}`,
-      files: {
-        'fail-shutdown-save.ts': `
-          import { mkdirSync, rmSync } from 'node:fs'
-          export default (vela) => vela.on('session_shutdown', (_event, ctx) => {
-            const { path } = ctx.session.persistence
-            rmSync(path, { force: true })
-            mkdirSync(path)
-            ctx.session.setName('shutdown state')
-          })
-        `,
-      },
-    },
-  )
-  expect(code).toBe(0)
-  expect(stdout).toBe('Hello, this is Vela (faux replay).\n')
-  expect(stderr).toContain('Could not save session')
-  expect(stderr).toContain('EISDIR')
+  expect(files[0]).toMatch(/^\d{8}-\d{6}-[0-9a-f]{4}$/)
+  expect(readSavedSession(dataDir, files[0]!)).toContain('faux replay')
 })
 
 test.concurrent('-p executes tools from the scenario in the process working directory', async () => {
@@ -1022,8 +1008,11 @@ test.concurrent('piped stdin is prepended to the prompt (print mode without -p)'
   })
   expect(code).toBe(0)
   expect(stdout).toBe('Hello, this is Vela (faux replay).\n')
-  const saved = await Bun.file(sessionFiles(dataDir)[0]!).text()
-  expect(saved).toContain('some piped input\\n\\nsummarize this')
+  const saved = JSON.parse(readSavedSession(dataDir, sessionFiles(dataDir)[0]!))
+  const textDump = saved.messages
+    .map((m: { content_json: string }) => m.content_json)
+    .join('\n')
+  expect(textDump).toContain('some piped input\\n\\nsummarize this')
 })
 
 test.concurrent('--mode json writes a session header and one JSON event per line', async () => {
@@ -1105,7 +1094,7 @@ for (const [mode, command, chunkDelayMs] of [
         ).toHaveLength(1)
     }
     expect(await Bun.file(join(dir.path, 'finished.txt')).exists()).toBe(true)
-    expect(await Bun.file(sessionFiles(dataDir)[0]!).text()).toContain(
+    expect(readSavedSession(dataDir, sessionFiles(dataDir)[0]!)).toContain(
       'Background delivery answer',
     )
   })
@@ -1266,7 +1255,7 @@ test.concurrent('each run starts a new session; -c continues the most recent one
   expect(third.code).toBe(0)
   const files = sessionFiles(first.dataDir)
   expect(files).toHaveLength(2)
-  const contents = await Promise.all(files.map((f) => Bun.file(f).text()))
+  const contents = files.map((id) => readSavedSession(first.dataDir, id))
   expect(
     contents.some(
       (c) => c.includes('first message') && !c.includes('second message'),
@@ -1458,9 +1447,7 @@ test.concurrent('--session opens a named session id; -r needs interactive mode',
     model: `faux:${scenario('hello')}`,
   })
   expect(first.code).toBe(0)
-  expect(sessionFiles(first.dataDir).map((f) => f.split('/').at(-2))).toEqual([
-    'work',
-  ])
+  expect(sessionFiles(first.dataDir)).toEqual(['work'])
   const resume = await cli(['-p', 'hello', '-r'], {
     model: `faux:${scenario('hello')}`,
   })
@@ -1482,21 +1469,22 @@ test.concurrent('--fork copies a saved session into a new one; --export writes a
 
   const forked = await cli(['-p', 'again', '--fork', 'work'], opts)
   expect(forked.code).toBe(0)
-  const files = sessionFiles(first.dataDir).filter(
-    (f) => f.split('/').at(-2) !== 'work',
-  )
+  const files = sessionFiles(first.dataDir).filter((id) => id !== 'work')
   expect(files).toHaveLength(1)
-  const lines = readFileSync(files[0]!, 'utf8').trim().split('\n')
-  expect(JSON.parse(lines[0]!)).toMatchObject({ parentSession: 'work' })
-  expect(lines.join('\n')).toContain('"hello"')
-  expect(lines.join('\n')).toContain('"again"')
+  expect(readSessionParent(first.dataDir, files[0]!)).toBe('work')
+  const savedDump = JSON.parse(readSavedSession(first.dataDir, files[0]!))
+  const textDump = savedDump.messages
+    .map((m: { content_json: string }) => m.content_json)
+    .join('\n')
+  expect(textDump).toContain('"hello"')
+  expect(textDump).toContain('"again"')
 
   const byId = await cli(['--export', 'work', 'work.html'], opts)
   expect(byId.code).toBe(0)
   expect(byId.stderr).toContain('Exported to')
   expect(readFileSync(join(first.cwd, 'work.html'), 'utf8')).toContain('hello')
-  const byFile = await cli(['--export', files[0]!, 'fork.html'], opts)
-  expect(byFile.code).toBe(0)
+  const byFork = await cli(['--export', files[0]!, 'fork.html'], opts)
+  expect(byFork.code).toBe(0)
   expect(readFileSync(join(first.cwd, 'fork.html'), 'utf8')).toContain('again')
 
   const missing = await cli(['--fork', 'nope', '-p', 'x'], opts)
@@ -1926,7 +1914,7 @@ test.concurrent.if(hasScript)(
     expect(stdout).toContain('Hello, this is Vela (faux replay).')
     const files = sessionFiles(dataDir)
     expect(files).toHaveLength(1)
-    expect(await Bun.file(files[0]!).text()).toContain('hello')
+    expect(readSavedSession(dataDir, files[0]!)).toContain('hello')
   },
 )
 
@@ -2223,16 +2211,23 @@ test.concurrent('-p: SIGTERM stops a running bash command with its process group
     for (let i = 0; i < 100 && alive(pid); i++) await Bun.sleep(10)
     expect(alive(pid)).toBe(false)
     // The session was closed before exiting: the cancelled bash call is saved with its result
-    const saved = await Array.fromAsync(
-      new Bun.Glob('projects/*/sessions/*/transcript.jsonl').scan({
+    const dbs = await Array.fromAsync(
+      new Bun.Glob('projects/*/vela.db').scan({
         cwd: home.path,
         absolute: true,
       }),
     )
-    expect(saved).toHaveLength(1)
-    const records = await Bun.file(saved[0]!).text()
-    expect(records).toContain('run it')
-    expect(records).toContain('"tool_result"')
+    expect(dbs).toHaveLength(1)
+    const db = openDatabase({ path: dbs[0]!, readonly: true })
+    try {
+      const dump = JSON.stringify(
+        db.all('SELECT content_json FROM vela_messages ORDER BY seq'),
+      )
+      expect(dump).toContain('run it')
+      expect(dump).toContain('tool_result')
+    } finally {
+      db.close()
+    }
   } finally {
     proc.kill('SIGKILL')
     // Don't leave the command running if the assertion failed

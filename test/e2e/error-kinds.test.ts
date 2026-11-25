@@ -288,7 +288,7 @@ for (const followUpFails of [false, true]) {
       session.subscribe((event) => {
         if (event.type === 'agent_start' && !queued) {
           queued = true
-          session.followUp('Queued follow-up')
+          session.steer('Queued steer')
         }
       })
       let output: string

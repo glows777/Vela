@@ -157,6 +157,9 @@ test('Steer joins the active run with both named questions and sends one combine
     f.release()
   }
   await until(() => f.sent.length >= 1)
+  const sessionEntries = JSON.stringify(
+    f.t.vela.session('lark-oc_group').getEntries(),
+  )
   await f.t.vela.dispose()
   expect(f.sent).toEqual([
     { messageId: 'first', text: 'Alice and Bob: use blue' },
@@ -171,9 +174,7 @@ test('Steer joins the active run with both named questions and sends one combine
     `${at('3000')}Alice: original question`,
     `${at('5000')}Bob: use blue`,
   ])
-  expect(
-    await f.t.readData('sessions/lark-oc_group/transcript.jsonl'),
-  ).toContain('Bob: use blue')
+  expect(sessionEntries).toContain('Bob: use blue')
 })
 
 test('Stop aborts the active run, visibly confirms on the second message, and does not run that message later', async () => {
@@ -439,7 +440,6 @@ test('Stop discards an accepted steer from the cancelled run without leaking it 
     await until(() => f.sent.length === 1)
     expect(f.t.vela.session('lark-oc_group').queue).toEqual({
       steering: [],
-      followUp: [],
     })
     const independent = larkEvent({
       message_id: 'independent',
@@ -530,7 +530,6 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
     )
     expect(t.vela.session('lark-oc_group').queue).toEqual({
       steering: [],
-      followUp: [],
     })
     expect(t.model.calls).toHaveLength(1)
     expect(f.sent).toEqual([

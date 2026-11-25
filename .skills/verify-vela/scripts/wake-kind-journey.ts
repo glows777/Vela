@@ -5,7 +5,7 @@
 // Run from a verify-vela run:  $H exec $RUN wake bun $REPO/.skills/verify-vela/scripts/wake-kind-journey.ts
 // It prints one line per check, marks failed checks FAIL and exits 1 if any failed.
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import {
@@ -13,6 +13,7 @@ import {
   type FauxRequest,
   type FauxResponse,
 } from '@glows777/vela/testing'
+import { openDatabase } from '../../../packages/vela/src/db/sqlite.ts'
 import { lark } from '../../../packages/vela/src/lark/index.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'
@@ -121,27 +122,36 @@ check(
   !model.calls[3]!.lastUserText.includes(UNTAGGED),
 )
 
-const ledgerPath = join('.vela-data', 'usage', 'requests.jsonl')
-if (!existsSync(ledgerPath)) check('usage ledger written', false)
+const dbPath = join('.vela-data', 'vela.db')
+if (!existsSync(dbPath)) check('usage ledger written', false)
 else {
-  const wakes = readFileSync(ledgerPath, 'utf8')
-    .trim()
-    .split('\n')
-    .slice(-4)
-    .map((line) => JSON.parse(line))
-  for (const wake of wakes)
-    console.log(
-      `wake: input=${wake.inputTokens} cacheRead=${wake.cacheReadTokens} cacheWrite=${wake.cacheWriteTokens}`,
+  const db = openDatabase({ path: dbPath, readonly: true })
+  const wakes = db
+    .all<{
+      inputTokens: number
+      cacheReadTokens: number
+      cacheWriteTokens: number
+    }>(
+      'SELECT input_tokens AS inputTokens, cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens FROM usage_records ORDER BY rowid DESC LIMIT 4',
     )
-  check(
-    'every wake after the first reads the previous prefix',
-    wakes
-      .slice(1)
-      .every(
-        (wake, index) =>
-          wake.cacheReadTokens >= wakes[index]!.cacheWriteTokens - 1,
-      ),
-  )
+    .reverse()
+  db.close()
+  if (!wakes.length) check('usage ledger written', false)
+  else {
+    for (const wake of wakes)
+      console.log(
+        `wake: input=${wake.inputTokens} cacheRead=${wake.cacheReadTokens} cacheWrite=${wake.cacheWriteTokens}`,
+      )
+    check(
+      'every wake after the first reads the previous prefix',
+      wakes
+        .slice(1)
+        .every(
+          (wake, index) =>
+            wake.cacheReadTokens >= wakes[index]!.cacheWriteTokens - 1,
+        ),
+    )
+  }
 }
 
 await vela.dispose()

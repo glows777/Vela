@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { openDatabase, type VelaDatabase } from '../db/index.ts'
 import type {
   AuthInteraction,
   CredentialStore,
@@ -38,7 +39,12 @@ import {
   loadPromptTemplates,
   type PromptTemplate,
 } from './prompt/templates.ts'
-import { setSavedSessionArchived } from './session/index.ts'
+import {
+  listSessionSummariesFromDb,
+  searchSessionsInDb,
+  setSavedSessionArchivedInDb,
+} from './session/db-store.ts'
+import type { SessionSummary } from './session/entries.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
 import { ProjectConfig } from './session/project-config.ts'
@@ -46,15 +52,12 @@ import { ProjectExtensions } from './session/project-extensions.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
 import { WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
-import { type SessionSearchHit, searchSessionText } from './session/search.ts'
+import type { SessionSearchHit } from './session/search.ts'
 import {
-  fileSessionStorage,
-  memorySessionStorage,
-  type SessionStorage,
-  type SessionSummary,
-} from './session/storage.ts'
-import { ToolResultStore } from './session/tool-results.ts'
-import { loadWorkspaceInventory, workspaceKey } from './session/workspace.ts'
+  disposeVelaRuntime,
+  loadWorkspaceInventory,
+  workspaceKey,
+} from './session/workspace.ts'
 import { expandEnvironmentSkill } from './skills/environment-skills.ts'
 import { SkillLoader } from './skills/loader.ts'
 import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
@@ -104,8 +107,10 @@ export interface VelaOptions {
    * The CLI uses `~/.vela/projects/<encoded cwd>` (see loadConfig).
    */
   dataDir?: string
-  /** Where session history is stored; defaults to `<dataDir>/sessions/<id>/transcript.jsonl` with dataDir, otherwise memory */
-  sessionStorage?: SessionStorage
+  /** Pre-opened SQLite database to share across sessions (defaults to `<dataDir>/vela.db` or `:memory:` when ephemeral). */
+  db?: VelaDatabase
+  /** Force in-memory SQLite session persistence even when `dataDir` is set (`--no-session`). */
+  ephemeralSessions?: boolean
   /**
    * Skill directories or `.md` files (Agent Skills format, see docs/skills.md), in priority order: the first skill
    * with a name wins. Default `<cwd>/.vela/skills`, `<cwd>/.skills`. The model sees each skill's name, description
@@ -263,17 +268,29 @@ export function velaInternals(vela: Vela): VelaInternals {
 
 /** Assembles one host with per-session history, execution and location-bound project capabilities. */
 export function createVela(options: VelaOptions = {}): Vela {
+  if (
+    options.ephemeralSessions === true &&
+    options.db &&
+    options.db.path !== ':memory:'
+  ) {
+    throw new Error(
+      'Cannot combine ephemeralSessions: true with a persistent db',
+    )
+  }
   const cwd = resolve(options.cwd ?? process.cwd())
   // Without dataDir, use a temp dir (long tool output, tool history, extension data) deleted on dispose
   const ephemeral = options.dataDir === undefined
+  const ephemeralSessions =
+    options.ephemeralSessions === true || (ephemeral && !options.db)
   const dataDir = ephemeral
     ? mkdtempSync(join(tmpdir(), 'vela-'))
     : resolve(cwd, options.dataDir as string)
-  const sessionStorage =
-    options.sessionStorage ??
-    (ephemeral
-      ? memorySessionStorage()
-      : fileSessionStorage(join(dataDir, 'sessions'), options.logger))
+  const ownsDb = !options.db
+  const db =
+    options.db ??
+    openDatabase({
+      path: ephemeralSessions ? ':memory:' : join(dataDir, 'vela.db'),
+    })
   let { model } = options
   let defaultsChanged = false
   let defaultThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL
@@ -299,7 +316,7 @@ export function createVela(options: VelaOptions = {}): Vela {
   // The Vela-level registry only holds shared tool definitions; tools run in each session's forked registry.
   // Its own results dir starts with `.`, so it never collides with a session id.
   const registry = new ToolRegistry(
-    new ToolResultStore(join(dataDir, 'sessions', '.shared', 'tool-results')),
+    join(dataDir, 'sessions', '.shared', 'tool-results'),
   )
   registry.setLogger(logger)
   const resolveBinary = createBinaryResolver({
@@ -405,8 +422,13 @@ export function createVela(options: VelaOptions = {}): Vela {
         limitOverrides: options.limits ?? {},
         logger,
         dataDir,
+        db,
+        ephemeral: ephemeralSessions,
         temporaryDataDir: ephemeral,
-        sessionStorage,
+        uploadsRoot: (sessionId) =>
+          join(dataDir, 'sessions', sessionId, 'uploads'),
+        spillRoot: (sessionId) =>
+          join(dataDir, 'sessions', sessionId, 'tool-results'),
         cwd,
         shellPath: options.shellPath,
         registry,
@@ -509,7 +531,6 @@ export function createVela(options: VelaOptions = {}): Vela {
     location = session.location,
     signal?: AbortSignal,
   ) => {
-    session.store.assertLocationKnown()
     const key = workspaceKey(session.id, location)
     const local = location.environment === 'local'
     const target = { sessionId: session.id, location }
@@ -521,7 +542,9 @@ export function createVela(options: VelaOptions = {}): Vela {
         ? createSessionLocalExecutionEnv({
             cwd: location.cwd,
             shellPath: options.shellPath,
-            tempRoot: session.registry.results.dir,
+            tempRoot:
+              session.registry.spillDir ??
+              join(dataDir, 'sessions', session.id, 'tool-results'),
           })
         : undefined
     signal?.throwIfAborted()
@@ -547,11 +570,13 @@ export function createVela(options: VelaOptions = {}): Vela {
         env = createSessionLocalExecutionEnv({
           cwd: location.cwd,
           shellPath,
-          tempRoot: session.registry.results.dir,
+          tempRoot:
+            session.registry.spillDir ??
+            join(dataDir, 'sessions', session.id, 'tool-results'),
         })
     }
-    return local && resolver
-      ? scopeLocalResults(env, session.registry.results.dir)
+    return local && resolver && session.registry.spillDir
+      ? scopeLocalResults(env, session.registry.spillDir)
       : env
   }
 
@@ -560,7 +585,6 @@ export function createVela(options: VelaOptions = {}): Vela {
     signal?: AbortSignal,
     target = session.location,
   ) => {
-    session.store.assertLocationKnown()
     if (sessions.get(session.id) !== session)
       throw new Error('Session is closed')
     const key = workspaceKey(session.id, target)
@@ -699,17 +723,16 @@ export function createVela(options: VelaOptions = {}): Vela {
     logout: (provider, options) => models.logout(provider, options),
     session,
     sessions: () => [...sessions.values()],
-    listSessions: async (listOptions) => {
-      const list = (await sessionStorage.list?.()) ?? []
-      return listOptions?.includeArchived
-        ? list
-        : list.filter((summary) => !summary.archived)
-    },
+    listSessions: async (listOptions) =>
+      ephemeralSessions
+        ? []
+        : listSessionSummariesFromDb(db, listOptions?.includeArchived ?? false),
     setSessionArchived: async (id, archived) => {
       assertSessionId(id)
       const open = sessions.get(id)
       if (open) return open.store.setArchived(archived)
-      if (!(await setSavedSessionArchived(sessionStorage, id, archived))) return
+      if (ephemeralSessions || !setSavedSessionArchivedInDb(db, id, archived))
+        return
       try {
         options.onSessionSaved?.(id)
       } catch (error) {
@@ -718,17 +741,14 @@ export function createVela(options: VelaOptions = {}): Vela {
         )
       }
     },
-    searchSessions: async (query, searchOptions) => {
-      const text = query.trim()
-      if (!text) return []
-      const hits: SessionSearchHit[] = []
-      for (const summary of await vela.listSessions(searchOptions)) {
-        const entries = await sessionStorage.load(summary.id)
-        const match = entries && searchSessionText(entries, text)
-        if (match) hits.push({ id: summary.id, match })
-      }
-      return hits
-    },
+    searchSessions: async (query, searchOptions) =>
+      ephemeralSessions
+        ? []
+        : searchSessionsInDb(
+            db,
+            query,
+            searchOptions?.includeArchived ?? false,
+          ),
     subscribe(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -740,40 +760,17 @@ export function createVela(options: VelaOptions = {}): Vela {
       projects.select(id, sessions, activeKey(id ?? 'default')).commands(),
     dispose() {
       disposed = true
-      disposing ??= (async () => {
-        // A factory may still be registering resources. Initialization failures remain on ready().
-        await runner.settled
-        const errors: unknown[] = []
-        try {
-          await options.beforeDispose?.()
-        } catch (error) {
-          errors.push(error)
-        }
-        // Do not tear down shared dependencies until every session-close attempt settles.
-        // Defer each call so a synchronous close() throw becomes a rejection, not an interrupted map.
-        const closed = await Promise.allSettled(
-          [...sessions.values()].map((s) =>
-            Promise.resolve().then(() => s.close()),
-          ),
-        )
-        for (const result of closed)
-          if (result.status === 'rejected') errors.push(result.reason)
-        try {
-          await runner.shutdown()
-        } catch (error) {
-          errors.push(error)
-        }
-        listeners.clear()
-        if (ephemeral) {
-          try {
-            rmSync(dataDir, { recursive: true, force: true })
-          } catch (error) {
-            errors.push(error)
-          }
-        }
-        if (errors.length)
-          throw new AggregateError(errors, 'Vela disposal failed')
-      })()
+      disposing ??= disposeVelaRuntime({
+        settled: runner.settled,
+        shutdownRunner: () => runner.shutdown(),
+        sessions: sessions.values(),
+        listeners,
+        db,
+        ownsDb,
+        ephemeral,
+        dataDir,
+        beforeDispose: options.beforeDispose,
+      })
       return disposing
     },
   }

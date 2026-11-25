@@ -1,18 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
-import {
-  memorySessionStorage,
-  type SessionStorage,
-  type VelaEvent,
-} from '../../packages/vela/src/driver/index.ts'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
+import type { VelaEvent } from '../../packages/vela/src/driver/index.ts'
 import { createVela } from '../../packages/vela/src/index.ts'
 import {
   createFauxModel,
@@ -53,12 +44,27 @@ test('two sessions run at the same time with separate history, files, locks and 
   expect(a.messages.map((m) => m.role)).toEqual(['user'])
   expect(a.getEntries().at(-1)).toMatchObject({ stopReason: 'aborted' })
 
-  expect(await t.readData('sessions/b/transcript.jsonl')).toContain(
-    'answer for b',
-  )
-  expect(await t.readData('sessions/a/transcript.jsonl')).not.toContain(
-    'answer for b',
-  )
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    expect(
+      JSON.stringify(
+        db.all<{ content_json: string }>(
+          'SELECT content_json FROM vela_messages WHERE session_id = ?',
+          'b',
+        ),
+      ),
+    ).toContain('answer for b')
+    expect(
+      JSON.stringify(
+        db.all<{ content_json: string }>(
+          'SELECT content_json FROM vela_messages WHERE session_id = ?',
+          'a',
+        ),
+      ),
+    ).not.toContain('answer for b')
+  } finally {
+    db.close()
+  }
   expect(b.usage.totals.steps).toBe(1)
   expect(a.usage.totals.steps).toBe(0)
   expect(t.session.messages).toEqual([])
@@ -226,9 +232,19 @@ test('close() stops a running prompt, saves it and removes the session', async (
   await s.close()
   await expect(running).rejects.toThrow()
   expect(t.vela.sessions().map((x) => x.id)).toEqual(['default'])
-  expect(await t.readData('sessions/closing/transcript.jsonl')).toContain(
-    'keep thinking',
-  )
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    expect(
+      JSON.stringify(
+        db.all<{ content_json: string }>(
+          'SELECT content_json FROM vela_messages WHERE session_id = ?',
+          'closing',
+        ),
+      ),
+    ).toContain('keep thinking')
+  } finally {
+    db.close()
+  }
   await expect(s.prompt('again')).rejects.toThrow('is closed')
   // Reopening the same id gives a new session that can resume from disk
   const reopened = t.vela.session('closing')
@@ -279,20 +295,30 @@ test('tool calls from sessions running at the same time are recorded in their ow
 
   await Promise.all([a.prompt('a'), b.prompt('b')])
 
-  const recorded = async (id: string) => {
-    let text = ''
-    for await (const file of new Bun.Glob(`sessions/${id}/**/*`).scan({
-      cwd: t.vela.dataDir,
-    }))
-      text += await t.readData(file)
-    return text
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const recorded = (id: string) =>
+      JSON.stringify(
+        db.all<{ content_json: string }>(
+          'SELECT content_json FROM vela_messages WHERE session_id = ?',
+          id,
+        ),
+      ) +
+      JSON.stringify(
+        db.all<{ result_json: string | null }>(
+          'SELECT result_json FROM vela_tool_calls WHERE session_id = ?',
+          id,
+        ),
+      )
+    const inA = recorded('a')
+    const inB = recorded('b')
+    expect(inA).toContain('AAA')
+    expect(inA).not.toContain('BBB')
+    expect(inB).toContain('BBB')
+    expect(inB).not.toContain('AAA')
+  } finally {
+    db.close()
   }
-  const inA = await recorded('a')
-  const inB = await recorded('b')
-  expect(inA).toContain('AAA')
-  expect(inA).not.toContain('BBB')
-  expect(inB).toContain('BBB')
-  expect(inB).not.toContain('AAA')
 })
 
 test('saved sessions are listed newest first with name, size and first message', async () => {
@@ -317,87 +343,6 @@ test('saved sessions are listed newest first with name, size and first message',
   const again = resumed.vela.session('newer')
   expect(await again.resume()).toBe(true)
   expect(again.name).toBe('Refactor discussion')
-})
-
-test('a session in the 0.5.0 flat layout lists, resumes and is converted on open', async () => {
-  const first = createTestVela({
-    responses: [
-      fauxToolCall('bash', { command: 'echo legacy' }),
-      fauxText('saved'),
-    ],
-  })
-  await first.run('Run the legacy command')
-  // Seed the on-disk output a 0.5.0 install wrote even for a short command.
-  mkdirSync(first.session.registry.results.dir, { recursive: true })
-  const path = join(first.session.registry.results.dir, 'legacy-output.txt')
-  writeFileSync(path, 'legacy\n')
-  const legacy = {
-    kind: 'vela-tool-result',
-    path,
-    indexPath: first.session.registry.results.indexPath,
-    bytes: 7,
-    preview: 'legacy\n',
-    read: 'Only a preview is shown. Use read to read more.',
-  }
-  await first.cleanup({ keepDir: true })
-
-  // Rewrite the tool result and put the session back in the 0.5.0 flat layout
-  const flat = first.dataPath('sessions/default.jsonl')
-  const transcript = first.dataPath('sessions/default/transcript.jsonl')
-  const entries = readFileSync(
-    existsSync(transcript) ? transcript : flat,
-    'utf8',
-  )
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  entries.find(
-    (entry) => entry.type === 'message' && entry.message.role === 'tool',
-  ).message.content[0].output = { type: 'json', value: legacy }
-  writeFileSync(
-    flat,
-    `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
-  )
-  rmSync(transcript, { force: true })
-
-  const second = createTestVela({
-    cwd: first.cwd,
-    responses: [
-      (req) => {
-        const output = req.prompt
-          .flatMap((message) =>
-            message.role === 'tool' ? message.content : [],
-          )
-          .find((part) => part.type === 'tool-result')!.output
-        expect(output).toEqual({ type: 'text', value: 'legacy\n' })
-        return fauxText('continued')
-      },
-    ],
-  })
-  expect((await second.vela.listSessions()).map((s) => s.id)).toContain(
-    'default',
-  )
-  expect(await second.session.resume()).toBe(true)
-  expect(readFileSync(legacy.path, 'utf8')).toBe('legacy\n')
-  await second.run('Continue the legacy session')
-  expect(second.lastAssistantText()).toBe('continued')
-
-  const converted = readFileSync(transcript, 'utf8')
-  expect(converted).toContain('Run the legacy command')
-  expect(converted).toContain('Continue the legacy session')
-  expect(existsSync(flat)).toBe(false)
-  await second.cleanup({ keepDir: true })
-
-  // Resuming again reads the converted file and leaves it alone
-  const third = createTestVela({
-    cwd: first.cwd,
-    responses: [fauxText('again')],
-  })
-  expect(await third.session.resume()).toBe(true)
-  expect(readFileSync(transcript, 'utf8')).toBe(converted)
-  await third.run('Ask once more')
-  expect(third.lastAssistantText()).toBe('again')
-  expect(readFileSync(transcript, 'utf8')).toContain('Ask once more')
 })
 
 test('session summaries carry the working directory and channel', async () => {
@@ -500,33 +445,34 @@ test('searching saved sessions returns an id and a short user or assistant match
 })
 
 test('archiving retries a write that failed before it resolves', async () => {
-  const memory = memorySessionStorage()
-  let failing = false
-  const storage: SessionStorage = {
-    ...memory,
-    append: async (id, entries) => {
-      if (failing) throw new Error('disk full')
-      await memory.append(id, entries)
-    },
-  }
-  const t = createTestVela({
-    responses: [fauxText('one')],
-    sessionStorage: storage,
+  const db = openDatabase({ path: ':memory:' })
+  const vela = createVela({
+    db,
+    model: createFauxModel({ responses: [fauxText('one')] }),
   })
-  await t.vela.session('s').prompt('one')
+  try {
+    await vela.session('s').prompt('one')
 
-  failing = true
-  await expect(t.vela.setSessionArchived('s', true)).rejects.toThrow(
-    'disk full',
-  )
-  failing = false
-  // The retry flushes the entry the failed write left behind instead of resolving early
-  await t.vela.setSessionArchived('s', true)
-  expect(
-    (await t.vela.listSessions({ includeArchived: true })).find(
-      (summary) => summary.id === 's',
-    )?.archived,
-  ).toBe(true)
+    db.exec(`
+      CREATE TRIGGER fail_archive BEFORE UPDATE OF archived ON sessions
+      BEGIN
+        SELECT RAISE(ABORT, 'disk full');
+      END;
+    `)
+    await expect(vela.setSessionArchived('s', true)).rejects.toThrow(
+      'disk full',
+    )
+    db.exec('DROP TRIGGER fail_archive;')
+    await vela.setSessionArchived('s', true)
+    expect(
+      (await vela.listSessions({ includeArchived: true })).find(
+        (summary) => summary.id === 's',
+      )?.archived,
+    ).toBe(true)
+  } finally {
+    await vela.dispose()
+    db.close()
+  }
 })
 
 test('a first channel binding after the session was written reaches the summary', async () => {
@@ -580,16 +526,18 @@ test('archiving a session that is not open still reports the save to the host', 
   }
 })
 
-const channelRecords = (text: string) =>
-  text
-    .split('\n')
-    .filter(Boolean)
-    .flatMap((line) => {
-      const entry = JSON.parse(line) as { type?: string; channel?: string }
-      if (entry.type !== 'session' && entry.type !== 'session_channel')
-        return []
-      return [`${entry.type}:${entry.channel ?? ''}`]
-    })
+const channelRecords = (dataDir: string, sessionId: string) => {
+  const db = openDatabase({ path: join(dataDir, 'vela.db'), readonly: true })
+  try {
+    const row = db.get<{ value_json: string }>(
+      'SELECT value_json FROM kv_meta WHERE key = ?',
+      `legacy_session_channel:${sessionId}`,
+    )
+    return row ? [`session:${JSON.parse(row.value_json) as string}`] : []
+  } finally {
+    db.close()
+  }
+}
 
 const expectRoutingConflict = (run: () => void) => {
   let error: unknown
@@ -624,9 +572,7 @@ test('a header channel rejects a different bind after resume', async () => {
     (await second.vela.listSessions()).find((row) => row.id === 'chat')
       ?.channel,
   ).toBe('lark')
-  expect(
-    channelRecords(await second.readData('sessions/chat/transcript.jsonl')),
-  ).toEqual(['session:lark'])
+  expect(channelRecords(second.dataDir, 'chat')).toEqual(['session:lark'])
 })
 
 test('a late channel binding rejects a different bind after resume', async () => {
@@ -652,9 +598,7 @@ test('a late channel binding rejects a different bind after resume', async () =>
     (await second.vela.listSessions()).find((row) => row.id === 'late')
       ?.channel,
   ).toBe('lark')
-  expect(
-    channelRecords(await second.readData('sessions/late/transcript.jsonl')),
-  ).toEqual(['session:', 'session_channel:lark'])
+  expect(channelRecords(second.dataDir, 'late')).toEqual(['session:lark'])
 })
 
 test('resuming and supplying the saved channel again does not append another entry', async () => {
@@ -678,18 +622,14 @@ test('resuming and supplying the saved channel again does not append another ent
   expect(second.vela.session('header', { channel: 'lark' })).toBe(header)
   expect(header.channel).toBe('lark')
   await header.prompt('same channel')
-  expect(
-    channelRecords(await second.readData('sessions/header/transcript.jsonl')),
-  ).toEqual(['session:lark'])
+  expect(channelRecords(second.dataDir, 'header')).toEqual(['session:lark'])
 
   const rebound = second.vela.session('late')
   expect(await rebound.resume()).toBe(true)
   expect(second.vela.session('late', { channel: 'lark' })).toBe(rebound)
   expect(rebound.channel).toBe('lark')
   await rebound.prompt('same late channel')
-  expect(
-    channelRecords(await second.readData('sessions/late/transcript.jsonl')),
-  ).toEqual(['session:', 'session_channel:lark'])
+  expect(channelRecords(second.dataDir, 'late')).toEqual(['session:lark'])
 })
 
 test('opening with a different channel and then resuming is a routing conflict', async () => {
@@ -723,9 +663,7 @@ test('opening with a different channel and then resuming is a routing conflict',
     (await second.vela.listSessions()).find((row) => row.id === 'chat')
       ?.channel,
   ).toBe('lark')
-  expect(
-    channelRecords(await second.readData('sessions/chat/transcript.jsonl')),
-  ).toEqual(['session:lark'])
+  expect(channelRecords(second.dataDir, 'chat')).toEqual(['session:lark'])
 
   const rebound = second.vela.session('late', { channel: 'telegram' })
   let lateError: unknown
@@ -736,7 +674,5 @@ test('opening with a different channel and then resuming is a routing conflict',
   }
   expect((lateError as Error).name).toBe('SessionRoutingConflictError')
   expect(rebound.channel).toBe('lark')
-  expect(
-    channelRecords(await second.readData('sessions/late/transcript.jsonl')),
-  ).toEqual(['session:', 'session_channel:lark'])
+  expect(channelRecords(second.dataDir, 'late')).toEqual(['session:lark'])
 })

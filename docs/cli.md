@@ -29,7 +29,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--session <id>` | Open the session with this id, creating it if it does not exist. Ids use letters, digits, `.`, `_` and `-`, do not start with `.`, and are at most 128 characters; an invalid id is a usage error (exit code 2). |
 | `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Tool call history, usage records and long tool output are not written to the data directory (tool history and long output use a temporary directory removed when the session closes). Memory and the knowledge base are still written. |
 | `--fork <id>` | Copy the saved session `<id>` into a new session (with a new id) and start there, like pi. The original is not changed. |
-| `--export <id or file> [output]` | Write a saved session (by id, or a session `.jsonl` file) as HTML and exit, like pi. `output` defaults to `vela-session-<id>…html` in the current folder. |
+| `--export <id> [output]` | Write a saved session from `vela.db` (by id) as HTML and exit, like pi. `output` defaults to `vela-session-<id>…html` in the current folder. |
 | `--model <provider/id>` | Use this model. See [Models](models.md). |
 | `--thinking <level>` | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. |
 | `-e`, `--extension <path>` | Load an extension file or directory, or `builtin:<name>`. Repeatable. Relative paths resolve from the current folder. |
@@ -133,7 +133,7 @@ The fullscreen screen has, from top to bottom: a header with the CLI version, th
 
 The header, editor and footer stay in place while the transcript scrolls. The transcript follows streamed output while you are at the bottom. If you scroll up, output continues but the viewport stays at your reading position, and Vela shows `↓ New output · scroll to bottom`. Scroll back to the bottom or press Ctrl+End to jump to the latest output and resume following it.
 
-Text you send while the agent is running is a steering message: it is inserted after the current step. Alt+Enter queues a follow-up instead, which runs after the task finishes. Slash commands run immediately even while the agent is running.
+Text you send while the agent is running is a steering message: it is inserted after the current tool call. Slash commands run immediately even while the agent is running.
 
 `!command` runs a shell command yourself, like pi: the output streams into a green block, and the command and its output go to the model as part of your next message. `!!command` runs it without sending it to the model (the block is dim). Both are saved in the session and work while the agent runs (the result is recorded when the run ends, so it never lands between a tool call and its result). Esc cancels the command. These commands don't go through tool selection checks or hooks: they are yours. The editor border turns green while the input starts with `!`. RPC clients have the same through the `bash` command.
 
@@ -145,8 +145,7 @@ Vela's own keys:
 
 | Key | Action |
 |---|---|
-| Enter | Send. While running: steer (insert after the current step). |
-| Alt+Enter | While running: queue a follow-up for after the task. When idle: send. |
+| Enter | Send. While running: steer (insert after the current tool call). |
 | Ctrl+V (Windows: Alt+V) | Paste clipboard files as their original paths, an image as a temporary file path for the model to read with `read`, or clipboard text. |
 | Alt+Up | Move queued messages back into the editor. |
 | Esc | Cancel a running `!` command; otherwise interrupt the running task (queued messages go back into the editor), or clear a `!` input. Closes the autocomplete menu first if it is open. |

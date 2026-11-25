@@ -111,9 +111,7 @@ test('a 400 is not retried: the run fails and the user message stays in the save
     reason: 'error',
   })
   expect(t.session.busy.locked).toBe(false)
-  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
-    '"hi"',
-  )
+  expect(JSON.stringify(t.session.getEntries())).toContain('"hi"')
 })
 
 test('retries give up after maxRetries', async () => {
@@ -199,7 +197,7 @@ test('a content-filtered response fails the run with the provider reason and kee
   expect(t.eventsOf('auto_retry_start')).toHaveLength(0)
   expect(t.eventsOf('turn_end')).toHaveLength(t.eventsOf('turn_start').length)
   expect(t.session.busy.locked).toBe(false)
-  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
+  expect(JSON.stringify(t.session.getEntries())).toContain(
     'Half a filtered ans',
   )
 
@@ -273,9 +271,7 @@ test('aborting while the model is streaming stops the run; the next run works', 
     stopReason: 'aborted',
     message: { content: [{ type: 'text', text: t.streamedText() }] },
   })
-  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
-    '"aborted"',
-  )
+  expect(JSON.stringify(t.session.getEntries())).toContain('"aborted"')
 
   await t.run('Again')
   expect(t.lastAssistantText()).toBe('Second run works')
@@ -331,8 +327,16 @@ test('aborting while a tool runs cancels the tool and records it as cancelled', 
   })
   // The model was called only once: no new turn starts after an abort
   expect(t.model.calls).toHaveLength(1)
-  const history = await Bun.file(t.session.registry.results.indexPath).text()
-  expect(history).toContain('"status":"cancelled"')
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+  try {
+    const row = db.get<{ status: string; is_error: number }>(
+      'SELECT status, is_error FROM vela_tool_calls ORDER BY created_at DESC LIMIT 1',
+    )
+    expect(row).toMatchObject({ status: 'failed', is_error: 1 })
+  } finally {
+    db.close()
+  }
   // Like pi: the call stays in history, answered with "Operation aborted", so the model knows it was cut short
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool'])
   expect(t.eventsOf('tool_execution_end')).toEqual([

@@ -335,7 +335,7 @@ export class InteractiveMode {
       `${theme.bold('Vela')} ${theme.fg('dim', headerSessionLabel(this.session.id))}`,
       theme.fg(
         'dim',
-        `${keyLabel('interrupt')} interrupt · ${keyLabel('clear')} clear · ${keyLabel('exit')} exit · / commands · ${keyLabel('followUp')} follow-up · /hotkeys for more`,
+        `${keyLabel('interrupt')} interrupt · ${keyLabel('clear')} clear · ${keyLabel('exit')} exit · / commands · /hotkeys for more`,
       ),
     ]
     // Loaded extensions are not listed here (#558): /extensions names each one with what it registered.
@@ -504,12 +504,6 @@ export class InteractiveMode {
             'error',
           )
         break
-      case 'session_save_failed':
-        this.addNotice(
-          `Failed to save session: ${errorMessage(event.error)}`,
-          'error',
-        )
-        break
       case 'audit':
         // An SDK record, not chat: the tool block and the fold line already show the write (#553).
         break
@@ -573,16 +567,12 @@ export class InteractiveMode {
 
   private updatePending(): void {
     this.pending.clear()
-    const { steering, followUp } = this.session.queue
-    if (!steering.length && !followUp.length) return
+    const { steering } = this.session.queue
+    if (!steering.length) return
     this.pending.addChild(new Spacer(1))
     for (const text of steering)
       this.pending.addChild(
         new TruncatedText(theme.fg('dim', `Steering: ${oneLine(text)}`), 1, 0),
-      )
-    for (const text of followUp)
-      this.pending.addChild(
-        new TruncatedText(theme.fg('dim', `Follow-up: ${oneLine(text)}`), 1, 0),
       )
     this.pending.addChild(
       new TruncatedText(
@@ -623,18 +613,6 @@ export class InteractiveMode {
     actions.set('dequeue', () => {
       if (!this.restoreQueue()) this.addNotice('No queued messages', 'dim')
     })
-    actions.set('followUp', () => {
-      const text = editor.getExpandedText().trim()
-      if (!text) return
-      if (!this.session.isRunning) {
-        editor.setText('')
-        void this.submit(text)
-        return
-      }
-      editor.addToHistory(text)
-      editor.setText('')
-      void this.queue(text, 'followUp')
-    })
     actions.set('clear', () => {
       const now = Date.now()
       if (now - this.lastCtrlC < 500) void this.shutdown()
@@ -674,8 +652,8 @@ export class InteractiveMode {
 
   /** Move queued messages back to the editor (like pi); with abort, also interrupt the current task. Returns how many were moved. */
   private restoreQueue(options: { abort?: boolean } = {}): number {
-    const { steering, followUp } = this.session.clearQueue()
-    const queued = [...steering, ...followUp]
+    const { steering } = this.session.clearQueue()
+    const queued = [...steering]
     if (queued.length) {
       const text = [...queued, this.editor.getText()]
         .filter((t) => t.trim())
@@ -694,7 +672,7 @@ export class InteractiveMode {
     return this.vela.commands(this.session.id).some((c) => c.name === name)
   }
 
-  private async queue(text: string, behavior: 'steer' | 'followUp') {
+  private async queue(text: string, behavior: 'steer') {
     try {
       await this.session.prompt(text, {
         streamingBehavior: behavior,

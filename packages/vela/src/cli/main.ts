@@ -1,26 +1,13 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { savedTrust } from '../config/index.ts'
 import { registerExtensionHostModules } from '../driver/config/extensions.ts'
-import {
-  buildSessionPath,
-  isSessionV1,
-  newSessionId,
-  renderSessionHtml,
-  resolveModel,
-} from '../driver/diagnostics.ts'
+import { newSessionId, resolveModel } from '../driver/diagnostics.ts'
 import type { ImageContent, VelaSession } from '../driver/index.ts'
-import {
-  memorySessionStorage,
-  migrateSessionV1,
-  type SessionEntry,
-  type SessionHeader,
-  setDefaultToolModifiers,
-} from '../driver/index.ts'
+import { setDefaultToolModifiers } from '../driver/index.ts'
 import { type LocalOptions, local } from '../legacy-channels/index.ts'
 import { defaultAgentDir, loadConfig, type VelaConfig } from '../load-config.ts'
 import { usableModel } from '../settings.ts'
@@ -312,7 +299,7 @@ const vela = createVela({
   thinkingLevel: args.thinking,
   cwd,
   dataDir: config.dataDir,
-  sessionStorage: args.noSession ? memorySessionStorage() : undefined,
+  ephemeralSessions: args.noSession,
   sessionResources: config.sessionResources && {
     ...config.sessionResources,
     useBuiltinLocal: !!docker,
@@ -360,16 +347,6 @@ const vela = createVela({
   ],
 })
 
-// Text mode diagnostics must survive runPrintMode, including the final save during dispose().
-// Vela clears this subscription after every session has closed.
-if (mode === 'print')
-  vela.subscribe((event, sessionId) => {
-    if (event.type === 'session_save_failed')
-      console.error(
-        `Could not save session ${sessionId}: ${errorMessage(event.error)}`,
-      )
-  })
-
 const exitWith = async (code: number, message: string): Promise<never> => {
   ;(code ? process.stderr : process.stdout).write(message)
   await vela.dispose()
@@ -404,7 +381,7 @@ const exit = async (code: number): Promise<never> => {
   process.exit(signalCode ?? configurationExitCode ?? code)
 }
 
-// --export <id or .jsonl file> [output]: write the session as HTML and exit (like pi)
+// --export <id> [output]: write the saved session from vela.db as HTML and exit
 if (args.export) {
   try {
     const written = await exportHtml(args.export, args.messages[0])
@@ -652,34 +629,12 @@ try {
   await exit(1)
 }
 
-/** Writes a saved session (by id, or a .jsonl session file) as HTML; returns the path written. */
+/** Writes a saved session from `vela.db` as HTML; returns the path written. */
 async function exportHtml(source: string, output?: string): Promise<string> {
-  let html: string
-  let id = source
-  if (existsSync(source) && statSync(source).isFile()) {
-    const lines = readFileSync(source, 'utf8')
-      .split('\n')
-      .filter((line) => line.trim())
-      .map((line) => JSON.parse(line) as unknown)
-    const fileEntries = isSessionV1(lines)
-      ? migrateSessionV1('imported', lines)
-      : (lines as (SessionHeader | SessionEntry)[])
-    const header =
-      fileEntries[0]?.type === 'session' ? fileEntries[0] : undefined
-    id = header?.id ?? 'imported'
-    const entries = fileEntries.filter(
-      (entry): entry is SessionEntry => entry.type !== 'session',
-    )
-    html = renderSessionHtml({ id, entries: buildSessionPath(entries) })
-  } else {
-    const session = vela.session(source)
-    if (!(await session.resume()))
-      throw new Error(`Session ${source} has no saved history`)
-    return session.exportHtml(output)
-  }
-  const target = resolve(cwd, output ?? `vela-session-${id}.html`)
-  await writeFile(target, html, { mode: 0o600 })
-  return target
+  const session = vela.session(source)
+  if (!(await session.resume()))
+    throw new Error(`Session ${source} has no saved history in vela.db`)
+  return session.exportHtml(output)
 }
 
 async function readStdin(): Promise<string> {

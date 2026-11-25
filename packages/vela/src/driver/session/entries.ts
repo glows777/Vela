@@ -1,150 +1,74 @@
-import type { ThinkingLevel } from '../../providers/models/index.ts'
 import type { ModelMessage, UserContent } from '../../shared/messages.ts'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
 
 /**
- * Session file format version written now (like pi's CURRENT_SESSION_VERSION). Version 1 was one
- * checkpoint per file; version 2 is pi's append-only entry log. Older versions are migrated on load.
+ * Session export format version (pi-compatible append-only branch log).
  */
 export const SESSION_FORMAT_VERSION = 2
 
-/** First line of a session file (like pi's `SessionHeader`). */
+/** First line of an exported JSONL branch file. */
 export interface SessionHeader {
   type: 'session'
   version: number
-  /** Session id (also the file name) */
   id: string
-  /** When the session was created (ISO) */
   timestamp: string
-  /** Working directory the session started in */
   cwd?: string
   location?: ExecutionLocation
-  /** Channel the session answers on (e.g. `lark`), when a host opened it for one */
   channel?: string
-  /** @internal Tool call history the session's tool results belong to */
-  toolHistoryId?: string
-  /** Id of the session this one was forked or cloned from (pi stores the parent's file path) */
   parentSession?: string
 }
 
-/**
- * Fields every entry has (like pi): entries form a tree through `parentId`. A new entry's parent is the
- * session's current leaf, so moving the leaf to an earlier entry and appending starts a new branch.
- */
 interface SessionEntryBase {
   type: string
-  /** 8 hex characters, unique within the session */
   id: string
-  /** The entry this one follows; null for the first entry */
   parentId: string | null
-  /** When the entry was appended (ISO) */
   timestamp: string
+  label?: string
 }
 
 /** A message in the conversation. */
 export interface SessionMessageEntry extends SessionEntryBase {
   type: 'message'
   message: ModelMessage
-  /**
-   * Set on an assistant message that was aborted or failed while it streamed (pi keeps this on the message).
-   * Such a message is kept for the record but never sent to the model again.
-   */
   stopReason?: 'aborted' | 'error'
-  /** On a tool message: each tool's display data (`tool_execution_end`'s `details`), by tool call id. Not sent to the model. */
   details?: Record<string, unknown>
-  /** On an assistant message: the model that produced it, as its `provider/modelId` (pi's provider + api + model). Only that model gets its reasoning back. */
   producedBy?: string
 }
 
 /**
- * A command the user ran with `!` / `!!` (pi's `bashExecution` message). It reaches the model as a user
- * message (`bashExecutionToText`) unless `excludeFromContext` (`!!`).
+ * A command the user ran with `!` / `!!` (pi's `bashExecution` message).
  */
 export interface BashExecutionEntry extends SessionEntryBase {
   type: 'bash_execution'
   command: string
-  /** The end of the output (see `truncated`) */
   output: string
-  /** Undefined when the command was cancelled */
   exitCode?: number
   cancelled: boolean
   truncated: boolean
-  /** File with the whole output, when truncated */
   fullOutputPath?: string
-  /** `!!`: kept in the session, never sent to the model */
   excludeFromContext?: boolean
-  /** The command was moved to the background while it ran; this is the tail so far. */
   backgroundTaskId?: string
-}
-
-/** The session's model changed (`session.setModel()` with a name). */
-export interface ModelChangeEntry extends SessionEntryBase {
-  type: 'model_change'
-  /** `provider/id` */
-  model: string
-}
-
-export interface ThinkingLevelChangeEntry extends SessionEntryBase {
-  type: 'thinking_level_change'
-  thinkingLevel: ThinkingLevel
-}
-
-/** Session metadata (`session.setName()`); an empty name clears it. */
-export interface SessionInfoEntry extends SessionEntryBase {
-  type: 'session_info'
-  name?: string
-}
-
-/**
- * The session was archived or unarchived (`vela.setSessionArchived()`); the last one in the file wins.
- * Archived sessions are hidden from `listSessions()` by default. Not part of the model context.
- */
-export interface SessionArchivedEntry extends SessionEntryBase {
-  type: 'session_archived'
-  archived: boolean
-}
-
-/**
- * The channel this session belongs to. A session opened for a channel records it in its header; a first
- * binding that arrives after the session was written (`vela.session(id, { channel })` on an open session)
- * appends this instead, because the header is never rewritten.
- */
-export interface SessionChannelEntry extends SessionEntryBase {
-  type: 'session_channel'
-  channel: string
 }
 
 /**
  * Earlier history was summarized (like pi). The model context becomes the summary followed by the
- * entries from `firstKeptEntryId` on; the summarized entries stay in the file.
+ * entries from `firstKeptEntryId` on; the summarized entries stay in the session.
  */
 export interface CompactionEntry extends SessionEntryBase {
   type: 'compaction'
   summary: string
   firstKeptEntryId: string
-  /** Estimated context tokens before the summary */
   tokensBefore: number
-  /** @internal Tool call history snapshot the summary's reading guide points at */
-  toolHistoryViewSeq?: number
 }
 
 /**
- * Summary of a branch the session left through `navigateTree(…, { summarize: true })` (like pi). It is a
- * child of the navigation target and enters the model context as a user message.
+ * Summary of a branch the session left through `navigateTree(…, { summarize: true })` (like pi).
  */
 export interface BranchSummaryEntry extends SessionEntryBase {
   type: 'branch_summary'
-  /** The leaf the session navigated away from ('root' when it had none) */
   fromId: string
   summary: string
-}
-
-/** A user-defined bookmark on an entry (like pi); an undefined label clears it. Not sent to the model. */
-export interface LabelEntry extends SessionEntryBase {
-  type: 'label'
-  targetId: string
-  label: string | undefined
 }
 
 /** Extension state saved with `session.appendEntry()` (pi's `custom` entry); never sent to the model. */
@@ -155,8 +79,7 @@ export interface CustomEntry extends SessionEntryBase {
 }
 
 /**
- * A message an extension sent with `session.sendMessage()` (pi's `custom_message` entry). The model context
- * gets it as a user message with `content`; `display` and `details` are for UIs and the extension.
+ * A message an extension sent with `session.sendMessage()` (pi's `custom_message` entry).
  */
 export interface CustomMessageEntry extends SessionEntryBase {
   type: 'custom_message'
@@ -166,27 +89,19 @@ export interface CustomMessageEntry extends SessionEntryBase {
   details?: unknown
 }
 
-/** Entries Vela writes. Readers keep entries of other types (written by newer versions or extensions) and ignore them. */
+/** Entries stored in `vela_messages`. */
 export type SessionEntry =
   | SessionMessageEntry
-  | ModelChangeEntry
-  | ThinkingLevelChangeEntry
-  | SessionInfoEntry
-  | SessionArchivedEntry
-  | SessionChannelEntry
   | CompactionEntry
   | BranchSummaryEntry
-  | LabelEntry
   | CustomEntry
   | CustomMessageEntry
   | BashExecutionEntry
 
-/** An entry before it gets its place in the log (`id`, `parentId`, `timestamp`); keeps each type's own fields. */
 export type NewEntry<T> = T extends SessionEntry
   ? Omit<T, 'id' | 'parentId' | 'timestamp'>
   : never
 
-/** One line of a session file. */
 export type SessionFileEntry = SessionHeader | SessionEntry
 
 /** Text of the user message that stands for a summary in the model context. */
@@ -237,25 +152,12 @@ export function createEntryId(taken: { has(id: string): boolean }): string {
 
 /** What `buildSessionContext()` rebuilds from the entries. */
 export interface SessionContext {
-  /** The model context */
   messages: ModelMessage[]
-  /** Entry id of each context message (the summary message maps to its compaction entry) */
   ids: Map<ModelMessage, string>
-  /** When each context message entered the history */
   timestamps: Map<ModelMessage, number>
-  /** The model (`provider/id`) that produced each assistant message (see its entry's `producedBy`) */
   producers: Map<ModelMessage, string>
-  /** Context messages that are extensions' custom messages (from `custom_message` entries) */
   custom: Map<ModelMessage, CustomMessageInfo>
-  /** Latest `model_change` on the branch */
-  model?: string
-  /** Latest `thinking_level_change` on the branch */
-  thinkingLevel?: ThinkingLevel
-  /** Latest `session_info` name in the whole session */
-  name?: string
-  /** Latest compaction summary ('' if never compacted) */
   summary: string
-  toolHistoryViewSeq?: number
 }
 
 function parseTime(value: string): number {
@@ -264,8 +166,7 @@ function parseTime(value: string): number {
 }
 
 /**
- * The entries from the root to `leafId` (like pi's `buildSessionPath`). An undefined leaf means the last
- * entry; null means before the first entry (an empty path).
+ * The entries from the root to `leafId` (like pi's `buildSessionPath`).
  */
 /** @experimental Shared frontend contract. */
 export function buildSessionPath(
@@ -290,9 +191,7 @@ export function buildSessionPath(
 }
 
 /**
- * The entries of a branch (root first) the context is built from (like the path pi's `buildSessionContext`
- * walks): with a compaction, the branch's latest one and the entries it keeps plus everything after it;
- * otherwise the whole branch. The TUI renders a resumed session from these.
+ * The entries of a branch (root first) the context is built from.
  */
 /** @experimental Shared frontend contract. */
 export function contextEntries(path: SessionEntry[]): {
@@ -322,11 +221,42 @@ export function contextEntries(path: SessionEntry[]): {
   }
 }
 
+/** Convert a slice of session entries (e.g. an abandoned branch) into model messages. */
+export function entriesToMessages(
+  entries: readonly SessionEntry[],
+): ModelMessage[] {
+  const messages: ModelMessage[] = []
+  for (const entry of entries) {
+    if (entry.type === 'branch_summary') {
+      if (entry.summary)
+        messages.push({
+          role: 'user',
+          content: branchSummaryMessageText(entry.summary),
+        })
+      continue
+    }
+    if (entry.type === 'compaction') {
+      if (entry.summary)
+        messages.push({
+          role: 'user',
+          content: summaryMessageText(entry.summary),
+        })
+      continue
+    }
+    if (entry.type === 'message') {
+      if (entry.stopReason) continue
+      messages.push(entry.message)
+    } else if (entry.type === 'custom_message') {
+      messages.push({ role: 'user', content: entry.content })
+    } else if (entry.type === 'bash_execution' && !entry.excludeFromContext) {
+      messages.push({ role: 'user', content: bashExecutionToText(entry) })
+    }
+  }
+  return messages
+}
+
 /**
- * Rebuilds the model context and settings of the branch ending at `leafId` (default: the last entry), like
- * pi's `buildSessionContext`: the branch's latest compaction summary, then the kept and later entries, with
- * context edits applied. Branch summaries enter as user messages; aborted / failed assistant messages are
- * left out, and so are `!!` commands (like pi's transform-messages).
+ * Rebuilds the model context of the branch ending at `leafId`.
  */
 export function buildSessionContext(
   entries: SessionEntry[],
@@ -342,15 +272,6 @@ export function buildSessionContext(
     custom: new Map(),
     summary: '',
   }
-  for (const entry of path) {
-    if (entry.type === 'model_change') context.model = entry.model
-    else if (entry.type === 'thinking_level_change')
-      context.thinkingLevel = entry.thinkingLevel
-  }
-  // Like pi: the name belongs to the session, not a branch (the latest session_info anywhere)
-  for (const entry of entries)
-    if (entry.type === 'session_info')
-      context.name = entry.name?.trim() || undefined
   const push = (message: ModelMessage, entry: SessionEntry) => {
     context.messages.push(message)
     context.ids.set(message, entry.id)
@@ -361,7 +282,6 @@ export function buildSessionContext(
   const { compaction, entries: selected } = contextEntries(path)
   if (compaction) {
     context.summary = compaction.summary
-    context.toolHistoryViewSeq = compaction.toolHistoryViewSeq
     push(
       { role: 'user', content: summaryMessageText(compaction.summary) },
       compaction,
@@ -381,11 +301,7 @@ export function buildSessionContext(
       if (entry.stopReason) continue
       message = entry.message
     } else if (entry.type === 'custom_message')
-      // Like pi's convertToLlm: the model sees a custom message as a user message
-      message = {
-        role: 'user',
-        content: entry.content,
-      }
+      message = { role: 'user', content: entry.content }
     else if (entry.type === 'bash_execution' && !entry.excludeFromContext)
       message = { role: 'user', content: bashExecutionToText(entry) }
     else continue
@@ -403,33 +319,21 @@ export function buildSessionContext(
 /** A node of `getTree()` (like pi's `SessionTreeNode`). */
 export interface SessionTreeNode {
   entry: SessionEntry
-  /** Children, oldest first */
   children: SessionTreeNode[]
-  /** The entry's current label, if any */
   label?: string
 }
 
-/** Current label of each entry (the latest `label` entry for it wins). */
-function resolveLabels(entries: SessionEntry[]): Map<string, string> {
-  const labels = new Map<string, string>()
-  for (const entry of entries) {
-    if (entry.type !== 'label') continue
-    if (entry.label) labels.set(entry.targetId, entry.label)
-    else labels.delete(entry.targetId)
-  }
-  return labels
-}
-
 /**
- * The entries as a tree (like pi's `getTree`). Normally there is one root; an entry whose parent is
- * missing is also returned as a root.
+ * The entries as a tree (like pi's `getTree`).
  */
 export function buildSessionTree(entries: SessionEntry[]): SessionTreeNode[] {
-  const labels = resolveLabels(entries)
   const nodes = new Map<string, SessionTreeNode>()
   for (const entry of entries) {
-    const label = labels.get(entry.id)
-    nodes.set(entry.id, { entry, children: [], ...(label ? { label } : {}) })
+    nodes.set(entry.id, {
+      entry,
+      children: [],
+      ...(entry.label ? { label: entry.label } : {}),
+    })
   }
   const roots: SessionTreeNode[] = []
   for (const entry of entries) {
@@ -441,50 +345,18 @@ export function buildSessionTree(entries: SessionEntry[]): SessionTreeNode[] {
     if (parent) parent.children.push(node)
     else roots.push(node)
   }
-  // Append order is already oldest first, which is pi's timestamp order
   return roots
 }
 
 /**
- * Copies a branch for a new session (like pi's `createBranchedSession`): the path re-chained without
- * label entries, followed by the labels of entries on the path.
+ * Copies a branch for a new session (re-chaining `parentId`, preserving `label` and `firstKeptEntryId`).
  */
 export function copyBranch(path: SessionEntry[]): SessionEntry[] {
-  const labels = resolveLabels(path)
   const copied: SessionEntry[] = []
-  const replacement = new Map<string, string>()
-  const pendingLabels: string[] = []
   let parentId: string | null = null
   for (const entry of path) {
-    if (entry.type === 'label') {
-      pendingLabels.push(entry.id)
-      continue
-    }
-    // The archive flag and channel belong to the saved session; a fork or clone starts active and unbound
-    if (entry.type === 'session_archived' || entry.type === 'session_channel')
-      continue
-    for (const id of pendingLabels) replacement.set(id, entry.id)
-    pendingLabels.length = 0
-    copied.push(
-      entry.type === 'compaction'
-        ? {
-            ...entry,
-            parentId,
-            firstKeptEntryId:
-              replacement.get(entry.firstKeptEntryId) ?? entry.firstKeptEntryId,
-          }
-        : { ...entry, parentId },
-    )
+    copied.push({ ...entry, parentId })
     parentId = entry.id
-  }
-  const ids = new Set(copied.map((entry) => entry.id))
-  const timestamp = new Date().toISOString()
-  for (const [targetId, label] of labels) {
-    if (!ids.has(targetId)) continue
-    const id = createEntryId(ids)
-    ids.add(id)
-    copied.push({ type: 'label', id, parentId, timestamp, targetId, label })
-    parentId = id
   }
   return copied
 }
@@ -501,199 +373,19 @@ export function messageText(content: ModelMessage['content']): string {
         .join('')
 }
 
-/** One `SessionStorage.list()` entry, used by the session picker and `vela.listSessions()`. */
+/** One entry returned by `vela.listSessions()`. */
 export interface SessionSummary {
   id: string
   name?: string
-  /** Time of the last entry (ISO) */
   updatedAt: string
-  /** Messages in the session file (including summarized ones) */
   messageCount: number
-  /** Start of the first user message (empty string if none) */
   firstMessage: string
-  /** Working directory the session started in (from its header) */
   cwd?: string
-  /** Channel the session answers on (from its header) */
   channel?: string
-  /** Archived with `vela.setSessionArchived()`; `listSessions()` leaves these out unless asked */
   archived?: boolean
 }
 
-/** Builds a list entry from a session's entries (for custom storages implementing `list`). */
-export function summarizeSession(
-  id: string,
-  entries: SessionFileEntry[],
-): SessionSummary {
-  let name: string | undefined
-  let updatedAt = ''
-  let messageCount = 0
-  let firstMessage = ''
-  let cwd: string | undefined
-  let channel: string | undefined
-  let archived = false
-  for (const entry of entries) {
-    if (entry.timestamp > updatedAt) updatedAt = entry.timestamp
-    if (entry.type === 'session') {
-      cwd = entry.cwd
-      channel = entry.channel
-    }
-    if (entry.type === 'session_info') name = entry.name?.trim() || undefined
-    if (entry.type === 'session_archived') archived = entry.archived
-    if (entry.type === 'session_channel') channel = entry.channel
-    // A `!` command counts like a message: a session with only commands can be resumed
-    if (entry.type === 'bash_execution') {
-      messageCount++
-      firstMessage ||=
-        `${entry.excludeFromContext ? '!!' : '!'}${entry.command}`
-          .replace(/\s+/g, ' ')
-          .trim()
-          .slice(0, 120)
-      continue
-    }
-    if (entry.type !== 'message') continue
-    messageCount++
-    if (firstMessage || entry.message.role !== 'user') continue
-    const content = entry.message.content
-    firstMessage = messageText(content)
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 120)
-  }
-  return {
-    id,
-    ...(name ? { name } : {}),
-    updatedAt,
-    messageCount,
-    firstMessage,
-    ...(cwd ? { cwd } : {}),
-    ...(channel ? { channel } : {}),
-    ...(archived ? { archived: true } : {}),
-  }
-}
-
-/** Version-1 checkpoint line (`{ type: 'checkpoint', messages, … }`). */
-interface CheckpointV1 {
-  type: 'checkpoint'
-  timestamp?: string
-  messages: { timestamp: string; message: ModelMessage }[]
-  model?: string
-  thinkingLevel?: ThinkingLevel
-  name?: string
-  summary?: string
-  toolHistoryId?: string
-  toolHistoryViewSeq?: number
-}
-
-/**
- * Whether parsed lines are a version-1 file: a checkpoint, or the older one-message-per-line form
- * (message lines without entry ids). Anything else without a header (say a version-2 file whose header
- * line is damaged) is not converted, so it is never rewritten with less than it holds.
- */
-/** @experimental Shared frontend contract. */
-export function isSessionV1(lines: unknown[]): boolean {
-  const first = lines[0] as { type?: unknown; id?: unknown } | undefined
-  return (
-    first?.type === 'checkpoint' ||
-    (first?.type === 'message' && first.id === undefined)
-  )
-}
-
-/**
- * Converts the parsed lines of a version-1 session file to version 2 (for custom storages holding old data):
- * the latest checkpoint's messages plus message lines after it become `message` entries, and the
- * checkpoint's model, thinking level and name become entries. A compacted checkpoint (its first
- * message is the summary) becomes the kept messages followed by a `compaction` entry, which rebuilds
- * the same context.
- */
-export function migrateSessionV1(
-  id: string,
-  lines: unknown[],
-): SessionFileEntry[] {
-  let checkpoint: CheckpointV1 = { type: 'checkpoint', messages: [] }
-  for (const line of lines) {
-    const entry = line as {
-      type?: string
-      timestamp?: string
-      message?: ModelMessage
-      messages?: unknown
-    }
-    if (entry.type === 'checkpoint' && Array.isArray(entry.messages))
-      checkpoint = {
-        ...(entry as CheckpointV1),
-        messages: [...(entry as CheckpointV1).messages],
-      }
-    else if (entry.type === 'message' && entry.message)
-      checkpoint.messages.push({
-        timestamp: entry.timestamp ?? new Date().toISOString(),
-        message: entry.message,
-      })
-  }
-  const time =
-    checkpoint.timestamp ??
-    checkpoint.messages[0]?.timestamp ??
-    new Date().toISOString()
-  const header: SessionHeader = {
-    type: 'session',
-    version: SESSION_FORMAT_VERSION,
-    id,
-    timestamp: checkpoint.messages[0]?.timestamp ?? time,
-    ...(checkpoint.toolHistoryId
-      ? { toolHistoryId: checkpoint.toolHistoryId }
-      : {}),
-  }
-  const entries: SessionEntry[] = []
-  const ids = new Set<string>()
-  const push = (entry: NewEntry<SessionEntry> & { timestamp: string }) => {
-    const id = createEntryId(ids)
-    ids.add(id)
-    entries.push({
-      ...entry,
-      id,
-      parentId: entries.at(-1)?.id ?? null,
-    } as SessionEntry)
-  }
-  const first = checkpoint.messages[0]?.timestamp ?? time
-  if (checkpoint.model)
-    push({ type: 'model_change', timestamp: first, model: checkpoint.model })
-  if (checkpoint.thinkingLevel)
-    push({
-      type: 'thinking_level_change',
-      timestamp: first,
-      thinkingLevel: checkpoint.thinkingLevel,
-    })
-  const summary = checkpoint.summary
-  const compacted =
-    !!summary &&
-    checkpoint.messages[0]?.message.content === summaryMessageText(summary)
-  for (const stored of checkpoint.messages.slice(compacted ? 1 : 0))
-    push({
-      type: 'message',
-      timestamp: stored.timestamp,
-      message: stored.message,
-    })
-  if (compacted) {
-    const firstKept = entries.find((entry) => entry.type === 'message')
-    push({
-      type: 'compaction',
-      timestamp: checkpoint.messages[0]?.timestamp ?? time,
-      summary,
-      firstKeptEntryId: firstKept?.id ?? '',
-      tokensBefore: 0,
-      ...(checkpoint.toolHistoryViewSeq === undefined
-        ? {}
-        : { toolHistoryViewSeq: checkpoint.toolHistoryViewSeq }),
-    })
-    // Kept nothing: the compaction keeps itself (like pi's `firstKeptEntryId ?? id`)
-    const compaction = entries.at(-1) as CompactionEntry
-    if (!compaction.firstKeptEntryId)
-      compaction.firstKeptEntryId = compaction.id
-  }
-  if (checkpoint.name)
-    push({ type: 'session_info', timestamp: time, name: checkpoint.name })
-  return [header, ...entries]
-}
-
-/** A custom message's or entry's type must be a non-empty string (used by the session's custom APIs). */
+/** A custom message's or entry's type must be a non-empty string. */
 export function assertCustomType(customType: unknown): void {
   if (typeof customType !== 'string' || !customType.trim())
     throw new Error('customType must be a non-empty string')

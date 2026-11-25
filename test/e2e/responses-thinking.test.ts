@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import type {
   ModelSpec,
   ThinkingLevel,
@@ -131,13 +132,27 @@ test.each(['text', 'summary'] as const)(
       .join('')
     expect(thinking).toBe('Check the result.')
     expect(t.lastAssistantText()).toBe('OK')
-    const saved = (await t.readData('sessions/default/transcript.jsonl'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line))
-    const assistant = saved
-      .filter((entry) => entry.message?.role === 'assistant')
-      .at(-1).message
+    const db = openDatabase({
+      path: join(t.dataDir, 'vela.db'),
+      readonly: true,
+    })
+    let assistant: { content: unknown[] }
+    try {
+      const rows = db
+        .all<{ content_json: string }>(
+          "SELECT content_json FROM vela_messages WHERE session_id = 'default' AND kind = 'message' ORDER BY seq",
+        )
+        .map(
+          (row) =>
+            JSON.parse(row.content_json) as {
+              role: string
+              content: unknown[]
+            },
+        )
+      assistant = rows.filter((m) => m.role === 'assistant').at(-1)!
+    } finally {
+      db.close()
+    }
     expect(assistant.content).toContainEqual(
       expect.objectContaining({ type: 'thinking', text: thinking }),
     )

@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import type { VelaExtension } from '@glows777/vela'
 import { jsonSchema } from 'ai'
 import { z } from 'zod'
@@ -12,6 +13,7 @@ import today from '../../examples/extensions/prompt-section.ts'
 import readOnlyReview from '../../examples/extensions/read-only-session.ts'
 import redact from '../../examples/extensions/redact-secrets.ts'
 import todo from '../../examples/extensions/todo-command.ts'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { web } from '../../packages/vela/src/driver/index.ts'
 import {
   fauxText,
@@ -187,9 +189,17 @@ test('redact-secrets: the model sees the redacted text, the history keeps the or
   await t.run('Show me .env')
   expect(t.lastAssistantText()).toContain('[REDACTED]')
   expect(t.lastAssistantText()).not.toContain('sk-abcdefghijkl')
-  expect(
-    await Bun.file(t.session.registry.results.history.path).text(),
-  ).toContain('sk-abcdefghijkl')
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const row = db.get<{ result_json: string | null }>(
+      'SELECT result_json FROM vela_tool_calls ORDER BY created_at DESC LIMIT 1',
+    )
+    // Tool result hooks rewrite output before persistence so resume never re-exposes redacted secrets.
+    expect(row?.result_json).toContain('[REDACTED]')
+    expect(row?.result_json).not.toContain('sk-abcdefghijkl')
+  } finally {
+    db.close()
+  }
 })
 
 test('read-only-session: setActiveTools narrows the tools of one session only', async () => {

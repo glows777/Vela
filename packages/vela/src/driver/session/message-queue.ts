@@ -7,10 +7,9 @@ import { type ModelMessage, normalizeUserMessage } from '../messages.ts'
 import { assertCustomType } from './entries.ts'
 import type { QueueMode } from './options.ts'
 
-/** Queued inputs and custom-message metadata owned by one session. */
+/** Queued steer inputs and custom-message metadata owned by one session. */
 export class MessageQueue {
   private readonly steeringQueue: ModelMessage[] = []
-  private readonly followUpQueue: ModelMessage[] = []
   /** Extensions' custom messages in the history or queues, and what they carry (pi's custom message fields) */
   readonly customMessages = new WeakMap<ModelMessage, CustomMessageInfo>()
   /** Custom messages sent while running without triggering a turn: appended once the step's tool results are in (like pi) */
@@ -37,30 +36,29 @@ export class MessageQueue {
     for (const message of this.pendingCustom.splice(0)) append(message)
   }
 
-  enqueue(kind: 'steering' | 'followUp', message: ModelMessage): void {
-    ;(kind === 'steering' ? this.steeringQueue : this.followUpQueue).push(
-      message,
-    )
+  enqueue(message: ModelMessage): void {
+    this.steeringQueue.push(message)
     this.emitQueue()
   }
 
-  /** Clears queued messages and returns the user inputs among them (the TUI puts them back in the input box before aborting). */
-  clear(): { steering: string[]; followUp: string[] } {
+  /** Clears queued steer messages and returns the user inputs among them. */
+  clear(): { steering: string[] } {
     const steering = this.steeringQueue.splice(0)
-    const followUp = this.followUpQueue.splice(0)
-    if (steering.length || followUp.length) this.emitQueue()
+    if (steering.length) this.emitQueue()
     return {
       steering: this.inputTexts(steering),
-      followUp: this.inputTexts(followUp),
     }
   }
 
-  /** Currently queued user inputs (a copy; queued custom messages are not listed) */
-  get queue(): { steering: string[]; followUp: string[] } {
+  /** Currently queued user steer inputs (a copy; queued custom messages are not listed). */
+  get queue(): { steering: string[] } {
     return {
       steering: this.inputTexts(this.steeringQueue),
-      followUp: this.inputTexts(this.followUpQueue),
     }
+  }
+
+  get hasSteering(): boolean {
+    return this.steeringQueue.length > 0
   }
 
   private inputTexts(messages: ModelMessage[]): string[] {
@@ -73,10 +71,12 @@ export class MessageQueue {
     this.emit({ type: 'queue_update', ...this.queue })
   }
 
-  /** Takes from the queues by mode: steer first, then followUp. */
-  dequeue(kind: 'steering' | 'followUp', mode: QueueMode): ModelMessage[] {
-    const queue = kind === 'steering' ? this.steeringQueue : this.followUpQueue
-    const taken = queue.splice(0, mode === 'all' ? queue.length : 1)
+  /** Takes from the steer queue by mode. */
+  dequeue(mode: QueueMode): ModelMessage[] {
+    const taken = this.steeringQueue.splice(
+      0,
+      mode === 'all' ? this.steeringQueue.length : 1,
+    )
     if (taken.length) this.emitQueue()
     return taken
   }

@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
 import type {
   ChannelDefinition,
   ChannelRuntime,
@@ -356,22 +355,19 @@ test('Stop expires when model work settles even while its reply is still deliver
 test('Stop during session restoration prevents a later model run', async () => {
   const held = latch()
   const restoring = latch()
-  const storage = memorySessionStorage()
   const f = adapter()
   const t = createTestVela({
+    ephemeralSessions: true,
     responses: [],
-    sessionStorage: {
-      ...storage,
-      async load(id) {
-        if (id === 'fixture-project') {
-          restoring.release()
-          await held.promise
-        }
-        return storage.load(id)
-      },
-    },
     extensions: [(api) => api.registerChannel(f.channel)],
   })
+  const session = t.vela.session('fixture-project')
+  const origResume = session.resume.bind(session)
+  session.resume = async () => {
+    restoring.release()
+    await held.promise
+    return origResume()
+  }
   await t.vela.startChannels()
   try {
     await f.runtime.submit(input('restore', { replyToId: 'restore' }))

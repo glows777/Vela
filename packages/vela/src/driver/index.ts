@@ -160,21 +160,13 @@ export {
   type CompactionEntry,
   type CustomEntry,
   type CustomMessageEntry,
-  type LabelEntry,
-  type ModelChangeEntry,
-  migrateSessionV1,
   SESSION_FORMAT_VERSION,
-  type SessionArchivedEntry,
-  type SessionChannelEntry,
   type SessionEntry,
   type SessionFileEntry,
   type SessionHeader,
-  type SessionInfoEntry,
   type SessionMessageEntry,
   type SessionSummary,
   type SessionTreeNode,
-  summarizeSession,
-  type ThinkingLevelChangeEntry,
 } from './session/entries.ts'
 export { messageText } from './session/message-queue.ts'
 export type {
@@ -183,28 +175,28 @@ export type {
   PromptOptions,
   QueueMode,
   SessionOptions,
+  SessionPersistence,
   SessionUsage,
 } from './session/options.ts'
 export type { SessionScope } from './session/scope.ts'
 export type { SessionSearchHit } from './session/search.ts'
-export {
-  fileSessionStorage,
-  memorySessionStorage,
-  type SessionPersistence,
-  type SessionStorage,
-} from './session/storage.ts'
-export type { ExecutionMetadata } from './session/tool-history.ts'
+export type {
+  ApprovalDecision,
+  PendingApprovalInfo,
+  ResolvedApprovalInfo,
+} from './step-recovery.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export { defineJsonSchemaTool } from './tools/json-schema.ts'
 export type { ToolContext, ToolDefinition } from './tools/registry.ts'
 export type { BashResult } from './tools/shell.ts'
 export type {
+  ExecutionMetadata,
   ToolAnnotations,
   ToolExecutionMode,
   ToolExposure,
   ToolNamespace,
 } from './tools/types.ts'
-export { ToolExecutionResult } from './tools/types.ts'
+export { SpilledToolOutput, ToolExecutionResult } from './tools/types.ts'
 export type {
   ModelPricing,
   StepRecord,
@@ -217,4 +209,5 @@ export {
   type Vela,
   type VelaOptions,
 } from './vela.ts'
-export { type ForkResult, VelaSession } from './vela-session.ts'
+export type { ForkResult } from './vela-session.ts'
+export { VelaSession } from './vela-session.ts'

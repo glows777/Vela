@@ -22,27 +22,11 @@ const toolSearchToolSchema = z.object({
 /** The first line of a description, for the list of loaded tools. */
 const firstLine = (text: string) => text.trim().split(/\r?\n/)[0] ?? ''
 
-/**
- * Tools a `tool_search` result said it loaded: the `- name: description` lines it starts with (the
- * namespace instructions that follow may hold lines of their own). A resumed session declares them again.
- */
-export function loadedToolNames(result: string): string[] {
-  const names: string[] = []
-  for (const line of result.split('\n')) {
-    const end = line.indexOf(': ')
-    if (!line.startsWith('- ') || end < 0) {
-      if (names.length) break
-      continue
-    }
-    names.push(line.slice(2, end))
-  }
-  return names
-}
-
 export const registerToolSearchTool = (registry: ToolRegistry) => {
   const toolSearchTool: ToolDefinition = {
     name: 'tool_search',
     replay: 'safe',
+    executionMode: 'parallel',
     // Like pi, the description does not list the tools, so it stays the same when tools register
     description:
       'Searches tools that are not loaded yet (such as MCP server tools) by keyword and loads the best matches; they are available from your next call. Exact tool names separated by commas load exactly those tools.',
@@ -63,10 +47,21 @@ export const registerToolSearchTool = (registry: ToolRegistry) => {
         limit ?? DEFAULT_TOOL_SEARCH_LIMIT,
       )
       if (tools.length === 0) return 'No matching tools found.'
-      // loadedToolNames() reads these lines back when a resumed session declares the tools again
       const lines = [
         `Loaded ${tools.length} tool${tools.length === 1 ? '' : 's'}. They are available from your next call:`,
-        ...tools.map((t) => `- ${t.name}: ${firstLine(t.description)}`),
+        ...tools.map((t) => {
+          const desc = firstLine(t.description)
+          const extra: string[] = []
+          const snippet = t.promptSnippet?.trim()
+          if (snippet && snippet !== desc) extra.push(`  Note: ${snippet}`)
+          for (const g of t.promptGuidelines ?? []) {
+            const text = g.trim()
+            if (text) extra.push(`  - ${text}`)
+          }
+          return extra.length
+            ? `- ${t.name}: ${desc}\n${extra.join('\n')}`
+            : `- ${t.name}: ${desc}`
+        }),
       ]
       // Vela has no codemode describeNamespace() yet, so the namespace instructions (e.g. MCP server
       // instructions) come with the loaded tools, once per namespace

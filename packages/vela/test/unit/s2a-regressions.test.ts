@@ -31,7 +31,6 @@ import {
 } from '../../src/driver/messages.ts'
 import { preamble, SystemPromptBuilder } from '../../src/driver/prompt/index.ts'
 import { SessionStore } from '../../src/driver/session/index.ts'
-import { ToolResultStore } from '../../src/driver/session/tool-results.ts'
 import { applyEditsToNormalizedContent } from '../../src/driver/tools/edit-diff.ts'
 import {
   createListDirectoryTool,
@@ -573,19 +572,16 @@ test('ToolRegistry resolves ExecutionEnv lazily via ctx.requireEnv() only when r
     '../../src/driver/execution/local.ts'
   )
   const sharedEnv = createLocalExecutionEnv({ cwd: regDir })
-  const registry = new ToolRegistry(
-    new ToolResultStore(join(regDir, 'results')),
-    {
-      tools: new Map(),
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
-      interception: {
-        resolveEnv: async () => {
-          resolves++
-          return sharedEnv
-        },
+  const registry = new ToolRegistry(join(regDir, 'results'), {
+    tools: new Map(),
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    interception: {
+      resolveEnv: async () => {
+        resolves++
+        return sharedEnv
       },
     },
-  )
+  })
   registry.register(
     {
       name: 'pure',
@@ -605,14 +601,39 @@ test('ToolRegistry resolves ExecutionEnv lazily via ctx.requireEnv() only when r
       },
     },
   )
-  const tools = Object.fromEntries(
-    registry.toProviderTools().map((t) => [t.name, t]),
+  const { openDatabase } = await import('../../src/db/index.ts')
+  const { SessionStore } = await import('../../src/driver/session/index.ts')
+  const { VelaDriver } = await import('../../src/driver/vela-driver.ts')
+  const { TokenTracker } = await import('../../src/driver/usage/tracker.ts')
+  const { createFauxModel, fauxText, fauxToolCall } = await import(
+    '../../src/testing/core/index.ts'
   )
-  await tools.pure!.execute!({}, { toolCallId: 'c1' })
-  expect(resolves).toBe(0)
-  await tools.env_user!.execute!({}, { toolCallId: 'c2' })
-  expect(resolves).toBe(1)
-  expect(sameEnv).toBe(true)
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const store = new SessionStore('lazy-reg', db, { ephemeral: true })
+    const driver = new VelaDriver({
+      sessionId: 'lazy-reg',
+      db,
+      store,
+      registry,
+      tracker: new TokenTracker(),
+    })
+    await driver.run({
+      model: createFauxModel({
+        responses: [
+          fauxToolCall('pure', {}),
+          fauxToolCall('env_user', {}),
+          fauxText('ok'),
+        ],
+      }),
+      systemPrompt: '',
+      messages: [{ role: 'user', content: 'run' }],
+    })
+    expect(resolves).toBe(1)
+    expect(sameEnv).toBe(true)
+  } finally {
+    db.close()
+  }
 })
 
 test('streamProviderStep preserves split reasoning/text metadata in both checkpoints and finalStep', async () => {
@@ -656,7 +677,6 @@ test('streamProviderStep preserves split reasoning/text metadata in both checkpo
       ),
     }
   }
-  let checkpointContent: unknown[] = []
   const { stream, getFinalStep } = streamProviderStep({
     model: faux,
     system: 's',
@@ -667,9 +687,6 @@ test('streamProviderStep preserves split reasoning/text metadata in both checkpo
       },
       toolDefinitions: [],
       hasHostedTools: false,
-    },
-    onModelCallEnd: async ({ buildCheckpoint }) => {
-      checkpointContent = (await buildCheckpoint()).content as unknown[]
     },
   })
   for await (const _ of stream) {
@@ -685,12 +702,6 @@ test('streamProviderStep preserves split reasoning/text metadata in both checkpo
     }>
   ).find((p) => p.type === 'thinking')
   expect(finalThinking?.providerOptions).toEqual({
-    openai: { reasoningEncryptedContent: 'enc-secret', itemId: 'rs_split' },
-  })
-  const ckptThinking = (
-    checkpointContent as Array<{ type: string; providerOptions?: unknown }>
-  ).find((p) => p.type === 'thinking')
-  expect(ckptThinking?.providerOptions).toEqual({
     openai: { reasoningEncryptedContent: 'enc-secret', itemId: 'rs_split' },
   })
 })
@@ -985,20 +996,17 @@ test('concurrent requireEnv() calls share one resolver promise and estimateMessa
     '../../src/driver/execution/local.ts'
   )
   const sharedEnv = createLocalExecutionEnv({ cwd: regDir })
-  const registry = new ToolRegistry(
-    new ToolResultStore(join(regDir, 'results')),
-    {
-      tools: new Map(),
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
-      interception: {
-        resolveEnv: async () => {
-          resolves++
-          await Bun.sleep(10)
-          return sharedEnv
-        },
+  const registry = new ToolRegistry(join(regDir, 'results'), {
+    tools: new Map(),
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    interception: {
+      resolveEnv: async () => {
+        resolves++
+        await Bun.sleep(10)
+        return sharedEnv
       },
     },
-  )
+  })
   registry.register({
     name: 'concurrent',
     description: 'parallel requireEnv',
@@ -1012,12 +1020,35 @@ test('concurrent requireEnv() calls share one resolver promise and estimateMessa
       return 'ok'
     },
   })
-  const tools = Object.fromEntries(
-    registry.toProviderTools().map((t) => [t.name, t]),
+  const { openDatabase } = await import('../../src/db/index.ts')
+  const { SessionStore } = await import('../../src/driver/session/index.ts')
+  const { VelaDriver } = await import('../../src/driver/vela-driver.ts')
+  const { TokenTracker } = await import('../../src/driver/usage/tracker.ts')
+  const { createFauxModel, fauxText, fauxToolCall } = await import(
+    '../../src/testing/core/index.ts'
   )
-  await tools.concurrent!.execute!({}, { toolCallId: 'c1' })
-  expect(resolves).toBe(1)
-  expect(bothSame).toBe(true)
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const store = new SessionStore('conc-reg', db, { ephemeral: true })
+    const driver = new VelaDriver({
+      sessionId: 'conc-reg',
+      db,
+      store,
+      registry,
+      tracker: new TokenTracker(),
+    })
+    await driver.run({
+      model: createFauxModel({
+        responses: [fauxToolCall('concurrent', {}), fauxText('ok')],
+      }),
+      systemPrompt: '',
+      messages: [{ role: 'user', content: 'run' }],
+    })
+    expect(resolves).toBe(1)
+    expect(bothSame).toBe(true)
+  } finally {
+    db.close()
+  }
 
   const bloated: ModelMessage[] = [
     {
@@ -1096,7 +1127,6 @@ test('streamProviderStep aligns start and end metadata when preceded by empty te
       ),
     }
   }
-  let checkpointContent: unknown
   const { stream, getFinalStep } = streamProviderStep({
     model: faux,
     system: 's',
@@ -1111,9 +1141,6 @@ test('streamProviderStep aligns start and end metadata when preceded by empty te
       toolDefinitions: [],
       hasHostedTools: false,
     },
-    onModelCallEnd: async (event) => {
-      checkpointContent = (await event.buildCheckpoint()).content
-    },
   })
   for await (const _ of stream) {
   }
@@ -1124,12 +1151,6 @@ test('streamProviderStep aligns start and end metadata when preceded by empty te
     finalAssistant.content as Array<{ type: string; providerOptions?: unknown }>
   ).find((p) => p.type === 'text')
   expect(finalText?.providerOptions).toEqual({
-    openai: { phase: 'commentary', itemId: 'msg_real' },
-  })
-  const ckptText = (
-    checkpointContent as Array<{ type: string; providerOptions?: unknown }>
-  ).find((p) => p.type === 'text')
-  expect(ckptText?.providerOptions).toEqual({
     openai: { phase: 'commentary', itemId: 'msg_real' },
   })
 })
@@ -1339,17 +1360,25 @@ test('withProviderHooks preserves custom anthropic protocol classification and e
   ).toThrow('Found 2 occurrences')
 })
 
-test('ToolRegistry binds lazy requireEnv location and rejects cross-workspace replay; TokenTracker avoids hook double-count; read offset=1 skips scanLines', async () => {
+test('VelaDriver binds lazy requireEnv location and rejects cross-workspace replay; TokenTracker avoids hook double-count; read offset=1 skips scanLines', async () => {
   const { createLocalExecutionEnv } = await import(
     '../../src/driver/execution/local.ts'
   )
+  const { openDatabase } = await import('../../src/db/index.ts')
+  const { SessionStore } = await import('../../src/driver/session/index.ts')
+  const { recoverPendingStep } = await import(
+    '../../src/driver/step-recovery.ts'
+  )
+  const { executeStepCalls } = await import('../../src/driver/tool-executor.ts')
   const wsA = join(dir, 'ws-a')
   const wsB = join(dir, 'ws-b')
   mkdirSync(wsA, { recursive: true })
   mkdirSync(wsB, { recursive: true })
+  const dbPath = join(dir, 'lazy-loc.db')
   let activeCwd = wsA
-  const results = new ToolResultStore(join(dir, 'lazy-loc', 'results'))
-  const registry = new ToolRegistry(results, {
+  const db1 = openDatabase({ path: dbPath })
+  const store1 = new SessionStore('lazy-loc', db1)
+  const registry1 = new ToolRegistry(join(dir, 'lazy-loc', 'results'), {
     tools: new Map(),
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     interception: {
@@ -1357,11 +1386,7 @@ test('ToolRegistry binds lazy requireEnv location and rejects cross-workspace re
     },
   })
   let ranIn = ''
-  let notifyLocated!: () => void
-  const located = new Promise<void>((resolve) => {
-    notifyLocated = resolve
-  })
-  registry.register({
+  registry1.register({
     name: 'lazy_reader',
     replay: 'safe',
     description: 'lazy env read',
@@ -1369,45 +1394,97 @@ test('ToolRegistry binds lazy requireEnv location and rejects cross-workspace re
     execute: async (_input, ctx) => {
       const env = await ctx!.requireEnv!()
       ranIn = env.cwd
-      notifyLocated()
-      // Simulate process interruption after env resolves (before tool_result is written)
       return await new Promise<string>(() => {})
     },
   })
-  const tools = Object.fromEntries(
-    registry.toProviderTools().map((t) => [t.name, t]),
+  store1.ensureSessionRow()
+  store1.appendMessage({ role: 'user', content: 'run' })
+  const assistantEntry = store1.appendMessage({
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_call',
+        toolCallId: 'c-loc',
+        toolName: 'lazy_reader',
+        input: {},
+      },
+    ],
+  })
+  const now = new Date().toISOString()
+  db1.run(
+    `INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at)
+     VALUES ('run-1', 'lazy-loc', 'vela', 'user', 'running', ?, ?)`,
+    now,
+    now,
   )
-  void tools.lazy_reader!.execute!({}, { toolCallId: 'c-loc' })
-  await located
+  db1.run(
+    `INSERT INTO vela_tool_calls (
+       id, session_id, run_id, assistant_message_id, tool_call_id, call_index,
+       tool_name, input_json, execution_mode, replay, status, attempt, is_error,
+       created_at, updated_at
+     ) VALUES ('tc-1', 'lazy-loc', 'run-1', ?, 'c-loc', 0, 'lazy_reader', '{}', 'parallel', 'safe', 'pending', 0, 0, ?, ?)`,
+    assistantEntry.id,
+    now,
+    now,
+  )
+  const row = db1.get<Record<string, unknown>>(
+    'SELECT * FROM vela_tool_calls WHERE id = ?',
+    'tc-1',
+  ) as never
+  void executeStepCalls({
+    db: db1,
+    store: store1,
+    registry: registry1,
+    sessionId: 'lazy-loc',
+    rows: [row],
+    emit: () => {},
+  })
+  for (let i = 0; i < 100 && !ranIn; i++) await Bun.sleep(5)
   expect(ranIn).toBe(wsA)
+  db1.close()
 
   activeCwd = wsB
   ranIn = ''
-  const results2 = new ToolResultStore(join(dir, 'lazy-loc', 'results'))
-  await results2.resumeHistory(results.historyId)
-  const registry2 = new ToolRegistry(results2, {
-    tools: new Map(),
-    logger: { debug() {}, info() {}, warn() {}, error() {} },
-    interception: {
-      resolveEnv: async () => createLocalExecutionEnv({ cwd: activeCwd }),
-    },
-  })
-  registry2.register({
-    name: 'lazy_reader',
-    replay: 'safe',
-    description: 'lazy env read',
-    inputSchema: z.object({}),
-    execute: async (_input, ctx) => {
-      const env = await ctx!.requireEnv!()
-      ranIn = env.cwd
-      return 'should not run'
-    },
-  })
-  const recovered = await registry2.recoverToolCall('lazy_reader', 'c-loc', {})
-  expect(recovered).toEqual({
-    type: 'error-text',
-    value: expect.stringContaining('location or input changed'),
-  })
+  const db2 = openDatabase({ path: dbPath })
+  try {
+    const store2 = new SessionStore('lazy-loc', db2)
+    const loaded = (await store2.loadSaved())!
+    const registry2 = new ToolRegistry(join(dir, 'lazy-loc', 'results'), {
+      tools: new Map(),
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      interception: {
+        resolveEnv: async () => createLocalExecutionEnv({ cwd: activeCwd }),
+      },
+    })
+    registry2.register({
+      name: 'lazy_reader',
+      replay: 'safe',
+      description: 'lazy env read',
+      inputSchema: z.object({}),
+      execute: async (_input, ctx) => {
+        const env = await ctx!.requireEnv!()
+        ranIn = env.cwd
+        return 'should not run'
+      },
+    })
+    const rec = await recoverPendingStep({
+      db: db2,
+      store: store2,
+      registry: registry2,
+      sessionId: 'lazy-loc',
+      messages: loaded.messages,
+      runId: 'run-2',
+      emit: () => {},
+    })
+    expect(rec.recovered).toBe(true)
+    const part = rec.toolMessage?.content[0] as { output: unknown }
+    expect(part.output).toEqual({
+      type: 'error-text',
+      value: expect.stringContaining('location changed'),
+    })
+  } finally {
+    db2.close()
+  }
   expect(ranIn).toBe('')
 
   const tracker = new TokenTracker()
@@ -1443,7 +1520,7 @@ test('ToolRegistry binds lazy requireEnv location and rejects cross-workspace re
   })
   const readOut = await createReadFileTool().execute(
     { path: logPath, offset: 1, limit: 2 },
-    { execution: wrappedEnv as never, results },
+    { execution: wrappedEnv as never },
   )
   expect(readOut).toContain('line1')
   expect(scanCalls).toBe(0)

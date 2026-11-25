@@ -718,21 +718,16 @@ test('Stop finalizes an untagged steer still downloading its attachment', async 
 })
 
 test('a held bash call shows a bounded single-line command head', async () => {
-  let release!: () => void
-  const command = `printf 'checking logs\\n'\n# ${'context '.repeat(15)}`
-  const { fake, t, start } = setup(
-    [fauxToolCall('bash', { command }), fauxText('checked')],
-    [
-      function hold(api) {
-        api.on('tool_call', async (event) => {
-          if (event.toolName === 'bash')
-            await new Promise<void>((resolve) => {
-              release = resolve
-            })
-        })
-      },
-    ],
-  )
+  const { rmSync: removeFile, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const gate = join(tmpdir(), `vela-bash-release-${crypto.randomUUID()}`)
+  const command = `printf 'checking logs\\n'\nwhile [ ! -f ${gate} ]; do sleep 0.02; done\n# ${'context '.repeat(15)}`
+  const { fake, t, start } = setup([
+    fauxToolCall('bash', { command }),
+    fauxText('checked'),
+  ])
+  const release = () => writeFileSync(gate, 'ok')
   await start()
   try {
     fake.deliver(topic())
@@ -746,7 +741,8 @@ test('a held bash call shows a bounded single-line command head', async () => {
       "Finished: bash — printf 'checking logs",
     )
   } finally {
-    release?.()
+    release()
+    removeFile(gate, { force: true })
     await t.internals.gateway.stopAll()
   }
 })

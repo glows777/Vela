@@ -1,11 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import {
-  fileSessionStorage,
-  type SessionStorage,
-} from '../../packages/vela/src/driver/index.ts'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import {
   fauxHang,
   fauxText,
@@ -20,22 +16,18 @@ import {
 
 afterEach(cleanupTestVelas)
 
-/**
- * Roles of the messages in the session file. A run appends a record as it goes, and appendFile() creates the
- * file before writing it, so a record caught mid-write has no trailing newline yet: nothing to parse until it
- * is complete (storage.load() ends such a line the same way).
- */
-async function savedRoles(t: TestVela): Promise<string[]> {
-  const text = t.exists('sessions/default/transcript.jsonl')
-    ? await t.readData('sessions/default/transcript.jsonl')
-    : ''
-  if (!text.endsWith('\n')) return []
-  return text
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-    .filter((entry) => entry.type === 'message')
-    .map((entry) => entry.message.role as string)
+function savedRoles(t: TestVela): string[] {
+  if (!t.exists('vela.db')) return []
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    return db
+      .all<{ content_json: string }>(
+        "SELECT content_json FROM vela_messages WHERE session_id = 'default' AND kind = 'message' ORDER BY seq",
+      )
+      .map((row) => (JSON.parse(row.content_json) as { role: string }).role)
+  } finally {
+    db.close()
+  }
 }
 
 test('a resumed Vela continues the saved conversation', async () => {
@@ -72,61 +64,10 @@ test('each message is written as it enters the history, so a killed process keep
   })
   const running = t.run('Read a.txt')
   // The second request is still running: the first step is already on disk
-  while ((await savedRoles(t)).length < 3) await Bun.sleep(1)
-  expect(await savedRoles(t)).toEqual(['user', 'assistant', 'tool'])
+  while (savedRoles(t).length < 3) await Bun.sleep(1)
+  expect(savedRoles(t)).toEqual(['user', 'assistant', 'tool'])
   await t.session.abort()
   await expect(running).rejects.toThrow()
-})
-
-test('a session file caught mid-write is not parsed until its record is complete', async () => {
-  const dir = tempDir()
-  // appendFile() creates the file, then writes it. Hold the first write so a reader sees a file with no record yet
-  const sessions = join(dir.path, 'data', 'sessions')
-  const storage = fileSessionStorage(sessions)
-  let release!: () => void
-  const holding = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  let held = false
-  const pausing: SessionStorage = {
-    persistence: (id) => storage.persistence!(id),
-    load: (id) => storage.load(id),
-    list: () => storage.list!(),
-    async append(id, entries) {
-      if (!held) {
-        held = true
-        await mkdir(join(sessions, id), { recursive: true, mode: 0o700 })
-        await writeFile(join(sessions, id, 'transcript.jsonl'), '', {
-          mode: 0o600,
-        })
-        await holding
-      }
-      await storage.append(id, entries)
-    },
-  }
-  const t = createTestVela({
-    cwd: dir.path,
-    dataDir: 'data',
-    sessionStorage: pausing,
-    files: { 'a.txt': 'A' },
-    responses: [fauxToolCall('read', { path: 'a.txt' }), fauxHang('…')],
-  })
-  const running = t.run('Read a.txt')
-  running.catch(() => {})
-  try {
-    // The file exists, but its first record is still being written
-    while (!t.exists('sessions/default/transcript.jsonl')) await Bun.sleep(1)
-    expect(await savedRoles(t)).toEqual([])
-    release()
-    while ((await savedRoles(t)).length < 3) await Bun.sleep(1)
-    expect(await savedRoles(t)).toEqual(['user', 'assistant', 'tool'])
-  } finally {
-    release()
-    await t.session.abort()
-    await running.catch(() => {})
-    await t.cleanup({ keepDir: true })
-    dir.cleanup()
-  }
 })
 
 test('prompting a saved session that was not resumed fails instead of mixing two conversations', async () => {
@@ -142,53 +83,6 @@ test('prompting a saved session that was not resumed fails instead of mixing two
     await second.cleanup()
     rmSync(first.cwd, { recursive: true, force: true })
   }
-})
-
-test('a version-1 session file resumes with its settings and is rewritten in the new format', async () => {
-  const t = createTestVela({
-    files: {
-      '.vela-data/sessions/default/transcript.jsonl': `${JSON.stringify({
-        type: 'checkpoint',
-        version: 1,
-        timestamp: '2026-10-01T00:00:00.000Z',
-        summary: '',
-        thinkingLevel: 'low',
-        name: 'Old chat',
-        messages: [
-          {
-            timestamp: '2026-10-01T00:00:00.000Z',
-            message: { role: 'user', content: 'old question' },
-          },
-          {
-            timestamp: '2026-10-01T00:00:01.000Z',
-            message: {
-              role: 'assistant',
-              content: [{ type: 'text', text: 'old answer' }],
-            },
-          },
-        ],
-      })}\n`,
-    },
-    responses: [
-      (req) =>
-        fauxText(
-          JSON.stringify(req.prompt).includes('old answer') ? 'kept' : 'lost',
-        ),
-    ],
-  })
-  expect(await t.session.resume()).toBe(true)
-  expect(t.session.name).toBe('Old chat')
-  expect(t.session.thinkingLevel).toBe('low')
-  await t.run('new question')
-  expect(t.lastAssistantText()).toBe('kept')
-  const lines = (await t.readData('sessions/default/transcript.jsonl'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  expect(lines[0]).toMatchObject({ type: 'session', version: 2 })
-  expect(
-    lines.filter((l) => l.type === 'message').map((l) => l.message.role),
-  ).toEqual(['user', 'assistant', 'user', 'assistant'])
 })
 
 test('resume on an empty data dir reports no session', async () => {
@@ -212,11 +106,25 @@ test('sessions with different ids are stored separately', async () => {
       responses: [fauxText('B')],
     })
     await b.run('in b')
-    expect(a.exists('sessions/a/transcript.jsonl')).toBe(true)
-    expect(b.exists('sessions/b/transcript.jsonl')).toBe(true)
-    expect(await a.readData('sessions/a/transcript.jsonl')).not.toContain(
-      'in b',
-    )
+    const db = openDatabase({
+      path: join(dir.path, '.vela-data/vela.db'),
+      readonly: true,
+    })
+    try {
+      const aRows = db.all<{ content_json: string }>(
+        "SELECT content_json FROM vela_messages WHERE session_id = ? AND kind = 'message'",
+        'a',
+      )
+      const bRows = db.all<{ content_json: string }>(
+        "SELECT content_json FROM vela_messages WHERE session_id = ? AND kind = 'message'",
+        'b',
+      )
+      expect(aRows.length).toBeGreaterThan(0)
+      expect(bRows.length).toBeGreaterThan(0)
+      expect(JSON.stringify(aRows)).not.toContain('in b')
+    } finally {
+      db.close()
+    }
 
     const again = createTestVela({ cwd: dir.path, sessionId: 'a' })
     await again.session.resume()
@@ -235,11 +143,7 @@ test('dataDir keeps sessions, memory and usage out of the working directory', as
   })
   await t.run('hi')
 
-  for (const path of [
-    'sessions/default/transcript.jsonl',
-    'memory/MEMORY.md',
-    'usage/requests.jsonl',
-  ])
+  for (const path of ['vela.db', 'memory/MEMORY.md'])
     expect(t.exists(path)).toBe(true)
   expect(t.dataDir).toBe(t.path('.vela-data'))
   const top = Array.from(
@@ -258,12 +162,16 @@ test('token usage is appended to the usage log for every model step', async () =
   await t.run('1')
   await t.run('2')
 
-  const rows = (await t.readData('usage/requests.jsonl'))
-    .trim()
-    .split('\n')
-    .map((l) => JSON.parse(l))
-  expect(rows).toHaveLength(2)
-  expect(rows.map((r) => r.outputTokens)).toEqual([10, 12])
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const rows = db.all<{ output_tokens: number }>(
+      'SELECT output_tokens FROM usage_records ORDER BY created_at',
+    )
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.output_tokens)).toEqual([10, 12])
+  } finally {
+    db.close()
+  }
   expect(t.eventsOf('usage').map((e) => e.modelId)).toEqual(['faux', 'faux'])
 })
 

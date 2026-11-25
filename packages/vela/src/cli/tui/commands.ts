@@ -45,7 +45,6 @@ const CLI_COMMANDS = [
 
 export const HOTKEYS = [
   'Enter send; while running, Enter = steer (inserted after the current step)',
-  `${keyLabel('followUp')} while running, queue a follow-up (after the task finishes)`,
   `${keyLabel('dequeue')} move queued messages back to the editor`,
   `${keyLabel('interrupt')} interrupt (queued messages go back to the editor), or cancel a ! command`,
   '!cmd run a shell command and send its output with the next message · !!cmd run it without sending',

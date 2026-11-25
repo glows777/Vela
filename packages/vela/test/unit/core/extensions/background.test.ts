@@ -10,7 +10,6 @@ import type {
   InternalSessionOptions,
   SessionHost,
 } from '../../../../src/driver/session/options.ts'
-import { ToolResultStore } from '../../../../src/driver/session/tool-results.ts'
 import { SessionWork } from '../../../../src/driver/session/work.ts'
 import { backgroundBash } from '../../../../src/driver/tools/environment-bash.ts'
 import {
@@ -125,7 +124,7 @@ test('background({ shellPath }) runs a local job with that shell, and leaves oth
   )
   const context = {
     execution: env,
-    results: new ToolResultStore(join(root, 'results')),
+    spillDir: join(root, 'results'),
   }
   await backgroundBash('echo hi', undefined, root, undefined, context, jobs)
   expect(argvs).toEqual([['/opt/bash', '-c', 'echo hi']])
@@ -164,7 +163,7 @@ test('cancelling the bash call while its job is being recorded starts nothing', 
     undefined,
     {
       execution: createLocalExecutionEnv({ cwd: root }),
-      results: new ToolResultStore(join(root, 'results')),
+      spillDir: join(root, 'results'),
       signal: controller.signal,
     },
     jobs,
@@ -229,7 +228,7 @@ test('the start result carries the tail a command already produced', async () =>
     undefined,
     root,
     undefined,
-    { execution: env, results: new ToolResultStore(join(root, 'results')) },
+    { execution: env, spillDir: join(root, 'results') },
     jobs,
   )
   expect(result.text).toStartWith('READY_AT_ADMISSION\n\n')

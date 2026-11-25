@@ -11,16 +11,23 @@ export interface CompactionSource {
   text: string
 }
 
-/** The `<conversation>` block among the request's message texts, if this is a compaction request. */
+/** The `<conversation>` (or `<current-turn-prefix>`) block among the request's message texts, if this is a compaction request. */
 export function findConversation(texts: string[]): string | undefined {
-  return texts.find((text) => text.startsWith('<conversation>'))
+  for (const text of texts) {
+    const match =
+      /<(?:conversation|current-turn-prefix)>[\s\S]*?<\/(?:conversation|current-turn-prefix)>/.exec(
+        text,
+      )
+    if (match) return match[0]
+  }
+  return undefined
 }
 
 /** Old messages of a compaction request, parsed from its `<conversation>` block. */
 export function compactionSources(conversation: string): CompactionSource[] {
   const body = conversation
-    .replace(/^<conversation>\n/, '')
-    .replace(/\n<\/conversation>$/, '')
+    .replace(/^<(?:conversation|current-turn-prefix)>\n/, '')
+    .replace(/\n<\/(?:conversation|current-turn-prefix)>$/, '')
   return body.split(/\n\n(?=\[\d+\] )/).flatMap((block) => {
     const match = /^\[(\d+)\] ([a-z]+)\n([\s\S]*)$/.exec(block)
     if (!match || !match[3]!.trim()) return []

@@ -71,7 +71,7 @@ function sessionPath(
       persistence: session.persistence,
       homeDir: homedir(),
       agentDir,
-      isFile: isSessionFile,
+      isFile: (path) => session.getEntries().length > 0 && isSessionFile(path),
     }),
   )
 }

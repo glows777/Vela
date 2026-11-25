@@ -6,7 +6,6 @@ import { z } from 'zod'
 import type { VelaEvent } from '../../../../src/driver/agent/events.ts'
 import { agentLoop } from '../../../../src/driver/agent/index.ts'
 import type { ModelMessage } from '../../../../src/driver/messages.ts'
-import { ToolResultStore } from '../../../../src/driver/session/tool-results.ts'
 import { ToolRegistry } from '../../../../src/driver/tools/registry.ts'
 import { TokenTracker } from '../../../../src/driver/usage/tracker.ts'
 import {
@@ -18,11 +17,8 @@ import {
 const dir = mkdtempSync(join(tmpdir(), 'vela-agent-drain-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-// These tests do not assert on persistence, so their tool history goes to a temp directory.
 function makeRegistry() {
-  return new ToolRegistry(
-    new ToolResultStore(join(dir, crypto.randomUUID(), 'tool-results')),
-  )
+  return new ToolRegistry(join(dir, crypto.randomUUID(), 'tool-results'))
 }
 
 test('drain lets an active tool finish, keeps its real output, and starts no next request or queued input', async () => {
@@ -101,7 +97,7 @@ test('a drain begun during the model response prevents unstarted tools and repor
   ).rejects.toMatchObject({ name: 'AbortError' })
   expect(executed).toBe(false)
   expect(JSON.stringify(messages.at(-1))).toContain(
-    'Tool was not executed because the session is shutting down.',
+    'Tool work was not executed because the session is shutting down',
   )
 })
 

@@ -190,7 +190,7 @@ function contaminated(call: Call, e: Evidence): boolean {
         ? relative(e.recallPaths.workspace, absolute)
         : path
     if (
-      /(?:^|\/)(?:\.vela-eval|sessions)(?:\/|$)|(?:feishu|lark)-[^/]*\.jsonl/u.test(
+      /(?:^|\/)(?:\.vela-eval|sessions)(?:\/|$)|(?:feishu|lark)-[^/]*\.jsonl|(?:^|\/)vela\.db(?:$|[-\w.*]*)/u.test(
         reference,
       )
     )

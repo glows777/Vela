@@ -306,43 +306,24 @@ test('oversized image captions retain native tool details separately from the fu
     responses: [fauxToolCall('pictures_picture', {}), fauxText('done')],
   })
   await t.run('Get the picture')
-  const records = readFileSync(t.session.store.results.history.path, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  const result = records.find((record) => record.type === 'tool_result')
-  expect(result.output).toEqual(native)
-  expect(typeof result.modelTextPath).toBe('string')
-  expect(readFileSync(result.modelTextPath, 'utf8')).toBe(caption)
-  expect(readFileSync(result.modelTextPath, 'utf8')).not.toContain(image().data)
-})
-
-test('failed native-result persistence labels a saved caption as model text, not the full native output', async () => {
-  const t = createTestVela({
-    extensions: [
-      function pictures(v) {
-        v.registerTool({
-          ...pictureTool(),
-          maxResultChars: 100,
-          execute: async () =>
-            new ToolExecutionResult({ importantNativeValue: 42 }, [
-              { type: 'text', text: 'Caption '.repeat(500) },
-              image(),
-            ]),
-        })
-      },
-    ],
-    responses: [fauxToolCall('pictures_picture', {})],
-  })
-  const history = t.session.store.results.history
-  const original = history.append.bind(history)
-  Object.defineProperty(history, 'append', {
-    value: (record: { type: string }) =>
-      record.type === 'tool_result'
-        ? Promise.reject(new Error('Simulated disk full'))
-        : original(record as never),
-  })
-  await expect(t.run('Get picture')).rejects.toThrow('full model text saved at')
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+  try {
+    const row = db.get<{
+      details_json: string | null
+      spill_path: string | null
+    }>(
+      'SELECT details_json, spill_path FROM vela_tool_calls ORDER BY created_at DESC LIMIT 1',
+    )
+    expect(JSON.parse(String(row?.details_json))).toEqual(native)
+    expect(typeof row?.spill_path).toBe('string')
+    expect(readFileSync(String(row?.spill_path), 'utf8')).toBe(caption)
+    expect(readFileSync(String(row?.spill_path), 'utf8')).not.toContain(
+      image().data,
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('Chat redaction after an image tool does not promise a second attachment', async () => {

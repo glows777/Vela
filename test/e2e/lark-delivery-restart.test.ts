@@ -1,13 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 
 const roots: string[] = []
 const fixture = new URL(
@@ -26,13 +21,66 @@ afterEach(async () => {
 function read(cwd: string, path: string) {
   return JSON.parse(readFileSync(join(cwd, path), 'utf8'))
 }
-const transcript = (cwd: string) =>
-  join(
-    cwd,
-    '.vela-data/sessions',
-    read(cwd, '.vela-data/channels/index.json').records[0].activeSessionId,
-    'transcript.jsonl',
-  )
+function activeSessionId(cwd: string): string {
+  return read(cwd, '.vela-data/channels/index.json').records[0].activeSessionId
+}
+function readIntents(cwd: string) {
+  const db = openDatabase({
+    path: join(cwd, '.vela-data/vela.db'),
+    readonly: true,
+  })
+  try {
+    return db
+      .all<{ content_json: string }>(
+        "SELECT content_json FROM vela_messages WHERE session_id = ? AND kind = 'custom' AND content_json LIKE '%channel.lark_delivery%' ORDER BY seq",
+        activeSessionId(cwd),
+      )
+      .map(
+        (row) =>
+          JSON.parse(row.content_json) as { data: Record<string, unknown> },
+      )
+  } finally {
+    db.close()
+  }
+}
+function patchIntents(cwd: string, patch: Record<string, unknown>) {
+  const db = openDatabase({ path: join(cwd, '.vela-data/vela.db') })
+  try {
+    const rows = db.all<{ id: string; content_json: string }>(
+      "SELECT id, content_json FROM vela_messages WHERE session_id = ? AND kind = 'custom' AND content_json LIKE '%channel.lark_delivery%'",
+      activeSessionId(cwd),
+    )
+    for (const row of rows) {
+      const parsed = JSON.parse(row.content_json) as {
+        data: Record<string, unknown>
+      }
+      Object.assign(parsed.data, patch)
+      db.run(
+        'UPDATE vela_messages SET content_json = ? WHERE id = ?',
+        JSON.stringify(parsed),
+        row.id,
+      )
+    }
+  } finally {
+    db.close()
+  }
+}
+function readSessionDump(cwd: string): string {
+  const db = openDatabase({
+    path: join(cwd, '.vela-data/vela.db'),
+    readonly: true,
+  })
+  try {
+    return JSON.stringify(
+      db.all<{ content_json: string }>(
+        'SELECT content_json FROM vela_messages WHERE session_id = ? ORDER BY seq',
+        activeSessionId(cwd),
+      ),
+    )
+  } finally {
+    db.close()
+  }
+}
 async function run(cwd: string, mode: string, kill = false) {
   const child = Bun.spawn([process.execPath, fixture, cwd, mode], {
     stdout: 'pipe',
@@ -88,17 +136,9 @@ for (const route of ['topic', 'direct'])
       expect(readFileSync(join(cwd, 'methods.txt'), 'utf8').trim()).toBe(
         route === 'direct' ? 'create' : 'reply',
       )
-      const savedIntents = readFileSync(transcript(cwd), 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line))
-        .filter(
-          (entry) =>
-            entry.type === 'custom' &&
-            entry.customType === 'channel.lark_delivery',
-        )
-      expect(savedIntents[0].data.uuid).toBe(first.uuid)
-      expect(savedIntents.at(-1).data.confirmed === true).toBe(
+      const savedIntents = readIntents(cwd)
+      expect(savedIntents[0]!.data.uuid).toBe(first.uuid)
+      expect(savedIntents.at(-1)!.data.confirmed === true).toBe(
         mode === 'confirmed',
       )
       await run(cwd, 'restart')
@@ -126,18 +166,8 @@ for (const route of ['topic', 'direct'])
 test('an unconfirmed Lark intent older than one hour is unknown and never resent with a fresh UUID', async () => {
   const cwd = root()
   await run(cwd, 'accepted', true)
-  const entries = readFileSync(transcript(cwd), 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  for (const entry of entries)
-    if (entry.type === 'custom' && entry.customType === 'channel.lark_delivery')
-      entry.data.startedAt = Date.now() - 3600001
   // Age only the persisted local intent: this checks the local guard, not Lark server TTL behavior.
-  writeFileSync(
-    transcript(cwd),
-    `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
-  )
+  patchIntents(cwd, { startedAt: Date.now() - 3600001 })
   await run(cwd, 'expired')
   expect(finalAttempts(cwd)).toHaveLength(1)
   expect(finalDeliveries(cwd)).toHaveLength(1)
@@ -166,7 +196,7 @@ test('a channel_start_topic title send persists the tool identity and is not rep
   const title = read(cwd, 'remote-ledger.json').attempts[0]
   expect(title.text).toBe('TOPIC TITLE')
   expect(title.uuid).toBeTruthy()
-  const saved = readFileSync(transcript(cwd), 'utf8')
+  const saved = readSessionDump(cwd)
   expect(saved).toContain('tool:faux-call-2-1:start_topic')
   expect(saved).toContain(title.uuid)
   expect(saved).toContain('FINISHED EARLIER STEP')
@@ -194,16 +224,8 @@ for (const mode of ['before-send', 'accepted', 'confirmed'])
     expect(
       read(cwd, '.vela-data/channels/index.json').records[0].requester.id,
     ).toBe('ou_alice')
-    const intents = readFileSync(transcript(cwd), 'utf8')
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line))
-      .filter(
-        (entry) =>
-          entry.type === 'custom' &&
-          entry.customType === 'channel.lark_delivery',
-      )
-    const uuid = intents.at(-1).data.uuid
+    const intents = readIntents(cwd)
+    const uuid = intents.at(-1)!.data.uuid
     expect(uuid).toBeTruthy()
     expect(finalAttempts(cwd)).toHaveLength(mode === 'before-send' ? 0 : 1)
     await run(cwd, 'restart')
@@ -265,20 +287,7 @@ for (const [name, patch, diagnostic, mode] of [
   test(`Lark recovery settles ${name} without any chat notice on either restart`, async () => {
     const cwd = root()
     await run(cwd, mode, true)
-    const entries = readFileSync(transcript(cwd), 'utf8')
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line))
-    for (const entry of entries)
-      if (
-        entry.type === 'custom' &&
-        entry.customType === 'channel.lark_delivery'
-      )
-        Object.assign(entry.data, patch)
-    writeFileSync(
-      transcript(cwd),
-      `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
-    )
+    patchIntents(cwd, patch)
     const ledger = read(cwd, 'remote-ledger.json')
     await run(cwd, 'restart')
     expect(read(cwd, 'remote-ledger.json')).toEqual(ledger)

@@ -1,7 +1,8 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
@@ -268,13 +269,15 @@ test('serve answers a channel message on stderr and stops cleanly on SIGTERM', a
   )
   expect(await Bun.file(replyFile).text()).toBe('pong\n')
   // The channel session was saved before the process exited
-  const sessionsDir = join(projectDataDir(home.path, dir.path), 'sessions')
-  const sessions = readdirSync(sessionsDir, { withFileTypes: true }).filter(
-    (entry) =>
-      entry.isDirectory() &&
-      existsSync(join(sessionsDir, entry.name, 'transcript.jsonl')),
-  )
-  expect(sessions).toHaveLength(1)
+  const db = openDatabase({
+    path: join(projectDataDir(home.path, dir.path), 'vela.db'),
+    readonly: true,
+  })
+  try {
+    expect(db.all<{ id: string }>('SELECT id FROM sessions')).toHaveLength(1)
+  } finally {
+    db.close()
+  }
 })
 
 test('a stop signal during channel startup still disposes instead of dying', async () => {

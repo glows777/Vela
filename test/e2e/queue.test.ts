@@ -9,7 +9,7 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
-// Messages queued during a run (steer / followUp, as in pi). Faux response functions run when the request
+// Messages queued during a run (steer, as in pi). Faux response functions run when the request
 // arrives, so queueing inside them deterministically simulates "the user typed again while the model was running".
 
 test('steer is injected after the current step, before the next model request', async () => {
@@ -37,8 +37,8 @@ test('steer is injected after the current step, before the next model request', 
   ])
   expect(t.eventsOf('agent_start')).toHaveLength(1)
   expect(t.eventsOf('queue_update')).toEqual([
-    { type: 'queue_update', steering: ['Read b instead'], followUp: [] },
-    { type: 'queue_update', steering: [], followUp: [] },
+    { type: 'queue_update', steering: ['Read b instead'] },
+    { type: 'queue_update', steering: [] },
   ])
   expect(t.eventTypes().at(-1)).toBe('agent_settled')
 })
@@ -59,32 +59,6 @@ test('a steer that arrives on the final answer keeps the loop going', async () =
   expect(t.model.calls).toHaveLength(2)
   expect(t.lastAssistantText()).toBe('Second line')
   expect(t.eventsOf('agent_end').map((e) => e.reason)).toEqual(['done'])
-})
-
-test('followUp waits until the model would stop, then continues in the same loop (pi)', async () => {
-  const t = createTestVela({
-    files: { 'a.txt': 'A' },
-    responses: [
-      () => {
-        void t.session.followUp('Then summarize')
-        return fauxToolCall('read', { path: 'a.txt' })
-      },
-      fauxText('Done reading'),
-      fauxText('Summary: A'),
-    ],
-  })
-
-  await t.run('Read a')
-
-  // followUp did not cut into the first task: the second request still sees the tool result
-  expect(t.model.calls[1]!.toolResults).toHaveLength(1)
-  expect(t.model.calls[2]!.lastUserText).toBe('Then summarize')
-  expect(t.eventsOf('agent_start').map((e) => e.input)).toEqual(['Read a'])
-  expect(t.eventsOf('agent_end').map((e) => e.reason)).toEqual(['done'])
-  expect(
-    t.eventTypes().filter((type) => type === 'agent_settled'),
-  ).toHaveLength(1)
-  expect(t.lastAssistantText()).toBe('Summary: A')
 })
 
 test('one-at-a-time takes one queued steer per step; all takes them together', async () => {
@@ -127,13 +101,12 @@ test('prompt() while running needs a streamingBehavior; with one it queues', asy
   while (!t.streamedText()) await Bun.sleep(1)
 
   await expect(t.session.prompt('Interject')).rejects.toThrow('steer()')
-  await t.session.prompt('Interject', { streamingBehavior: 'followUp' })
-  expect(t.session.queue).toEqual({ steering: [], followUp: ['Interject'] })
+  await t.session.prompt('Interject', { streamingBehavior: 'steer' })
+  expect(t.session.queue).toEqual({ steering: ['Interject'] })
 
   // Clear the queue before interrupting (as TUI / RPC do); abort waits until it really stops
   expect(t.session.clearQueue()).toEqual({
-    steering: [],
-    followUp: ['Interject'],
+    steering: ['Interject'],
   })
   await t.session.abort()
   expect(t.session.isRunning).toBe(false)
@@ -145,20 +118,20 @@ test('abort stops the task and leaves queued messages in the queue', async () =>
   const t = createTestVela({ responses: [fauxHang('Thinking')] })
   const running = t.run('Think slowly')
   while (!t.streamedText()) await Bun.sleep(1)
-  await t.session.followUp('Do this later')
+  await t.session.steer('Do this later')
 
   await t.session.abort()
 
   await expect(running).rejects.toThrow()
   expect(t.model.calls).toHaveLength(1)
-  expect(t.session.queue.followUp).toEqual(['Do this later'])
+  expect(t.session.queue.steering).toEqual(['Do this later'])
 })
 
 test('queued messages still run after the task fails; prompt() then rejects with the failure', async () => {
   const t = createTestVela({
     responses: [
       () => {
-        void t.session.followUp('Different question')
+        void t.session.steer('Different question')
         return fauxError('400 Bad Request')
       },
       fauxText('OK'),
@@ -174,11 +147,11 @@ test('queued messages still run after the task fails; prompt() then rejects with
   expect(t.lastAssistantText()).toBe('OK')
 })
 
-test('steer and followUp on an idle session behave like prompt()', async () => {
+test('steer on an idle session behaves like prompt()', async () => {
   const t = createTestVela({ responses: [fauxText('one'), fauxText('two')] })
 
   await t.session.steer('Hello')
-  await t.session.followUp('Bye')
+  await t.session.steer('Bye')
 
   expect(t.model.calls.map((c) => c.lastUserText)).toEqual(['Hello', 'Bye'])
 })

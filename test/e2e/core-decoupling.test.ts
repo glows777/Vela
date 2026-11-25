@@ -2,8 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tempDir } from '@glows777/vela/testing'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
-import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
 import {
   createFauxModel,
   fauxText,
@@ -220,12 +220,12 @@ test('clone and fork retain history without inheriting routing authority', async
 })
 
 test('storage success observers cannot turn committed batches into duplicate history', async () => {
-  const storage = memorySessionStorage()
+  const db = openDatabase({ path: ':memory:' })
   const errors: string[] = []
   let saved = 0
   const { vela } = setup({
     model: createFauxModel({ responses: [fauxText('saved')] }),
-    sessionStorage: storage,
+    db,
     onSessionSaved() {
       saved++
       throw new Error('observer failed')
@@ -239,49 +239,59 @@ test('storage success observers cannot turn committed batches into duplicate his
       },
     },
   })
-  const session = vela.session('observer')
-  await session.prompt('write once')
-  expect(saved).toBeGreaterThan(0)
-  const before = await storage.load(session.id)
-  const count = saved
-  await session.save()
-  await session.save()
-  expect(await storage.load(session.id)).toEqual(before)
-  expect(saved).toBe(count)
-  expect(before?.filter((entry) => entry.type === 'session')).toHaveLength(1)
-  expect(errors.join('\n')).toContain('observer failed')
+  try {
+    const session = vela.session('observer')
+    await session.prompt('write once')
+    expect(saved).toBeGreaterThan(0)
+    const msgCount = () =>
+      db.get<{ c: number }>(
+        'SELECT COUNT(*) AS c FROM vela_messages WHERE session_id = ?',
+        session.id,
+      )!.c
+    const before = msgCount()
+    const count = saved
+    await session.save()
+    await session.save()
+    expect(msgCount()).toBe(before)
+    expect(saved).toBe(count)
+    expect(
+      db.all<{ id: string }>(
+        'SELECT id FROM sessions WHERE id = ?',
+        session.id,
+      ),
+    ).toHaveLength(1)
+    expect(errors.join('\n')).toContain('observer failed')
+  } finally {
+    db.close()
+  }
 })
 
-test('explicit save reports a failure only when requested and retains the live session', async () => {
-  const storage = memorySessionStorage()
-  let broken = false
+test('explicit save failure rejects while retaining the live session', async () => {
+  const db = openDatabase({ path: ':memory:' })
   const { vela } = setup({
     model: createFauxModel({ responses: [fauxText('saved')] }),
-    sessionStorage: {
-      ...storage,
-      async append(id, entries) {
-        if (broken) throw new Error('storage unavailable')
-        await storage.append(id, entries)
-      },
-    },
+    db,
   })
-  const session = vela.session('save')
-  await session.prompt('start')
-  broken = true
-  session.appendEntry('pending', { retain: true })
-  const failures: unknown[] = []
-  session.subscribe((event) => {
-    if (event.type === 'session_save_failed') failures.push(event.error)
-  })
-  await expect(session.save()).rejects.toThrow('storage unavailable')
-  expect(failures).toHaveLength(0)
-  await expect(session.save({ reportFailure: true })).rejects.toThrow(
-    'storage unavailable',
-  )
-  expect(failures).toHaveLength(1)
-  expect(vela.sessions()).toContain(session)
-  broken = false
-  await session.save()
+  try {
+    const session = vela.session('save')
+    await session.prompt('start')
+    db.exec(`
+      CREATE TRIGGER block_pending_write BEFORE INSERT ON vela_messages
+      WHEN NEW.kind = 'custom' AND NEW.content_json LIKE '%"pending"%'
+      BEGIN
+        SELECT RAISE(ABORT, 'storage unavailable');
+      END;
+    `)
+    expect(() => session.appendEntry('pending', { retain: true })).toThrow(
+      'storage unavailable',
+    )
+    expect(vela.sessions()).toContain(session)
+    db.exec('DROP TRIGGER block_pending_write;')
+    session.appendEntry('pending', { retain: true })
+    await session.save()
+  } finally {
+    db.close()
+  }
 })
 
 test('beforeDispose precedes session/shared shutdown and failure does not skip either', async () => {

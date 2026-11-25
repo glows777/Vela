@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import z from 'zod'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { web } from '../../packages/vela/src/driver/index.ts'
 import {
   fauxSummary,
@@ -21,12 +22,17 @@ test('echo hi reaches the model as exact output and is recorded inline in histor
     value: 'hi\n',
   })
   expect(t.model.calls[0]!.system).not.toContain('[Tool call history]')
-  const rows = readFileSync(t.session.registry.results.indexPath, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  expect(rows[1]).toMatchObject({ status: 'completed', exitCode: 0 })
-  expect(rows[1].output).toBe('hi\n')
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const rows = db.all<{ status: string; result_json: string | null }>(
+      'SELECT status, result_json FROM vela_tool_calls ORDER BY created_at',
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.status).toBe('completed')
+    expect(rows[0]!.result_json).toContain('hi\\n')
+  } finally {
+    db.close()
+  }
 })
 
 test('bash over 2000 lines keeps its tail and a single readable full-output footer', async () => {
@@ -159,7 +165,7 @@ test('web_fetch keeps a 20KB page whole and an oversized page head with one reco
   }
 })
 
-test('a pre-change StoredToolResult session resumes with its original result text', async () => {
+test('a resumed SQLite session preserves original tool result and error text', async () => {
   const first = createTestVela({
     responses: [
       fauxToolCall('bash', { command: 'echo legacy' }),
@@ -168,34 +174,7 @@ test('a pre-change StoredToolResult session resumes with its original result tex
     ],
   })
   await first.run('Run legacy')
-  const legacyPath = `${first.session.registry.results.dir}/legacy-output.txt`
-  mkdirSync(first.session.registry.results.dir, { recursive: true })
-  writeFileSync(legacyPath, 'legacy\n')
-  const legacy = {
-    kind: 'vela-tool-result',
-    path: legacyPath,
-    indexPath: first.session.registry.results.indexPath,
-    bytes: 7,
-    preview: 'legacy\n',
-    read: 'Only a preview is shown. Use read to read more.',
-  }
-  const saved = `${first.dataDir}/sessions/default/transcript.jsonl`
   await first.cleanup({ keepDir: true })
-  const entries = readFileSync(saved, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  for (const entry of entries)
-    if (
-      entry.type === 'message' &&
-      entry.message.role === 'tool' &&
-      entry.message.content[0].output.type === 'text'
-    )
-      entry.message.content[0].output = { type: 'json', value: legacy }
-  writeFileSync(
-    saved,
-    `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
-  )
   const second = createTestVela({
     cwd: first.cwd,
     responses: [
@@ -216,14 +195,9 @@ test('a pre-change StoredToolResult session resumes with its original result tex
   expect(await second.session.resume()).toBe(true)
   await second.run('Remember the command output')
   expect(second.lastAssistantText()).toBe('remembered')
-  const savedResult = second.messages
-    .flatMap((m) => (m.role === 'tool' ? m.content : []))
-    .find((p) => p.type === 'tool_result')!.output
-  expect(savedResult).toEqual({ type: 'json', value: legacy })
-  expect(readFileSync(saved, 'utf8')).toContain(JSON.stringify(legacy))
 })
 
-test('a resumed truncated legacy generic result keeps its full-output recovery path', async () => {
+test('a resumed oversized tool result keeps its spill_path recovery path', async () => {
   const body = `HEAD\n${'body\n'.repeat(800)}MIDDLE_EVIDENCE\n${'tail\n'.repeat(800)}TAIL\n`
   const first = createTestVela({
     extensions: [
@@ -240,31 +214,16 @@ test('a resumed truncated legacy generic result keeps its full-output recovery p
     responses: [fauxToolCall('report_legacy', {}), fauxText('saved')],
   })
   await first.run('Get the report')
-  await first.session.close()
-  const history = readFileSync(first.session.registry.results.indexPath, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  const legacy = {
-    kind: 'vela-tool-result',
-    path: history[1].outputPath,
-    indexPath: first.session.registry.results.indexPath,
-    bytes: Buffer.byteLength(body),
-    preview: `${body.slice(0, 1800)}\n\n[preview: first 1800 and last 1200 of ${body.length} UTF-16 code units; ${body.length - 3000} omitted here, full output saved]\n\n${body.slice(-1200)}`,
-    read: 'Only a preview is shown. Use read with path, offset, limit and column to read more.',
-  }
-  const saved = `${first.dataDir}/sessions/default/transcript.jsonl`
-  const entries = readFileSync(saved, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  for (const entry of entries)
-    if (entry.type === 'message' && entry.message.role === 'tool')
-      entry.message.content[0].output = { type: 'json', value: legacy }
-  writeFileSync(
-    saved,
-    `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+  const db = openDatabase({
+    path: join(first.dataDir, 'vela.db'),
+    readonly: true,
+  })
+  const spillRow = db.get<{ spill_path: string | null }>(
+    'SELECT spill_path FROM vela_tool_calls LIMIT 1',
   )
+  db.close()
+  expect(spillRow?.spill_path).toBeTruthy()
+  await first.session.close()
   const second = createTestVela({
     cwd: first.cwd,
     responses: [
@@ -274,7 +233,6 @@ test('a resumed truncated legacy generic result keeps its full-output recovery p
           .filter((p) => p.type === 'tool-result')[0]!.output
         expect(output.type).toBe('text')
         const text = (output as { type: 'text'; value: string }).value
-        expect(text).toStartWith(legacy.preview)
         expect(text.match(/Full output:/g)).toHaveLength(1)
         expect(text).not.toContain('MIDDLE_EVIDENCE')
         return fauxToolCall('read', {
@@ -292,10 +250,9 @@ test('a resumed truncated legacy generic result keeps its full-output recovery p
   expect(await second.session.resume()).toBe(true)
   await second.run('Recover the omitted middle')
   expect(second.lastAssistantText()).toBe('recovered')
-  expect(readFileSync(saved, 'utf8')).toContain(JSON.stringify(legacy))
 })
 
-test('compaction keeps the earlier-output snapshot location without the history guide', async () => {
+test('compaction keeps summary without earlier-output snapshot footer or history guide', async () => {
   const t = createTestVela({
     responses: Array.from({ length: 5 }, () => fauxText('answer')),
     generate: [fauxSummary()],
@@ -304,7 +261,8 @@ test('compaction keeps the earlier-output snapshot location without the history 
   await t.session.compact()
   await t.run('Continue')
   const prompt = JSON.stringify(t.model.calls.at(-1)!.prompt)
-  expect(prompt).toContain('/snapshots/through-')
+  expect(prompt).not.toContain('/snapshots/through-')
+  expect(prompt).not.toContain('Earlier tool output:')
   expect(prompt).not.toContain('[Tool call history]')
   expect(t.model.calls.at(-1)!.system).not.toContain('[Tool call history]')
 })

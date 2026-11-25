@@ -14,6 +14,7 @@ import {
   type NewEntry,
 } from './entries.ts'
 import type { SessionStore } from './index.ts'
+import { pendingToolCalls } from './recovery.ts'
 
 /** One session's user shell command and results waiting for its agent loop to stop. */
 export class UserBash {
@@ -157,7 +158,14 @@ export class UserBash {
           : {}),
         ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
       })
-      if (!this.host.busy.locked && this.flush()) await this.host.save()
+      let hasPending = false
+      try {
+        hasPending = pendingToolCalls(this.host.messages).length > 0
+      } catch {
+        hasPending = true
+      }
+      if (!this.host.busy.locked && !hasPending && this.flush())
+        await this.host.save()
       return result
     } finally {
       controller.signal.removeEventListener('abort', onAbort)
@@ -219,12 +227,12 @@ export class UserBash {
       const message: ModelMessage | undefined = execution.excludeFromContext
         ? undefined
         : { role: 'user', content: bashExecutionToText(execution) }
+      this.host.store.appendBashExecution(execution, message)
       if (message) {
         this.host.messages.push(message)
         this.host.tracker.addMessage(message)
         this.host.timestamps.set(message, Date.now())
       }
-      this.host.store.appendBashExecution(execution, message)
     }
     return pending.length > 0
   }

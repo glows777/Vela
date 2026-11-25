@@ -173,10 +173,11 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
     await rpc.call({
       type: 'prompt',
       message: 'Later',
-      streamingBehavior: 'followUp',
+      streamingBehavior: 'followUp' as never,
     }),
   ).toMatchObject({
-    data: { disposition: 'queued' },
+    success: false,
+    error: 'streamingBehavior must be steer',
   })
   expect(
     await rpc.call({ type: 'steer', message: 'Change course' }),
@@ -185,13 +186,12 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   })
   expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
     isStreaming: true,
-    pendingMessageCount: 2,
+    pendingMessageCount: 1,
   })
   expect(
     rpc.records.filter((r) => r.type === 'queue_update').at(-1),
   ).toMatchObject({
     steering: ['Change course'],
-    followUp: ['Later'],
   })
 
   // Renaming while running: not saved separately (it would interleave with the loop's writes); saved when this run ends
@@ -201,7 +201,6 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
 
   expect((await rpc.call({ type: 'clear_queue' })).data).toEqual({
     steering: ['Change course'],
-    followUp: ['Later'],
   })
   expect(await rpc.call({ type: 'abort' })).toMatchObject({ success: true })
   // The abort response comes after the session has really stopped
@@ -421,8 +420,8 @@ test.concurrent('rpc: bash runs a command for the user and answers with its resu
   expect(await rpc.close()).toBe(0)
 })
 
-test.concurrent('rpc: prompt, steer and follow_up forward canonical image attachments', async () => {
-  for (const type of ['prompt', 'steer', 'follow_up']) {
+test.concurrent('rpc: prompt and steer forward canonical image attachments; follow_up is removed', async () => {
+  for (const type of ['prompt', 'steer']) {
     const rpc = startRpc(`faux:${scenario('hello')}`)
     try {
       const image = {
@@ -446,6 +445,17 @@ test.concurrent('rpc: prompt, steer and follow_up forward canonical image attach
     } finally {
       expect(await rpc.close()).toBe(0)
     }
+  }
+  const rpc = startRpc(`faux:${scenario('hello')}`)
+  try {
+    expect(
+      await rpc.call({ type: 'follow_up', message: 'Later' }),
+    ).toMatchObject({
+      success: false,
+      error: 'Unknown command: follow_up',
+    })
+  } finally {
+    expect(await rpc.close()).toBe(0)
   }
 })
 
@@ -520,7 +530,7 @@ test.concurrent('rpc: resized transparent PNG keeps dark lines in prompt history
 test.concurrent('rpc: malformed image arrays fail clearly and a later valid prompt still runs', async () => {
   const rpc = startRpc(`faux:${scenario('hello')}`)
   try {
-    for (const type of ['prompt', 'steer', 'follow_up']) {
+    for (const type of ['prompt', 'steer']) {
       for (const images of [
         { data: 'x' },
         [null],
@@ -646,6 +656,95 @@ test.concurrent('rpc: background_tasks moves one bash call by id, or every runni
     expect(text).toContain('TWO')
   } finally {
     // Closing ends the session, which stops both jobs without delivering.
+    await rpc.close()
+  }
+})
+
+test.concurrent('rpc R1 #20: pending_approvals, resolve_approval, and continue_interrupted resume suspended tool calls', async () => {
+  const work = tempDir('vela-rpc-approval-')
+  dirs.push(work)
+  const extPath = join(work.path, 'approval-ext.ts')
+  const scenarioPath = join(work.path, 'approval-scenario.json')
+  writeFileSync(
+    extPath,
+    `import { z } from 'zod'
+export default function (api) {
+  api.registerTool({
+    name: 'gated',
+    description: 'requires human approval',
+    inputSchema: z.object({ action: z.string() }),
+    execute: async ({ action }) => 'executed:' + action,
+  })
+  api.on('tool_call', (ev) => {
+    if (ev.toolName === 'approval-ext_gated') {
+      return { approval: { summary: 'Approve ' + ev.input.action } }
+    }
+  })
+}
+`,
+  )
+  writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      responses: [
+        {
+          toolCalls: [
+            {
+              id: 'rpc-c1',
+              name: 'approval-ext_gated',
+              input: { action: 'deploy' },
+            },
+          ],
+        },
+        { text: 'deployment finished' },
+      ],
+    }),
+  )
+  const rpc = startRpc(`faux:${scenarioPath}`, ['-e', extPath])
+  try {
+    expect(
+      await rpc.call({ type: 'prompt', message: 'please deploy' }),
+    ).toMatchObject({ success: true, data: { disposition: 'started' } })
+    const endWait = await rpc.waitFor(
+      (r) => r.type === 'agent_end' && r.reason === 'waiting_human',
+    )
+    expect(endWait.reason).toBe('waiting_human')
+    await rpc.waitFor((r) => r.type === 'agent_settled')
+
+    const listed = await rpc.call({ type: 'pending_approvals' })
+    const approvals = (
+      listed.data as { approvals: { id: string; summary: string }[] }
+    ).approvals
+    expect(approvals).toHaveLength(1)
+    expect(approvals[0]!.summary).toBe('Approve deploy')
+
+    expect(
+      await rpc.call({
+        type: 'resolve_approval',
+        approvalId: approvals[0]!.id,
+        approved: true,
+        reason: 'looks good',
+        decidedBy: 'rpc-operator',
+      }),
+    ).toMatchObject({
+      success: true,
+      data: { id: approvals[0]!.id, status: 'approved' },
+    })
+
+    const beforeResume = rpc.records.length
+    expect(await rpc.call({ type: 'continue_interrupted' })).toMatchObject({
+      success: true,
+      data: { disposition: 'started' },
+    })
+    await rpc.waitFor((r) => r.type === 'agent_end' && r.reason === 'done')
+    await rpc.waitFor(
+      (r) =>
+        r.type === 'agent_settled' && rpc.records.indexOf(r) >= beforeResume,
+    )
+    const msgs = await rpc.call({ type: 'get_messages' })
+    expect(JSON.stringify(msgs.data)).toContain('executed:deploy')
+    expect(JSON.stringify(msgs.data)).toContain('deployment finished')
+  } finally {
     await rpc.close()
   }
 })

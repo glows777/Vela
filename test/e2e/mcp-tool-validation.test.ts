@@ -251,8 +251,8 @@ test.each(['openai-responses', 'openai-completions'] as const)(
     expect(String(ends[0]?.result)).toContain('notes')
     expect(String(ends[1]?.result)).toContain('labels')
     // …the model receives that error as the call's result…
-    expect(JSON.stringify(requests[1])).toContain('Type validation failed')
-    expect(JSON.stringify(requests[3])).toContain('Type validation failed')
+    expect(JSON.stringify(requests[1])).toContain('Invalid input for')
+    expect(JSON.stringify(requests[3])).toContain('Invalid input for')
     // …and neither call runs: only the valid call reached the MCP server.
     expect(server.calls).toEqual([{ notes: { a: 'ok' }, labels: { b: 'ok' } }])
     expect(ends[2]?.isError).toBe(false)

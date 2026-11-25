@@ -105,6 +105,26 @@ export interface BashResult {
   backgroundTaskId?: string
 }
 
+/** Strip ANSI escape sequences and normalize `\r` line overwrites for user `!cmd` output. */
+export function sanitizeBashOutput(text: string): string {
+  const ansi =
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI escape sequences is intentional
+    /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g
+  const noAnsi = text.replace(ansi, '')
+  return noAnsi
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => {
+      if (!line.includes('\r')) return line
+      const segments = line.split('\r')
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if (segments[i]!.length > 0) return segments[i]!
+      }
+      return ''
+    })
+    .join('\n')
+}
+
 /** Run a user command inside the selected execution environment. */
 export async function runBash(
   command: string,
@@ -152,10 +172,11 @@ export async function runBash(
     )
     .finally(() => publish(true))
   const tail = output.read()
+  const cleanOutput = sanitizeBashOutput(tail.text.replace(/\n$/, ''))
   if (!run.ok) {
     if (run.error.code === 'aborted')
       return {
-        output: tail.text.replace(/\n$/, ''),
+        output: cleanOutput,
         exitCode: undefined,
         cancelled: true,
         truncated: tail.truncated || !!run.error.spillPath,
@@ -166,12 +187,12 @@ export async function runBash(
       run.error.message.startsWith('Failed to preserve complete shell output:')
     )
       throw new Error(
-        `Command started and was stopped because its full output could not be saved; it may have had partial effects. ${tail.text}`,
+        `Command started and was stopped because its full output could not be saved; it may have had partial effects. ${cleanOutput}`,
       )
     throw run.error
   }
   return {
-    output: tail.text.replace(/\n$/, ''),
+    output: cleanOutput,
     exitCode: run.value.exitCode,
     cancelled: false,
     truncated: !!run.value.spillPath,

@@ -65,7 +65,7 @@ export class SessionDefaultState {
   }
 
   async restore(
-    context: SessionContext,
+    context: SessionContext & { model?: string; thinkingLevel?: ThinkingLevel },
     deps: {
       extensions: { ready: Promise<void> }
       logger: SessionDeps<unknown>['logger']
@@ -99,12 +99,21 @@ export class SessionDefaultState {
   applyOpenChoices(
     options: SessionOptions,
     selectModel: (model: ModelInput) => void,
+    sync?: {
+      store: SessionStore
+      modelRef: () => string
+      thinkingLevel: () => ThinkingLevel
+    },
   ) {
     // A model or thinking level given at open (a channel's current chat entry) wins over the saved choice
     if (options.thinkingLevel !== undefined)
       this.thinking = options.thinkingLevel
     if (options.model !== undefined && options.model !== this.modelChoice)
       selectModel(options.model)
+    if (sync && options.model !== undefined)
+      sync.store.setModelChoice(sync.modelRef())
+    if (sync && options.thinkingLevel !== undefined)
+      sync.store.setThinkingLevelChoice(sync.thinkingLevel())
   }
 
   apply(
@@ -120,12 +129,12 @@ export class SessionDefaultState {
       this.resolved = undefined
       this.hooked = undefined
       if (typeof defaults.model === 'string')
-        store.appendModelChange(defaults.model)
+        store.setModelChoice(defaults.model)
     }
     const thinking = defaults.thinkingLevel ?? DEFAULT_THINKING_LEVEL
     if (!this.thinkingPinned && thinking !== this.thinking) {
       this.thinking = thinking
-      store.appendThinkingLevelChange(this.thinking)
+      store.setThinkingLevelChoice(this.thinking)
     }
     this.effectiveLimitOverrides = { ...(defaults.limits ?? {}) }
     const effective = limitsForModel(

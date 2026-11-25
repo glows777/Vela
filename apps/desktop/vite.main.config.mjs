@@ -31,6 +31,9 @@ export default defineConfig({
       formats: ['es'],
     },
     rolldownOptions: {
+      // Node 22.18 omits scheme-only `node:sqlite` from `builtinModules`, so Forge's default
+      // externals miss it and Vite replaces it with a browser-compatibility stub in CI.
+      external: ['node:sqlite'],
       output: {
         // Extension factories use their names to select configuration.
         keepNames: true,

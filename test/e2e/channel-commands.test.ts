@@ -190,18 +190,8 @@ test.each(['!stop', '!restart'])(
   async (command) => {
     const fake = fakeLark()
     let loads = 0
-    let writes = 0
     const t = createTestVela({
       responses: [],
-      sessionStorage: {
-        load: async () => {
-          loads++
-          return undefined
-        },
-        append: async () => {
-          writes++
-        },
-      },
       extensions: [
         lark({
           owners: ['ou_alice'],
@@ -209,6 +199,18 @@ test.each(['!stop', '!restart'])(
           transport: fake.transport,
         }),
       ],
+    })
+    const origSession = t.vela.session.bind(t.vela)
+    Object.defineProperty(t.vela, 'session', {
+      value: (id: string, opts?: Parameters<typeof origSession>[1]) => {
+        const s = origSession(id, opts)
+        const origResume = s.resume.bind(s)
+        s.resume = async () => {
+          loads++
+          return origResume()
+        }
+        return s
+      },
     })
     await t.vela.ready()
     await t.vela.startChannels()
@@ -219,7 +221,7 @@ test.each(['!stop', '!restart'])(
     expect(fake.reactions).toEqual([])
     expect(t.model.calls).toEqual([])
     expect(t.exists('channels/index.json')).toBe(false)
-    expect(writes).toBe(0)
+    expect(await t.vela.listSessions()).toEqual([])
     expect(await readdir(t.dataPath('sessions')).catch(() => [])).toEqual([])
   },
 )
@@ -399,9 +401,13 @@ test.each([false, true])(
     const freshId = index.records[0].activeSessionId
     expect(freshId).not.toBe(oldId)
     expect(index.records[0].previousSessionIds).toEqual([oldId])
-    expect(await t.readData(`sessions/${oldId}/transcript.jsonl`)).toContain(
-      'original task',
-    )
+    expect(
+      JSON.stringify(
+        (await t.vela.session(oldId).resume())
+          ? t.vela.session(oldId).getEntries()
+          : [],
+      ),
+    ).toContain('original task')
     fake.topicHistory.push([
       historyMessage('prior', 'ou_bob', 'historical cobalt fact'),
     ])

@@ -1,10 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import type { ProviderContext } from '../../packages/vela/src/driver/index.ts'
-import {
-  memorySessionStorage,
-  silentLogger,
-} from '../../packages/vela/src/driver/index.ts'
+import { silentLogger } from '../../packages/vela/src/driver/index.ts'
 import { messageTime } from '../../packages/vela/src/lark/history.ts'
 import { lark } from '../../packages/vela/src/lark/index.ts'
 import type {
@@ -79,16 +76,15 @@ test('senders in one chat share a persisted session', async () => {
     ['u2', 'Hello u2'],
   ])
   expect(channelSessionId('fake', 'c1')).toBe('fake-c1')
-  expect(await t.readData('sessions/fake-c1/transcript.jsonl')).toContain(
-    'I am u1',
-  )
-  expect(await t.readData('sessions/fake-c1/transcript.jsonl')).toContain(
-    'I am u2',
-  )
+  const c1Entries = JSON.stringify(t.vela.session('fake-c1').getEntries())
+  expect(c1Entries).toContain('I am u1')
+  expect(c1Entries).toContain('I am u2')
   expect(t.eventsIn('fake-c1').map((e) => e.type)).toContain('channel_reply')
   // The CLI's default session is unaffected
   expect(t.session.messages).toEqual([])
-  expect(t.exists('sessions/default/transcript.jsonl')).toBe(false)
+  expect((await t.vela.listSessions()).map((s) => s.id)).not.toContain(
+    'default',
+  )
 })
 
 test('a sender continues the conversation after a restart', async () => {
@@ -196,7 +192,7 @@ test('a channel session closed while idle resumes its history when reopened', as
 
   await deliver('u1', 'What color do I like?')
   expect(sent.at(-1)?.text).toBe('blue')
-  expect(await t.readData('sessions/fake-c1/transcript.jsonl')).toContain(
+  expect(JSON.stringify(t.vela.session('fake-c1').getEntries())).toContain(
     'I like blue',
   )
 })
@@ -302,8 +298,9 @@ test('sessions are keyed by conversation: group members share history and direct
     ['group', 'u2', 'clean'],
     ['dm_u1', 'u1', 'same chat'],
   ])
-  expect(t.exists('sessions/fake-dm_u1/transcript.jsonl')).toBe(true)
-  expect(t.exists('sessions/fake-group/transcript.jsonl')).toBe(true)
+  const listed = (await t.vela.listSessions()).map((s) => s.id)
+  expect(listed).toContain('fake-dm_u1')
+  expect(listed).toContain('fake-group')
   expect(t.vela.sessions().filter((s) => s.channel === 'fake')).toHaveLength(2)
 })
 
@@ -416,7 +413,7 @@ test('Lark enabled group members share a persisted session and both display name
   // A hub runs quick work itself; a longer task is still dispatched to a topic (#421).
   expect(f.t.model.calls[1]?.tools).toContain('bash')
   expect(
-    await f.t.readData('sessions/lark-oc_group/transcript.jsonl'),
+    JSON.stringify(f.t.vela.session('lark-oc_group').getEntries()),
   ).toContain('Alice: first')
 })
 
@@ -585,372 +582,26 @@ test('Lark unsupported replies wait for earlier context preparation and cannot e
   expect(f.sent.map((reply) => reply.messageId)).toEqual(['text', 'audio'])
 })
 
-function failingStorage() {
-  const storage = memorySessionStorage()
-  const failing = new Set(['fake-c1'])
-  return {
-    failing,
-    storage: {
-      ...storage,
-      async append(...args: Parameters<typeof storage.append>) {
-        if (failing.has(args[0])) throw new Error('disk full')
-        await storage.append(...args)
-      },
-    },
-  }
-}
-
-test('the gateway logs the first session save failure at error level with its session id', async () => {
-  const { storage } = failingStorage()
-  const errors: string[] = []
-  const t = createTestVela({
-    responses: [fauxText('answer')],
-    sessionStorage: storage,
-    logger: {
-      debug() {},
-      info() {},
-      warn() {},
-      error: (message) => errors.push(message),
-    },
-  })
-  await fakeChannel(t).deliver('u1', 'hello')
-  expect(t.eventsOf('session_save_failed')).toHaveLength(1)
-  expect(errors).toHaveLength(1)
-  expect(errors[0]).toContain('fake-c1')
-  expect(errors[0]).toContain('disk full')
-})
-
-test('after three save failures the gateway refuses queued prompts without calling the model again', async () => {
-  const { storage } = failingStorage()
-  const t = createTestVela({
-    responses: [
-      fauxText('one'),
-      fauxText('two'),
-      fauxText('three'),
-      fauxText('other chat'),
-    ],
-    sessionStorage: storage,
-  })
-  const { sent, deliver } = fakeChannel(t)
-  await Promise.all(
-    ['first', 'second', 'third', 'refused', 'refused again'].map((text) =>
-      deliver('u1', text),
-    ),
-  )
-  expect(t.eventsOf('session_save_failed')).toHaveLength(3)
-  expect(t.model.calls).toHaveLength(3)
-  expect(sent.slice(0, 3).map((reply) => reply.text)).toEqual([
-    'one',
-    'two',
-    'three',
-  ])
-  expect(sent).toHaveLength(5)
-  for (const reply of sent.slice(3)) {
-    expect(reply).toMatchObject({ channelId: 'c1', recipientId: 'u1' })
-    expect(reply.text).toContain("can't be saved")
-  }
-  expect(JSON.stringify(t.vela.session('fake-c1').getEntries())).not.toContain(
-    'refused',
-  )
-  expect(t.eventsOf('channel_reply')).toHaveLength(5)
-  await deliver('u2', 'unaffected', 'c2')
-  expect(sent.at(-1)?.text).toBe('other chat')
-})
-
-test('a successful save resets consecutive failures, including SDK saves after refusal', async () => {
-  const { storage, failing } = failingStorage()
-  const t = createTestVela({
-    responses: Array.from({ length: 7 }, (_, i) => fauxText(`answer ${i + 1}`)),
-    sessionStorage: storage,
-    allowPendingResponses: true,
-  })
-  const { sent, deliver } = fakeChannel(t)
-  await deliver('u1', 'failure 1')
-  await deliver('u1', 'failure 2')
-  failing.clear()
-  await deliver('u1', 'successful turn')
-  failing.add('fake-c1')
-  await deliver('u1', 'new failure 1')
-  await deliver('u1', 'new failure 2')
-  await deliver('u1', 'new failure 3')
-  await deliver('u1', 'refused')
-  expect(t.model.calls).toHaveLength(6)
-  expect(sent.at(-1)?.text).toContain("can't be saved")
-  failing.clear()
-  await t.vela.session('fake-c1').save()
-  await deliver('u1', 'recovered')
-  expect(t.model.calls).toHaveLength(7)
-  expect(sent.at(-1)?.text).toBe('answer 7')
-  expect(JSON.stringify(await storage.load('fake-c1'))).toContain('failure 1')
-})
-
-test('handling an input without saving does not clear failures from channel or SDK prompts', async () => {
-  const { storage } = failingStorage()
-  const errors: string[] = []
-  const t = createTestVela({
-    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
-    sessionStorage: storage,
-    logger: {
-      debug() {},
-      info() {},
-      warn() {},
-      error: (message) => errors.push(message),
-    },
-    extensions: [
-      (vela) => {
-        vela.on('input', (event) =>
-          event.text === 'skip' ? { action: 'handled' } : undefined,
-        )
-      },
-    ],
-  })
-  const { sent, deliver } = fakeChannel(t)
-  await deliver('u1', 'first')
-  await t.vela.session('fake-c1').prompt('SDK turn')
-  await deliver('u1', 'skip')
-  await deliver('u1', 'third')
-  await deliver('u1', 'refused')
-  expect(t.model.calls).toHaveLength(3)
-  expect(errors).toHaveLength(3)
-  expect(sent.at(-1)?.text).toContain("can't be saved")
-})
-
-test('an idle save failure retains the same session and its pending history', async () => {
-  const { storage } = failingStorage()
-  const t = createTestVela({
-    responses: [fauxText('one'), fauxText('two')],
-    sessionStorage: storage,
-    channelIdleMs: 0,
-  })
-  const { sent, deliver } = fakeChannel(t)
-  await deliver('u1', 'first')
-  const session = t.vela.session('fake-c1')
-  await waitFor(() => t.eventsOf('session_save_failed').length >= 2)
-  expect(t.vela.sessions()).toContain(session)
-  await deliver('u1', 'third failure')
-  await deliver('u1', 'refused')
-  expect(t.vela.session('fake-c1')).toBe(session)
-  expect(t.model.calls).toHaveLength(2)
-  expect(sent.at(-1)?.text).toContain("can't be saved")
-  expect(JSON.stringify(session.getEntries())).toContain('first')
-  expect(JSON.stringify(session.getEntries())).not.toContain('refused')
-})
-
-test('a retained blocked session still replies when storage reads also fail', async () => {
-  const { storage } = failingStorage()
-  let failReads = false
-  let failedReads = 0
-  const t = createTestVela({
-    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
-    channelIdleMs: 0,
-    sessionStorage: {
-      ...storage,
-      async load(id) {
-        if (failReads) {
-          failedReads++
-          throw new Error('storage unavailable')
-        }
-        return storage.load(id)
-      },
-    },
-  })
-  const { sent, deliver } = fakeChannel(t)
-  await Promise.all(
-    ['first', 'second', 'third'].map((text) => deliver('u1', text)),
-  )
-  await waitFor(() => t.eventsOf('session_save_failed').length >= 4)
-  const session = t.vela.session('fake-c1')
-  failReads = true
-  await deliver('u1', 'refused during full outage')
-  await deliver('u1', 'still refused during full outage')
-  expect(sent).toHaveLength(5)
-  for (const reply of sent.slice(3))
-    expect(reply.text).toContain("can't be saved")
-  expect(failedReads).toBe(0)
-  expect(t.model.calls).toHaveLength(3)
-  expect(t.vela.session('fake-c1')).toBe(session)
-  expect(t.eventsOf('channel_message')).toHaveLength(5)
-  expect(t.eventsOf('channel_reply')).toHaveLength(5)
-})
-
-test('a blocked retained session saves its real batch before accepting a new prompt', async () => {
-  const { storage, failing } = failingStorage()
-  let emptyAppends = 0
-  const t = createTestVela({
-    responses: ['one', 'two', 'three', 'recovered', 'continued'].map((text) =>
-      fauxText(text),
-    ),
-    allowPendingResponses: true,
-    channelIdleMs: 0,
-    sessionStorage: {
-      ...storage,
-      async append(id, entries) {
-        // An empty append can be a no-op even while real writes still fail.
-        if (!entries.length) {
-          emptyAppends++
-          return
-        }
-        return storage.append(id, entries)
-      },
-    },
-  })
-  const { sent, deliver } = fakeChannel(t)
-  await Promise.all(
-    ['first', 'second', 'third'].map((text) => deliver('u1', text)),
-  )
-  const session = t.vela.session('fake-c1')
-  await waitFor(() => t.eventsOf('session_save_failed').length >= 4)
-  expect(t.vela.sessions()).toContain(session)
-  await deliver('u1', 'refused while broken')
-  expect(sent.at(-1)?.text).toContain("can't be saved")
-  expect(t.model.calls).toHaveLength(3)
-  failing.clear()
-  await deliver('u1', 'after repair')
-  expect(sent.at(-1)?.text).toBe('recovered')
-  expect(t.model.calls).toHaveLength(4)
-  expect(JSON.stringify(t.model.calls[3]?.prompt)).toContain('first')
-  const saved = JSON.stringify(await storage.load('fake-c1'))
-  expect(saved).toContain('after repair')
-  expect(saved).not.toContain('refused while broken')
-  expect(emptyAppends).toBe(0)
-  await waitFor(() => !t.vela.sessions().some((s) => s.id === 'fake-c1'))
-  await deliver('u1', 'after successful idle close')
-  expect(sent.at(-1)?.text).toBe('continued')
-  expect(JSON.stringify(t.model.calls[4]?.prompt)).toContain('after repair')
-})
-
-test('repairing writes recovers the retained context without needing a storage reload', async () => {
-  const { storage, failing } = failingStorage()
-  let failReads = false
-  let failedReads = 0
-  const t = createTestVela({
-    responses: ['one', 'two', 'three', 'recovered'].map((text) =>
-      fauxText(text),
-    ),
-    allowPendingResponses: true,
-    channelIdleMs: 0,
-    sessionStorage: {
-      ...storage,
-      async load(id) {
-        if (failReads) {
-          failedReads++
-          throw new Error('reads unavailable')
-        }
-        return storage.load(id)
-      },
-    },
-  })
-  const { sent, deliver } = fakeChannel(t)
-  await Promise.all(
-    ['first', 'second', 'third'].map((text) => deliver('u1', text)),
-  )
-  await waitFor(() => t.eventsOf('session_save_failed').length >= 4)
-  failing.clear()
-  failReads = true
-  await deliver('u1', 'after writes repair')
-  expect(sent.at(-1)?.text).toBe('recovered')
-  expect(t.model.calls).toHaveLength(4)
-  expect(JSON.stringify(t.model.calls[3]?.prompt)).toContain('first')
-  expect(failedReads).toBe(0)
-})
-
-for (const persistedBaseline of [false, true]) {
-  test(`SDK recovery uses the retained idle session with persisted baseline=${persistedBaseline}`, async () => {
-    const { storage, failing } = failingStorage()
-    const t = createTestVela({
-      responses: [
-        ...(persistedBaseline ? ['saved'] : []),
-        'one',
-        'two',
-        'three',
-        'continued',
-      ].map((text) => fauxText(text)),
-      allowPendingResponses: true,
-      channelIdleMs: 0,
-      sessionStorage: storage,
-    })
-    const { sent, deliver } = fakeChannel(t)
-    const id = 'fake-c1'
-    const closed = () => !t.vela.sessions().some((session) => session.id === id)
-    if (persistedBaseline) {
-      failing.clear()
-      await deliver('u1', 'saved before outage')
-      await waitFor(closed)
-      failing.add(id)
-    }
-    await Promise.all(
-      ['unsaved 1', 'unsaved 2', 'unsaved 3'].map((text) =>
-        deliver('u1', text),
-      ),
-    )
-    const original = t.vela.session(id)
-    await waitFor(() => t.eventsOf('session_save_failed').length >= 4)
-    expect(t.vela.sessions()).toContain(original)
-    expect(t.vela.session(id)).toBe(original)
-    failing.clear()
-    const sdk = t.vela.session(id)
-    await sdk.resume()
-    sdk.appendEntry('sdk-repair', { healthy: true })
-    await sdk.save()
-    // Saving through the SDK clears failures without scheduling a close during SDK work.
-    // biome-ignore lint/complexity/useLiteralKeys: bracket access reads a private ChannelGateway field; dot access does not typecheck
-    expect(t.internals.gateway['idle'].timers.has(id)).toBe(false)
-    expect(t.vela.session(id)).toBe(original)
-    await deliver('u1', 'after SDK recovery')
-    expect(sent.at(-1)?.text).toBe('continued')
-    const saved = await storage.load(id)
-    expect(saved?.filter((entry) => entry.type === 'session')).toHaveLength(1)
-    for (const text of ['unsaved 1', 'unsaved 2', 'unsaved 3', 'sdk-repair'])
-      expect(JSON.stringify(saved)).toContain(text)
-    const prompt = JSON.stringify(t.model.calls.at(-1)?.prompt)
-    for (const text of ['unsaved 1', 'unsaved 2', 'unsaved 3'])
-      expect(prompt).toContain(text)
-    if (persistedBaseline) expect(prompt).toContain('saved before outage')
-    await waitFor(closed)
-  })
-}
-
-test('disposal closes an unsaved retained channel session without retrying indefinitely', async () => {
-  const { storage } = failingStorage()
-  const t = createTestVela({
-    responses: [fauxText('answer')],
-    sessionStorage: storage,
-    channelIdleMs: 0,
-  })
-  const { deliver } = fakeChannel(t)
-  await deliver('u1', 'unsaved')
-  const session = t.vela.session('fake-c1')
-  await waitFor(() => t.eventsOf('session_save_failed').length >= 2)
-  expect(t.vela.sessions()).toContain(session)
-  await t.vela.dispose()
-  expect(t.vela.sessions()).toEqual([])
-  expect(t.eventsOf('session_save_failed')).toHaveLength(3)
-  await deliver('u1', 'after disposal')
-  expect(t.model.calls).toHaveLength(1)
-})
-
 test('a message queued during idle saving keeps the current session open', async () => {
-  const storage = memorySessionStorage()
   let blockWrites = false
   let releaseWrite!: () => void
   const gate = new Promise<void>((resolve) => {
     releaseWrite = resolve
   })
   const t = createTestVela({
+    ephemeralSessions: true,
     responses: [fauxText('first'), fauxText('second')],
     allowPendingResponses: true,
     channelIdleMs: 0,
-    sessionStorage: {
-      ...storage,
-      async append(id, entries) {
-        if (blockWrites) await gate
-        await storage.append(id, entries)
-      },
-    },
   })
   const { deliver } = fakeChannel(t)
   await deliver('u1', 'first input')
   const session = t.vela.session('fake-c1')
+  const origSave = session.save.bind(session)
+  session.save = async () => {
+    if (blockWrites) await gate
+    return origSave()
+  }
   blockWrites = true
   session.appendEntry('idle-write', {})
   // Synchronize on the idle save operation rather than assuming a timer duration.

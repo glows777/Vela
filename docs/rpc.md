@@ -109,12 +109,12 @@ Send a user message.
 | Field | Type | Meaning |
 |---|---|---|
 | `message` | string | The text. |
-| `streamingBehavior` | `"steer"` \| `"followUp"` | Required while a run is in progress; ignored when idle. |
+| `streamingBehavior` | `"steer"` | Required while a run is in progress; ignored when idle. |
 
 Response data: `{ "disposition": "started" | "queued" | "handled" }`.
 
 - When idle, the message starts a run.
-- While a run is in progress, `streamingBehavior` decides the queue: `steer` is delivered after the current step's tool calls, before the next model request; `followUp` is delivered when the model would otherwise stop. Without `streamingBehavior` the command fails with `A task is already running: ...`.
+- While a run is in progress, `streamingBehavior: "steer"` queues the message for delivery before the next model request (skipping remaining unstarted calls in the current step). Without `streamingBehavior` the command fails with `A task is already running: ...`.
 - A message `/name args` that matches an extension command (see [`get_commands`](#get_commands)) runs the command, even during a run, and the response comes when the command finishes, with `disposition: "handled"`. Any other text starting with `/` is sent to the model as is; the interactive CLI's own slash commands (`/model`, `/context`, ...) don't exist in RPC mode.
 
 #### steer
@@ -125,15 +125,7 @@ Response data: `{ "disposition": "started" | "queued" | "handled" }`.
 
 Queues a steering message during a run (`disposition: "queued"`). When idle it starts a run like `prompt` (`disposition: "started"`). Extension commands are rejected: send them with `prompt`.
 
-#### follow_up
-
-```json
-{"id":"4","type":"follow_up","message":"After that, also update the docs"}
-```
-
-Same as `steer`, but delivered when the model would otherwise stop.
-
-Queueing works only during a prompt's run: while a compaction (or an extension command's loop) holds the session, `steer`, `follow_up` and `prompt` with `streamingBehavior` fail with `A task is already running: ...`; retry after it finishes.
+Queueing works only during a prompt's run: while a compaction (or an extension command's loop) holds the session, `steer` and `prompt` with `streamingBehavior` fail with `A task is already running: ...`; retry after it finishes.
 
 #### abort
 
@@ -149,7 +141,31 @@ Aborts the running loop and extension commands, and responds once the agent loop
 {"id":"6","type":"clear_queue"}
 ```
 
-Removes all queued messages and returns them: `{ "steering": string[], "followUp": string[] }`. To mirror the TUI's Esc behavior, send `clear_queue`, then `abort`, then put the returned text back in your input box.
+Removes all queued messages and returns them: `{ "steering": string[] }`. To mirror the TUI's Esc behavior, send `clear_queue`, then `abort`, then put the returned text back in your input box.
+
+#### pending_approvals
+
+```json
+{"id":"6a","type":"pending_approvals"}
+```
+
+Lists pending human tool approvals (`{ "approvals": PendingApprovalInfo[] }`) while a session is suspended in `waiting_human`.
+
+#### resolve_approval
+
+```json
+{"id":"6b","type":"resolve_approval","approvalId":"...","approved":true,"reason":"Verified command","decidedBy":"operator"}
+```
+
+Records a human decision (`approved: boolean`, optional `reason` and `decidedBy`) for a pending approval. Returns the resolved approval record; follow with `continue_interrupted` to resume execution.
+
+#### continue_interrupted
+
+```json
+{"id":"6c","type":"continue_interrupted"}
+```
+
+Resumes an interrupted or approval-resolved session (`disposition: "started"`). Follow events until `agent_settled`.
 
 ### Shell commands
 
@@ -195,7 +211,7 @@ Moves running shell commands to the background (the key binding and `/tasks` are
 ```
 
 ```json
-{"id":"7","type":"response","command":"get_state","success":true,"data":{"sessionId":"20261008-105115-a006","sessionName":"demo","model":"anthropic/<model-id>","thinkingLevel":"medium","isStreaming":false,"steeringMode":"one-at-a-time","followUpMode":"one-at-a-time","messageCount":2,"pendingMessageCount":0,"autoCompactionEnabled":true}}
+{"id":"7","type":"response","command":"get_state","success":true,"data":{"sessionId":"20261008-105115-a006","sessionName":"demo","model":"anthropic/<model-id>","thinkingLevel":"medium","isStreaming":false,"steeringMode":"one-at-a-time","messageCount":2,"pendingMessageCount":0,"autoCompactionEnabled":true}}
 ```
 
 | Field | Meaning |
@@ -205,9 +221,9 @@ Moves running shell commands to the background (the key binding and `/tasks` are
 | `model` | `provider/id`; omitted when no model can be resolved. |
 | `thinkingLevel` | Current thinking level. |
 | `isStreaming` | Whether a run or a compaction is in progress. A running extension command alone doesn't count. |
-| `steeringMode`, `followUpMode` | `one-at-a-time` or `all`. |
+| `steeringMode` | `one-at-a-time` or `all`. |
 | `messageCount` | Messages in the history. |
-| `pendingMessageCount` | Queued steer plus follow-up messages. |
+| `pendingMessageCount` | Queued steer messages. |
 | `autoCompactionEnabled` | Whether the context is compacted automatically (see [`set_auto_compaction`](#set_auto_compaction)). |
 
 #### get_messages
@@ -333,11 +349,10 @@ Switches to the next supported level, like Shift+Tab. Data: `{ "level" }`, or `n
 
 ### Queue modes
 
-#### set_steering_mode, set_follow_up_mode
+#### set_steering_mode
 
 ```json
 {"id":"16","type":"set_steering_mode","mode":"all"}
-{"id":"17","type":"set_follow_up_mode","mode":"one-at-a-time"}
 ```
 
 `one-at-a-time` (default) delivers one queued message per step; `all` delivers every queued message at once. Any other value fails.
@@ -385,7 +400,7 @@ A failed command gets `success: false` and an `error` message; the process keeps
 ```json
 {"id":"4","type":"response","command":"nope","success":false,"error":"Unknown command: nope"}
 {"id":"e","type":"response","command":"set_model","success":false,"error":"No provider named nope (available: openai, anthropic)"}
-{"id":"h","type":"response","command":"set_follow_up_mode","success":false,"error":"mode must be one of one-at-a-time / all"}
+{"id":"h","type":"response","command":"set_steering_mode","success":false,"error":"mode must be one of one-at-a-time / all"}
 ```
 
 A line that isn't JSON, or has no string `type`, gets a `parse` response without an `id`:
@@ -404,7 +419,7 @@ A run with the offline demo model (`VELA_MODEL=mock`), from `>` client to `<` Ve
 
 ```
 > {"id":"1","type":"get_state"}
-< {"id":"1","type":"response","command":"get_state","success":true,"data":{"sessionId":"20261008-105115-a006","model":"mock/mock-model","thinkingLevel":"medium","isStreaming":false,"steeringMode":"one-at-a-time","followUpMode":"one-at-a-time","messageCount":0,"pendingMessageCount":0}}
+< {"id":"1","type":"response","command":"get_state","success":true,"data":{"sessionId":"20261008-105115-a006","model":"mock/mock-model","thinkingLevel":"medium","isStreaming":false,"steeringMode":"one-at-a-time","messageCount":0,"pendingMessageCount":0}}
 > {"id":"2","type":"prompt","message":"hello"}
 < {"id":"2","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
 < {"type":"agent_start","input":"hello","sessionId":"20261008-105115-a006"}
@@ -485,8 +500,8 @@ process.wait()
 | | pi | Vela |
 |---|---|---|
 | Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are Vela `ModelMessage`s (an inline image part is `{ "type": "image", "data", "mimeType" }`) and the stop reason is on `message_end`; the same `compaction_start` / `compaction_end`; Vela adds `context_prepare` (`summary-required`), `usage` and others. See [SDK events](sdk.md#events). |
-| `prompt` / `steer` / `follow_up` | Accept `images` | Accept `images` as `{ "type": "image", "data", "mimeType" }`. See [Image attachments](#image-attachments). |
-| `steer` / `follow_up` when idle | Queued | Start a run (`disposition: "started"`) |
+| `prompt` / `steer` | Accept `images` | Accept `images` as `{ "type": "image", "data", "mimeType" }`. See [Image attachments](#image-attachments). |
+| `steer` when idle | Queued | Start a run (`disposition: "started"`) |
 | `new_session`, `switch_session` | Return `{ cancelled }`; `switch_session` takes `sessionPath` | Return `{ sessionId }`; `switch_session` takes `sessionId` |
 | `set_model` | `provider` + `modelId` | Also accepts `model: "provider/id"` |
 | `get_state` | `model` is an object; also `sessionFile`, `isCompacting` | `model` is a `provider/id` string; no session file |
@@ -501,7 +516,7 @@ pi commands Vela doesn't have: `set_auto_retry`, `abort_retry`, `get_session_sta
 
 ## Image attachments
 
-`prompt`, `steer` and `follow_up` accept an optional `images` array. Each item is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. `message` may be empty for an image-only input.
+`prompt` and `steer` accept an optional `images` array. Each item is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. `message` may be empty for an image-only input.
 
 ```json
 {"id":"picture","type":"prompt","message":"Describe this","images":[{"type":"image","data":"<base64>","mimeType":"image/png"}]}

@@ -2,22 +2,22 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { generateText, type LanguageModel, stepCountIs } from 'ai'
 import z from 'zod'
+import { openDatabase } from '../../../../src/db/index.ts'
+import { agentLoop } from '../../../../src/driver/agent/index.ts'
 import { summarize } from '../../../../src/driver/context/compressor.ts'
 import { createRequestSnapshot } from '../../../../src/driver/context/request.ts'
 import type { ModelMessage } from '../../../../src/driver/messages.ts'
 import { SessionStore } from '../../../../src/driver/session/index.ts'
-import {
-  getStoredResult,
-  ToolResultStore,
-} from '../../../../src/driver/session/tool-results.ts'
+import { prepareCallResult } from '../../../../src/driver/tools/call-result.ts'
 import { readFileTool } from '../../../../src/driver/tools/file.ts'
 import { ToolRegistry } from '../../../../src/driver/tools/registry.ts'
 import { createBashTool } from '../../../../src/driver/tools/shell.ts'
-import { ToolExecutionResult } from '../../../../src/driver/tools/types.ts'
+import {
+  SpilledToolOutput,
+  ToolExecutionResult,
+} from '../../../../src/driver/tools/types.ts'
 import { TokenTracker } from '../../../../src/driver/usage/tracker.ts'
-import { resolveProviderTools } from '../../../../src/providers/index.ts'
 import {
   createFauxModel,
   fauxSummary,
@@ -27,33 +27,20 @@ import {
 import { createTestBashTool, testBashTool } from '../../../support/bash.ts'
 
 const EMPTY_TOOLS = { sdkTools: {}, toolDefinitions: [], hasHostedTools: false }
-const sdkTools = (r: ToolRegistry) =>
-  Object.fromEntries(r.toProviderTools().map((t) => [t.name, t]))
 const dir = mkdtempSync(join(tmpdir(), 'vela-output-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 const posixTest = process.platform === 'win32' ? test.skip : test
 
-test('oversized result is saved before returning a preview and can be read through the registry', async () => {
-  const registry = new ToolRegistry(new ToolResultStore(join(dir, 'results')))
+test('oversized result is saved to spillDir and can be paged with readFileTool', async () => {
   const raw = `${'head\n'.repeat(1000)}MIDDLE_EVIDENCE\n${'tail\n'.repeat(1000)}`
-  registry.register(
-    {
-      name: 'large',
-      description: 'large',
-      inputSchema: z.object({}),
-      maxResultChars: 3000,
-      execute: async () => raw,
-    },
-    readFileTool,
-  )
-  const tools = sdkTools(registry)
-  const result = await tools.large!.execute!({}, { toolCallId: 'large' })
-  const path = String(result).match(/Full output: (.+?);/)![1]!
+  const prepared = await prepareCallResult({
+    raw,
+    spillDir: join(dir, 'results'),
+    maxResultChars: 3000,
+  })
+  const path = String(prepared.output).match(/Full output: (.+?);/)![1]!
   expect(await Bun.file(path).text()).toBe(raw)
-  const page = await tools.read!.execute!(
-    { path, offset: 1001, limit: 1 },
-    { toolCallId: 'read' },
-  )
+  const page = await readFileTool.execute({ path, offset: 1001, limit: 1 })
   expect(String(page)).toContain('MIDDLE_EVIDENCE')
   expect(String(page)).toContain('offset=1002')
 })
@@ -81,41 +68,26 @@ test('long Unicode lines can be continued without missing or splitting a charact
 test('storage failure returns a bounded warning without an unreadable reference', async () => {
   const path = join(dir, 'not-a-directory')
   await Bun.write(path, 'occupied')
-  const registry = new ToolRegistry(new ToolResultStore(path))
-  registry.register({
-    name: 'large',
-    description: 'large',
-    inputSchema: z.object({}),
-    execute: async () => 'x'.repeat(60_000),
+  const prepared = await prepareCallResult({
+    raw: 'x'.repeat(60_000),
+    spillDir: path,
   })
-  const output = await sdkTools(registry).large!.execute!(
-    {},
-    { toolCallId: 'fail' },
-  )
-  expect(output).toContain('could not be saved')
-  expect(output).not.toContain('Full output:')
-  expect(String(output).length).toBeLessThan(60_000)
+  expect(String(prepared.output)).toContain('could not be saved')
+  expect(String(prepared.output)).not.toContain('Full output:')
+  expect(String(prepared.output).length).toBeLessThan(60_000)
 })
 
 test('real Bash captures large stdout and stderr with exit status and a bounded tail', async () => {
-  const registry = new ToolRegistry(
-    new ToolResultStore(join(dir, 'bash-results')),
-  )
-  registry.register(testBashTool)
-  // Like pi, a non-zero exit is an error result: the error text is the bounded tail plus the status
-  const error = await sdkTools(registry).bash!.execute!(
+  const result = await testBashTool.execute(
     {
       command:
         "printf 'STDERR_EVIDENCE\\n' >&2; for ((i=0;i<15000;i++)); do printf '日志😀-%s\\n' \"$i\"; done; exit 7",
     },
-    { toolCallId: 'bash' },
-  ).then(
-    () => {
-      throw new Error('expected an error result')
-    },
-    (error: Error) => error,
+    { spillDir: join(dir, 'bash-results') },
   )
-  const preview = error.message
+  expect(result).toBeInstanceOf(SpilledToolOutput)
+  const spilled = result as SpilledToolOutput
+  const preview = spilled.preview
   const [, bytes, path] = preview.match(
     /of (\d+) bytes of output\. Full output: (.+)\]/,
   )!
@@ -124,36 +96,21 @@ test('real Bash captures large stdout and stderr with exit status and a bounded 
   expect(raw).toContain('STDERR_EVIDENCE')
   expect(raw).toContain('日志😀-7500')
   expect(raw).toContain('日志😀-14999')
-  // Same as pi: the last 2000 lines (here ~34KB, under the 50KB cap), then the status
   expect(preview.startsWith('日志😀-13000\n')).toBe(true)
   expect(preview).toContain('日志😀-14999\n')
   expect(preview).toContain('[Showing the last 2000 lines of ')
   expect(preview.endsWith('Command exited with code 7')).toBe(true)
   expect(preview.isWellFormed()).toBe(true)
+  expect(spilled.execution).toMatchObject({ exitCode: 7, isError: true })
 })
 
 test('small results stay inline and invalid read cursors fail clearly', async () => {
-  const results = new ToolResultStore(join(dir, 'small-results'))
-  const registry = new ToolRegistry(results)
-  registry.register({
-    name: 'small',
-    description: 'small',
-    inputSchema: z.object({}),
-    execute: async () => 'small',
+  const prepared = await prepareCallResult({
+    raw: 'small',
+    spillDir: join(dir, 'small-results'),
   })
-  expect(
-    await sdkTools(registry).small!.execute!({}, { toolCallId: 'small' }),
-  ).toBe('small')
-  const records = (await Bun.file(results.indexPath).text())
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  expect(records.map((record) => record.type)).toEqual([
-    'tool_call',
-    'tool_result',
-    'tool_response',
-  ])
-  expect(records[1].output).toBe('small')
+  expect(prepared.output).toBe('small')
+  expect(prepared.stored).toBeUndefined()
   const path = join(dir, 'short.txt')
   await Bun.write(path, 'hello')
   await expect(readFileTool.execute({ path, offset: 0 })).rejects.toThrow()
@@ -165,71 +122,43 @@ test('small results stay inline and invalid read cursors fail clearly', async ()
   )
 })
 
-test('summary keeps a readable index even if the summarizer omits every file reference', async () => {
-  const summaryStore = new SessionStore('summary-results', dir)
-  const results = summaryStore.results
-  const model = createFauxModel({ responses: [fauxSummary(), fauxSummary()] })
-  const history: ModelMessage[] = [
-    { role: 'user', content: 'old request' },
-    {
-      role: 'tool',
-      content: [
-        {
-          type: 'tool_result',
-          toolName: 'bash',
-          toolCallId: 'summary',
-          output: { type: 'text', value: 'SUMMARY_EVIDENCE' },
-        },
-      ],
-    },
-    ...Array.from(
-      { length: 6 },
-      (): ModelMessage => ({ role: 'user', content: 'recent' }),
-    ),
-  ]
-  const compacted = await summarize(
-    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, history),
-    summaryStore,
-    new TokenTracker(),
-  )
-  expect(compacted.compressedCount).toBe(2)
-  expect(compacted.summary).toContain(
-    results.history.snapshotPath(compacted.historyViewSequence!),
-  )
-  expect(String(compacted.messages[0]!.content)).toContain(
-    '/snapshots/through-',
-  )
-  const entry = JSON.parse((await Bun.file(results.indexPath).text()).trim())
-  expect(entry.type).toBe('legacy_result')
-  expect(await Bun.file(entry.outputPath).text()).toBe('SUMMARY_EVIDENCE')
-  const store = new SessionStore('summary', dir)
-  store.appendMessage({ role: 'user', content: 'hi' })
-  store.appendCompaction(
-    compacted.messages[0]!,
-    compacted.summary,
-    undefined,
-    0,
-  )
-  await store.flush()
-  expect((await store.loadSaved())?.summary).toContain('/snapshots/through-')
-  const repeated = await summarize(
-    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, [
-      ...compacted.messages,
-      ...Array.from(
-        { length: 6 },
-        (): ModelMessage => ({ role: 'user', content: 'next' }),
-      ),
-    ]),
-    summaryStore,
-    new TokenTracker(),
-  )
-  expect(repeated.summary).toContain('/snapshots/through-')
+test('compaction omits legacy Earlier tool output footer and persists in SQLite cleanly', async () => {
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const summaryStore = new SessionStore('summary-results', db)
+    const model = createFauxModel({ responses: [fauxSummary(), fauxSummary()] })
+    const history: ModelMessage[] = [
+      { role: 'user', content: 'old request' },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'SUMMARY_EVIDENCE' }],
+      },
+      { role: 'user', content: 'recent' },
+    ]
+    for (const msg of history) summaryStore.appendMessage(msg)
+    const compacted = await summarize(
+      await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, history),
+      summaryStore,
+      new TokenTracker(),
+      500,
+    )
+    expect(compacted.compressedCount).toBe(2)
+    expect(compacted.summary).not.toContain('Earlier tool output:')
+    expect(compacted.summary).not.toContain('/snapshots/through-')
+    summaryStore.appendCompaction(
+      compacted.messages[0]!,
+      compacted.summary,
+      compacted.messages[1],
+      0,
+    )
+    expect((await summaryStore.loadSaved())?.summary).toBe(compacted.summary)
+  } finally {
+    db.close()
+  }
 })
 
-test('AI SDK passes the saved reference to the next step and accepts a paged follow-up', async () => {
-  const registry = new ToolRegistry(
-    new ToolResultStore(join(dir, 'sdk-results')),
-  )
+test('VelaDriver passes the spilled output reference to the next step and accepts a paged follow-up', async () => {
+  const registry = new ToolRegistry(join(dir, 'sdk-results'))
   registry.register(readFileTool, {
     name: 'large',
     description: 'large',
@@ -244,12 +173,7 @@ test('AI SDK passes the saved reference to the next step and accepts a paged fol
       (req) => {
         const path =
           req.toolResults[0]!.output.match(/Full output: (.+?);/)![1]!
-        expect(req.toolResults[0]!.raw).toMatchObject({ type: 'text' })
-        return fauxToolCall('read', {
-          path,
-          offset: 1001,
-          limit: 1,
-        })
+        return fauxToolCall('read', { path, offset: 1001, limit: 1 })
       },
       (req) => {
         expect(JSON.stringify(req.prompt)).toContain('SDK_MIDDLE_EVIDENCE')
@@ -257,42 +181,45 @@ test('AI SDK passes the saved reference to the next step and accepts a paged fol
       },
     ],
   })
-  const resolved = await resolveProviderTools(model, registry.toProviderTools())
-  const result = await generateText({
-    model: model as unknown as LanguageModel,
-    prompt: 'Find the middle evidence',
-    tools: resolved.sdkTools,
-    stopWhen: stepCountIs(3),
+  const messages: ModelMessage[] = [
+    { role: 'user', content: 'Find the middle evidence' },
+  ]
+  await agentLoop({
+    model,
+    systemPrompt: '',
+    toolRegistry: registry,
+    messages,
+    tokenTracker: new TokenTracker(),
   })
   expect(model.calls).toHaveLength(3)
-  expect(result.text).toBe('Recovered middle evidence.')
+  expect(JSON.stringify(messages.at(-1))).toContain(
+    'Recovered middle evidence.',
+  )
 })
 
 test('short Bash output completes without reserving an output file', async () => {
   const blocked = join(dir, 'blocked-results')
   await Bun.write(blocked, 'not a directory')
-  const results = new ToolResultStore(blocked)
   const marker = join(dir, 'must-not-exist')
   const output = await testBashTool.execute(
     { command: `touch '${marker}'` },
-    { results },
+    { spillDir: blocked },
   )
   expect(output).toBeInstanceOf(ToolExecutionResult)
   expect(await Bun.file(marker).exists()).toBe(true)
 })
 
 test('Bash timeout preserves output already written to disk', async () => {
-  // Not sub-second: the tool runs `bash -lc`, so a slow login profile can outlast a short timeout
-  // and the command is killed before printf runs (#372)
   const timeout = 2
   const result = await createTestBashTool().execute(
     {
       command: "printf '%060000d\\n' 0; printf 'BEFORE_TIMEOUT\\n'; sleep 20",
       timeout,
     },
-    { results: new ToolResultStore(join(dir, 'timeout-results')) },
+    { spillDir: join(dir, 'timeout-results') },
   )
-  const stored = getStoredResult({ type: 'json', value: result as never })!
+  expect(result).toBeInstanceOf(SpilledToolOutput)
+  const stored = result as SpilledToolOutput
   expect(await Bun.file(stored.path).text()).toContain('BEFORE_TIMEOUT')
   expect(stored.preview).toContain('BEFORE_TIMEOUT')
   expect(stored.preview).toContain(`Command timed out after ${timeout} seconds`)
@@ -300,14 +227,14 @@ test('Bash timeout preserves output already written to disk', async () => {
 })
 
 test('Bash rejects an invalid timeout and reports a missing shell without running the command', async () => {
-  const results = new ToolResultStore(join(dir, 'invalid-bash'))
+  const spillDir = join(dir, 'invalid-bash')
   for (const timeout of [0, -1, Number.POSITIVE_INFINITY, 3_000_000])
     await expect(
-      createBashTool().execute({ command: 'true', timeout }, { results }),
+      createBashTool().execute({ command: 'true', timeout }, { spillDir }),
     ).rejects.toThrow(/Invalid timeout/)
   const result = await createBashTool(undefined, {
     shellPath: join(dir, 'no-such-shell'),
-  }).execute({ command: 'true' }, { results })
+  }).execute({ command: 'true' }, { spillDir })
   if (!(result instanceof ToolExecutionResult))
     throw new Error('Expected an inline result')
   expect(result.text).toContain('The command did not run')
@@ -318,15 +245,10 @@ test('Bash reports a missing working directory without disabling the shell', asy
   const missingDirectory = join(dir, 'missing-working-directory')
   const result = await createTestBashTool(missingDirectory).execute(
     { command: 'echo this must not run' },
-    {
-      results: new ToolResultStore(
-        join(dir, 'missing-working-directory-results'),
-      ),
-    },
+    { spillDir: join(dir, 'missing-working-directory-results') },
   )
   if (!(result instanceof ToolExecutionResult))
     throw new Error('Expected an inline result')
-
   expect(result.text).toContain(
     `Working directory unavailable: ${missingDirectory}`,
   )
@@ -336,10 +258,7 @@ test('Bash reports a missing working directory without disabling the shell', asy
 posixTest('Bash runs commands with the configured shellPath', async () => {
   const result = await createBashTool(undefined, {
     shellPath: '/bin/sh',
-  }).execute(
-    { command: 'echo "$0"' },
-    { results: new ToolResultStore(join(dir, 'shell-path')) },
-  )
+  }).execute({ command: 'echo "$0"' }, { spillDir: join(dir, 'shell-path') })
   if (!(result instanceof ToolExecutionResult))
     throw new Error('Expected an inline result')
   expect(result.text.trim()).toBe('/bin/sh')

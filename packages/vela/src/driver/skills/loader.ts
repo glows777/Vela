@@ -29,8 +29,18 @@ export class SkillLoader {
     const seenFiles = new Set<string>()
     for (const entry of this.paths) {
       const resolved = path.resolve(entry)
-      if (!fs.existsSync(resolved)) continue
-      const found = fs.statSync(resolved).isDirectory()
+      let isDir = false
+      try {
+        if (!fs.existsSync(resolved)) continue
+        isDir = fs.statSync(resolved).isDirectory()
+      } catch (error) {
+        this.problems.push({
+          message: `could not inspect skill path: ${(error as Error).message}`,
+          path: resolved,
+        })
+        continue
+      }
+      const found = isDir
         ? this.loadDir(resolved, true)
         : resolved.endsWith('.md')
           ? [this.loadFile(resolved)].filter((s) => s !== undefined)

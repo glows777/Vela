@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ModelMessage } from '../../packages/vela/src/driver/index.ts'
+import type {
+  ModelMessage,
+  SessionMessageEntry,
+} from '../../packages/vela/src/driver/index.ts'
 import {
   fauxText,
   fauxToolCall,
@@ -12,10 +15,7 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 afterEach(cleanupTestVelas)
 
 const entries = async (t: ReturnType<typeof createTestVela>) =>
-  (await t.readData('sessions/default/transcript.jsonl'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
+  t.session.getEntries()
 
 const userTexts = (messages: readonly ModelMessage[]) =>
   messages
@@ -267,10 +267,13 @@ test("tool messages record each tool's details, so a resumed session can show ed
   })
   await t.run('edit a.txt')
   const tool = (await entries(t)).find(
-    (e) => e.type === 'message' && e.message.role === 'tool',
-  )
-  const callId = tool.message.content[0].toolCallId
-  expect(tool.details[callId].diff).toContain('+1 two')
+    (e): e is SessionMessageEntry =>
+      e.type === 'message' && e.message.role === 'tool',
+  )!
+  const part = tool.message.content[0] as { toolCallId: string }
+  const callId = part.toolCallId
+  const details = tool.details as Record<string, { diff: string }>
+  expect(details[callId]!.diff).toContain('+1 two')
   expect(t.session.getEntries()).toContainEqual(
     expect.objectContaining({ details: tool.details }),
   )

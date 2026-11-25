@@ -1,51 +1,29 @@
 import type { ProviderToolSpec } from '../../providers/index.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
-import { type ToolInputSchema, toJsonSchema } from '../../shared/tool-schema.ts'
+import type { ToolInputSchema } from '../../shared/tool-schema.ts'
 import { getRetiredToolError } from '../../shared/tool-selection.ts'
-import type { VelaEventListener } from '../agent/events.ts'
+import type { VelaEvent, VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
-import {
-  isToolContent,
-  normalizeToolContent,
-  type ToolResultOutput,
-  toolContentText,
-} from '../messages.ts'
 import type { SessionScope } from '../session/scope.ts'
-import type { CallRecord } from '../session/tool-history.ts'
-import { ToolResultStore } from '../session/tool-results.ts'
 import type { BackgroundCommands } from './background.ts'
-import { prepareCallResult } from './call-result.ts'
 import { validateToolDefinition } from './definition-validation.ts'
 import { ActiveCalls, ExecutionGate } from './execution-gate.ts'
 import {
-  bindLocatedEnvResolver,
-  type CallOptions,
-  createLazyEnvResolver,
-  handleToolExecutionError,
-  persistResponse,
-  recordToolRejection,
-  recoverToolCall,
-  rejectDrainingCall,
-  ToolRejection,
-} from './recovery.ts'
-import { countToolTokens, toProviderTools } from './sdk-tools.ts'
-import {
-  createToolSearchDocument,
-  formatDeferredToolSummary,
-  rankTools,
-} from './tool-ranker.ts'
-import {
-  type InterceptionContext,
-  type ToolAnnotations,
-  type ToolExecutionMode,
-  ToolExecutionResult,
-  type ToolExposure,
-  type ToolInterception,
-  type ToolNamespace,
-  type ToolRegistryForkOptions,
-  ToolResultError,
+  countToolTokens,
+  matchDeferredTools,
+  orderActiveTools,
+  toProviderTools,
+} from './sdk-tools.ts'
+import { formatDeferredToolSummary } from './tool-ranker.ts'
+import type {
+  ToolAnnotations,
+  ToolExecutionMode,
+  ToolExposure,
+  ToolInterception,
+  ToolNamespace,
+  ToolRegistryForkOptions,
 } from './types.ts'
-import { validateInput } from './validation.ts'
+
 /** Context passed to a tool's execute. */
 export interface ToolContext {
   /** @internal */ execution?: ExecutionEnv
@@ -59,10 +37,8 @@ export interface ToolContext {
   signal?: AbortSignal
   /** Reports partial output while the tool runs (`tool_execution_update`); calls after settle are ignored. */
   onUpdate?: (partialResult: unknown) => void
-  /** @internal The session's tool result store (bash writes large output to files) */
-  results: ToolResultStore
-  /** @internal This call's id in the tool history */
-  callId?: string
+  /** @internal Directory where large outputs may spill to temp files. */
+  spillDir?: string
   /** @internal The (session-level) registry running this call (used by tool_search) */
   registry?: ToolRegistry
 }
@@ -130,7 +106,7 @@ export class ToolRegistry {
   private scope?: () => Readonly<SessionScope> | undefined
 
   constructor(
-    readonly results = new ToolResultStore(),
+    readonly spillDir?: string,
     shared?: SharedToolState,
     private parent?: ToolRegistry,
   ) {
@@ -139,10 +115,10 @@ export class ToolRegistry {
 
   /**
    * A registry for one session: shares tool definitions and hooks with this registry, but has its
-   * own tool result store, discovered deferred tools, persistence state and execution gate.
+   * own spill directory, discovered deferred tools, and execution gate.
    */
-  fork(results: ToolResultStore, options: ToolRegistryForkOptions = {}) {
-    const forked = new ToolRegistry(results, this.shared, this.parent)
+  fork(spillDir?: string, options: ToolRegistryForkOptions = {}) {
+    const forked = new ToolRegistry(spillDir, this.shared, this.parent)
     forked.onEvent = options.onEvent
     forked.sessionId = options.sessionId
     forked.scope = options.scope
@@ -159,7 +135,10 @@ export class ToolRegistry {
     this.shared.logger = logger
   }
 
-  private persistenceFailure: Error | undefined
+  get logger(): VelaLogger {
+    return this.shared.logger
+  }
+
   /** `ToolExecutionResult.value`s by tool call id, until the call's `tool_execution_end` takes them */
   private readonly details = new Map<string, unknown>()
   private readonly active = new ActiveCalls()
@@ -171,28 +150,30 @@ export class ToolRegistry {
 
   async waitForIdle(): Promise<void> {
     await this.active.waitForIdle()
-    this.assertHealthy()
   }
 
-  assertHealthy(): void {
-    if (this.persistenceFailure) throw this.persistenceFailure
-    this.results.history.assertHealthy()
+  trackCall<T>(fn: () => Promise<T>): Promise<T> {
+    return this.active.track(fn)
   }
 
-  async recordRejection(
-    toolName: string,
-    toolCallId: string,
-    input: unknown,
-    error: unknown,
-  ): Promise<void> {
-    this.assertHealthy()
-    await recordToolRejection(
-      this.results.history,
-      toolName,
-      toolCallId,
-      input,
-      error,
-    )
+  runInGate<T>(mode: ToolExecutionMode, fn: () => Promise<T>): Promise<T> {
+    return this.gate.run(mode, fn)
+  }
+
+  emitEvent(event: VelaEvent): void {
+    this.onEvent?.(event)
+  }
+
+  setDetails(toolCallId: string, value: unknown): void {
+    this.details.set(toolCallId, value)
+  }
+
+  currentSessionId(): string | undefined {
+    return this.sessionId
+  }
+
+  currentScope(): Readonly<SessionScope> | undefined {
+    return this.scope?.()
   }
 
   private get tools(): Map<string, ToolDefinition> {
@@ -235,7 +216,7 @@ export class ToolRegistry {
   }
 
   /** Whether tool selection and channel eligibility make a tool available in this session. */
-  private isAvailable(toolName: string): boolean {
+  isAvailable(toolName: string): boolean {
     const tool = this.tools.get(toolName)
     if (!tool) return false
     if (
@@ -250,8 +231,12 @@ export class ToolRegistry {
     return enabled ?? tool.activeByDefault !== false
   }
 
-  private get interception(): ToolInterception | undefined {
+  getInterception(): ToolInterception | undefined {
     return this.shared.interception ?? this.parent?.interception
+  }
+
+  private get interception(): ToolInterception | undefined {
+    return this.getInterception()
   }
 
   setInterception(interception: ToolInterception): void {
@@ -281,257 +266,23 @@ export class ToolRegistry {
   getAllTools(): ToolDefinition[] {
     return Array.from(this.tools.values())
   }
-
   toProviderTools(): ProviderToolSpec[] {
-    return toProviderTools(this.getActiveTools(), (tool, input, options) =>
-      this.active.track(() => this.runCall(tool, input, options)),
-    )
+    return toProviderTools(this.getActiveTools())
   }
-
-  /** Availability checks, hooks, execution, tool history and post hooks for one call. */
-  private async runCall(
-    tool: ToolDefinition,
-    input: unknown,
-    options: CallOptions,
-  ): Promise<unknown> {
-    const name = tool.name
-    const mode = tool.executionMode ?? 'parallel'
-    const signal = options.abortSignal
-    // Availability checks and hooks run before the execution gate, so waiting on the user doesn't hold back other calls
-    this.assertHealthy()
-    const reject = async (reason: string) => {
-      await this.recordRejection(
-        name,
-        options.toolCallId ?? crypto.randomUUID(),
-        input,
-        reason,
-      )
-      return new ToolRejection(reason)
-    }
-    const rejectDraining = (call?: CallRecord) =>
-      rejectDrainingCall(
-        this.results.history,
-        name,
-        options.toolCallId,
-        input,
-        call,
-      )
-    if (this.isDraining()) return rejectDraining()
-    if (tool.hostedOnly)
-      return await reject(`[Rejected] ${name} is unavailable locally`)
-    if (!this.isAvailable(name))
-      return await reject(`[Rejected] ${name} is not enabled in this session`)
-    const interception = this.interception
-    const context: InterceptionContext = {
-      sessionId: this.sessionId,
-      toolCallId: options.toolCallId,
-    }
-    if (interception?.before) {
-      const pre = await interception.before(name, input, context)
-      if (pre.block) {
-        return await reject(
-          `[Blocked by hook] ${pre.reason || 'Operation blocked'}`,
-        )
-      }
-      if (pre.input !== input) {
-        input = pre.input
-        try {
-          input = await validateInput(tool.inputSchema, input)
-        } catch (error) {
-          return await reject(
-            `[Rejected] Input modified by hook is invalid: ${error instanceof Error ? error.message : String(error)}`,
-          )
-        }
-      }
-    }
-    if (name === 'bash') {
-      const command = (input as { command?: unknown } | null)?.command
-      if (typeof command !== 'string')
-        return await reject('[Rejected] bash command must be a string')
-    }
-    return await this.gate.run(mode, async () => {
-      if (this.isDraining()) return rejectDraining()
-      this.shared.logger.debug(`[tools] ${name} started (${mode})`)
-      this.assertHealthy()
-      const history = this.results.history
-      const requireEnv = interception?.resolveEnv
-        ? createLazyEnvResolver(
-            (envSignal) => interception.resolveEnv!(this.sessionId, envSignal),
-            signal,
-            (resolved) => {
-              context.execution = resolved
-            },
-            () => context.execution,
-          )
-        : undefined
-      if (
-        (options.recovery?.location ||
-          (tool.replay === 'safe' &&
-            (name === 'read' ||
-              name === 'ls' ||
-              name === 'grep' ||
-              name === 'find'))) &&
-        !context.execution &&
-        requireEnv
-      )
-        await requireEnv(signal)
-      const location = context.execution && {
-        environment: context.execution.id,
-        cwd: context.execution.cwd,
-      }
-      // Recovery never silently moves a call to a different environment or replays changed input.
-      if (
-        options.recovery &&
-        ((options.recovery.location &&
-          (!location ||
-            JSON.stringify(location) !==
-              JSON.stringify(options.recovery.location))) ||
-          JSON.stringify(input) !== JSON.stringify(options.recovery.input))
-      )
-        return new ToolRejection(
-          `Tool ${name} was interrupted by a restart and may have partially run; its location or input changed, so it was not replayed`,
-        )
-      const call = await history.begin(name, options.toolCallId, input, {
-        replay: tool.replay ?? 'unsafe',
-        location,
-        ...(options.recovery
-          ? { interruption: (options.recovery.interruption ?? 0) + 1 }
-          : {}),
-      })
-      if (this.isDraining()) return rejectDraining(call)
-      const boundRequireEnv = requireEnv
-        ? bindLocatedEnvResolver(
-            requireEnv,
-            call,
-            history,
-            name,
-            options.recovery?.location,
-            Boolean(location),
-          )
-        : undefined
-      const started = performance.now()
-      let settled = false
-      const onUpdate = (partialResult: unknown) => {
-        if (settled || options.toolCallId === undefined) return
-        this.onEvent?.({
-          type: 'tool_execution_update',
-          toolCallId: options.toolCallId,
-          toolName: name,
-          args: input,
-          partialResult,
-        })
-        options.onUpdate?.(partialResult)
-      }
-      let raw: unknown
-      try {
-        signal?.throwIfAborted()
-        raw = await tool.execute(input, {
-          ...context,
-          requireEnv: boundRequireEnv,
-          background: this.background,
-          scope: this.scope?.(),
-          results: this.results,
-          toolCallId: options.toolCallId,
-          callId: call.callId,
-          signal,
-          registry: this,
-          onUpdate,
-        })
-      } catch (error) {
-        settled = true
-        return await handleToolExecutionError({
-          error,
-          name,
-          input,
-          started,
-          callId: call.callId,
-          signal,
-          history,
-          interception,
-          context,
-        })
-      }
-      settled = true
-      if (raw instanceof ToolExecutionResult && options.toolCallId)
-        this.details.set(options.toolCallId, raw.value)
-      const result = await prepareCallResult({
-        raw,
-        name,
-        results: this.results,
-        environment: context.execution,
-        resolveEnvironment: requireEnv ? () => requireEnv(signal) : undefined,
-        call,
-        started,
-        signal,
-        maxResultChars: tool.maxResultChars,
-        onPersistenceFailure: (error) => {
-          this.persistenceFailure = error
-        },
-      })
-      let { output } = result
-      const { execution } = result
-      if (interception?.after) {
-        output = await interception.after(
-          name,
-          input,
-          output,
-          context,
-          Boolean(execution.isError),
-        )
-      }
-      // Normalize after all post hooks, including replacement image payloads.
-      if (isToolContent(output)) output = await normalizeToolContent(output)
-      await persistResponse(history, call.callId, output, execution.isError)
-      // Like pi: a failed command is an error result, with its output (and where the full output is) as the message
-      if (execution.isError)
-        throw new ToolResultError(
-          (typeof output === 'string' ? output : toolContentText(output)) ||
-            'Tool reported an error',
-          typeof output === 'string' ? undefined : output,
-        )
-      return output
-    })
-  }
-
-  /** @internal Reconcile a missing transcript result before continuing. */
-  recoverToolCall(
-    name: string,
-    id: string,
-    input: unknown,
-    signal?: AbortSignal,
-  ): Promise<ToolResultOutput> {
-    return recoverToolCall(
-      this,
-      name,
-      id,
-      input,
-      signal,
-      (tool, args, recovery) =>
-        this.active.track(() =>
-          this.runCall(tool, args, {
-            toolCallId: id,
-            abortSignal: signal,
-            recovery,
-          }),
-        ),
-    )
-  }
-
-  /** Display data (`ToolExecutionResult.value`) of a finished call, for its `tool_execution_end`; removes it. */
+  /** Display data (`ToolExecutionResult.value`) of a finished call; removes it. */
   takeDetails(toolCallId: string): unknown {
     const details = this.details.get(toolCallId)
     this.details.delete(toolCallId)
     return details
   }
 
-  /** Tools declared to the model: allowed, and direct / model-only, or deferred and loaded with tool_search. */
+  /** Tools declared to the model: allowed direct/model-only, then discovered deferred in order. */
   getActiveTools() {
-    return this.getAllTools().filter((tool) => {
-      if (!this.isAvailable(tool.name)) return false
-      const exposure = tool.exposure ?? 'direct'
-      if (exposure === 'deferred') return this.discoveredTools.has(tool.name)
-      return exposure === 'direct' || exposure === 'model-only'
-    })
+    return orderActiveTools(
+      this.getAllTools(),
+      (name) => this.isAvailable(name),
+      this.discoveredTools,
+    )
   }
 
   /** Tools tool_search can load in this session: allowed deferred tools (not yet loaded, unless `loaded`). */
@@ -547,37 +298,16 @@ export class ToolRegistry {
 
   /** The `<deferred_tools>` lines. Like pi, a namespace (an MCP server) gets one line, not its tools. */
   getDeferredToolSummary(): string {
-    return formatDeferredToolSummary(this.searchableTools())
+    return formatDeferredToolSummary(this.searchableTools(true))
   }
 
   /** Loads deferred tools (comma-separated exact names, or top `limit` BM25 matches). */
   async searchTools(query: string, limit = 8): Promise<ToolDefinition[]> {
-    const loadable = this.searchableTools(true)
-    const names = query
-      .split(',')
-      .map((name) => name.trim())
-      .filter(Boolean)
-    // Exact names also return tools loaded earlier, so asking again is harmless
-    const exact = names.map((name) => loadable.find((t) => t.name === name))
-    let results: ToolDefinition[]
-    if (names.length > 0 && exact.every((tool) => tool !== undefined)) {
-      results = exact as ToolDefinition[]
-    } else {
-      const candidates = loadable.filter(
-        (t) => !this.discoveredTools.has(t.name),
-      )
-      const documents = await Promise.all(
-        candidates.map(async (tool) =>
-          createToolSearchDocument({
-            ...tool,
-            jsonSchema: await toJsonSchema(tool.inputSchema),
-          }),
-        ),
-      )
-      results = rankTools(query, documents, limit).flatMap(
-        (match) => candidates.find((t) => t.name === match.name) ?? [],
-      )
-    }
+    const results = await matchDeferredTools(
+      this.searchableTools(true),
+      query,
+      limit,
+    )
     for (const tool of results) this.discoveredTools.add(tool.name)
     return results
   }
@@ -585,7 +315,7 @@ export class ToolRegistry {
   countTokenEstimate(): { active: number; deferred: number; total: number } {
     return countToolTokens(
       this.getAllTools(),
-      new Set(this.getActiveTools().map((tool) => tool.name)),
+      new Set(this.getActiveTools().map((t) => t.name)),
     )
   }
 

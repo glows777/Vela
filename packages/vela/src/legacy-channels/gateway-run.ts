@@ -26,7 +26,6 @@ import type {
 } from './types.ts'
 import type { ChannelUsage } from './usage.ts'
 
-const MAX_SAVE_FAILURES = 3
 /** One group notice per session when a flood leaves discussion out of an evaluation. */
 const SKIPPED_NOTICE =
   'Skipped some untagged discussion: it was too large to evaluate at once.'
@@ -54,8 +53,6 @@ function trimPassiveBatch(messages: IncomingMessage[]): IncomingMessage[] {
 
 /** One admitted run, including preparation, persisted recovery and reply delivery. */
 export class GatewayRun {
-  private subscribed = new WeakSet<VelaSession>()
-  private saveFailures = new Map<string, number>()
   /** Sessions already told that a flood skipped discussion. */
   private readonly skippedNotices = new Set<string>()
 
@@ -75,14 +72,6 @@ export class GatewayRun {
     private stopped: () => boolean,
     private logger: VelaLogger,
   ) {}
-
-  saved(id: string): void {
-    this.saveFailures.delete(this.directory.keyForSession(id))
-  }
-
-  clearSaveFailures(): void {
-    this.saveFailures.clear()
-  }
 
   async process(
     id: string,
@@ -271,30 +260,7 @@ export class GatewayRun {
     const session = topicSession ?? this.sessions.open(id, channelName, merged)
     this.admission.observe(id, channelName, merged, task)
     this.usage.track(id, merged.channelId, session)
-    if (!this.subscribed.has(session)) {
-      this.subscribed.add(session)
-      session.subscribe((event) => {
-        if (event.type !== 'session_save_failed') return
-        if (!this.stopped())
-          this.saveFailures.set(id, (this.saveFailures.get(id) ?? 0) + 1)
-        this.logger.error(
-          `[gateway] Could not save session ${id}: ${errorMessage(event.error)}`,
-        )
-      })
-    }
-    if ((this.saveFailures.get(id) ?? 0) >= MAX_SAVE_FAILURES) {
-      try {
-        // Retry the retained live session, without appending the new input or calling the model.
-        await session.save()
-      } catch {
-        // The refusal below reports the continuing outage; only a real write clears the count.
-      }
-    }
-    // A blocked session must reply even when the storage outage also prevents reads.
-    if (
-      (this.saveFailures.get(id) ?? 0) < MAX_SAVE_FAILURES &&
-      !this.admission.resumed.has(session)
-    ) {
+    if (!this.admission.resumed.has(session)) {
       await this.sessions.resume(session, wait)
       if (wait.cancelled()) return stopped(session)
       this.admission.resumed.add(session)
@@ -313,22 +279,6 @@ export class GatewayRun {
         senderName: message.senderName,
         text: message.text,
       })
-
-    if ((this.saveFailures.get(id) ?? 0) >= MAX_SAVE_FAILURES) {
-      if (merged.passive) {
-        this.logger.error(
-          `[${channelName}] Passive evaluation paused: session ${session.id} cannot be saved`,
-        )
-        return 'failed'
-      }
-      await this.sendReply(
-        session,
-        channelName,
-        merged,
-        "This session can't be saved. New prompts are paused after 3 consecutive save failures. Please ask the operator to restore session storage.",
-      )
-      return 'failed'
-    }
 
     if (!recovered && !trigger.backgroundJobToken) {
       try {

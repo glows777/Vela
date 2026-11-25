@@ -102,16 +102,24 @@ test.each(['before', 'after'] as const)(
     )
     expect(t.eventsOf('tool_execution_end')[0]?.details).toEqual(native)
 
-    const records = readFileSync(t.session.store.results.history.path, 'utf8')
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line))
-    const record = records.find((entry) => entry.type === 'tool_result')
-    expect(record.output).toEqual(native)
-    const fullCaption = readFileSync(record.modelTextPath, 'utf8')
-    expect(fullCaption).toBe(captions.join('\n'))
-    for (const picture of images)
-      expect(fullCaption).not.toContain(picture.data)
+    const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+    const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+    try {
+      const row = db.get<{
+        details_json: string | null
+        spill_path: string | null
+      }>(
+        'SELECT details_json, spill_path FROM vela_tool_calls WHERE tool_name = ? ORDER BY created_at DESC LIMIT 1',
+        'pictures_ordered',
+      )
+      expect(JSON.parse(String(row?.details_json))).toEqual(native)
+      const fullCaption = readFileSync(String(row?.spill_path), 'utf8')
+      expect(fullCaption).toBe(captions.join('\n'))
+      for (const picture of images)
+        expect(fullCaption).not.toContain(picture.data)
+    } finally {
+      db.close()
+    }
     const recovered = JSON.stringify(t.model.calls[2]!.toolResults.at(-1))
     for (const caption of captions) expect(recovered).toContain(caption)
   },

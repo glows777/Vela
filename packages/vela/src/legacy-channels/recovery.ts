@@ -46,6 +46,7 @@ export class ChannelRecovery {
   private inputs = new WeakMap<VelaSession, IncomingMessage[][]>()
   private subscribed = new WeakSet<VelaSession>()
   private saves = new WeakMap<VelaSession, Promise<void>[]>()
+  private pending = new Set<Promise<void>>()
   constructor(
     private directory: ChannelDirectory,
     private logger: VelaLogger,
@@ -126,7 +127,12 @@ export class ChannelRecovery {
         if (ids.length) await this.directory.forget(key, ids)
       })
       // Keep the failure for the run's awaited drain; do not create an unhandled rejection.
-      void save.catch(() => {})
+      const tracked = save
+        .catch(() => {})
+        .finally(() => {
+          this.pending.delete(tracked)
+        })
+      this.pending.add(tracked)
       const saves = this.saves.get(session) ?? []
       saves.push(save)
       this.saves.set(session, saves)
@@ -138,6 +144,13 @@ export class ChannelRecovery {
     const saves = this.saves.get(session) ?? []
     this.saves.delete(session)
     await Promise.all(saves)
+  }
+
+  /** Wait for all in-flight recovery saves and directory forgets across sessions before shutdown removes storage. */
+  async settledAll(): Promise<void> {
+    while (this.pending.size) {
+      await Promise.allSettled([...this.pending])
+    }
   }
 
   /**

@@ -67,10 +67,20 @@ test('a running bash call moves to the background: the call returns at once, a l
   expect(t.model.calls[0]!.tools).toContain('bash')
   // The turn continued while the command ran, and the history says it is still owed.
   expect(t.model.calls[1]!.toolResults[0]!.output).not.toContain('END')
-  const history = await Bun.file(t.session.registry.results.history.path).text()
-  expect(history).toContain('"backgroundTaskId":"bg-1"')
-  expect(history).toContain('"backgroundedByUser":true')
-  expect(history).toContain('"status":"completed"')
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({
+    path: `${t.dataDir}/vela.db`,
+    readonly: true,
+  })
+  try {
+    const row = db.get<{ status: string; details_json: string | null }>(
+      'SELECT status, details_json FROM vela_tool_calls ORDER BY created_at DESC LIMIT 1',
+    )
+    expect(row?.status).toBe('completed')
+    expect(row?.details_json).toContain('bg-1')
+  } finally {
+    db.close()
+  }
   // The exit is its own turn, carrying the output and the environment's spill file.
   await until(() => t.model.calls.length === 3, 'the exit turn')
   await until(() => !t.session.isRunning, 'the exit turn to settle')
@@ -78,7 +88,7 @@ test('a running bash call moves to the background: the call returns at once, a l
   expect(delivery).toContain('\n19000\n')
   expect(delivery).not.toContain('\n2\n')
   const full = /Full output: (\S+)/.exec(delivery)![1]!
-  expect(full).toStartWith(t.session.registry.results.dir)
+  expect(full).toStartWith(t.session.registry.spillDir!)
   const log = await Bun.file(full).text()
   expect(log).toStartWith('1\n')
   expect(log).toEndWith('END\n')
@@ -237,11 +247,7 @@ test('moving your own `!` command records it as a background command, not a fini
     responses: [(request) => fauxText(request.lastUserText)],
     extensions: [background()],
   })
-  const entries = async () =>
-    (await t.readData('sessions/default/transcript.jsonl'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line))
+  const entries = async () => t.session.getEntries()
   const updates: string[] = []
   const command = t.session.executeBash(
     'echo BASH_STARTED; sleep 0.5; echo BASH_DONE',

@@ -74,9 +74,7 @@ test('image prompt reaches the provider as an image and history uses one inline 
     role: 'user',
     content: [{ type: 'text', text: 'Describe the image' }, image],
   })
-  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
-    image.data,
-  )
+  expect(JSON.stringify(t.session.getEntries())).toContain(image.data)
 })
 
 test('oversized prompt image is resized before it reaches the provider', async () => {
@@ -245,24 +243,24 @@ test('input hooks receive and replace images, including extension content arrays
   expect(t.model.calls[1]!.lastUserText).toBe('extension input transformed')
 })
 
-test('steer and follow-up images remain attached in queue order', async () => {
+test('queued steer images remain attached in queue order', async () => {
   const t = createTestVela({
     responses: [
       () => {
-        void t.session.steer('steering image', { images: [fixture()] })
-        void t.session.followUp('follow-up image', { images: [fixture()] })
+        void t.session.steer('first steering image', { images: [fixture()] })
+        void t.session.steer('second steering image', { images: [fixture()] })
         return fauxText('first')
       },
-      fauxText('steered'),
-      fauxText('followed'),
+      fauxText('steered-1'),
+      fauxText('steered-2'),
     ],
   })
   await t.run('start')
   expect(t.model.calls.map((call) => imagesIn(call.prompt).length)).toEqual([
     0, 1, 2,
   ])
-  expect(t.model.calls[1]!.lastUserText).toBe('steering image')
-  expect(t.model.calls[2]!.lastUserText).toBe('follow-up image')
+  expect(t.model.calls[1]!.lastUserText).toBe('first steering image')
+  expect(t.model.calls[2]!.lastUserText).toBe('second steering image')
 })
 
 test('summary compaction never serializes image base64 as text', async () => {
@@ -299,7 +297,7 @@ test('normalizing triggered and queued custom content preserves display metadata
             display: false,
             details: { saved: 'queued' },
           },
-          { deliverAs: 'followUp' },
+          { deliverAs: 'steer' },
         )
         return fauxText('first')
       },

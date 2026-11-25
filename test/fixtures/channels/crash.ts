@@ -1,6 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
+import { openDatabase } from '../../../packages/vela/src/db/sqlite.ts'
 import { lark } from '../../../packages/vela/src/lark/index.ts'
 import {
   type FauxRequest,
@@ -170,15 +171,22 @@ if (mode?.startsWith('note')) {
     !otherDone()
   )
     await Bun.sleep(1)
-  // Session entries are written as they are appended; wait for the note to reach the file.
-  const saved = () =>
-    readdirSync(t.vela.dataDir, { recursive: true, encoding: 'utf8' }).some(
-      (name) =>
-        name.endsWith('lark-oc_group-root/transcript.jsonl') &&
-        readFileSync(join(t.vela.dataDir, name), 'utf8').includes(
-          'cobalt is ready',
-        ),
-    )
+  // Session entries are written to vela.db; wait for the note to reach the database.
+  const saved = () => {
+    const dbPath = join(t.vela.dataDir, 'vela.db')
+    if (!existsSync(dbPath)) return false
+    const db = openDatabase({ path: dbPath, readonly: true })
+    try {
+      const row = db.get<{ c: number }>(
+        "SELECT COUNT(*) AS c FROM vela_messages WHERE session_id = 'lark-oc_group-root' AND content_json LIKE '%cobalt is ready%'",
+      )
+      return (row?.c ?? 0) > 0
+    } catch {
+      return false
+    } finally {
+      db.close()
+    }
+  }
   if (mode === 'note') while (!saved()) await Bun.sleep(5)
   ready()
 }

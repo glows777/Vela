@@ -25,7 +25,6 @@ test('experimental frontend helpers are the canonical core implementations', () 
     summaryMessageText: entries.summaryMessageText,
     branchSummaryMessageText: entries.branchSummaryMessageText,
     sessionContentText: entries.messageText,
-    isSessionV1: entries.isSessionV1,
     newSessionId: ids.newSessionId,
     assertSessionId: options.assertSessionId,
     THINKING_LEVELS: catalog.THINKING_LEVELS,

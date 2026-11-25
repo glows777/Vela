@@ -2,13 +2,40 @@ import type { VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import { type ToolContent, toolContentText } from '../messages.ts'
 import type { SessionScope } from '../session/scope.ts'
-import type { ExecutionMetadata } from '../session/tool-history.ts'
+
+/** Execution metadata attached to a tool result (recorded on `vela_tool_calls` and `tool` messages). */
+export interface ExecutionMetadata {
+  exitCode?: number
+  isError?: boolean
+  timedOut?: boolean
+  signal?: string | null
+  error?: string
+  backgroundTaskId?: string
+  backgroundedByUser?: boolean
+}
+
+/** Oversized tool output spilled to a file inside the execution environment. */
+export class SpilledToolOutput {
+  constructor(
+    readonly path: string,
+    readonly bytes: number,
+    readonly preview: string,
+    readonly execution: ExecutionMetadata = {},
+  ) {}
+}
 
 /** Identity of a call passed to the assembly's awaited interception callbacks and to tools. */
 export interface InterceptionContext {
   /** @internal */ execution?: ExecutionEnv
   sessionId?: string
   toolCallId?: string
+}
+
+interface ToolBeforeResult {
+  input: unknown
+  block?: boolean
+  reason?: string
+  approval?: { summary: string }
 }
 
 export interface ToolInterception {
@@ -20,9 +47,7 @@ export interface ToolInterception {
     name: string,
     input: unknown,
     context: InterceptionContext,
-  ) =>
-    | { input: unknown; block?: boolean; reason?: string }
-    | Promise<{ input: unknown; block?: boolean; reason?: string }>
+  ) => ToolBeforeResult | Promise<ToolBeforeResult>
   after?: (
     name: string,
     input: unknown,

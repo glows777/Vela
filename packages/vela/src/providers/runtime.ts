@@ -10,15 +10,12 @@ import {
   asSchema,
   generateText,
   type LanguageModel,
-  type LanguageModelCallEndEvent,
   streamText,
   type Tool,
   type ToolSet,
 } from 'ai'
 import type {
-  AssistantContentPart,
   ProviderOptions,
-  ToolContent,
   VelaAssistantMessage,
   VelaMessage,
   VelaToolMessage,
@@ -29,18 +26,9 @@ import type {
   ProviderUsage,
   ReasoningOption,
 } from '../shared/provider-types.ts'
-import {
-  isVelaJsonSchema,
-  type ToolInputSchema,
-  toJsonSchema,
-} from '../shared/tool-schema.ts'
+import { type ToolInputSchema, toJsonSchema } from '../shared/tool-schema.ts'
 import { withPromptCache } from './cache.ts'
-import {
-  fromAiResponseMessage,
-  fromAiToolOutput,
-  toAiModelMessages,
-  toAiToolOutput,
-} from './messages.ts'
+import { fromAiResponseMessage, toAiModelMessages } from './messages.ts'
 import type { HostedToolModel } from './models/index.ts'
 import { isAnthropicMessagesModel } from './models-config.ts'
 import {
@@ -57,10 +45,6 @@ export interface ProviderToolSpec {
   description: string
   inputSchema: ToolInputSchema
   hostedOnly?: true
-  execute: (
-    input: unknown,
-    options: { toolCallId?: string; abortSignal?: AbortSignal },
-  ) => Promise<unknown>
 }
 
 export interface ResolvedProviderTools {
@@ -70,19 +54,6 @@ export interface ResolvedProviderTools {
   readonly toolDefinitions: unknown[]
   /** True when at least one provider-hosted tool is active. */
   readonly hasHostedTools: boolean
-}
-
-function isToolContentValue(value: unknown): value is ToolContent {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (part) =>
-        part &&
-        typeof part === 'object' &&
-        (part.type === 'image' ||
-          (part.type === 'text' && typeof part.text === 'string')),
-    )
-  )
 }
 
 async function extractJsonSchema(
@@ -107,15 +78,6 @@ export async function resolveProviderTools(
   tools: ProviderToolSpec[],
   options: {
     reasoning?: ReasoningOption
-    wrapExecute?: (
-      execute: (
-        input: unknown,
-        options: { toolCallId?: string; abortSignal?: AbortSignal },
-      ) => Promise<unknown>,
-    ) => (
-      input: unknown,
-      options: { toolCallId?: string; abortSignal?: AbortSignal },
-    ) => Promise<unknown>
   } = {},
 ): Promise<ResolvedProviderTools> {
   const hostedTools: ToolSet =
@@ -132,27 +94,7 @@ export async function resolveProviderTools(
   for (const spec of tools) {
     const hosted = hostedTools[spec.name]
     if (hosted) {
-      sdkTools[spec.name] =
-        options.wrapExecute && hosted.execute
-          ? {
-              ...hosted,
-              execute: (input, execOptions) =>
-                options.wrapExecute!((wrappedInput, wrappedOptions) =>
-                  Promise.resolve(
-                    hosted.execute!(wrappedInput, {
-                      ...execOptions,
-                      toolCallId:
-                        wrappedOptions.toolCallId ?? execOptions.toolCallId,
-                      abortSignal:
-                        wrappedOptions.abortSignal ?? execOptions.abortSignal,
-                    }),
-                  ),
-                )(input, {
-                  toolCallId: execOptions?.toolCallId,
-                  abortSignal: execOptions?.abortSignal,
-                }),
-            }
-          : hosted
+      sdkTools[spec.name] = hosted
       if (hosted.type === 'provider') {
         hasHostedTools = true
         toolDefinitions.push({
@@ -187,145 +129,18 @@ export async function resolveProviderTools(
       inputSchema: jsonSchemaObj,
     })
 
-    const sdkSchema = isVelaJsonSchema(spec.inputSchema)
-      ? aiJsonSchema(jsonSchemaObj, {
-          validate: spec.inputSchema.validate
-            ? async (value) => {
-                const validator = spec.inputSchema as {
-                  validate: (
-                    v: unknown,
-                  ) => Promise<
-                    | { success: true; value: unknown }
-                    | { success: false; error: Error }
-                  >
-                }
-                const res = await validator.validate(value)
-                return res.success
-                  ? { success: true as const, value: res.value }
-                  : { success: false as const, error: res.error }
-              }
-            : undefined,
-        })
-      : spec.inputSchema
-
-    const runExecute = options.wrapExecute
-      ? options.wrapExecute(spec.execute)
-      : spec.execute
+    // Wrap every inputSchema with aiJsonSchema so AI SDK preserves raw parsed JSON args
+    // without running Zod .transform() or custom validate() twice (tool-executor runs full schema validation once).
+    const sdkSchema = aiJsonSchema(jsonSchemaObj)
 
     sdkTools[spec.name] = AITool({
       description: spec.description,
       // biome-ignore lint/suspicious/noExplicitAny: Zod or JSON Schema adapted for AI SDK
       inputSchema: sdkSchema as any,
-      toModelOutput: ({ output }) =>
-        isToolContentValue(output)
-          ? toAiToolOutput({ type: 'content', value: output })
-          : typeof output === 'string'
-            ? { type: 'text', value: output }
-            : {
-                type: 'json',
-                value: JSON.parse(JSON.stringify(output ?? null)),
-              },
-      execute: async (input, execOptions) =>
-        runExecute(input, {
-          toolCallId: execOptions?.toolCallId,
-          abortSignal: execOptions?.abortSignal,
-        }),
     })
   }
 
   return { sdkTools, toolDefinitions, hasHostedTools }
-}
-
-/** Convert an AI SDK `LanguageModelCallEndEvent` into a Vela checkpoint assistant message. */
-async function checkpointMessage(
-  event: LanguageModelCallEndEvent,
-  tools: ToolSet,
-): Promise<VelaAssistantMessage> {
-  const content: AssistantContentPart[] = []
-  const sources = new Map<string, string>()
-  for (const part of event.content) {
-    if (part.type === 'source') {
-      if (part.sourceType === 'url')
-        sources.set(part.url, part.title ?? part.url)
-      continue
-    }
-    const providerOptions =
-      'providerMetadata' in part
-        ? (part.providerMetadata as ProviderOptions | undefined)
-        : undefined
-    switch (part.type) {
-      case 'text':
-        if (part.text || providerOptions)
-          content.push({ type: 'text', text: part.text, providerOptions })
-        break
-      case 'reasoning':
-        if (part.text || providerOptions)
-          content.push({ type: 'thinking', text: part.text, providerOptions })
-        break
-      case 'custom':
-        content.push({ type: 'custom', kind: part.kind, providerOptions })
-        break
-      case 'file':
-      case 'reasoning-file':
-        content.push({
-          type: part.type,
-          data: part.file.base64,
-          mediaType: part.file.mediaType,
-          providerOptions,
-        })
-        break
-      case 'tool-call':
-        content.push({
-          type: 'tool_call',
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          input:
-            part.invalid && typeof part.input !== 'object' ? {} : part.input,
-          providerExecuted: part.providerExecuted,
-          providerOptions,
-        })
-        break
-      case 'tool-result':
-      case 'tool-error':
-        if (part.providerExecuted) {
-          const output =
-            part.type === 'tool-error'
-              ? ({
-                  type: 'error-json',
-                  value: JSON.parse(JSON.stringify(part.error) ?? 'null'),
-                } as const)
-              : tools[part.toolName]?.toModelOutput
-                ? fromAiToolOutput(
-                    await tools[part.toolName]!.toModelOutput!({
-                      toolCallId: part.toolCallId,
-                      input: part.input,
-                      output: part.output,
-                    }),
-                  )
-                : typeof part.output === 'string'
-                  ? ({ type: 'text', value: part.output } as const)
-                  : ({
-                      type: 'json',
-                      value: JSON.parse(JSON.stringify(part.output) ?? 'null'),
-                    } as const)
-          content.push({
-            type: 'tool_result',
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            output,
-            providerExecuted: true,
-            providerOptions,
-          })
-        }
-        break
-    }
-  }
-  if (sources.size)
-    content.push({
-      type: 'text',
-      text: `\n\nSources:\n${[...sources].map(([url, title]) => `- ${title}: ${url}`).join('\n')}`,
-    })
-  return { role: 'assistant', content }
 }
 
 /** Provider-agnostic stream chunks yielded by `streamProviderStep`. */
@@ -396,12 +211,6 @@ export interface StreamProviderStepOptions {
   maxOutputTokens?: number
   sessionId?: string
   abortSignal?: AbortSignal
-  onModelCallEnd?: (info: {
-    finishReason: FinishReason
-    toolCallIds: string[]
-    hasClientToolCalls: boolean
-    buildCheckpoint: () => Promise<VelaAssistantMessage>
-  }) => Promise<void>
 }
 
 function isAnthropicModel(model: LanguageModel): boolean {
@@ -480,26 +289,6 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
       : {}),
     abortSignal: options.abortSignal,
     onError: () => {},
-    onLanguageModelCallEnd: options.onModelCallEnd
-      ? async (event) => {
-          const toolCallIds = event.content.flatMap((part) =>
-            part.type === 'tool-call' ? [part.toolCallId] : [],
-          )
-          const hasClientToolCalls = event.content.some(
-            (part) => part.type === 'tool-call' && !part.providerExecuted,
-          )
-          await options.onModelCallEnd!({
-            finishReason: event.finishReason as FinishReason,
-            toolCallIds,
-            hasClientToolCalls,
-            buildCheckpoint: async () =>
-              applyStreamedMetadata(
-                await checkpointMessage(event, options.tools.sdkTools),
-                streamedMeta,
-              ),
-          })
-        }
-      : undefined,
   })
 
   const stream: AsyncIterable<ProviderStreamPart> = {

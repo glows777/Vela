@@ -332,7 +332,7 @@ test('Lark Steer carries an image into the active run', async () => {
 test('Lark first file creates a fresh data directory before the first session save', async () => {
   const f = await setup()
   const { rmSync } = await import('node:fs')
-  rmSync(f.t.vela.dataDir, { recursive: true, force: true })
+  rmSync(join(f.t.vela.dataDir, 'channels'), { recursive: true, force: true })
   f.resources.set('file', [Buffer.from('first')])
   f.deliver(dm('file', { file_key: 'file', file_name: 'first.txt' }))
   await until(() => f.sent.length === 1)
@@ -967,9 +967,6 @@ test('a Lark attachment cannot publish a host path to an unavailable environment
 })
 
 test('cloned memory session retains referenced attachment after parent closes', async () => {
-  const { memorySessionStorage } = await import(
-    '../../packages/vela/src/driver/index.ts'
-  )
   const { createVela } = await import('@glows777/vela')
   const { createFauxModel } = await import(
     '../../packages/vela/src/testing/core/index.ts'
@@ -981,7 +978,7 @@ test('cloned memory session retains referenced attachment after parent closes', 
   const vela = createVela({
     cwd: dir.path,
     dataDir: '.data',
-    sessionStorage: memorySessionStorage(),
+    ephemeralSessions: true,
     model,
     extensions: [lark({ owners: ['ou_alice'], transport: fake.transport })],
   })

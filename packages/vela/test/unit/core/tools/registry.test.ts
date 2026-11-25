@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import z from 'zod'
-import { ToolResultStore } from '../../../../src/driver/session/tool-results.ts'
+import { openDatabase } from '../../../../src/db/index.ts'
+import { SessionStore } from '../../../../src/driver/session/index.ts'
+import {
+  executeStepCalls,
+  type VelaToolCallRow,
+} from '../../../../src/driver/tool-executor.ts'
 import type { ToolDefinition } from '../../../../src/driver/tools/registry.ts'
 import { ToolRegistry } from '../../../../src/driver/tools/registry.ts'
 import { registerToolSearchTool } from '../../../../src/driver/tools/tool-search.ts'
@@ -13,9 +18,80 @@ const sdkTools = (r: ToolRegistry) =>
 const root = mkdtempSync(join(tmpdir(), 'vela-registry-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 function makeRegistry() {
-  return new ToolRegistry(
-    new ToolResultStore(join(root, crypto.randomUUID(), 'outputs')),
-  )
+  return new ToolRegistry(join(root, crypto.randomUUID(), 'outputs'))
+}
+async function runToolCalls(
+  registry: ToolRegistry,
+  calls: Array<{ id: string; name: string; input: unknown }>,
+) {
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const store = new SessionStore('reg-test', db, { ephemeral: true })
+    store.ensureSessionRow()
+    const now = new Date().toISOString()
+    db.run(
+      `INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at)
+       VALUES ('r1', 'reg-test', 'vela', 'user', 'running', ?, ?)`,
+      now,
+      now,
+    )
+    const rows: VelaToolCallRow[] = calls.map((call, idx) => ({
+      id: `row-${call.id}`,
+      session_id: 'reg-test',
+      run_id: 'r1',
+      assistant_message_id: 'm1',
+      tool_call_id: call.id,
+      call_index: idx,
+      tool_name: call.name,
+      input_json: JSON.stringify(call.input),
+      execution_mode: registry.get(call.name)?.executionMode ?? 'parallel',
+      replay: registry.get(call.name)?.replay === 'safe' ? 'safe' : 'none',
+      location_json: null,
+      status: 'pending',
+      attempt: 0,
+      is_error: 0,
+      preview: null,
+      result_json: null,
+      spill_path: null,
+      details_json: null,
+      duration_ms: null,
+      started_at: null,
+      finished_at: null,
+      created_at: now,
+      updated_at: now,
+    }))
+    for (const r of rows) {
+      db.run(
+        `INSERT INTO vela_tool_calls (
+           id, session_id, run_id, assistant_message_id, tool_call_id, call_index,
+           tool_name, input_json, execution_mode, replay, status, attempt, is_error,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, ?)`,
+        r.id,
+        r.session_id,
+        r.run_id,
+        r.assistant_message_id,
+        r.tool_call_id,
+        r.call_index,
+        r.tool_name,
+        r.input_json,
+        r.execution_mode,
+        r.replay,
+        now,
+        now,
+      )
+    }
+    await executeStepCalls({
+      db,
+      store,
+      registry,
+      sessionId: 'reg-test',
+      rows,
+      emit: () => {},
+    })
+  } finally {
+    db.close()
+  }
 }
 
 function tool(
@@ -151,7 +227,8 @@ test('deferred tools stay hidden until searchTools finds them', async () => {
 
   await registry.searchTools('deferred')
   expect(registry.getActiveTools().map((t) => t.name)).toEqual(['deferred'])
-  expect(registry.getDeferredToolSummary()).toBe('')
+  // Summary stays immutable after searchTools so system-prompt prefix caching holds.
+  expect(registry.getDeferredToolSummary()).toBe('- deferred — xxx tool hint')
 })
 
 test('the deferred tool summary is a heading plus one evenly indented line per tool', () => {
@@ -166,7 +243,9 @@ test('the deferred tool summary is a heading plus one evenly indented line per t
 test('searchTools loads exact names, and only deferred tools other than tool_search', async () => {
   const registry = makeRegistry()
   registry.register(tool('tool_search', { exposure: 'deferred' }))
-  registry.register(tool('present', { exposure: 'deferred' }))
+  registry.register(
+    tool('present', { exposure: 'deferred', description: 'alpha beta' }),
+  )
   registry.register(tool('direct'))
   const hits = await registry.searchTools('present')
   expect(hits.map((t) => t.name)).toEqual(['present'])
@@ -213,8 +292,10 @@ test('searchTools ranks deferred tools by keywords (BM25, like pi) and loads at 
       .map((t) => t.name)
       .sort(),
   ).toEqual(['mcp__github__create_issue', 'mcp__github__list_issues'])
-  // Loaded tools are not found again by keywords; unrelated words find nothing
-  expect((await registry.searchTools('issue')).map((t) => t.name)).toEqual([])
+  // Loaded tools remain searchable by keyword for post-compaction re-discovery; unrelated words find nothing
+  expect(
+    (await registry.searchTools('issue')).map((t) => t.name).sort(),
+  ).toEqual(['mcp__github__create_issue', 'mcp__github__list_issues'])
   expect(await registry.searchTools('weather forecast')).toHaveLength(0)
   registry.setDefaultToolModifiers(['-mcp__slack__post'])
   expect(await registry.searchTools('post message channel')).toHaveLength(0)
@@ -251,19 +332,13 @@ test('sequential tools run one at a time within a session', async () => {
       },
     }),
   )
-  const wrapped = sdkTools(registry)
-  const body = wrapped.exclusive
-  if (!body) throw new Error('exclusive tool expected in tool set')
-
-  const execute = body.execute!
-  const options = (toolCallId: string) => ({
-    toolCallId,
-    messages: [],
-    context: {},
-  })
-  const first = execute({ id: 'a' }, options('a'))
+  const first = runToolCalls(registry, [
+    { id: 'a', name: 'exclusive', input: { id: 'a' } },
+  ])
   await waitFor(() => order.includes('a-start'))
-  const second = execute({ id: 'b' }, options('b'))
+  const second = runToolCalls(registry, [
+    { id: 'b', name: 'exclusive', input: { id: 'b' } },
+  ])
   await Bun.sleep(20)
   expect(order).toEqual(['a-start'])
 
@@ -303,25 +378,17 @@ function blockingTool(
   }
 }
 
-const callOptions = (toolCallId: string) => ({
-  toolCallId,
-  messages: [],
-  context: {},
-})
-
 test('parallel tools run together; a sequential call waits for earlier calls and holds back later ones', async () => {
   const registry = makeRegistry()
   const order: string[] = []
   const par = blockingTool('par', order)
   const seq = blockingTool('seq', order, { executionMode: 'sequential' })
   registry.register(par.definition, seq.definition)
-  const tools = sdkTools(registry)
   const run = (name: 'par' | 'seq', id: string) =>
-    tools[name]!.execute!({ id }, callOptions(id))
+    runToolCalls(registry, [{ id, name, input: { id } }])
 
   const a = run('par', 'a')
   const b = run('par', 'b')
-  // Calls that run together may start in either order
   const started = () => [...order].sort()
   await waitFor(() => order.length === 2)
   expect(started()).toEqual(['a-start', 'b-start'])
@@ -353,11 +420,15 @@ test('a sequential call in one session does not hold back another session', asyn
   const order: string[] = []
   const seq = blockingTool('seq', order, { executionMode: 'sequential' })
   base.register(seq.definition)
-  const one = base.fork(new ToolResultStore(join(root, 'one')))
-  const two = base.fork(new ToolResultStore(join(root, 'two')))
+  const one = base.fork(join(root, 'one'))
+  const two = base.fork(join(root, 'two'))
 
-  const first = sdkTools(one).seq!.execute!({ id: 'a' }, callOptions('a'))
-  const second = sdkTools(two).seq!.execute!({ id: 'b' }, callOptions('b'))
+  const first = runToolCalls(one, [
+    { id: 'a', name: 'seq', input: { id: 'a' } },
+  ])
+  const second = runToolCalls(two, [
+    { id: 'b', name: 'seq', input: { id: 'b' } },
+  ])
   await waitFor(() => order.length === 2)
   expect([...order].sort()).toEqual(['a-start', 'b-start'])
 
@@ -385,10 +456,7 @@ test("tool_search is model-only and lists the loaded tools with each namespace's
   )
   expect(registry.get('tool_search')?.exposure).toBe('model-only')
   const run = (query: string) =>
-    sdkTools(registry).tool_search!.execute!(
-      { query },
-      { toolCallId: 'search' },
-    )
+    registry.get('tool_search')!.execute({ query }, { registry })
   expect(await run('mcp__docs__read, mcp__docs__search')).toBe(
     [
       'Loaded 2 tools. They are available from your next call:',
@@ -410,8 +478,8 @@ test('project scopes isolate definitions while session forks see later host regi
   const b = new ToolRegistry(undefined, undefined, host)
   a.register(tool('a'))
   b.register(tool('b'))
-  const session = host.fork(new ToolResultStore())
-  const results = session.results
+  const session = host.fork(join(root, 'scoped'))
+  const spillDir = session.spillDir
   session.bindScope(a)
   host.register(tool('later'))
   expect(session.getAllTools().map((t) => t.name)).toEqual([
@@ -425,7 +493,7 @@ test('project scopes isolate definitions while session forks see later host regi
   expect(host.get('host')).toBeDefined()
   expect(() => a.register(tool('host'))).toThrow('already registered')
   session.bindScope(b)
-  expect(session.results).toBe(results)
+  expect(session.spillDir).toBe(spillDir)
   expect(session.get('a')).toBeUndefined()
   expect(session.get('b')).toBeDefined()
   host.unregister('later')

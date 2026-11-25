@@ -1,12 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import type {
   ModelMessage,
   SessionEntry,
   SessionMessageEntry,
   SessionTreeNode,
 } from '../../packages/vela/src/driver/index.ts'
-import { memorySessionStorage } from '../../packages/vela/src/driver/index.ts'
 import type { ChannelExtension as VelaExtension } from '../../packages/vela/src/legacy-channels/index.ts'
 import {
   fauxError,
@@ -90,12 +91,22 @@ test('moving to a user message puts its text back; sending it again starts a new
   expect(lastStream(t)).toContain('q2b')
   expect(lastStream(t)).not.toContain('"q2"')
   expect(lastStream(t)).not.toContain('a2"')
-  // Both branches stay in the file; q2 and q2b share a parent
+  // Both branches stay in the DB; q2 and q2b share a parent
   const entries = t.session.getEntries()
   expect(entryOf(entries, 'q2b').parentId).toBe(q2.parentId)
-  const file = await t.readData('sessions/default/transcript.jsonl')
-  expect(file).toContain('"q2"')
-  expect(file).toContain('q2b')
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const allMsgs = db
+      .all<{ content_json: string }>(
+        "SELECT content_json FROM vela_messages WHERE session_id = 'default'",
+      )
+      .map((row) => row.content_json)
+      .join('\n')
+    expect(allMsgs).toContain('"q2"')
+    expect(allMsgs).toContain('q2b')
+  } finally {
+    db.close()
+  }
   // The tree has one root and branches below a1
   const tree = t.session.getTree()
   expect(tree).toHaveLength(1)
@@ -144,7 +155,7 @@ test('summarizing the branch left attaches a branch_summary the next request see
   expect(t.session.getLeafId()).toBe(summary!.id)
   // Like pi, the summary covers the old branch below the target: a2 (q2 itself goes back to the editor)
   const generate = t.model.calls.find((c) => c.kind === 'generate')!
-  expect(generate.lastUserText).toContain('"sourceMessageCount":1')
+  expect(generate.lastUserText).toContain('<conversation>')
   expect(JSON.stringify(generate.prompt)).toContain('[0] assistant\\na2')
   expect(generate.lastUserText).toContain('keep q2')
   await t.run('q2b')
@@ -216,23 +227,30 @@ test('fork copies the branch before a user message into a new open session; the 
     'tool',
     'assistant',
   ])
-  const header = JSON.parse(
-    (await t.readData('sessions/forked/transcript.jsonl')).split('\n')[0]!,
-  )
-  expect(header).toMatchObject({
-    type: 'session',
-    id: 'forked',
-    parentSession: 'default',
+  const db = openDatabase({
+    path: join(t.dataDir, 'vela.db'),
+    readonly: true,
   })
-  // The tool call history came along, under the fork's own history id
-  expect(header.toolHistoryId).not.toBe(
-    JSON.parse(
-      (await t.readData('sessions/default/transcript.jsonl')).split('\n')[0]!,
-    ).toolHistoryId,
-  )
-  expect(await Bun.file(forked.store.results.history.path).text()).toContain(
-    'a.txt',
-  )
+  try {
+    const forkSession = db.get<{
+      id: string
+      parent_session_id: string | null
+    }>('SELECT id, parent_session_id FROM sessions WHERE id = ?', 'forked')
+    expect(forkSession).toMatchObject({
+      id: 'forked',
+      parent_session_id: 'default',
+    })
+    const forkMsgs = db
+      .all<{ content_json: string }>(
+        'SELECT content_json FROM vela_messages WHERE session_id = ?',
+        'forked',
+      )
+      .map((row) => row.content_json)
+      .join('\n')
+    expect(forkMsgs).toContain('a.txt')
+  } finally {
+    db.close()
+  }
   // The original is untouched and both keep working
   expect(t.session.messages).toHaveLength(6)
   await forked.prompt('q2 again')
@@ -250,10 +268,16 @@ test('forking from the first message starts an empty session that records its pa
   expect(selectedText).toBe('q1')
   expect(session!.messages).toEqual([])
   await session!.prompt('new start')
-  const header = JSON.parse(
-    (await t.readData('sessions/fresh/transcript.jsonl')).split('\n')[0]!,
-  )
-  expect(header.parentSession).toBe('default')
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const forkSession = db.get<{ parent_session_id: string | null }>(
+      'SELECT parent_session_id FROM sessions WHERE id = ?',
+      'fresh',
+    )
+    expect(forkSession?.parent_session_id).toBe('default')
+  } finally {
+    db.close()
+  }
 })
 
 test('clone copies the current branch; fork rejects ids in use and non-user entries for `before`', async () => {
@@ -492,7 +516,7 @@ function latestToolText(messages: ModelMessage[]): string {
 test('a clone of an in-memory session still reads a long tool result after the source closes', async () => {
   let inherited = ''
   const t = createTestVela({
-    sessionStorage: memorySessionStorage(),
+    ephemeralSessions: true,
     responses: [
       fauxToolCall('bash', { command: "printf '0\\n%.0s' {1..2100}" }),
       fauxText('saved'),
@@ -507,17 +531,15 @@ test('a clone of an in-memory session still reads a long tool result after the s
   const { session: copy } = await t.session.clone({ sessionId: 'copy' })
   if (!copy) throw new Error('clone failed')
   inherited = storedToolPath(copy.messages)
-  const historyPath = copy.store.results.history.path
-  const outputPath = (await Bun.file(historyPath).text())
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as { type?: string; outputPath?: string })
-    .find((record) => record.type === 'tool_result')?.outputPath
+  const copyCall = copy.store.db.get<{ spill_path: string | null }>(
+    'SELECT spill_path FROM vela_tool_calls WHERE session_id = ? LIMIT 1',
+    'copy',
+  )
 
   await t.session.close()
 
   expect(await Bun.file(sourcePath).exists()).toBe(false)
-  expect(outputPath).toBe(inherited)
+  expect(copyCall?.spill_path).toBe(inherited)
   expect(await Bun.file(inherited).text()).toBe(ZEROS)
   await copy.prompt('read the saved output')
   expect(latestToolText(copy.messages)).toBe(ZEROS.slice(200))

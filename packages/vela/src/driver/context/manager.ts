@@ -87,7 +87,7 @@ export class ContextManager {
   /** Keeps the tracker's displayed estimate in sync when no provider report anchors it. */
   private syncContextEstimate(tokens: number): void {
     if (this.tracker.reportedContextTokens === undefined)
-      this.tracker.setEstimatedTokens(tokens)
+      this.tracker.setEstimatedTokens(tokens, true)
   }
 
   /**
@@ -120,9 +120,7 @@ export class ContextManager {
         compacted.summary,
         firstKept,
         before,
-        compacted.historyViewSequence,
       )
-      this.store.results.historyViewSequence = compacted.historyViewSequence
       this.replace(compacted.messages, compacted.summary)
       this.tracker.setEstimatedTokens(after)
       this.onEvent?.({
@@ -170,6 +168,30 @@ export class ContextManager {
     options: { allowSummary?: boolean } = {},
   ): Promise<void> {
     request.abortSignal?.throwIfAborted()
+    const rawEstimate = estimateRequestTokens(request)
+    this.syncContextEstimate(rawEstimate)
+    if (options.allowSummary === false && this.autoCompaction) {
+      const before = contextRequestTokens(
+        request,
+        this.tracker.reportedContextTokens,
+        Math.max(0, rawEstimate + this.tracker.contextDelta),
+      )
+      if (
+        before >= this.limits.summaryThreshold &&
+        canSummarize(request.messages, this.limits.maxInputTokens)
+      ) {
+        this.onEvent?.({
+          type: 'context_prepare',
+          action: 'summary-required',
+          before,
+        })
+      }
+    }
+  }
+
+  /** Post-turn threshold auto-compaction (runs after `agent_end` so mid-turn prompt prefixes stay cached). */
+  async compactIfNeeded(request: RequestSnapshot): Promise<boolean> {
+    if (!this.autoCompaction) return false
     const estimate = Math.max(
       0,
       estimateRequestTokens(request) + this.tracker.contextDelta,
@@ -179,25 +201,13 @@ export class ContextManager {
       this.tracker.reportedContextTokens,
       estimate,
     )
-    if (!this.autoCompaction) {
-      this.syncContextEstimate(before)
-      return
-    }
     if (
       before >= this.limits.summaryThreshold &&
-      canSummarize(request.messages)
+      canSummarize(request.messages, this.limits.maxInputTokens)
     ) {
-      if (options.allowSummary === false) {
-        this.onEvent?.({
-          type: 'context_prepare',
-          action: 'summary-required',
-          before,
-        })
-        return
-      }
       await this.summarizeHistory(request, 'threshold')
-      return
+      return true
     }
-    this.syncContextEstimate(before)
+    return false
   }
 }

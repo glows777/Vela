@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { wrapLanguageModel } from 'ai'
 import { z } from 'zod'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import type {
   ProviderDefinition,
   VelaLogger,
@@ -371,9 +372,19 @@ test('a model passed as an object is not saved with the session', async () => {
   try {
     const a = createTestVela({ cwd: dir.path, responses: [fauxText('x')] })
     await a.run('hi')
-    expect(await a.readData('sessions/default/transcript.jsonl')).not.toContain(
-      '"model"',
-    )
+    const row = openDatabase({
+      path: `${a.dataDir}/vela.db`,
+      readonly: true,
+    })
+    try {
+      expect(
+        row.get<{ model: string | null }>(
+          "SELECT model FROM sessions WHERE id = 'default'",
+        )?.model,
+      ).toBeNull()
+    } finally {
+      row.close()
+    }
     await a.cleanup()
   } finally {
     dir.cleanup()
@@ -383,8 +394,9 @@ test('a model passed as an object is not saved with the session', async () => {
 test('without a chosen model, the first provider with a credential supplies the model (like pi)', async () => {
   const { big, providers } = fakeProvider()
   big.push(fauxText('ok'))
+  const db = openDatabase({ path: ':memory:' })
   const none = createVela({ extensions: [] })
-  const vela = createVela({ providers, extensions: [] })
+  const vela = createVela({ providers, extensions: [], db })
   try {
     await expect(none.session().prompt('hi')).rejects.toThrow(
       'No model selected',
@@ -395,14 +407,15 @@ test('without a chosen model, the first provider with a credential supplies the 
     expect(big.calls).toHaveLength(1)
     // Saved like a chosen model, so a resumed session keeps it when credentials change later
     expect(
-      session
-        .getEntries()
-        .filter((e) => e.type === 'model_change')
-        .map((e) => (e as { model: string }).model),
-    ).toEqual(['fake/big'])
+      db.get<{ model: string | null }>(
+        'SELECT model FROM sessions WHERE id = ?',
+        session.id,
+      )?.model,
+    ).toBe('fake/big')
   } finally {
     await none.dispose()
     await vela.dispose()
+    db.close()
   }
 })
 

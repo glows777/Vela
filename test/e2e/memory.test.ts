@@ -253,13 +253,10 @@ test('automatic compaction keeps the memory index in the request it summarizes',
   for (let i = 0; i < 5; i++) await t.run(`Question ${i}`)
 
   expect(t.eventsOf('compaction_start')).toHaveLength(1)
-  // The message that carried the index was summarized away with the old history
-  expect(
-    t.session.messages.some(
-      (m) => t.session.customMessageOf(m)?.customType === 'memory',
-    ),
-  ).toBe(false)
-  // The request sent after that compaction still knows the index
+  // The summary request saw the memory index before the index entry was compacted away
+  const generate = t.model.calls.find((c) => c.kind === 'generate')!
+  expect(generate.lastUserText).toContain('openai-null-chars')
+  // After compaction, the request sent to the model still knows the memory index
   const request = t.model.calls.filter((c) => c.kind === 'stream').at(-1)!
   expect(request.system).not.toContain('openai-null-chars')
   expect(request.lastUserText).toContain('openai-null-chars')

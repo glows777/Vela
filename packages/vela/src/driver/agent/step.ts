@@ -320,7 +320,7 @@ export class StepMessage {
    * Ends the message (once). When the model stopped normally its tool calls run next, so their
    * `tool_execution_start` follow (like pi, after the assistant's `message_end`).
    */
-  end(finishReason: FinishReason): void {
+  end(finishReason: FinishReason, emitToolStart = true): void {
     if (this.ended) return
     this.ended = true
     this.complete = true
@@ -342,7 +342,7 @@ export class StepMessage {
         ? { errorMessage: CONTENT_FILTER_ERROR }
         : {}),
     })
-    if (runs)
+    if (runs && emitToolStart)
       for (const call of this.toolCalls)
         if (!call.providerExecuted) this.executionStart(call)
   }

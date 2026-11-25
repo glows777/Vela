@@ -495,7 +495,7 @@ export class ExtensionRunner {
     session: VelaSession,
     text: string,
     source: InputSource,
-    streamingBehavior?: 'steer' | 'followUp',
+    streamingBehavior?: 'steer',
     images?: ImageContent[],
   ): Promise<{ text: string; images?: ImageContent[] } | undefined> {
     let current = text
@@ -631,6 +631,7 @@ export class ExtensionRunner {
       input: structuredClone(input) as Record<string, unknown>,
     }
     const ctx = this.context(session)
+    let approval: { summary: string } | undefined
     for (const { extension, fn } of handlers) {
       try {
         const result = (await fn(event, ctx)) as ToolCallEventResult | undefined
@@ -640,6 +641,31 @@ export class ExtensionRunner {
             reason: result.reason ?? 'Blocked by an extension',
             input,
           }
+        if (
+          result?.approval !== undefined &&
+          result.approval !== null &&
+          !approval
+        ) {
+          if (
+            typeof result.approval !== 'object' ||
+            Array.isArray(result.approval) ||
+            ('summary' in result.approval &&
+              result.approval.summary !== undefined &&
+              typeof result.approval.summary !== 'string')
+          ) {
+            return {
+              block: true,
+              reason: 'Extension returned an invalid approval request',
+              input,
+            }
+          }
+          const rawSummary = result.approval.summary
+          const summary =
+            typeof rawSummary === 'string' && rawSummary.trim()
+              ? rawSummary.trim()
+              : `Approval required for ${toolName}`
+          approval = { summary }
+        }
       } catch (error) {
         this.report(extension, event.type, error)
         return {
@@ -650,6 +676,7 @@ export class ExtensionRunner {
       }
     }
     return {
+      ...(approval ? { approval } : {}),
       input: JSON.stringify(event.input) === before ? input : event.input,
     }
   }

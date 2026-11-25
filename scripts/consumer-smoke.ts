@@ -38,12 +38,16 @@ import {
   local,
   mcp,
   memory,
+  SpilledToolOutput,
   ToolExecutionResult,
+  type ApprovalDecision,
   type ImageContent,
   type LarkMessageEvent,
   type LarkOptions,
   type LarkTransport,
   type McpOptions,
+  type PendingApprovalInfo,
+  type ResolvedApprovalInfo,
   type ToolContent,
   type VelaEvent,
   type VelaExtension,
@@ -60,8 +64,16 @@ import { z } from 'zod'
 
 if (typeof defineJsonSchemaTool !== 'function')
   throw new Error('missing @glows777/vela/extension-api export')
+if (typeof SpilledToolOutput !== 'function')
+  throw new Error('missing SpilledToolOutput export')
 if (typeof lark !== 'function' || typeof local !== 'function')
   throw new Error('missing built-in channel factories')
+const _approvalTypeCheck = (
+  _d?: ApprovalDecision,
+  _p?: PendingApprovalInfo,
+  _r?: ResolvedApprovalInfo,
+) => void [_d, _p, _r]
+void _approvalTypeCheck
 
 const hello: VelaExtension = (vela) => {
   vela.registerTool({

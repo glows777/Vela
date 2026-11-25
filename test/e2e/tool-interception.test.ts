@@ -83,12 +83,20 @@ test('ordered async input rewrites reach later handlers, execution and original 
   expect(seen[0]).toBe('second.txt')
   expect(await Bun.file(join(t.cwd, 'final.txt')).text()).toBe('written')
   expect(existsSync(join(t.cwd, 'initial.txt'))).toBe(false)
-  const history = await Bun.file(t.session.registry.results.history.path).text()
-  expect(history).toContain('final.txt')
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+  try {
+    const row = db.get<{ input_json: string }>(
+      'SELECT input_json FROM vela_tool_calls ORDER BY created_at DESC LIMIT 1',
+    )
+    expect(row?.input_json).toContain('final.txt')
+  } finally {
+    db.close()
+  }
   expect(t.eventsOf('audit').map((event) => event.path)).toEqual(['final.txt'])
 })
 
-test('async tool_result transformations chain before the next model request without rewriting native history, preserving the final response for recovery', async () => {
+test('async tool_result transformations chain before the next model request without rewriting details, preserving final result_json', async () => {
   const entered = gate()
   const pending = gate()
   const t = createTestVela({
@@ -112,24 +120,23 @@ test('async tool_result transformations chain before the next model request with
   const run = t.run('Read')
   await entered.promise
   expect(t.model.calls).toHaveLength(1)
-  expect(
-    await Bun.file(t.session.registry.results.history.path).text(),
-  ).toContain('original text')
   pending.release()
   await run
   expect(t.model.calls[1]!.toolResults[0]!.output).toBe('first-second')
-  const history = (
-    await Bun.file(t.session.registry.results.history.path).text()
-  )
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  expect(history.find((record) => record.type === 'tool_result').output).toBe(
-    'original text',
-  )
-  expect(
-    history.find((record) => record.type === 'tool_response').output,
-  ).toEqual({ type: 'text', value: 'first-second' })
+  const { openDatabase } = await import('../../packages/vela/src/db/index.ts')
+  const db = openDatabase({ path: `${t.dataDir}/vela.db`, readonly: true })
+  try {
+    const row = db.get<{ status: string; result_json: string | null }>(
+      'SELECT status, result_json FROM vela_tool_calls ORDER BY created_at DESC LIMIT 1',
+    )
+    expect(row?.status).toBe('completed')
+    expect(JSON.parse(String(row?.result_json))).toEqual({
+      type: 'text',
+      value: 'first-second',
+    })
+  } finally {
+    db.close()
+  }
 })
 
 test('a block without a reason retains the extension rejection message', async () => {

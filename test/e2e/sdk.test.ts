@@ -4,8 +4,6 @@ import { join } from 'node:path'
 import {
   background,
   createVela,
-  type SessionFileEntry,
-  type SessionStorage,
   type VelaEvent,
   type VelaLogger,
 } from '@glows777/vela'
@@ -17,6 +15,7 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 
 afterEach(cleanupTestVelas)
 
@@ -116,8 +115,8 @@ test('without a dataDir nothing is persisted: sessions live in memory and scratc
   try {
     const session = vela.session('x')
     await session.prompt('one')
-    // Long tool output and tool history go to a temp data dir (the model can read them with read); the session itself writes no files
-    expect(existsSync(join(vela.dataDir, 'sessions/x'))).toBe(true)
+    // Ephemeral sessions use an in-memory DB while scratch files still clean up on dispose
+    expect(existsSync(join(vela.dataDir, 'vela.db'))).toBe(false)
     expect(existsSync(join(vela.dataDir, 'sessions/x/transcript.jsonl'))).toBe(
       false,
     )
@@ -140,17 +139,8 @@ test('without a dataDir nothing is persisted: sessions live in memory and scratc
   dir.cleanup()
 })
 
-test('a custom session storage receives every entry as it is appended and serves resume', async () => {
-  const saved = new Map<string, SessionFileEntry[]>()
-  const storage: SessionStorage = {
-    load: async (id) => saved.get(id),
-    append: async (id, entries) => {
-      saved.set(id, [...(saved.get(id) ?? []), ...entries])
-    },
-  }
-  const messages = (id: string) =>
-    saved.get(id)?.filter((entry) => entry.type === 'message') ?? []
-  // The first instance called a tool: its tool history lived in its temp dir and is gone after dispose, yet resume must still succeed
+test('a shared caller-owned SQLite db serves multiple Vela lifecycles and resume', async () => {
+  const db = openDatabase({ path: ':memory:' })
   const model = createFauxModel({
     responses: [
       fauxToolCall('bash', { command: 'echo hi' }),
@@ -158,23 +148,28 @@ test('a custom session storage receives every entry as it is appended and serves
       fauxText('b'),
     ],
   })
-  const first = createVela({ model, sessionStorage: storage })
+  const first = createVela({ model, db })
   const opened = first.session('db')
-  expect(opened.persistence).toEqual({ type: 'unknown' })
+  expect(opened.persistence).toEqual({ type: 'memory' })
   await opened.prompt('hello')
   await first.dispose()
-  expect(saved.get('db')?.[0]).toMatchObject({ type: 'session', id: 'db' })
-  expect(messages('db')).toHaveLength(4)
+  const count = () =>
+    db.get<{ c: number }>(
+      "SELECT COUNT(*) AS c FROM vela_messages WHERE session_id = ? AND kind = 'message'",
+      'db',
+    )!.c
+  expect(count()).toBe(4)
 
-  const second = createVela({ model, sessionStorage: storage })
+  const second = createVela({ model, db })
   try {
     const session = second.session('db')
-    expect(session.persistence).toEqual({ type: 'unknown' })
+    expect(session.persistence).toEqual({ type: 'memory' })
     expect(await session.resume()).toBe(true)
-    expect(session.persistence).toEqual({ type: 'unknown' })
+    expect(session.persistence).toEqual({ type: 'memory' })
     await session.prompt('again')
-    expect(messages('db')).toHaveLength(6)
+    expect(count()).toBe(6)
   } finally {
     await second.dispose()
+    db.close()
   }
 })

@@ -71,8 +71,7 @@ export class GatewayIdle {
     idleMs: number,
   ): Promise<void> {
     try {
-      // A failed close discards pending history. Keep the live session until a real save succeeds.
-      await session.save({ reportFailure: true })
+      await session.save()
     } catch {
       return
     }

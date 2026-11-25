@@ -10,10 +10,8 @@ import {
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
 import { runServe } from '../../../packages/vela/src/cli/serve.ts'
-import {
-  background,
-  fileSessionStorage,
-} from '../../../packages/vela/src/driver/index.ts'
+import { openDatabase } from '../../../packages/vela/src/db/sqlite.ts'
+import { background } from '../../../packages/vela/src/driver/index.ts'
 import { lark } from '../../../packages/vela/src/lark/index.ts'
 import {
   fauxText,
@@ -55,18 +53,10 @@ if (mode === 'restart-accepted' || mode === 'restart-ledger') {
 }
 
 const command = `echo $$ > '${cwd}/shell.pid'; while [ ! -f '${cwd}/release' ]; do sleep 0.05; done; echo REAL BACKGROUND RESULT`
-const storage = fileSessionStorage(join(cwd, '.vela-data/sessions'))
-const append = storage.append.bind(storage)
 let blockBackgroundWrite = false
-storage.append = async (id, entries) => {
-  if (blockBackgroundWrite) {
-    report('save-gate.json', true)
-    await new Promise<never>(() => {})
-  }
-  await append(id, entries)
-}
+const db = openDatabase({ path: join(cwd, '.vela-data/vela.db') })
 const t = createTestVela({
-  sessionStorage: storage,
+  db,
   cwd,
   responses: restart
     ? [
@@ -117,9 +107,21 @@ const t = createTestVela({
     }),
     function boundary(api) {
       api.on('session_start', (_event, { session }) => {
-        if (mode !== 'restart-after-save') return
+        const prompt = session.prompt.bind(session)
+        session.prompt = async (input, options) => {
+          if (blockBackgroundWrite) {
+            report('save-gate.json', true)
+            await new Promise<never>(() => {})
+          }
+          return prompt(input, options)
+        }
         const save = session.save.bind(session)
-        session.save = async (options) => {
+        session.save = async () => {
+          if (blockBackgroundWrite) {
+            report('save-gate.json', true)
+            await new Promise<never>(() => {})
+          }
+          if (mode !== 'restart-after-save') return save()
           const marker = session
             .getEntries()
             .some(
@@ -129,8 +131,8 @@ const t = createTestVela({
                 !!(entry.data as { backgroundJobToken?: string })
                   ?.backgroundJobToken,
             )
-          if (!marker) return save(options)
-          if (mode === 'restart-after-save') await save(options)
+          if (!marker) return save()
+          await save()
           report('save-gate.json', true)
           await new Promise<never>(() => {})
         }
@@ -175,13 +177,28 @@ if (!restart) {
     mode === 'waiting-before-save'
   ) {
     if (mode === 'before-save' || mode === 'waiting-before-save') {
-      report(
-        'before-notice-transcript.json',
-        readFileSync(
-          join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
-          'utf8',
-        ),
-      )
+      const savedRows = db
+        .all<{ id: string; kind: string; content_json: string }>(
+          'SELECT id, kind, content_json FROM vela_messages WHERE session_id = ? ORDER BY seq',
+          'lark-oc_group-root',
+        )
+        .map((row) => {
+          const parsed = JSON.parse(row.content_json) as {
+            customType?: string
+            data?: unknown
+          }
+          return {
+            id: row.id,
+            kind: row.kind,
+            custom_type:
+              row.kind === 'custom' ? (parsed.customType ?? null) : null,
+            data_json:
+              row.kind === 'custom'
+                ? JSON.stringify(parsed.data ?? null)
+                : null,
+          }
+        })
+      report('before-notice-transcript.json', JSON.stringify(savedRows))
       blockBackgroundWrite = true
     }
     writeFileSync(join(cwd, 'release'), '')
