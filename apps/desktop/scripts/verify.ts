@@ -186,7 +186,8 @@ await Bun.write(
       // the next step, and the hub's is suppressed on hand-off: same text either way.
       { text: 'I will read the retry module first.' },
       { text: 'I will read the retry module first.' },
-      { toolCalls: [{ name: 'bash', input: { command: 'printf retry' } }] },
+      // Slow enough for the panel to show the live tool before it ends
+      { toolCalls: [{ name: 'bash', input: { command: 'sleep 3' } }] },
       { hang: true },
       { text: 'Continued after the stop.' },
       { error: 'invalid api key' },
@@ -1020,6 +1021,13 @@ const journeyTwo = async (page: Page) => {
   await panel.getByRole('button', { name: 'Stop' }).waitFor()
   await panel.getByText('Running', { exact: true }).waitFor()
   checks.push('A running session shows one state word, the live tool and Stop.')
+
+  // The tool ended and the request after it is what runs now: its name must not stay (#571)
+  await panel
+    .getByText('bash', { exact: true })
+    .waitFor({ state: 'detached', timeout: 30_000 })
+  await panel.getByText('Running', { exact: true }).waitFor()
+  checks.push('A finished tool leaves the panel: the state word alone remains.')
 
   await panel.getByRole('button', { name: 'Stop' }).click()
   await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'stopped')
