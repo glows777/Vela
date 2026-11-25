@@ -643,7 +643,7 @@ test('a retried response keeps its partial text marked as failed, and the retry 
 test('the status line goes back to thinking once the compaction ended (like pi)', async () => {
   const t = createTestVela({
     // Summarize before every request that has an earlier turn to replace
-    limits: { microcompactThreshold: 1e9, summaryThreshold: 10 },
+    limits: { summaryThreshold: 10 },
     responses: [
       fauxText('Answer 0', { usage: { input: 60_000 } }),
       fauxText('Answer 1', { usage: { input: 60_000 } }),
