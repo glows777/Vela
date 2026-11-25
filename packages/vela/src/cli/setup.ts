@@ -70,7 +70,7 @@ export interface CliArgs {
   noSession: boolean
   /** `--fork <id>`: start in a new session copied from this saved one (like pi) */
   fork?: string
-  /** `--export <sessionId> [output]`: write the saved session as HTML and exit */
+  /** `--export <sessionId> [output]`: write the saved session as HTML or JSONL and exit */
   export?: string
   /** `--approve` / `--no-approve`: trust / don't trust project config for this run, without saving */
   approve?: boolean
@@ -131,7 +131,7 @@ Options:
   --session <id>                Open this session (created if missing)
   --no-session                  Keep the session in memory only, not on disk
   --fork <id>                   Start in a new session copied from a saved session
-  --export <id> [output]        Write a saved session from vela.db as HTML and exit
+  --export <id> [output]        Write a saved session from vela.db as HTML (or JSONL for .jsonl) and exit
   --model <provider/id>         Model to use (providers: built-in anthropic / openai / openrouter / deepseek,
                                 ~/.vela/config.json, extensions)
   --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}

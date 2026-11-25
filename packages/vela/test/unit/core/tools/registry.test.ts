@@ -44,7 +44,7 @@ async function runToolCalls(
       call_index: idx,
       tool_name: call.name,
       input_json: JSON.stringify(call.input),
-      execution_mode: registry.get(call.name)?.executionMode ?? 'parallel',
+      execution_mode: registry.get(call.name)?.executionMode ?? 'sequential',
       replay: registry.get(call.name)?.replay === 'safe' ? 'safe' : 'none',
       location_json: null,
       status: 'pending',
@@ -381,7 +381,7 @@ function blockingTool(
 test('parallel tools run together; a sequential call waits for earlier calls and holds back later ones', async () => {
   const registry = makeRegistry()
   const order: string[] = []
-  const par = blockingTool('par', order)
+  const par = blockingTool('par', order, { executionMode: 'parallel' })
   const seq = blockingTool('seq', order, { executionMode: 'sequential' })
   registry.register(par.definition, seq.definition)
   const run = (name: 'par' | 'seq', id: string) =>

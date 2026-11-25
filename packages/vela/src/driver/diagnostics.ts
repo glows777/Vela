@@ -1,3 +1,5 @@
+import { resolveProviderTools } from '../providers/index.ts'
+import type { ModelInput } from '../shared/provider-types.ts'
 import type { ContextFile } from './prompt/context-files.ts'
 import { formatSkillsForPrompt } from './skills/loader.ts'
 import { type Vela, velaInternals } from './vela.ts'
@@ -77,6 +79,14 @@ export async function inspectSession(
   const override = preview ? (preview.systemPrompt ?? null) : undefined
   const systemPrompt = session.buildSystem(sections, override)
   const active = session.registry.getActiveTools()
+  let modelForTools: ModelInput = ''
+  try {
+    modelForTools = session.model
+  } catch {}
+  const resolvedTools = await resolveProviderTools(
+    modelForTools,
+    session.registry.toProviderTools(),
+  )
   const skills =
     formatSkillsForPrompt(
       resources.skills,
@@ -86,14 +96,7 @@ export async function inspectSession(
     windowTokens: session.usage.contextWindow,
     systemPrompt,
     systemPromptChars: systemPrompt.length,
-    toolDescriptionChars: active.reduce(
-      (size, tool) =>
-        size +
-        tool.name.length +
-        tool.description.length +
-        JSON.stringify(tool.inputSchema || {}).length,
-      0,
-    ),
+    toolDescriptionChars: JSON.stringify(resolvedTools.toolDefinitions).length,
     skillsChars: skills.length,
     extensionSections: { ...sections },
     stages: internal.builder.status({
@@ -110,6 +113,7 @@ export {
 } from '../shared/tool-selection.ts'
 export { defaultAgentDir } from './config/paths.ts'
 export { extensionName, projectTrustRequired } from './config/settings.ts'
+export { isToolResultError } from './context/tool-result-output.ts'
 export { latestTodoList } from './extensions/todo/list.ts'
 export { isToolContent } from './messages.ts'
 export {

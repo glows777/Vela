@@ -1,5 +1,8 @@
-import { rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import type { VelaSettings } from '../../config/index.ts'
+import { openDatabase, type VelaDatabase } from '../../db/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
 import type { ConfigResourceSplit } from '../config/runtime-resources.ts'
 import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
@@ -177,4 +180,57 @@ export async function disposeVelaRuntime(options: {
     }
   }
   if (errors.length) throw new AggregateError(errors, 'Vela disposal failed')
+}
+
+export function openVelaStorage(options: {
+  cwd?: string
+  dataDir?: string
+  db?: VelaDatabase
+  ephemeralSessions?: boolean
+}): {
+  cwd: string
+  ephemeral: boolean
+  ephemeralSessions: boolean
+  dataDir: string
+  ownsDb: boolean
+  db: VelaDatabase
+} {
+  if (
+    options.ephemeralSessions === true &&
+    options.db &&
+    options.db.path !== ':memory:'
+  ) {
+    throw new Error(
+      'Cannot combine ephemeralSessions: true with a persistent db',
+    )
+  }
+  const cwd = resolve(options.cwd ?? process.cwd())
+  const ephemeral = options.dataDir === undefined
+  const ephemeralSessions =
+    options.ephemeralSessions === true || (ephemeral && !options.db)
+  const dataDir = ephemeral
+    ? mkdtempSync(join(tmpdir(), 'vela-'))
+    : resolve(cwd, options.dataDir as string)
+  const ownsDb = !options.db
+  try {
+    const db =
+      options.db ??
+      openDatabase({
+        path: ephemeralSessions ? ':memory:' : join(dataDir, 'vela.db'),
+      })
+    return { cwd, ephemeral, ephemeralSessions, dataDir, ownsDb, db }
+  } catch (error) {
+    if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
+    throw error
+  }
+}
+
+export function cleanupFailedVelaInit(
+  ownsDb: boolean,
+  db: VelaDatabase,
+  ephemeral: boolean,
+  dataDir: string,
+): void {
+  if (ownsDb && db.open) db.close()
+  if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
 }

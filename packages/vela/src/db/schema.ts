@@ -9,7 +9,7 @@
  *   connection for atomic step-level durability without leaking Vela internals into Runtime.
  */
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 1
 
 export const INITIAL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS runs (
   trigger TEXT NOT NULL CHECK (trigger IN ('user', 'channel', 'timer', 'webhook', 'approval', 'job', 'handoff', 'session')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'waiting_human', 'completed', 'stopped', 'failed', 'interrupted')),
   model TEXT,
+  owner_token TEXT,
   error TEXT,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -179,6 +180,7 @@ CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  tool_call_row_id TEXT REFERENCES vela_tool_calls(id) ON DELETE CASCADE,
   tool_call_id TEXT,
   tool_name TEXT NOT NULL,
   summary TEXT NOT NULL,
@@ -344,6 +346,8 @@ CREATE TABLE IF NOT EXISTS vela_messages (
   cost_usd REAL,
   duration_ms INTEGER,
   details_json TEXT,
+  choice_json TEXT,
+  location_json TEXT,
   created_at TEXT NOT NULL,
   PRIMARY KEY (session_id, id),
   UNIQUE (session_id, seq)

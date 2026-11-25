@@ -74,7 +74,7 @@ In the SDK these are `session.navigateTree(entryId, { summarize, focus, label })
 
 ## Export
 
-`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`) writes the branch in the [session file format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
+`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`, or `vela --export <id> branch.jsonl`) writes the branch in the [session file format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
 
 Review an export before you share it: it can contain your prompts, the model's answers, tool arguments, command output and file contents. Vela has no `/share` upload (pi's `/share` uploads to a gist).
 

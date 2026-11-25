@@ -467,24 +467,24 @@ function createProvider(
                 )
                   openai.includeWebSearchSources =
                     compat.includeWebSearchSources
-                // The SDK infers capability from IDs; positive metadata also enables custom IDs.
-                if (
-                  openai.forceReasoning === undefined &&
-                  spec?.reasoning === true
-                )
-                  openai.forceReasoning = true
-                const level =
-                  params.reasoning === 'none' ? 'off' : params.reasoning
-                const effort =
-                  level && level !== 'provider-default'
-                    ? spec?.thinkingLevelMap?.[level]
-                    : undefined
-                if (
-                  openai.reasoningEffort === undefined &&
-                  typeof effort === 'string'
-                )
-                  openai.reasoningEffort = effort
               }
+              // The SDK infers capability from IDs; positive metadata also enables custom IDs.
+              if (
+                openai.forceReasoning === undefined &&
+                spec?.reasoning === true
+              )
+                openai.forceReasoning = true
+              const level =
+                params.reasoning === 'none' ? 'off' : params.reasoning
+              const effort =
+                level && level !== 'provider-default'
+                  ? spec?.thinkingLevelMap?.[level]
+                  : undefined
+              if (
+                openai.reasoningEffort === undefined &&
+                typeof effort === 'string'
+              )
+                openai.reasoningEffort = effort
               // pi's supportsDeveloperRole: false keeps the system instruction's role.
               if (
                 compat.supportsDeveloperRole === false &&
@@ -753,7 +753,8 @@ function prepareResponsesPrompt(
           statelessTarget &&
           typeof ns.itemId === 'string' &&
           ns.itemId.startsWith('rs_') &&
-          ns.reasoningEncryptedContent === undefined,
+          (typeof ns.reasoningEncryptedContent !== 'string' ||
+            ns.reasoningEncryptedContent.length === 0),
         true,
       )
       if (next === part.providerOptions) return [part]

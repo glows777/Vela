@@ -1,7 +1,5 @@
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { openDatabase, type VelaDatabase } from '../db/index.ts'
+import { join } from 'node:path'
+import type { VelaDatabase } from '../db/index.ts'
 import type {
   AuthInteraction,
   CredentialStore,
@@ -54,8 +52,10 @@ import { WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
 import type { SessionSearchHit } from './session/search.ts'
 import {
+  cleanupFailedVelaInit,
   disposeVelaRuntime,
   loadWorkspaceInventory,
+  openVelaStorage,
   workspaceKey,
 } from './session/workspace.ts'
 import { expandEnvironmentSkill } from './skills/environment-skills.ts'
@@ -107,7 +107,9 @@ export interface VelaOptions {
    * The CLI uses `~/.vela/projects/<encoded cwd>` (see loadConfig).
    */
   dataDir?: string
-  /** Pre-opened SQLite database to share across sessions (defaults to `<dataDir>/vela.db` or `:memory:` when ephemeral). */
+  /**
+   * @internal Pre-opened SQLite database to share across sessions (defaults to `<dataDir>/vela.db` or `:memory:` when ephemeral).
+   */
   db?: VelaDatabase
   /** Force in-memory SQLite session persistence even when `dataDir` is set (`--no-session`). */
   ephemeralSessions?: boolean
@@ -210,7 +212,7 @@ export interface Vela {
   /** Currently open sessions */
   sessions(): VelaSession[]
   /**
-   * Saved sessions, newest first, from SessionStorage.list(); empty if the storage doesn't implement list.
+   * Saved sessions, newest first, from `vela.db`.
    * Sessions archived with `setSessionArchived()` are left out unless `includeArchived` is set.
    */
   listSessions(options?: SavedSessionOptions): Promise<SessionSummary[]>
@@ -268,29 +270,33 @@ export function velaInternals(vela: Vela): VelaInternals {
 
 /** Assembles one host with per-session history, execution and location-bound project capabilities. */
 export function createVela(options: VelaOptions = {}): Vela {
-  if (
-    options.ephemeralSessions === true &&
-    options.db &&
-    options.db.path !== ':memory:'
-  ) {
-    throw new Error(
-      'Cannot combine ephemeralSessions: true with a persistent db',
+  const { cwd, ephemeral, ephemeralSessions, dataDir, ownsDb, db } =
+    openVelaStorage(options)
+  try {
+    return initVelaInstance(
+      options,
+      cwd,
+      ephemeral,
+      ephemeralSessions,
+      dataDir,
+      ownsDb,
+      db,
     )
+  } catch (error) {
+    cleanupFailedVelaInit(ownsDb, db, ephemeral, dataDir)
+    throw error
   }
-  const cwd = resolve(options.cwd ?? process.cwd())
-  // Without dataDir, use a temp dir (long tool output, tool history, extension data) deleted on dispose
-  const ephemeral = options.dataDir === undefined
-  const ephemeralSessions =
-    options.ephemeralSessions === true || (ephemeral && !options.db)
-  const dataDir = ephemeral
-    ? mkdtempSync(join(tmpdir(), 'vela-'))
-    : resolve(cwd, options.dataDir as string)
-  const ownsDb = !options.db
-  const db =
-    options.db ??
-    openDatabase({
-      path: ephemeralSessions ? ':memory:' : join(dataDir, 'vela.db'),
-    })
+}
+
+function initVelaInstance(
+  options: VelaOptions,
+  cwd: string,
+  ephemeral: boolean,
+  ephemeralSessions: boolean,
+  dataDir: string,
+  ownsDb: boolean,
+  db: VelaDatabase,
+): Vela {
   let { model } = options
   let defaultsChanged = false
   let defaultThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL
@@ -412,6 +418,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         prepareCommands: resourceSplit !== undefined,
         resolveModel,
         planLabel: (provider, channel) => models.planLabel(provider, channel),
+        authMode: (provider, channel) => models.authMode(provider, channel),
         thinkingLevel: defaultThinkingLevel,
         autoCompaction: options.autoCompaction ?? true,
         openSession: (newId, newOptions) => {

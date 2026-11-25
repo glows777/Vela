@@ -1,6 +1,6 @@
 /**
- * Persistent SQLite sessions: pass a shared `dataDir` (or pre-opened `VelaDatabase` via `db`)
- * so sessions persist in `<dataDir>/vela.db` and resume across Vela restarts.
+ * Persistent SQLite sessions: pass a shared `dataDir` so sessions persist in
+ * `<dataDir>/vela.db` and resume across Vela restarts.
  *
  * Run: bun examples/sdk/04-custom-storage.ts
  */

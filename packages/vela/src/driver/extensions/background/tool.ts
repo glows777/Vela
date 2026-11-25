@@ -46,6 +46,7 @@ export function createBackgroundTools(
   return [
     {
       name: 'output',
+      executionMode: 'parallel',
       description:
         'Read a background command’s output so far: the last 2000 lines or 50KB. An unknown id means its result was already delivered or returned by a stop, or it ended with a restart or session close.',
       inputSchema: outputSchema,

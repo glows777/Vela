@@ -12,7 +12,7 @@ export interface VelaLimits {
   retryMaxMs: number
   /** Summarize history when the estimated input reaches this */
   summaryThreshold: number
-  /** Safe input cap for a single request; the turn stops if exceeded */
+  /** Model context budget cap used for compaction and recovery decisions */
   maxInputTokens: number
 }
 

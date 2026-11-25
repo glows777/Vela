@@ -69,6 +69,8 @@ function renderMessage(message: ModelMessage): string {
           text(toolResultOutputToText(part.output as ToolResultOutput), 'code'),
           'tool-result',
         )
+      case 'image':
+        return text(`[image: ${part.mimeType}]`, 'note')
       case 'file':
         return text(`[file: ${part.mediaType}]`, 'note')
       default:

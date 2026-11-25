@@ -16,7 +16,6 @@ import type {
   VelaEvent,
   VelaEventListener,
 } from './agent/events.ts'
-import { canSummarize } from './context/compressor.ts'
 import { ContextManager } from './context/manager.ts'
 import {
   type RequestSnapshot,
@@ -28,12 +27,7 @@ import type {
   BeforeAgentStartResult,
   InputSource,
 } from './extensions/events.ts'
-import {
-  estimateMessagesTokens,
-  type ImageContent,
-  type ModelMessage,
-  type TextContent,
-} from './messages.ts'
+import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
 import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
 import {
   cloneLeaf,
@@ -42,7 +36,17 @@ import {
   forkPoint,
 } from './session/branch-selection.ts'
 import { extractToolMessageDetails } from './session/db-store.ts'
-import { SessionDefaultState } from './session/defaults.ts'
+import {
+  buildForkSessionOptions,
+  defaultAbortError,
+  prepareAgentTurn,
+  resolveRunProducer,
+  restoreBranchState,
+  runLoopCompaction,
+  SessionDefaultState,
+  splitUserMessageContent,
+  summarizeEntriesForTree,
+} from './session/defaults.ts'
 import type {
   SessionDeps as SessionDependencies,
   ForkResult as SessionForkResult,
@@ -56,8 +60,8 @@ import {
   type SessionTreeNode,
 } from './session/entries.ts'
 import { exportBranch } from './session/export.ts'
-import { type LoadedSessionContext, SessionStore } from './session/index.ts'
-import { MessageQueue, messageText } from './session/message-queue.ts'
+import { SessionStore } from './session/index.ts'
+import { MessageQueue } from './session/message-queue.ts'
 import {
   assertSessionId,
   type ForkOptions,
@@ -316,6 +320,7 @@ export class VelaSession {
   }
 
   private applyModel(resolved: ResolvedModel): void {
+    const previousRef = this.defaults.resolved?.info.ref
     this.defaults.resolved = resolved
     this.defaults.hooked = undefined
     const limits = limitsForModel(
@@ -325,7 +330,10 @@ export class VelaSession {
     Object.assign(this.limits, limits)
     Object.assign(this.contextManager.limits, limits)
     const window = resolved.info.contextWindow ?? CONTEXT_WINDOW
-    this.tracker.setModel(window, resolved.info.cost)
+    this.tracker.setModel(window, resolved.info.cost, {
+      keepCalibration:
+        previousRef === undefined || previousRef === resolved.info.ref,
+    })
   }
 
   /** Emit a notification event on this session's event stream. */
@@ -530,14 +538,14 @@ export class VelaSession {
     return this.deps.extensions.beforeAgentStart(this, '')
   }
 
-  /** @internal Prepares the context before a request (threshold summary). */
+  /** @internal Prepares the context before a request. */
   prepareContext(
     request: RequestSnapshot,
-    options?: { allowSummary?: boolean; maxOutputTokens?: number },
+    options?: { maxOutputTokens?: number },
   ): Promise<void> {
     request.maxOutputTokens =
       options?.maxOutputTokens ?? this.modelInfo.maxTokens
-    return this.contextManager.prepare(request, options)
+    return this.contextManager.prepare(request)
   }
 
   /** Flushes pending storage operations. */
@@ -664,15 +672,16 @@ export class VelaSession {
         summarizeBranch: async (entries, focus, sig) => {
           const branchMessages = entriesToMessages(entries)
           if (!branchMessages.length) return undefined
-          const request = await resolveRequestSnapshot(
+          return summarizeEntriesForTree(
+            this.contextManager,
             this.model,
             this.buildSystem(),
             this.registry.toProviderTools(),
             branchMessages,
-            sig,
             this.modelInfo.maxTokens,
+            focus,
+            sig,
           )
-          return this.contextManager.summarizeBranch(request, 0, focus)
         },
         loadBranch: (ctx) => this.loadBranch(ctx),
         save: () => this.save(),
@@ -681,24 +690,20 @@ export class VelaSession {
   }
 
   /** Makes the store's current branch the session's context, model and thinking level. */
-  private async loadBranch(context: SessionContext): Promise<void> {
-    this.contextManager.restore(context)
-    this.registry.discoveredTools = new Set(await this.store.loadedTools())
-    for (const [message, info] of context.custom)
-      this.messageQueue.customMessages.set(message, info)
-    await this.defaults.restore(context, this.deps, this.id, (model) =>
-      this.selectModel(model, false),
-    )
-    const latest = (context as LoadedSessionContext).latestAssistantUsage
-    if (latest) {
-      this.tracker.restoreCalibration(
-        latest.inputTokens,
-        latest.outputTokens,
-        latest.trailingMessages,
-      )
-    } else {
-      this.tracker.setEstimatedTokens(estimateMessagesTokens(this.messages))
-    }
+  private loadBranch(context: SessionContext): Promise<void> {
+    return restoreBranchState({
+      context,
+      contextManager: this.contextManager,
+      registry: this.registry,
+      store: this.store,
+      customMessages: this.messageQueue.customMessages,
+      defaults: this.defaults,
+      deps: this.deps,
+      id: this.id,
+      selectModel: (model) => this.selectModel(model, false),
+      tracker: this.tracker,
+      messages: this.messages,
+    })
   }
 
   /**
@@ -714,18 +719,21 @@ export class VelaSession {
       await this.start(signal)
       if (await this.deps.extensions.beforeFork(this, entryId, position))
         return { cancelled: true }
-      const branchModel =
-        typeof this.defaults.modelChoice === 'string'
-          ? (this.store.modelAt(point.leafId) ?? this.defaults.modelChoice)
-          : this.defaults.modelChoice
-      return copyFork(this, point, options.sessionId, this.deps.openSession, {
-        ...routing.unroutedOptions(this.options),
-        location: this.location,
-        model: branchModel,
-        thinkingLevel:
-          this.store.thinkingAt(point.leafId) ?? this.defaults.thinking,
-        autoCompaction: this.autoCompaction,
-      })
+      return copyFork(
+        this,
+        point,
+        options.sessionId,
+        this.deps.openSession,
+        buildForkSessionOptions(
+          this.defaults,
+          this.store,
+          this.options,
+          this.location,
+          this.autoCompaction,
+          point.leafId,
+          (opts) => routing.unroutedOptions(opts),
+        ),
+      )
     })
   }
 
@@ -772,6 +780,8 @@ export class VelaSession {
       entries: this.store.getBranch(),
       name: this.name,
       model: this.defaults.modelChoice,
+      channel: this.channel,
+      parentSession: this.parentSession,
       format,
     })
   }
@@ -1020,17 +1030,7 @@ export class VelaSession {
   ): Promise<void> {
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
-    const text =
-      typeof content === 'string'
-        ? content
-        : content
-            .filter((part) => part.type === 'text')
-            .map((part) => part.text)
-            .join('\n')
-    const images =
-      typeof content === 'string'
-        ? undefined
-        : content.filter((part) => part.type === 'image')
+    const { text, images } = splitUserMessageContent(content)
     return this.promptInput(
       text,
       {
@@ -1265,39 +1265,38 @@ export class VelaSession {
         this.defaults.modelChoice = info.ref
         this.store.setModelChoice(info.ref)
       }
-      inputs = await Promise.all(
-        inputs.map((m) => this.messageQueue.normalizeInput(m)),
-      )
-      signal.throwIfAborted()
-      const input = inputs.map(messageText).join('\n\n')
-      this.turn = { sections: {}, messages: [] }
-      const started = await this.deps.extensions.beforeAgentStart(this, input)
-      this.turn = started
-      const added = started.messages.map((m) =>
-        this.messageQueue.customMessage(m),
-      )
-      this.emit({ type: 'agent_start', input })
-      const newMessages: ModelMessage[] = []
-      const flushAndAppend = () => {
-        this.userBash.flush()
-        this.messageQueue.flushPendingCustom((m) => this.append(m))
-        for (const m of [
-          ...inputs,
-          ...this.messageQueue.nextTurnMessages.splice(0),
-          ...added,
-        ]) {
-          this.append(m)
-          newMessages.push(m)
-        }
-      }
-      if (!recoverPending) flushAndAppend()
+      const { newMessages, flushAndAppend } = await prepareAgentTurn({
+        inputs,
+        signal,
+        recoverPending,
+        normalizeInput: (m) => this.messageQueue.normalizeInput(m),
+        beforeAgentStart: (text) =>
+          this.deps.extensions.beforeAgentStart(this, text),
+        setTurn: (turn) => {
+          this.turn = turn
+        },
+        toCustomMessage: (m) => this.messageQueue.customMessage(m),
+        emitStart: (input) => this.emit({ type: 'agent_start', input }),
+        flushBash: () => this.userBash.flush(),
+        flushPendingCustom: (cb) => this.messageQueue.flushPendingCustom(cb),
+        nextTurnMessages: this.messageQueue.nextTurnMessages,
+        append: (m) => this.append(m),
+      })
       const { info: servingInfo } = this.resolveModel()
       serving.model = this.requestModel()
       serving.maxOutputTokens = servingInfo.maxTokens
+      const producer = resolveRunProducer(
+        serving.model,
+        this.defaults.modelChoice,
+        servingInfo.provider,
+        this.channel,
+        this.deps.authMode,
+      )
       handedOff = true
       return await this.driver.run({
         claim,
         model: serving.model,
+        producer,
         trigger,
         maxOutputTokens: serving.maxOutputTokens,
         supportsImages: servingInfo.input?.includes('image') ?? true,
@@ -1359,9 +1358,13 @@ export class VelaSession {
     serving?: { model?: ModelInput; maxOutputTokens?: number },
   ): Promise<void> {
     const request = await this.buildSnapshot(signal, serving)
-    if (!canSummarize(request.messages, this.limits.maxInputTokens))
-      throw new Error('Nothing to compact (session too small)')
-    await this.contextManager.compact(request, focus, reason)
+    await runLoopCompaction(
+      this.contextManager,
+      request,
+      this.limits.maxInputTokens,
+      reason,
+      focus,
+    )
   }
 
   /**
@@ -1381,12 +1384,7 @@ export class VelaSession {
    * Aborts the current agent loop and extension commands (if any) and waits until the agent loop actually stops
    * (like pi's `await abort()`). Queued messages stay in the queue; call clearQueue() first if needed.
    */
-  async abort(
-    reason: unknown = new DOMException(
-      'User cancelled the current operation',
-      'AbortError',
-    ),
-  ): Promise<void> {
+  async abort(reason: unknown = defaultAbortError()): Promise<void> {
     for (const controller of [this.busy.controller, ...this.commands.keys()])
       if (controller && !controller.signal.aborted) controller.abort(reason)
     await this.waitForIdle()

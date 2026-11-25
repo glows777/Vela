@@ -193,12 +193,12 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
 ├── APPEND_SYSTEM.md                  appended to the system prompt (optional)
 └── projects/
     └── --home-me-code-app--1a2b3c4d/
+        ├── vela.db                   sessions, messages, tool calls, runs, approvals, usage
         ├── sessions/
         │   └── <session id>/
-        │       ├── transcript.jsonl  the conversation
-        │       └── …                 long tool output and tool call history
-        ├── memory/                   memory extension (MEMORY.md and one file per memory)
-        └── usage/requests.jsonl      token usage records
+        │       ├── tool-results/     spilled long tool outputs
+        │       └── uploads/          session upload metadata
+        └── memory/                   memory extension (MEMORY.md and one file per memory)
 ```
 
 The hash keeps two folders whose readable names collide (`/a-b/c` and `/a/b-c`) apart. Set `dataDir` to store a project's data somewhere else. Session files are described in [Session format](session-format.md).
@@ -305,4 +305,4 @@ Text in `~/.vela/APPEND_SYSTEM.md`, or in `<project>/.vela/APPEND_SYSTEM.md` whe
 
 ## Legacy data
 
-Older versions of Vela wrote data into the working folder: `.sessions/`, `.memory/`, `.usage/` and `knowledge.db`. If Vela finds any of these, it prints a `[data]` notice on stderr with shell commands that move them into the new data directory. Nothing is moved automatically. The commands are safe to run again; run them before creating new sessions or memories in the new directory, since the old data wins on name clashes.
+Older versions of Vela wrote data into `.sessions/`, `.memory/`, `.usage/`, `knowledge.db`, and per-session `transcript.jsonl` / `requests.jsonl` files. v0.9 makes a clean break to SQLite (`vela.db`) for sessions, runs, approvals, and usage with no automatic JSONL session migration. See [Upgrading to Vela v0.9](upgrading.md) for details.

@@ -6,7 +6,7 @@ import { generateText } from 'ai'
 import { z as z3 } from 'zod/v3'
 import { ExtensionRunner } from '../../src/driver/extensions/runner.ts'
 import {
-  messageEnvelopeChars,
+  estimateMessagesTokens,
   normalizeUserMessage,
 } from '../../src/driver/messages.ts'
 import {
@@ -263,9 +263,9 @@ test('driver messages helpers ignore thinking text, ignore image base64 size, an
     ]),
   ).toBe('visible')
 
-  // messageEnvelopeChars treats inline image as fixed char budget instead of raw base64 length
+  // estimateMessagesTokens treats inline image as fixed token budget instead of raw base64 length
   expect(
-    messageEnvelopeChars([
+    estimateMessagesTokens([
       {
         role: 'user',
         content: [
@@ -277,7 +277,7 @@ test('driver messages helpers ignore thinking text, ignore image base64 size, an
         ],
       },
     ]),
-  ).toBeLessThan(6000)
+  ).toBeLessThan(1500)
 
   const dir = tempDir('vela-s1-sess-')
   const dbPath = join(dir, 'vela.db')

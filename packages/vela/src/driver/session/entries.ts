@@ -221,12 +221,31 @@ export function contextEntries(path: SessionEntry[]): {
   }
 }
 
-/** Convert a slice of session entries (e.g. an abandoned branch) into model messages. */
+/** Convert a slice of session entries (e.g. an abandoned branch) into model messages, respecting internal compactions. */
 export function entriesToMessages(
   entries: readonly SessionEntry[],
 ): ModelMessage[] {
+  let effectiveEntries: readonly SessionEntry[] = entries
+  let compactionIndex = -1
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i]?.type === 'compaction') compactionIndex = i
+  }
+  if (compactionIndex >= 0) {
+    const compaction = entries[compactionIndex] as CompactionEntry
+    const firstKept =
+      compaction.firstKeptEntryId === compaction.id
+        ? compactionIndex
+        : entries.findIndex((entry) => entry.id === compaction.firstKeptEntryId)
+    if (firstKept >= 0 && firstKept <= compactionIndex) {
+      effectiveEntries = [
+        compaction,
+        ...entries.slice(firstKept, compactionIndex),
+        ...entries.slice(compactionIndex + 1),
+      ]
+    }
+  }
   const messages: ModelMessage[] = []
-  for (const entry of entries) {
+  for (const entry of effectiveEntries) {
     if (entry.type === 'branch_summary') {
       if (entry.summary)
         messages.push({

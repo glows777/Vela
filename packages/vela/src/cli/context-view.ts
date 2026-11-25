@@ -1,22 +1,5 @@
-import type { ModelMessage } from '../extension-api.ts'
-
-const IMAGE_CHARS = 4800
-const isImageContentPart = (part: {
-  type: string
-  mediaType?: string
-}): boolean =>
-  part.type === 'image' ||
-  part.type.startsWith('image-') ||
-  (part.type === 'file' && /^image(?:\/|$)/i.test(part.mediaType ?? ''))
-
-/**
- * Terminal view for /context, modeled on Claude Code's /context view.
- *
- * Splits context usage by category and draws it as a grid where each cell ≈ 1/256 of the window (16x16).
- * Each category gets its own color (ANSI 256) so you can see at a glance what is eating the context.
- */
-
-import type { UsageTotals } from '../extension-api.ts'
+import { estimateMessagesTokens } from '../driver/messages.ts'
+import type { ModelMessage, UsageTotals } from '../extension-api.ts'
 import { formatUsd } from './format.ts'
 
 interface ContextSlice {
@@ -167,46 +150,12 @@ export interface BuildSnapshotInput {
   autocompactBufferTokens?: number
 }
 
-const CHARS_PER_TOKEN = 3.5
 function approxTokensFromChars(chars: number): number {
-  return Math.ceil(chars / CHARS_PER_TOKEN)
+  return Math.ceil(chars * 0.25)
 }
 
 function approxMessageTokens(messages: ModelMessage[]): number {
-  let chars = 0
-  for (const m of messages) {
-    if (typeof m.content === 'string') chars += m.content.length
-    else if (Array.isArray(m.content)) {
-      for (const part of m.content) {
-        if (isImageContentPart(part)) chars += IMAGE_CHARS
-        else if (part.type === 'text') chars += (part.text || '').length
-        else if (part.type === 'tool_call')
-          chars += JSON.stringify(part.input || {}).length + 80
-        else if (part.type === 'tool_result') {
-          const out = part.output
-          if (out.type === 'content')
-            chars += out.value.reduce(
-              (total, item) =>
-                total +
-                (isImageContentPart(item)
-                  ? IMAGE_CHARS
-                  : item.type === 'text'
-                    ? item.text.length
-                    : JSON.stringify(item).length),
-              0,
-            )
-          else if ('value' in out && out.value)
-            chars +=
-              typeof out.value === 'string'
-                ? out.value.length
-                : JSON.stringify(out.value).length
-          else chars += JSON.stringify(out || {}).length
-          chars += 80
-        }
-      }
-    }
-  }
-  return approxTokensFromChars(chars)
+  return estimateMessagesTokens(messages)
 }
 
 export function buildContextSnapshot(

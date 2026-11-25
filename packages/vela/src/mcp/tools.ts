@@ -196,7 +196,7 @@ export interface McpToolCaller {
   ): Promise<CallToolResult>
 }
 
-// Only tools built by this adapter may use its internal AI SDK JSON schemas.
+// Only tools built by this adapter may wrap prebuilt JSON schemas via defineJsonSchemaTool.
 export function createMcpTool(options: {
   server: string
   tool: McpTool
@@ -215,6 +215,8 @@ export function createMcpTool(options: {
       title ||
       `MCP tool ${tool.name} from server ${server}`,
     inputSchema: createJsonSchema(toParameters(tool.inputSchema)),
+    executionMode:
+      annotations?.readOnlyHint === true ? 'parallel' : 'sequential',
     exposure: options.exposure,
     namespace: options.namespace,
     ...(annotations ? { annotations } : {}),

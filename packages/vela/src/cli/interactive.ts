@@ -15,6 +15,7 @@ import {
   branchSummaryMessageText,
   contextEntries,
   inspectSession,
+  isToolResultError,
   summaryMessageText,
 } from '../driver/diagnostics.ts'
 import type {
@@ -397,7 +398,7 @@ export class InteractiveMode {
         this.log.settleTool(
           block,
           part.output,
-          part.output.type.startsWith('error'),
+          isToolResultError(part.output),
           entry.details?.[part.toolCallId],
         )
       }
@@ -1136,5 +1137,3 @@ export class InteractiveMode {
     process.exit(129)
   }
 }
-
-/** Footer (like pi): directory and session name; usage, context percentage, model and thinking; extension statuses. */

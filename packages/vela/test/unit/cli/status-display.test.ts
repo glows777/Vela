@@ -322,7 +322,7 @@ test('truncation never splits a wide character or a surrogate pair', () => {
   }
 })
 
-test('memory and unknown storage stay honest', () => {
+test('memory storage stays honest', () => {
   expect(
     formatStatusPath({
       persistence: { type: 'memory' },
@@ -331,14 +331,6 @@ test('memory and unknown storage stay honest', () => {
       isFile: () => true,
     }),
   ).toBe('in-memory (not saved)')
-  expect(
-    formatStatusPath({
-      persistence: { type: 'unknown' },
-      homeDir: HOME,
-      agentDir: AGENT,
-      isFile: () => true,
-    }),
-  ).toBe('custom storage (path unknown)')
 })
 
 test('formatContextFileList strips APC sequences including their payload', () => {

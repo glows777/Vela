@@ -923,7 +923,6 @@
     unattended?: boolean | undefined
   type SessionPersistence = | { type: 'file'; path: string }
       | { type: 'memory' }
-      | { type: 'unknown' }
   interface SessionScope
     readonly dataDir: string
     readonly id: string
@@ -1120,11 +1119,6 @@
       type: 'file'
       mediaType: string
       data: { type: 'data'; data: string } | { type: 'url'; url: string }
-      }
-      | {
-      type: 'media'
-      data: string
-      mediaType: string
       }
       | {
       type: 'custom'
@@ -1386,7 +1380,6 @@
     credentials?: CredentialStore | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
-    db?: VelaDatabase | undefined
     docs?: false | DocsPaths | undefined
     env?: ((target: { sessionId: string; location: ExecutionLocation; }) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>) | undefined
     ephemeralSessions?: boolean | undefined

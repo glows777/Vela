@@ -15,7 +15,7 @@ import { isContextOverflow } from './overflow.ts'
 const BILLING =
   /insufficient[_ ](?:quota|balance|credits?|funds)|credit balance.*(?:too low|exhausted)|billing[_ ](?:error|limit|hard_limit)|out of (?:credits?|budget)|quota exceeded|exceeded (?:your )?current quota|subscription limit/i
 const NETWORK =
-  /ECONNRESET|EPIPE|ETIMEDOUT|timeout|timed out|fetch failed|network/i
+  /ECONNRESET|EPIPE|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|UND_ERR_SOCKET|timeout|timed out|fetch failed|network/i
 
 /** Classify only the terminal error. Retry and compaction decisions keep their existing rules. */
 export function classifyAgentError(error: unknown): AgentErrorKind {

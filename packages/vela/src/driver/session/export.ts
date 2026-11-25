@@ -1,7 +1,15 @@
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { openDatabase } from '../../db/index.ts'
 import type { ModelInput } from '../../shared/provider-types.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
+import {
+  loadSessionMeta,
+  parseRowLocation,
+  queryBranchRows,
+  rowToEntry,
+} from './db-store.ts'
 import {
   SESSION_FORMAT_VERSION,
   type SessionEntry,
@@ -14,6 +22,8 @@ function branchJsonl(
   id: string,
   location: ExecutionLocation,
   entries: SessionEntry[],
+  channel?: string,
+  parentSession?: string,
 ): string {
   const header: SessionHeader = {
     type: 'session',
@@ -22,6 +32,8 @@ function branchJsonl(
     timestamp: new Date().toISOString(),
     cwd: location.cwd,
     location,
+    ...(channel ? { channel } : {}),
+    ...(parentSession ? { parentSession } : {}),
   }
   const lines: object[] = [header]
   let parentId: string | null = null
@@ -58,11 +70,19 @@ export function exportBranch(options: {
   entries: SessionEntry[]
   name?: string
   model?: ModelInput
+  channel?: string
+  parentSession?: string
   format: 'jsonl' | 'html'
 }): Promise<string> {
   const content =
     options.format === 'jsonl'
-      ? branchJsonl(options.id, options.location, options.entries)
+      ? branchJsonl(
+          options.id,
+          options.location,
+          options.entries,
+          options.channel,
+          options.parentSession,
+        )
       : renderSessionHtml({
           id: options.id,
           name: options.name,
@@ -76,4 +96,56 @@ export function exportBranch(options: {
     options.format,
     content,
   )
+}
+
+/** Exports a saved session directly from `vela.db` in read-only mode without starting extensions or models. */
+export async function exportSavedSession(options: {
+  dataDir: string
+  sessionId: string
+  outputPath?: string
+  baseCwd: string
+}): Promise<string> {
+  const dbPath = join(options.dataDir, 'vela.db')
+  if (!existsSync(dbPath)) {
+    throw new Error(
+      `Session ${options.sessionId} has no saved history in vela.db`,
+    )
+  }
+  const db = openDatabase({ path: dbPath, readonly: true })
+  try {
+    const meta = loadSessionMeta(db, options.sessionId)
+    if (!meta.row) {
+      throw new Error(
+        `Session ${options.sessionId} has no saved history in vela.db`,
+      )
+    }
+    const rows = queryBranchRows(
+      db,
+      options.sessionId,
+      meta.row.leaf_message_id,
+    )
+    const location: ExecutionLocation = parseRowLocation(
+      meta.row.location_json,
+    ) ?? {
+      environment: 'local',
+      cwd: options.baseCwd,
+    }
+    const format = options.outputPath?.toLowerCase().endsWith('.jsonl')
+      ? 'jsonl'
+      : 'html'
+    return await exportBranch({
+      id: options.sessionId,
+      baseCwd: options.baseCwd,
+      location,
+      path: options.outputPath,
+      entries: rows.map(rowToEntry),
+      name: meta.row.name ?? undefined,
+      model: meta.model,
+      channel: meta.channel,
+      parentSession: meta.row.parent_session_id ?? undefined,
+      format,
+    })
+  } finally {
+    if (db.open) db.close()
+  }
 }

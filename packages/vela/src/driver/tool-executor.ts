@@ -1,5 +1,6 @@
 import { ABORTED_RESULT, errorMessageOf } from './agent/step.ts'
-import type { ExecutionLocation } from './execution/types.ts'
+import { abortable } from './execution/location.ts'
+import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import {
   isToolContent,
   normalizeToolContent,
@@ -48,6 +49,7 @@ async function runSingleToolCall(
   input: unknown,
   interception: ToolInterception | undefined,
   recoveryLocation: ExecutionLocation | undefined,
+  sharedResolveEnv?: (envSignal?: AbortSignal) => Promise<ExecutionEnv>,
 ): Promise<void> {
   const {
     db,
@@ -60,7 +62,7 @@ async function runSingleToolCall(
     shouldSkipForSteer,
   } = options
   const name = tool.name
-  const mode = tool.executionMode ?? 'parallel'
+  const mode = tool.executionMode ?? 'sequential'
 
   await registry.trackCall(() =>
     registry.runInGate(mode, async () => {
@@ -94,9 +96,9 @@ async function runSingleToolCall(
         sessionId,
         toolCallId: row.tool_call_id,
       }
-      const baseRequireEnv = interception?.resolveEnv
+      const baseRequireEnv = sharedResolveEnv
         ? createLazyEnvResolver(
-            (envSignal) => interception.resolveEnv!(sessionId, envSignal),
+            sharedResolveEnv,
             signal,
             (resolved) => {
               context.execution = resolved
@@ -110,12 +112,7 @@ async function runSingleToolCall(
 
       if (
         options.isRecovery &&
-        (recoveryLocation ||
-          (tool.replay === 'safe' &&
-            (name === 'read' ||
-              name === 'ls' ||
-              name === 'grep' ||
-              name === 'find'))) &&
+        recoveryLocation &&
         !context.execution &&
         located
       ) {
@@ -220,19 +217,24 @@ async function runSingleToolCall(
         let errorText = rawMessage
         let afterOutput: unknown = errorText
         if (interception?.after) {
-          afterOutput = await interception.after(
-            name,
-            input,
-            errorText,
-            context,
-            true,
-          )
-          if (isToolContent(afterOutput)) {
-            const normalized = await normalizeToolContent(afterOutput)
-            afterOutput = normalized
-            errorText = toolContentText(normalized) || errorText
-          } else if (typeof afterOutput === 'string') {
-            errorText = afterOutput
+          try {
+            afterOutput = await interception.after(
+              name,
+              input,
+              errorText,
+              context,
+              true,
+            )
+            if (isToolContent(afterOutput)) {
+              const normalized = await normalizeToolContent(afterOutput)
+              afterOutput = normalized
+              errorText = toolContentText(normalized) || errorText
+            } else if (typeof afterOutput === 'string') {
+              errorText = afterOutput
+            }
+          } catch (afterError) {
+            errorText = `${errorText} (tool_result hook error: ${errorMessageOf(afterError)})`
+            afterOutput = errorText
           }
         }
         const durationMs = performance.now() - startedAt
@@ -266,28 +268,54 @@ async function runSingleToolCall(
       settled = true
       const rawDetails =
         raw instanceof ToolExecutionResult ? raw.value : undefined
-      const prepared = await prepareCallResult({
-        raw,
-        spillDir: registry.spillDir,
-        environment: context.execution,
-        resolveEnvironment: located
-          ? () => located.requireEnv(signal)
-          : undefined,
-        signal,
-        maxResultChars: tool.maxResultChars,
-      })
-      let { output } = prepared
-      const { execution, stored } = prepared
-      if (interception?.after) {
-        output = await interception.after(
-          name,
-          input,
-          output,
-          context,
-          Boolean(execution.isError),
-        )
+      let prepared: Awaited<ReturnType<typeof prepareCallResult>>
+      let output: Awaited<ReturnType<typeof prepareCallResult>>['output']
+      try {
+        prepared = await prepareCallResult({
+          raw,
+          spillDir: registry.spillDir,
+          environment: context.execution,
+          resolveEnvironment: located
+            ? () => located.requireEnv(signal)
+            : undefined,
+          signal,
+          maxResultChars: tool.maxResultChars,
+        })
+        output = prepared.output
+        if (interception?.after) {
+          output = await interception.after(
+            name,
+            input,
+            output,
+            context,
+            Boolean(prepared.execution.isError),
+          )
+        }
+        if (isToolContent(output)) output = await normalizeToolContent(output)
+      } catch (postError) {
+        const postMessage = errorMessageOf(postError)
+        const durationMs = performance.now() - startedAt
+        const resolvedAfterLoc =
+          located?.getLocation() ??
+          (context.execution
+            ? { environment: context.execution.id, cwd: context.execution.cwd }
+            : undefined)
+        persistTerminalRow(db, row, 'failed', errorOutput(postMessage), true, {
+          preview: postMessage,
+          location: resolvedAfterLoc,
+          durationMs,
+        })
+        emit({
+          type: 'tool_execution_end',
+          toolCallId: row.tool_call_id,
+          toolName: name,
+          result: postMessage,
+          isError: true,
+          durationMs: Math.round(durationMs),
+        })
+        throw postError
       }
-      if (isToolContent(output)) output = await normalizeToolContent(output)
+      const { execution, stored } = prepared
 
       const durationMs = performance.now() - startedAt
       const isError = Boolean(execution.isError)
@@ -351,85 +379,153 @@ export async function executeStepCalls(
 ): Promise<ExecuteStepCallsResult> {
   const { db, registry, sessionId, rows, emit, signal, isDraining } = options
   const interception = registry.getInterception()
-  const runnable: Array<{
-    row: VelaToolCallRow
-    tool: ToolDefinition
-    input: unknown
-    recoveryLocation?: ExecutionLocation
-  }> = []
 
-  let blockedByParallelApproval = false
-
-  for (const row of rows) {
-    if (row.status === 'awaiting_approval') {
-      if (row.execution_mode === 'sequential') break
-      blockedByParallelApproval = true
-      continue
-    }
-    if (
-      row.status !== 'pending' &&
-      !(options.isRecovery && row.status === 'running')
-    )
-      continue
-    if (blockedByParallelApproval && row.execution_mode === 'sequential') break
-
-    const rawTool = registry.get(row.tool_name)
-    let input = parseJsonSafe(row.input_json)
-    const recoveryLocation = row.location_json
-      ? (parseJsonSafe(row.location_json) as ExecutionLocation)
-      : undefined
-
-    const callable = checkCallableTool(
-      rawTool,
-      row.tool_name,
-      registry,
-      isDraining,
-    )
-    if (!callable.ok) {
-      await failPrecheck(db, row, input, callable.reason, emit)
-      continue
-    }
-    const tool = callable.tool
-
-    if (row.status === 'running') {
-      if (signal?.aborted) {
-        await failPrecheck(db, row, input, 'Operation aborted', emit)
-        continue
-      }
-      runnable.push({ row, tool, input, recoveryLocation })
-      continue
-    }
-
-    const approval = db.get<{
-      status: string
-      input_json: string | null
-    }>(
-      `SELECT status, input_json FROM approvals
-       WHERE tool_call_row_id = ?
-          OR (tool_call_row_id IS NULL AND session_id = ? AND run_id = ? AND tool_call_id = ?)
-       ORDER BY created_at DESC LIMIT 1`,
-      row.id,
-      row.session_id,
-      row.run_id,
-      row.tool_call_id,
-    )
-    const isApproved = approval?.status === 'approved'
-
-    if (isApproved) {
-      if (
-        approval.input_json !== null &&
-        approval.input_json !== row.input_json
-      ) {
-        await failPrecheck(
-          db,
-          row,
-          input,
-          '[Rejected] Tool input changed after human approval',
-          emit,
+  // Share one single-flight env resolution across parallel calls in this step.
+  let stepEnvPromise: Promise<ExecutionEnv> | undefined
+  const sharedResolveEnv = interception?.resolveEnv
+    ? (envSignal?: AbortSignal): Promise<ExecutionEnv> => {
+        stepEnvPromise ??= interception.resolveEnv!(sessionId, signal).catch(
+          (error) => {
+            stepEnvPromise = undefined
+            throw error
+          },
         )
+        return abortable(stepEnvPromise, envSignal)
+      }
+    : undefined
+
+  // Partition into ordered execution waves: contiguous parallel rows run together, sequential rows isolate.
+  const waves: VelaToolCallRow[][] = []
+  for (const row of rows) {
+    if (row.execution_mode === 'sequential') {
+      waves.push([row])
+    } else {
+      const lastWave = waves.at(-1)
+      if (lastWave && lastWave[0]!.execution_mode === 'parallel') {
+        lastWave.push(row)
+      } else {
+        waves.push([row])
+      }
+    }
+  }
+
+  let blockedByApproval = false
+
+  for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
+    if (blockedByApproval) break
+    const wave = waves[waveIndex]!
+    if (options.shouldSkipForSteer?.()) {
+      const reason = 'Skipped due to queued user message.'
+      const skipOut: ToolResultOutput = { type: 'error-text', value: reason }
+      for (const remainingWave of waves.slice(waveIndex)) {
+        for (const pendingRow of remainingWave) {
+          if (pendingRow.status !== 'pending') continue
+          const pendingInput = parseJsonSafe(pendingRow.input_json)
+          persistTerminalRow(db, pendingRow, 'skipped', skipOut, true, {
+            preview: reason,
+            durationMs: 0,
+          })
+          pendingRow.status = 'skipped'
+          pendingRow.is_error = 1
+          pendingRow.preview = reason
+          pendingRow.result_json = JSON.stringify(skipOut)
+          emitImmediateError(emit, pendingRow, pendingInput, reason)
+        }
+      }
+      break
+    }
+
+    const runnable: Array<{
+      row: VelaToolCallRow
+      tool: ToolDefinition
+      input: unknown
+      recoveryLocation?: ExecutionLocation
+    }> = []
+
+    for (const row of wave) {
+      if (row.status === 'awaiting_approval') {
+        blockedByApproval = true
         continue
       }
-      if (approval.input_json === null) {
+      if (
+        row.status !== 'pending' &&
+        !(options.isRecovery && row.status === 'running')
+      )
+        continue
+
+      const rawTool = registry.get(row.tool_name)
+      let input = parseJsonSafe(row.input_json)
+      const recoveryLocation = row.location_json
+        ? (parseJsonSafe(row.location_json) as ExecutionLocation)
+        : undefined
+
+      const callable = checkCallableTool(
+        rawTool,
+        row.tool_name,
+        registry,
+        isDraining,
+      )
+      if (!callable.ok) {
+        await failPrecheck(db, row, input, callable.reason, emit)
+        continue
+      }
+      const tool = callable.tool
+
+      if (row.status === 'running') {
+        if (signal?.aborted) {
+          await failPrecheck(db, row, input, 'Operation aborted', emit)
+          continue
+        }
+        runnable.push({ row, tool, input, recoveryLocation })
+        continue
+      }
+
+      const approval = db.get<{
+        status: string
+        input_json: string | null
+      }>(
+        `SELECT status, input_json FROM approvals
+         WHERE tool_call_row_id = ?
+            OR (tool_call_row_id IS NULL AND session_id = ? AND run_id = ? AND tool_call_id = ?)
+         ORDER BY created_at DESC LIMIT 1`,
+        row.id,
+        row.session_id,
+        row.run_id,
+        row.tool_call_id,
+      )
+      const isApproved = approval?.status === 'approved'
+
+      if (isApproved) {
+        if (
+          approval.input_json !== null &&
+          approval.input_json !== row.input_json
+        ) {
+          await failPrecheck(
+            db,
+            row,
+            input,
+            '[Rejected] Tool input changed after human approval',
+            emit,
+          )
+          continue
+        }
+        if (approval.input_json === null) {
+          try {
+            input = await validateInput(tool.inputSchema, input)
+          } catch (error) {
+            await failPrecheck(
+              db,
+              row,
+              input,
+              `[Rejected] Invalid input for ${row.tool_name}: ${errorMessageOf(error)}`,
+              emit,
+            )
+            continue
+          }
+        } else {
+          input = parseJsonSafe(approval.input_json)
+        }
+      } else {
         try {
           input = await validateInput(tool.inputSchema, input)
         } catch (error) {
@@ -442,128 +538,114 @@ export async function executeStepCalls(
           )
           continue
         }
-      } else {
-        input = parseJsonSafe(approval.input_json)
-      }
-    } else {
-      try {
-        input = await validateInput(tool.inputSchema, input)
-      } catch (error) {
-        await failPrecheck(
-          db,
-          row,
-          input,
-          `[Rejected] Invalid input for ${row.tool_name}: ${errorMessageOf(error)}`,
-          emit,
-        )
-        continue
-      }
-      const canonicalJson = JSON.stringify(input)
-      if (canonicalJson !== row.input_json) {
-        row.input_json = canonicalJson
-        db.run(
-          'UPDATE vela_tool_calls SET input_json = ?, updated_at = ? WHERE id = ?',
-          canonicalJson,
-          new Date().toISOString(),
-          row.id,
-        )
-      }
-
-      if (interception?.before) {
-        const pre = await interception.before(row.tool_name, input, {
-          sessionId,
-          toolCallId: row.tool_call_id,
-        })
-        if (pre.block && pre.approval) {
-          await failPrecheck(
-            db,
-            row,
-            input,
-            '[Rejected] Tool hook returned both block and approval',
-            emit,
-          )
-          continue
-        }
-        if (pre.block) {
-          await failPrecheck(
-            db,
-            row,
-            input,
-            `[Blocked by hook] ${pre.reason || 'Operation blocked'}`,
-            emit,
-          )
-          continue
-        }
-        if (pre.input !== input) {
-          try {
-            input = await validateInput(tool.inputSchema, pre.input)
-          } catch (error) {
-            await failPrecheck(
-              db,
-              row,
-              input,
-              `[Rejected] Input modified by hook is invalid: ${errorMessageOf(error)}`,
-              emit,
-            )
-            continue
-          }
-          const inputJson = JSON.stringify(input)
-          row.input_json = inputJson
+        const canonicalJson = JSON.stringify(input)
+        if (canonicalJson !== row.input_json) {
+          row.input_json = canonicalJson
           db.run(
             'UPDATE vela_tool_calls SET input_json = ?, updated_at = ? WHERE id = ?',
-            inputJson,
+            canonicalJson,
             new Date().toISOString(),
             row.id,
           )
         }
-        if (pre.approval) {
-          markApprovalRequested(db, row, input, pre.approval.summary, emit)
-          if (row.execution_mode === 'sequential') break
-          blockedByParallelApproval = true
+
+        if (interception?.before) {
+          const pre = await interception.before(row.tool_name, input, {
+            sessionId,
+            toolCallId: row.tool_call_id,
+          })
+          if (pre.block && pre.approval) {
+            await failPrecheck(
+              db,
+              row,
+              input,
+              '[Rejected] Tool hook returned both block and approval',
+              emit,
+            )
+            continue
+          }
+          if (pre.block) {
+            await failPrecheck(
+              db,
+              row,
+              input,
+              `[Blocked by hook] ${pre.reason || 'Operation blocked'}`,
+              emit,
+            )
+            continue
+          }
+          if (pre.input !== input) {
+            try {
+              input = await validateInput(tool.inputSchema, pre.input)
+            } catch (error) {
+              await failPrecheck(
+                db,
+                row,
+                input,
+                `[Rejected] Input modified by hook is invalid: ${errorMessageOf(error)}`,
+                emit,
+              )
+              continue
+            }
+            const inputJson = JSON.stringify(input)
+            row.input_json = inputJson
+            db.run(
+              'UPDATE vela_tool_calls SET input_json = ?, updated_at = ? WHERE id = ?',
+              inputJson,
+              new Date().toISOString(),
+              row.id,
+            )
+          }
+          if (pre.approval) {
+            markApprovalRequested(db, row, input, pre.approval.summary, emit)
+            blockedByApproval = true
+            continue
+          }
+        }
+      }
+
+      if (row.tool_name === 'bash') {
+        const command = (input as { command?: unknown } | null)?.command
+        if (typeof command !== 'string') {
+          await failPrecheck(
+            db,
+            row,
+            input,
+            '[Rejected] bash command must be a string',
+            emit,
+          )
           continue
         }
       }
-    }
 
-    if (row.tool_name === 'bash') {
-      const command = (input as { command?: unknown } | null)?.command
-      if (typeof command !== 'string') {
-        await failPrecheck(
-          db,
-          row,
-          input,
-          '[Rejected] bash command must be a string',
-          emit,
-        )
+      if (signal?.aborted) {
+        await failPrecheck(db, row, input, 'Operation aborted', emit)
         continue
       }
+
+      runnable.push({ row, tool, input, recoveryLocation })
     }
 
-    if (signal?.aborted) {
-      await failPrecheck(db, row, input, 'Operation aborted', emit)
-      continue
-    }
-
-    runnable.push({ row, tool, input, recoveryLocation })
-  }
-
-  if (runnable.length > 0) {
-    const results = await Promise.allSettled(
-      runnable.map((item) =>
-        runSingleToolCall(
-          options,
-          item.row,
-          item.tool,
-          item.input,
-          interception,
-          item.recoveryLocation,
+    if (runnable.length > 0) {
+      const results = await Promise.allSettled(
+        runnable.map((item) =>
+          runSingleToolCall(
+            options,
+            item.row,
+            item.tool,
+            item.input,
+            interception,
+            item.recoveryLocation,
+            sharedResolveEnv,
+          ),
         ),
-      ),
-    )
-    const rejected = results.find(
-      (result): result is PromiseRejectedResult => result.status === 'rejected',
-    )
-    if (rejected) throw rejected.reason
+      )
+      const rejected = results.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === 'rejected',
+      )
+      if (rejected) throw rejected.reason
+    }
   }
 
   const waitingHuman = rows.some((row) => row.status === 'awaiting_approval')

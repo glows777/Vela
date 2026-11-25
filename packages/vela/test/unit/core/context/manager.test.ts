@@ -194,7 +194,7 @@ test('a request with nothing to summarize skips compaction cleanly', async () =>
     messages,
   )
   const before = JSON.stringify(messages)
-  await manager.prepare(request, { allowSummary: false })
+  await manager.prepare(request)
   expect(m.calls).toHaveLength(0)
   await manager.compactIfNeeded(request)
   expect(m.calls).toHaveLength(0)

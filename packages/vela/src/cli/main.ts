@@ -8,6 +8,7 @@ import { registerExtensionHostModules } from '../driver/config/extensions.ts'
 import { newSessionId, resolveModel } from '../driver/diagnostics.ts'
 import type { ImageContent, VelaSession } from '../driver/index.ts'
 import { setDefaultToolModifiers } from '../driver/index.ts'
+import { exportSavedSession } from '../driver/session/export.ts'
 import { type LocalOptions, local } from '../legacy-channels/index.ts'
 import { defaultAgentDir, loadConfig, type VelaConfig } from '../load-config.ts'
 import { usableModel } from '../settings.ts'
@@ -197,6 +198,27 @@ if (previousDataDir)
       : `[data] Owner environments select ${config.dataDir}. The previous settings select ${previousDataDir}. To keep using that history, pin dataDir to ${JSON.stringify(previousDataDir)} in the owner settings and restart.`,
   )
 
+// --export <id> [output]: read directly from vela.db (readonly) without initializing models, extensions, or recorder
+if (args.export) {
+  if (args.noSession) {
+    console.error('[export] --export cannot be used with --no-session')
+    process.exit(1)
+  }
+  try {
+    const written = await exportSavedSession({
+      dataDir: config.dataDir,
+      sessionId: args.export,
+      outputPath: args.messages[0],
+      baseCwd: cwd,
+    })
+    console.error(`Exported to ${written}`)
+    process.exit(0)
+  } catch (error) {
+    console.error(`[export] ${error instanceof Error ? error.message : error}`)
+    process.exit(1)
+  }
+}
+
 /**
  * Default model: VELA_MODEL=mock / faux:<scenario> wins (offline demo, replay), then `--model` → config
  * model → `openai/$OPENAI_API_MODEL_NAME` (the legacy env var form).
@@ -379,18 +401,6 @@ const exit = async (code: number): Promise<never> => {
   await vela.dispose()
   await recorder?.flush()
   process.exit(signalCode ?? configurationExitCode ?? code)
-}
-
-// --export <id> [output]: write the saved session from vela.db as HTML and exit
-if (args.export) {
-  try {
-    const written = await exportHtml(args.export, args.messages[0])
-    console.error(`Exported to ${written}`)
-  } catch (error) {
-    console.error(`[export] ${error instanceof Error ? error.message : error}`)
-    await exit(1)
-  }
-  await exit(0)
 }
 
 // --fork <id>: copy a saved session into a new one and start there (like pi)
@@ -627,14 +637,6 @@ try {
     messages.push(errorMessage(cause))
   console.error(messages.join(': '))
   await exit(1)
-}
-
-/** Writes a saved session from `vela.db` as HTML; returns the path written. */
-async function exportHtml(source: string, output?: string): Promise<string> {
-  const session = vela.session(source)
-  if (!(await session.resume()))
-    throw new Error(`Session ${source} has no saved history in vela.db`)
-  return session.exportHtml(output)
 }
 
 async function readStdin(): Promise<string> {

@@ -89,6 +89,7 @@ export const agentLoop = async ({
       takeSteering,
     })
   } finally {
+    store.releaseTransient()
     if (db.open) db.close()
   }
 }

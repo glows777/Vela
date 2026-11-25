@@ -20,6 +20,7 @@ import type {
   VelaMessage,
   VelaToolMessage,
 } from '../shared/messages.ts'
+import { deepMergeProviderOptions } from './stream-metadata.ts'
 
 const IMAGE_MEDIA_TYPE = /^image(?:\/|$)/i
 
@@ -151,16 +152,13 @@ function mergeConsecutiveAssistants(
             : []
           : content
       const parts = [...toParts(prev.content), ...toParts(msg.content)]
+      const providerOptions = deepMergeProviderOptions(
+        prev.providerOptions as ProviderOptions | undefined,
+        msg.providerOptions as ProviderOptions | undefined,
+      ) as SharedV4ProviderOptions | undefined
       merged[merged.length - 1] = {
         ...prev,
-        ...(msg.providerOptions
-          ? {
-              providerOptions: {
-                ...prev.providerOptions,
-                ...msg.providerOptions,
-              },
-            }
-          : {}),
+        ...(providerOptions ? { providerOptions } : {}),
         content: parts,
       } as AIModelMessage
       continue

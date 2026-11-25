@@ -2,7 +2,6 @@ import type { ModelPricing } from '../../shared/pricing.ts'
 import type { ProviderUsage } from '../../shared/provider-types.ts'
 import { toolResultOutputToText } from '../context/tool-result-output.ts'
 import {
-  estimateMessagesTokens,
   estimateTextTokens,
   IMAGE_TOKENS,
   isImageContentPart,
@@ -234,11 +233,18 @@ export class TokenTracker {
   /**
    * Switches to the model with this window and price (undefined uses the built-in table).
    */
-  setModel(contextWindow: number, pricing: ModelPricing | undefined): void {
+  setModel(
+    contextWindow: number,
+    pricing: ModelPricing | undefined,
+    options: { keepCalibration?: boolean } = {},
+  ): void {
     this.contextWindow = contextWindow
     this.pricing = pricing
-    this.reportedPromptTokens = undefined
-    this.baselineContextHookDeltaTokens = 0
+    if (!options.keepCalibration) {
+      this.reportedPromptTokens = undefined
+      this.contextHookDeltaTokens = 0
+      this.baselineContextHookDeltaTokens = 0
+    }
   }
 
   /** Current context status relative to the model window (default 200k). */
@@ -356,7 +362,7 @@ function countMessageTokens(message: ModelMessage): number {
                   )),
           0,
         )
-      } else if (output.type === 'json') {
+      } else if (output.type === 'json' || output.type === 'error-json') {
         tokens += estimateTextTokens(
           JSON.stringify(stripOpaqueFields(output.value)) ?? '',
         )
@@ -378,11 +384,6 @@ function countMessagesTokens(messages: ModelMessage[]): number {
     tokens += countMessageTokens(message)
   }
   return tokens
-}
-
-/** Estimates history tokens from message content, for context defense. */
-export function estimateMessageTokens(messages: ModelMessage[]): number {
-  return estimateMessagesTokens(messages)
 }
 
 function computeCost(usage: StepUsage, p: ModelPricing): number {

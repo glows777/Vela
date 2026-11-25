@@ -1,9 +1,11 @@
 import type { ThinkingLevel } from '../../providers/models/index.ts'
+import type { VelaLogger } from '../../shared/logger.ts'
 import type { ModelInput } from '../../shared/provider-types.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
 import type { InputSource } from '../extensions/events.ts'
-import type { ImageContent } from '../messages.ts'
+import type { ImageContent, ModelMessage } from '../messages.ts'
 import type { TokenStatus, UsageTotals } from '../usage/tracker.ts'
+import type { SessionContext } from './entries.ts'
 import type { SessionScope } from './scope.ts'
 
 /** How queued steer messages are taken: one at a time (default, like pi) or all at once. */
@@ -106,10 +108,38 @@ export interface InternalSessionOptions extends SessionOptions {
 export type SessionPersistence =
   | { type: 'file'; path: string }
   | { type: 'memory' }
-  | { type: 'unknown' }
 
 export interface SessionUsage extends TokenStatus {
   totals: UsageTotals
   contextWindow: number
   lastRecord?: import('../usage/tracker.ts').StepRecord
+}
+
+export interface SessionState {
+  messages: ModelMessage[]
+  timestamps: Map<ModelMessage, number>
+  summary: string
+}
+
+export interface LoadedSessionContext extends SessionContext {
+  channel?: string
+  location?: ExecutionLocation
+  name?: string
+  model?: string
+  thinkingLevel?: ThinkingLevel
+  discoveredTools: string[]
+  latestAssistantUsage?: {
+    inputTokens: number
+    outputTokens: number
+    trailingMessages: ModelMessage[]
+  }
+}
+
+export interface SessionStoreOptions {
+  uploadsDir?: string
+  logger?: VelaLogger
+  ephemeral?: boolean
+  cwd?: string
+  location?: ExecutionLocation
+  onSaved?: () => void
 }

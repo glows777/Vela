@@ -810,8 +810,8 @@ test('R1 #1/#2/#3/#6/#7/#13: atomic driver claim, approval binding, blank summar
   await session.prompt('run both')
   expect(ranSecondTool).toBe(false)
   expect(preHookCalls).toBe(1)
-  // R1 #7: no turn_end emitted when waiting_human
-  expect(events).not.toContain('turn_end')
+  // S2-fix: turn_end is emitted before suspending in waiting_human
+  expect(events).toContain('turn_end')
 
   // R1 #3 & #20: pendingApprovals normalized summary
   const pending = session.pendingApprovals()
@@ -1192,7 +1192,7 @@ test('R1 #8/#18/#19: hosted+client filter, discovery order + prompt exclusion + 
     now,
     now,
   )
-  const stepEntry = persistAssistantStepTx({
+  const { entry: stepEntry } = persistAssistantStepTx({
     db,
     store: mixStore,
     registry: mixRegistry,
@@ -1362,7 +1362,7 @@ test('R2 #1/#2: pre-mutation session claim blocks concurrent instances, rejects 
   const deadRun = db.get<{ status: string }>(
     "SELECT status FROM runs WHERE id = 'live-ext-run'",
   )
-  expect(deadRun?.status).toBe('stopped')
+  expect(deadRun?.status).toBe('interrupted')
   expect(
     db.get<{ state: string }>(
       "SELECT state FROM sessions WHERE id = 'claim-order'",
@@ -1446,7 +1446,7 @@ test('R2 #5/#6/#7/#8/#11/#14: TX1 terminalError, Promise.allSettled + waitForIdl
     now,
     now,
   )
-  const termEntry = persistAssistantStepTx({
+  const { entry: termEntry } = persistAssistantStepTx({
     db,
     store: store5,
     registry: new ToolRegistry(),

@@ -170,6 +170,23 @@ export class ModelRegistry {
     return oauth.planLabel
   }
 
+  /** Effective credential mode for a provider/channel pair (`oauth` vs `api_key`). */
+  authMode(
+    provider: string,
+    channel?: string,
+  ): 'oauth' | 'api_key' | undefined {
+    const def = this.providers.get(provider)
+    const stored = this.credentials.get(provider)
+    if (stored?.type === 'oauth') {
+      if (def?.oauth?.localOnly && channel) {
+        return this.authSource(provider) ? 'api_key' : undefined
+      }
+      return 'oauth'
+    }
+    if (stored?.type === 'api_key') return 'api_key'
+    return this.authSource(provider) ? 'api_key' : undefined
+  }
+
   /** Models listed by all providers, configured or not */
   list(): ModelInfo[] {
     return [...this.providers].flatMap(([provider, def]) =>

@@ -67,7 +67,6 @@ type FauxToolOutputContentPart =
   | { type: 'file-data'; data: string; mediaType: string; filename?: string }
   | { type: 'file-url'; url: string }
   | { type: 'image-url'; url: string }
-  | { type: 'media'; data: string; mediaType: string }
   | {
       type: 'custom'
       providerOptions?: Record<string, Record<string, unknown>>

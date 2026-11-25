@@ -1,5 +1,5 @@
 /**
- * Vela message helpers (image normalization, foreign reasoning stripping, envelope char estimates).
+ * Vela message helpers (image normalization, foreign reasoning stripping, token estimates).
  *
  * Pure Vela types live in `../shared/messages.ts`; AI SDK wire conversion lives strictly in
  * `../providers/messages.ts`.
@@ -74,8 +74,7 @@ export async function normalizeToolContent(
   return message.content as ToolContent
 }
 
-/** Pi's conservative image estimate (4800 chars ≈ 1200 tokens), independent of encoded byte length. */
-const IMAGE_CHARS = 4800
+/** Pi's conservative image estimate (1200 tokens), independent of encoded byte length. */
 export const IMAGE_TOKENS = 1200
 
 /** Canonical images (or image file parts). */
@@ -258,6 +257,46 @@ function withoutProviderOptions<T extends object>(value: T): T {
   return rest as T
 }
 
+function sanitizePartForEstimation(part: unknown, image: () => null): unknown {
+  if (!part || typeof part !== 'object') return part
+  const record = part as Record<string, unknown>
+  if (isImageContentPart(record as { type: string; mediaType?: string })) {
+    return image()
+  }
+  if (record.type === 'reasoning-file') {
+    return { type: 'reasoning-file' }
+  }
+  const stripped = withoutProviderOptions(record)
+  if (
+    stripped.type === 'tool_result' &&
+    stripped.output &&
+    typeof stripped.output === 'object' &&
+    (stripped.output as { type?: unknown }).type === 'content' &&
+    Array.isArray((stripped.output as { value?: unknown }).value)
+  ) {
+    const out = stripped.output as { type: 'content'; value: unknown[] }
+    return {
+      ...stripped,
+      output: {
+        ...out,
+        value: out.value.map((item) => {
+          if (
+            item &&
+            typeof item === 'object' &&
+            isImageContentPart(item as { type: string; mediaType?: string })
+          ) {
+            return image()
+          }
+          return item && typeof item === 'object'
+            ? stripOpaqueFields(withoutProviderOptions(item))
+            : item
+        }),
+      },
+    }
+  }
+  return stripOpaqueFields(stripped)
+}
+
 function sanitizeMessagesForEstimation(messages: VelaMessage[]): {
   cleaned: unknown[]
   imageCount: number
@@ -268,30 +307,13 @@ function sanitizeMessagesForEstimation(messages: VelaMessage[]): {
     return null
   }
   const cleaned = messages.map((message) => {
-    const baseMessage = stripOpaqueFields(withoutProviderOptions(message))
+    const baseMessage = withoutProviderOptions(message)
     if (typeof baseMessage.content === 'string') return baseMessage
     return {
       ...baseMessage,
-      content: baseMessage.content.map((part) => {
-        if (isImageContentPart(part)) return image()
-        const stripped = stripOpaqueFields(withoutProviderOptions(part))
-        if (
-          stripped.type !== 'tool_result' ||
-          stripped.output.type !== 'content'
-        )
-          return stripped
-        return {
-          ...stripped,
-          output: {
-            ...stripped.output,
-            value: stripped.output.value.map((item) =>
-              isImageContentPart(item)
-                ? image()
-                : stripOpaqueFields(withoutProviderOptions(item)),
-            ),
-          },
-        }
-      }),
+      content: baseMessage.content.map((part) =>
+        sanitizePartForEstimation(part, image),
+      ),
     }
   })
   return { cleaned, imageCount }
@@ -305,10 +327,4 @@ export function estimateMessagesTokens(messages: VelaMessage[]): number {
     estimateTextTokens(JSON.stringify(cleaned)) +
     imageCount * (IMAGE_TOKENS - 1)
   )
-}
-
-/** JSON-envelope char estimate: strips opaque providerOptions / encrypted payloads and replaces images. */
-export function messageEnvelopeChars(messages: VelaMessage[]): number {
-  const { cleaned, imageCount } = sanitizeMessagesForEstimation(messages)
-  return JSON.stringify(cleaned).length + imageCount * (IMAGE_CHARS - 4)
 }

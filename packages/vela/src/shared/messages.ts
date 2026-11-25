@@ -78,11 +78,6 @@ export type ToolResultContentItem =
       data: { type: 'data'; data: string } | { type: 'url'; url: string }
     }
   | {
-      type: 'media'
-      data: string
-      mediaType: string
-    }
-  | {
       type: 'custom'
       providerOptions?: ProviderOptions
     }

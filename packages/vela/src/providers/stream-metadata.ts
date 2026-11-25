@@ -23,6 +23,12 @@ export function deepMergeProviderOptions(
     const out: Record<string, unknown> = { ...target }
     for (const [k, v] of Object.entries(src)) {
       const prev = out[k]
+      if (
+        (v === undefined || v === null) &&
+        prev !== undefined &&
+        prev !== null
+      )
+        continue
       out[k] = isPlainRecord(prev) && isPlainRecord(v) ? merge(prev, v) : v
     }
     return out
