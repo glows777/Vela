@@ -3,7 +3,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { savedTrust } from '../config/index.ts'
 import { registerExtensionHostModules } from '../driver/config/extensions.ts'
 import { newSessionId, resolveModel } from '../driver/diagnostics.ts'
 import type { ImageContent, VelaSession } from '../driver/index.ts'
@@ -11,6 +10,7 @@ import { setDefaultToolModifiers } from '../driver/index.ts'
 import { exportSavedSession } from '../driver/session/export.ts'
 import { type LocalOptions, local } from '../legacy-channels/index.ts'
 import { defaultAgentDir, loadConfig, type VelaConfig } from '../load-config.ts'
+import { McpPool } from '../mcp/index.ts'
 import { usableModel } from '../settings.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import { createVela } from '../vela.ts'
@@ -31,6 +31,7 @@ import { runRpcMode } from './rpc-mode.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
+  cliWorkspaceModeAt,
   formatModelList,
   HELP,
   loadCliExtensions,
@@ -307,8 +308,16 @@ const logger =
 // Extensions that failed to load (already reported on stderr); --list-models exits 1 when there are any
 const extensionErrors: string[] = []
 const docker = ownerDocker(config)
+const mcpPool = new McpPool()
 const vela = createVela({
   ...docker,
+  beforeDispose: async () => {
+    try {
+      await docker?.beforeDispose()
+    } finally {
+      await mcpPool.dispose()
+    }
+  },
   model:
     recorder?.model ??
     (args.model ||
@@ -325,19 +334,25 @@ const vela = createVela({
   sessionResources: config.sessionResources && {
     ...config.sessionResources,
     useBuiltinLocal: !!docker,
-    projectExtensions: cliProjectExtensions(config, args, (message) =>
-      logger.warn(message),
+    projectExtensions: cliProjectExtensions(
+      config,
+      args,
+      (message) => logger.warn(message),
+      mcpPool,
     ),
     fallbackModel: env.OPENAI_API_MODEL_NAME
       ? `openai/${env.OPENAI_API_MODEL_NAME}`
       : undefined,
     fallbackShellPath: resolveShellPath(undefined, { env }),
-    workspaceModeAt: (location) =>
-      join(location, '.vela') === config.agentDir
-        ? 'home'
-        : args.approve !== false && savedTrust(config.agentDir, location)
-          ? 'all'
-          : 'none',
+    workspaceModeAt: (location, environment = 'local') =>
+      cliWorkspaceModeAt({
+        agentDir: config.agentDir,
+        dataDir: config.dataDir,
+        startupCwd: cwd,
+        approve: args.approve,
+        location,
+        environment,
+      }),
   },
   contextFiles: args.noContextFiles ? false : undefined,
   systemPrompt: args.systemPrompt.length
@@ -364,6 +379,7 @@ const vela = createVela({
         console.error(message)
       },
       true,
+      mcpPool,
     )),
     ...(localOptions ? [local(localOptions)] : []),
   ],

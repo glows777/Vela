@@ -1,17 +1,18 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+// vela-boundary: allow
 import { createInterface } from 'node:readline'
-import type {
-  ExecutionEnv,
-  ExecutionError,
-  FileError,
-  Result,
-  ShellExecOptions,
-} from '../../packages/vela/src/driver/index.ts'
-import type { readEnvironmentInventory } from '../../packages/vela/src/driver/session/environment-inventory.ts'
 import {
-  type InventoryEnv,
+  checkGitRepo,
+  type ExecutionEnv,
+  type ExecutionError,
+  executionEnvOs,
+  type FileError,
+  type InternalExecutionEnv,
+  type Result,
+  type ShellExecOptions,
+  type WorkspaceInventorySnapshot,
   workspaceDiscovery,
-} from '../../packages/vela/src/driver/session/workspace-discovery.ts'
+} from '../../shared/execution.ts'
 
 type Failure = FileError | ExecutionError
 function failure<C extends Failure['code']>(code: C, message: string) {
@@ -65,6 +66,15 @@ class Exchange {
       throw new Error(
         this.stderr.trim() || 'Docker guest cleanup could not be confirmed',
       )
+  }
+  teardownError(): string | undefined {
+    if (this.child.exitCode === 0 && !this.child.signalCode) return undefined
+    return (
+      this.stderr.trim() ||
+      (this.child.signalCode
+        ? `Docker guest killed by ${this.child.signalCode}`
+        : `Docker guest exited with status ${this.child.exitCode}`)
+    )
   }
   async request<T, E extends Failure>(
     args: unknown[],
@@ -170,11 +180,24 @@ export function dockerOperations(
       await channel?.stop()
     }
   }
-  const env: InventoryEnv = {
-    async [workspaceDiscovery](contextEnabled, signal) {
-      const result = await file<
-        Awaited<ReturnType<typeof readEnvironmentInventory>>
-      >('discoverWorkspace', [contextEnabled], signal)
+  const env: InternalExecutionEnv = {
+    [executionEnvOs]: 'linux',
+    async [checkGitRepo](path, signal) {
+      const result = await file<boolean>('insideGitRepo', [path], signal)
+      if (!result.ok) throw result.error
+      return result.value
+    },
+    async [workspaceDiscovery](
+      contextEnabled,
+      signal,
+      declaredSkills = [],
+      declaredPrompts = [],
+    ) {
+      const result = await file<WorkspaceInventorySnapshot>(
+        'discoverWorkspace',
+        [contextEnabled, [...declaredSkills], [...declaredPrompts]],
+        signal,
+      )
       if (!result.ok) throw result.error
       return result.value
     },
@@ -253,7 +276,25 @@ export function dockerOperations(
         return failure('unavailable', String(e))
       }
       const { onOutput, ...settings } = options
-      return channel.request([command, settings], signal, onOutput)
+      let result: Awaited<ReturnType<Exchange['request']>>
+      try {
+        result = await channel.request([command, settings], signal, onOutput)
+      } finally {
+        await channel.stop()
+      }
+      if (result.ok) {
+        const teardown = channel.teardownError()
+        if (teardown) return failure('unavailable', teardown)
+      }
+      return result as Result<
+        Awaited<ReturnType<ExecutionEnv['exec']>> extends Result<
+          infer T,
+          unknown
+        >
+          ? T
+          : never,
+        ExecutionError
+      >
     },
     async cleanup() {
       await Promise.all([...active].map((channel) => channel.cleanup()))

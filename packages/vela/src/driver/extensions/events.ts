@@ -124,6 +124,8 @@ export interface BeforeAgentStartEvent {
    * `systemPrompt` an earlier handler returned). Read it to describe or extend the current prompt.
    */
   systemPrompt: string
+  /** @internal Already-discovered deferred tools on the session (e.g. after resume). */
+  discoveredTools?: readonly string[]
 }
 
 /**

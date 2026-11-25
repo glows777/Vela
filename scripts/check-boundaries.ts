@@ -32,6 +32,8 @@ const LAYER_ALLOWED: Record<string, readonly string[]> = {
   ],
   cli: [
     'shared',
+    'db',
+    'runtime',
     'daemon',
     'providers',
     'driver',

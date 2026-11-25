@@ -7,18 +7,24 @@ import {
   request as requestHttps,
 } from 'node:https'
 import { join } from 'node:path'
-import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
-import { buildDockerAdapter } from '../../extensions/docker/build.ts'
-import { createCredentialIdentity } from '../../extensions/docker/credential-identity.ts'
-import { openCredentialProxy } from '../../extensions/docker/credential-proxy.ts'
-import { openGuestHttpsRouter } from '../../extensions/docker/guest-https-router.ts'
-import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
-import { dockerOperations } from '../../extensions/docker/operations.ts'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+  tempDir,
+} from '@glows777/vela/testing'
 import {
   createVela,
   type ExecutionEnv,
   type Result,
 } from '../../packages/vela/src/driver/index.ts'
+import { openDockerEnvironment } from '../../packages/vela/src/runtime/docker/adapter.ts'
+import { createCredentialIdentity } from '../../packages/vela/src/runtime/docker/credential-identity.ts'
+import { openCredentialProxy } from '../../packages/vela/src/runtime/docker/credential-proxy.ts'
+import { prepareDocker } from '../../packages/vela/src/runtime/docker/lifecycle.ts'
+import { dockerOperations } from '../../packages/vela/src/runtime/docker/operations.ts'
+import { openGuestHttpsRouter } from '../../packages/vela/src/shared/docker-guest-https-router.ts'
+import { buildDockerGuest } from '../../scripts/build-docker-guest.ts'
 
 describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
   const ownerTest = test.skipIf(
@@ -38,7 +44,7 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
   beforeAll(async () => {
     dir = tempDir()
     resultRoot = join(dir.path, 'results')
-    await buildDockerAdapter(dir.path)
+    await buildDockerGuest(dir.path)
     const guest = readFileSync(join(dir.path, 'guest.cjs'), 'utf8')
     // Exercise the identical per-operation guest offline. Docker lifecycle is tested separately.
     env = dockerOperations('offline-guest', dir.path, (op, cwd) => {
@@ -56,13 +62,11 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
   })
 
   test('the installed adapter rejects invalid restricted owner policy before touching Docker', async () => {
-    const { openDockerEnvironment } = (await import(
-      join(dir.path, 'adapter.mjs')
-    )) as typeof import('../../extensions/docker/adapter.ts')
     const defaults = {
       dataDir: join(dir.path, 'unused-owner'),
       name: 'test',
       image: 'node:22-bookworm',
+      guestPath: join(dir.path, 'guest.cjs'),
     }
     const network = 'restricted' as const
     for (const mode of ['on', 'off'] as const)
@@ -837,5 +841,105 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
     })
     expect(existsSync(marker)).toBe(false)
     await down.cleanup()
+  })
+
+  test('exec closes its guest exchange after completion so background children do not leak guest processes', async () => {
+    const guest = readFileSync(join(dir.path, 'guest.cjs'), 'utf8')
+    const spawned: import('node:child_process').ChildProcess[] = []
+    const isolated = dockerOperations(
+      'exec-leak-check',
+      dir.path,
+      (op, cwd) => {
+        const child = spawn('node', ['-e', guest, '--', op, cwd, resultRoot], {
+          cwd: dir.path,
+          env: { PATH: process.env.PATH, HOME: dir.path },
+          stdio: 'pipe',
+        })
+        spawned.push(child)
+        return child
+      },
+    )
+    try {
+      const res = value(
+        await isolated.exec(
+          'sh -c "(sleep 30 >/dev/null 2>&1 &); echo done"',
+          {},
+        ),
+      )
+      expect(res.exitCode).toBe(0)
+      expect(spawned).toHaveLength(1)
+      const child = spawned[0]!
+      // Guest node process must exit promptly after exec returns, without waiting for env.cleanup()
+      for (
+        let i = 0;
+        i < 100 && child.exitCode === null && child.signalCode === null;
+        i++
+      ) {
+        await Bun.sleep(20)
+      }
+      expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
+    } finally {
+      await isolated.cleanup()
+    }
+  })
+
+  test('read opens one binary reader per call and find checks git repo in a single insideGitRepo operation', async () => {
+    await mkdir(join(dir.path, '.git'), { recursive: true })
+    await writeFile(join(dir.path, 'sample.txt'), 'line1\nline2\nline3\n')
+    const tinyPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    )
+    await writeFile(join(dir.path, 'pixel.png'), tinyPng)
+
+    const model = createFauxModel({
+      responses: [
+        fauxToolCall('read', { path: 'sample.txt' }),
+        fauxToolCall('read', { path: 'sample.txt', offset: 2, limit: 1 }),
+        fauxToolCall('read', { path: 'pixel.png' }),
+        fauxToolCall('find', { pattern: '*.txt' }),
+        fauxText('done'),
+      ],
+    })
+    const vela = createVela({
+      model,
+      dataDir: join(dir.path, 'single-reader-data'),
+      env: () => env,
+    })
+    try {
+      const s = vela.session('ops-check', {
+        location: { cwd: dir.path, environment: 'guest' },
+        tools: ['read', 'find'],
+      })
+      await s.resources()
+      operations.length = 0
+      await s.prompt('run tools')
+      const readerOpens = operations.filter((op) => op === 'openBinaryReader')
+      expect(readerOpens).toHaveLength(3)
+      expect(operations.filter((op) => op === 'insideGitRepo')).toHaveLength(1)
+      expect(operations.filter((op) => op === 'joinPath')).toHaveLength(0)
+      expect(operations.filter((op) => op === 'exists')).toHaveLength(0)
+    } finally {
+      await vela.dispose()
+    }
+  }, 60000)
+
+  test('exec returns unavailable if the guest process exits non-zero during teardown', async () => {
+    const faultyGuest = `
+      const lines = require('node:readline').createInterface({ input: process.stdin, terminal: false });
+      lines.once('line', () => {
+        process.stdout.write(JSON.stringify({ ok: true, value: { exitCode: 0 } }) + '\\n');
+      });
+      lines.on('close', () => process.exit(9));
+    `
+    const faultyEnv = dockerOperations(
+      'faulty-teardown',
+      dir.path,
+      (_op, cwd) => spawn('node', ['-e', faultyGuest], { cwd, stdio: 'pipe' }),
+    )
+    const result = await faultyEnv.exec('echo hi', {})
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected failure')
+    expect(result.error.code).toBe('unavailable')
   })
 })

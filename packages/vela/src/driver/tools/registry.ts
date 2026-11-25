@@ -91,6 +91,7 @@ export interface ToolDefinition {
  */
 interface SharedToolState {
   tools: Map<string, ToolDefinition>
+  deferredNamespaces?: Map<string, string>
   interception?: ToolInterception
   logger: VelaLogger
 }
@@ -110,7 +111,11 @@ export class ToolRegistry {
     shared?: SharedToolState,
     private parent?: ToolRegistry,
   ) {
-    this.shared = shared ?? { tools: new Map(), logger: silentLogger }
+    this.shared = shared ?? {
+      tools: new Map(),
+      deferredNamespaces: new Map(),
+      logger: silentLogger,
+    }
   }
 
   /**
@@ -296,9 +301,65 @@ export class ToolRegistry {
     )
   }
 
+  private get deferredNamespaces(): Map<string, string> {
+    if (!this.shared.deferredNamespaces) {
+      this.shared.deferredNamespaces = new Map()
+    }
+    const own = this.shared.deferredNamespaces
+    if (!this.parent) return own
+    const merged = new Map(this.parent.deferredNamespaces)
+    for (const [ns, summary] of own) {
+      merged.set(ns, summary)
+    }
+    return merged
+  }
+
+  /** @internal Static namespace lines so `<deferred_tools>` stays invariant before async tools connect. */
+  registerDeferredNamespace(namespace: string, summaryLine: string): void {
+    if (!this.shared.deferredNamespaces) {
+      this.shared.deferredNamespaces = new Map()
+    }
+    this.shared.deferredNamespaces.set(namespace, summaryLine)
+  }
+
+  private isNamespaceReachable(namespace: string): boolean {
+    const prefix = `${namespace}__`
+    if (this.selection) {
+      let allowedBySelection = false
+      for (const name of this.selection) {
+        if (name.startsWith(prefix)) {
+          allowedBySelection = true
+          break
+        }
+      }
+      if (!allowedBySelection) return false
+    }
+    let sawNamespaceTool = false
+    for (const tool of this.tools.values()) {
+      if (tool.namespace?.name !== namespace) continue
+      sawNamespaceTool = true
+      if (
+        (tool.exposure ?? 'direct') === 'deferred' &&
+        this.isAvailable(tool.name)
+      ) {
+        return true
+      }
+    }
+    return !sawNamespaceTool
+  }
+
   /** The `<deferred_tools>` lines. Like pi, a namespace (an MCP server) gets one line, not its tools. */
   getDeferredToolSummary(): string {
-    return formatDeferredToolSummary(this.searchableTools(true))
+    const visibleNamespaces = new Map<string, string>()
+    for (const [ns, summary] of this.deferredNamespaces) {
+      if (this.isNamespaceReachable(ns)) {
+        visibleNamespaces.set(ns, summary)
+      }
+    }
+    return formatDeferredToolSummary(
+      this.searchableTools(true),
+      visibleNamespaces,
+    )
   }
 
   /** Loads deferred tools (comma-separated exact names, or top `limit` BM25 matches). */

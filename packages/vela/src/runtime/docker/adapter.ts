@@ -1,8 +1,10 @@
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { posix } from 'node:path'
-import type { ExecutionEnv } from '../../packages/vela/src/driver/index.ts'
-import { containerOperations, runDocker } from './container.ts'
+import { fileURLToPath } from 'node:url'
+import type { ExecutionEnv } from '../../shared/execution.ts'
+import { containerOperations, createDockerRunner } from './container.ts'
 import {
   type DockerCredential,
   openDockerCredentialBinding,
@@ -55,24 +57,47 @@ function restrictedAllow(
   return allow
 }
 
+function resolveDockerGuestPath(explicit?: string): string {
+  if (explicit) return explicit
+  const candidates = [
+    fileURLToPath(new URL('../../docker/guest.cjs', import.meta.url)),
+    fileURLToPath(new URL('../../../dist/docker/guest.cjs', import.meta.url)),
+  ]
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!
+}
+
 // Validate the installed guest before creating or starting an owned container.
 export async function openDockerEnvironment(
-  config: DockerOptions & { credentials?: readonly DockerCredential[] },
+  config: DockerOptions & {
+    credentials?: readonly DockerCredential[]
+    guestPath?: string
+    dockerHost?: string
+    hostEnv?: Record<string, string | undefined>
+    run?: (args: string[]) => Promise<string>
+  },
   cwd = '/workspace',
 ): Promise<ExecutionEnv> {
   if (!posix.isAbsolute(cwd) || cwd.includes('\0'))
     throw Error('An absolute Docker working directory is required')
-  const guest = await readFile(new URL('./guest.cjs', import.meta.url), 'utf8')
-  const { credentials = [], ...options } = config
+  const guest = await readFile(resolveDockerGuestPath(config.guestPath), 'utf8')
+  const {
+    credentials = [],
+    guestPath: _,
+    dockerHost,
+    hostEnv,
+    run,
+    ...options
+  } = config
   const allow = restrictedAllow(options, credentials)
   if (credentials?.length && options.network === 'off')
     throw Error('Docker credentials cannot be used with network off')
+  const docker = run ?? createDockerRunner(dockerHost, hostEnv)
   const transport = allow
     ? { directory: await restrictedDirectory(options, allow), allow }
     : undefined
   const binding =
     credentials.length || transport
-      ? await openDockerCredentialBinding(credentials, runDocker, transport)
+      ? await openDockerCredentialBinding(credentials, docker, transport)
       : undefined
   try {
     const guestSocket =
@@ -81,23 +106,30 @@ export async function openDockerEnvironment(
         : undefined
     const { id, name } = await prepareDocker(
       allow ? { ...options, allow } : options,
-      runDocker,
+      docker,
       transport && guestSocket
         ? { directory: transport.directory, socket: guestSocket }
         : undefined,
     )
-    const env = containerOperations(id, name, cwd, guest, binding?.guest)
+    const env = containerOperations(
+      id,
+      name,
+      cwd,
+      guest,
+      binding?.guest,
+      dockerHost,
+      hostEnv,
+    )
     if (!binding) return env
-    return {
-      ...env,
-      async cleanup() {
-        try {
-          await env.cleanup()
-        } finally {
-          await binding.close()
-        }
-      },
+    const baseCleanup = env.cleanup.bind(env)
+    env.cleanup = async (signal) => {
+      try {
+        await baseCleanup(signal)
+      } finally {
+        await binding.close()
+      }
     }
+    return env
   } catch (error) {
     await binding?.close()
     throw error

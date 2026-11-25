@@ -109,7 +109,7 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
     expect(() => parseArgs(args)).toThrow('vela serve runs channels only')
 })
 
-test('the untrusted-project notice names the real trust.json under VELA_DIR', async () => {
+test('the untrusted-project notice names the real vela.db under VELA_DIR', async () => {
   const home = tempDir()
   const project = tempDir()
   dirs.push(home, project)
@@ -122,7 +122,7 @@ test('the untrusted-project notice names the real trust.json under VELA_DIR', as
   })
   expect(result.trusted).toBe(false)
   expect(result.warning).toContain(
-    `edit ${join(home.path, 'trust.json')} to change this`,
+    `update trusted_paths in ${join(home.path, 'vela.db')} to change this`,
   )
   expect(result.warning).not.toContain('~/.vela')
 })

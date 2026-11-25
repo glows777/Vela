@@ -1,6 +1,7 @@
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import { savedTrust, saveTrust, type VelaSettings } from '../config/index.ts'
+import type { VelaSettings } from '../config/index.ts'
+import { savedTrust, saveTrust } from '../db/index.ts'
 import {
   assertSessionId,
   getToolListError,
@@ -18,23 +19,28 @@ import {
   projectTrustRequired,
   type VelaConfig,
 } from '../load-config.ts'
-import { mcp } from '../mcp/index.ts'
+import { type McpPool, mcp } from '../mcp/index.ts'
 import { resolveShellPath } from './shell.ts'
 import { applyToolModifiers, type ToolLoadout } from './tool-selection.ts'
 
 type Env = Record<string, string | undefined>
 
+export interface BuiltinExtensionOptions {
+  mcpPool?: McpPool
+}
+
 /** Built-in extensions shipped with the CLI (`builtin:<name>`). Config comes from top-level `<name>` in `config.json`. */
 export const BUILTIN_EXTENSIONS: Record<
   string,
-  (settings: VelaSettings) => VelaExtension
+  (settings: VelaSettings, options?: BuiltinExtensionOptions) => VelaExtension
 > = {
   background: (settings) =>
     background({ shellPath: resolveShellPath(settings.shellPath) }),
   memory: () => memory(),
   web: () => web(),
   lark: () => lark(),
-  mcp: () => mcp(),
+  mcp: (_settings, options) =>
+    mcp(options?.mcpPool ? { pool: options.mcpPool } : {}),
   todo: () => todo(),
 }
 
@@ -580,7 +586,36 @@ export async function resolveTrust(options: {
 }
 
 function notTrusted(cwd: string, agentDir: string, reason: string): string {
-  return `[trust] Did not load config, extensions, skills and prompts from ${resolve(cwd)} (${reason}; edit ${join(agentDir, 'trust.json')} to change this)`
+  return `[trust] Did not load config, extensions, skills and prompts from ${resolve(cwd)} (${reason}; pass --approve or update trusted_paths in ${join(agentDir, 'vela.db')} to change this)`
+}
+
+/** Scope `--approve` to the CLI startup directory while consulting saved trust elsewhere. */
+export function cliWorkspaceModeAt(options: {
+  agentDir: string
+  dataDir?: string
+  startupCwd: string
+  approve?: boolean
+  location: string
+  environment?: string
+}): 'home' | 'all' | 'none' {
+  const { agentDir, dataDir, startupCwd, approve, location } = options
+  const environment = options.environment ?? 'local'
+  if (environment === 'local') {
+    if (join(location, '.vela') === agentDir) return 'home'
+    if (resolve(location) === resolve(startupCwd)) {
+      return approve === true ||
+        (approve !== false && savedTrust(agentDir, location) === true)
+        ? 'all'
+        : 'none'
+    }
+    return approve !== false && savedTrust(agentDir, location) === true
+      ? 'all'
+      : 'none'
+  }
+  return approve !== false &&
+    savedTrust(agentDir, { environment, cwd: location }, dataDir) === true
+    ? 'all'
+    : 'none'
 }
 
 async function question(prompt: string): Promise<string> {
@@ -646,6 +681,7 @@ export async function loadCliExtensions(
   args: CliArgs,
   onError: (message: string) => void,
   hostOnly = false,
+  mcpPool?: McpPool,
 ): Promise<VelaExtension[]> {
   const entries: ExtensionEntry[] = [
     ...(args.noExtensions
@@ -689,7 +725,7 @@ export async function loadCliExtensions(
         const factory = BUILTIN_EXTENSIONS[entry.name]
         if (!factory)
           throw new Error(`Unknown built-in extension builtin:${entry.name}`)
-        extension = factory(config.settings)
+        extension = factory(config.settings, mcpPool ? { mcpPool } : undefined)
       } else extension = await importExtension(entry.path, entry.name)
       loaded.push(reportFailures(extension, report))
     } catch (error) {

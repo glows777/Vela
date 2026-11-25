@@ -2,20 +2,18 @@
  * The built-in MCP extension (like pi's `extensions/mcp`): connects to MCP servers over stdio or
  * streamable HTTP and registers their tools as `mcp__<server>__<tool>`, deferred by default so
  * tool_search loads them on demand.
- *
- * Unlike pi, one set of connections serves all sessions of a Vela (a Lark bot has many concurrent
- * sessions); they start with the first session and close when the Vela is disposed.
  */
 
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { ExtensionContext, VelaExtension } from '../extension-api.ts'
+import type { VelaExtension } from '../extension-api.ts'
 import {
   type McpServerConfig,
   type McpServerEntry,
   parseServers,
   toolExposureOf,
 } from './config.ts'
-import { McpConnection } from './connection.ts'
+import type { McpConnection } from './connection.ts'
+import { McpPool } from './pool.ts'
 import { createMcpTool, createMcpToolName, namespaceName } from './tools.ts'
 
 export type {
@@ -25,6 +23,7 @@ export type {
   McpServersFile,
   McpStdioServerConfig,
 } from './config.ts'
+export { McpPool } from './pool.ts'
 
 /** The first prompt waits this long for servers with direct tools (like pi). */
 const DIRECT_WAIT_MS = 10_000
@@ -33,11 +32,15 @@ export interface McpOptions {
   /**
    * Servers in the `mcpServers` format of Claude Desktop / Claude Code (`{ name: { command, args } }`
    * or `{ name: { url, headers } }`). Default: `mcpServers` in this extension's config, which the
-   * CLI fills from `~/.vela/mcp.json` and the trusted project's `.vela/mcp.json`.
+   * CLI fills from `~/.vela/config.json` and the trusted project's `.vela/config.json`.
    */
   servers?: Record<string, McpServerConfig>
   /** @internal Creates transports (tests use in-memory servers) */
   createTransport?: (entry: McpServerEntry, cwd: string) => Promise<Transport>
+  /** @internal Shared connection pool keyed by `(cwd, mcpServers)` */
+  pool?: McpPool
+  /** @internal Idle eviction delay (ms) when creating an extension-owned pool */
+  idleTtlMs?: number
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -60,7 +63,21 @@ export function mcp(options: McpOptions = {}): VelaExtension {
     if (!options.servers && Array.isArray(vela.config.errors))
       errors.unshift(...vela.config.errors.map(String))
 
-    const connections = new Map<string, McpConnection>()
+    // Declare static namespace lines synchronously so <deferred_tools> stays cache-invariant
+    // whether deferred servers connect before or after turn 1.
+    for (const entry of entries) {
+      if (entry.config.enabled === false) continue
+      const mayDefer =
+        (entry.config.exposure ?? 'deferred') === 'deferred' ||
+        Object.values(entry.config.toolExposure ?? {}).includes('deferred')
+      if (!mayDefer) continue
+      const ns = namespaceName(entry.name)
+      vela.registerDeferredNamespace?.(
+        ns,
+        `- ${ns}${entry.config.description ? ` — ${entry.config.description}` : ''}`,
+      )
+    }
+
     /** Server → its registered tool names */
     const registered = new Map<string, string[]>()
     /** Registered MCP tool name → `<server>\0<tool>`, to detect sanitized names that collide */
@@ -109,92 +126,66 @@ export function mcp(options: McpOptions = {}): VelaExtension {
       registered.set(server, names)
     }
 
-    for (const entry of entries) {
-      if (entry.config.enabled === false) continue
-      connections.set(
-        entry.name,
-        new McpConnection({
-          entry,
-          cwd: vela.cwd,
-          onTools: syncTools,
-          ...(options.createTransport
-            ? { createTransport: options.createTransport }
-            : {}),
-        }),
-      )
+    const ownsPool = !options.pool
+    const pool =
+      options.pool ?? new McpPool({ idleTtlMs: options.idleTtlMs ?? 0 })
+    const reporters = new Map<string, (message: string) => void>()
+    const report = (problems: string[]) => {
+      if (problems.length === 0) return
+      const message = `[mcp] ${problems.join('\n[mcp] ')}\nRun /mcp for details.`
+      for (const notify of reporters.values()) notify(message)
+      vela.logger.error(message)
     }
 
-    /** Settles when every server has connected or failed (started on the first session_start). */
-    let started: Promise<void> | undefined
-    /** Settles when the servers that declare direct tools have connected or failed. */
-    let directReady: Promise<void> = Promise.resolve()
-
-    const start = (ctx: ExtensionContext) => {
-      if (started) return
-      const attempts = [...connections.values()].map((connection) => ({
-        connection,
-        done: connection.connect().then(
-          () => undefined,
-          (error: unknown) =>
-            error instanceof Error ? error.message : String(error),
-        ),
-      }))
-      directReady = Promise.all(
-        attempts
-          .filter(({ connection }) => hasDirectTools(connection.entry))
-          .map(({ done }) => done),
-      ).then(() => {})
-      const report = (problems: string[]) => {
-        if (problems.length === 0) return
-        const message = `[mcp] ${problems.join('\n[mcp] ')}\nRun /mcp for details.`
-        ctx.notify(message, 'error')
-        vela.logger.error(message)
-      }
-      // Report configuration errors now and failed connections once they settle (like pi)
-      report(errors)
-      started = Promise.all(attempts.map(({ done }) => done)).then((failures) =>
-        report(failures.filter((f): f is string => f !== undefined)),
-      )
-    }
-
-    vela.on('session_start', (_event, ctx) => {
-      if (connections.size === 0 && errors.length === 0) return
-      start(ctx)
+    const lease = pool.acquire({
+      cwd: vela.cwd,
+      entries,
+      errors,
+      ...(options.createTransport
+        ? { createTransport: options.createTransport }
+        : {}),
+      onTools: syncTools,
+      onError: report,
     })
 
-    // The first prompt waits (up to 10s) only for servers with direct tools, which must be declared
-    // in its request; deferred tools are waited for by tool_search (like pi)
+    vela.on('session_start', (_event, ctx) => {
+      if (!lease.hasWork) return
+      reporters.set(ctx.session.id, (message) => ctx.notify(message, 'error'))
+      lease.start()
+    })
+
+    vela.on('session_shutdown', (_event, ctx) => {
+      reporters.delete(ctx.session.id)
+    })
+
+    // The first prompt waits (up to 10s) for servers with direct tools and any server owning
+    // previously restored discoveredTools, while deferred namespaces stay static in <deferred_tools>.
+    const namespacePrefixes = new Map<string, string[]>()
+    for (const entry of entries) {
+      if (entry.config.enabled === false) continue
+      const prefix = `${namespaceName(entry.name)}__`
+      const list = namespacePrefixes.get(prefix) ?? []
+      list.push(entry.name)
+      namespacePrefixes.set(prefix, list)
+    }
     vela.on('before_agent_start', async (event) => {
-      if (!started) return
-      let timer: ReturnType<typeof setTimeout> | undefined
-      await Promise.race([
-        directReady,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, DIRECT_WAIT_MS)
-        }),
-      ])
-      clearTimeout(timer)
-      // Servers still connecting once the wait is over are listed by name, so the model knows to
-      // search for their tools (like pi's mcp_servers section); connected servers appear in the
-      // deferred tool list
-      const pending = [...connections.values()].filter(
-        (c) =>
-          (c.state === 'connecting' || c.state === 'idle') &&
-          hasVisibleTools(c.entry),
+      const extraServers = new Set<string>()
+      for (const toolName of event.discoveredTools ?? []) {
+        for (const [prefix, serverNames] of namespacePrefixes) {
+          if (toolName.startsWith(prefix)) {
+            for (const name of serverNames) extraServers.add(name)
+          }
+        }
+      }
+      await lease.waitForDirect(
+        DIRECT_WAIT_MS,
+        extraServers.size > 0 ? extraServers : undefined,
       )
-      if (pending.length)
-        event.sections.mcp_servers = [
-          'MCP servers still connecting (tool_search waits for them and finds their tools):',
-          ...pending.map(
-            (c) =>
-              `- ${namespaceName(c.name)}${c.entry.config.description ? ` — ${c.entry.config.description}` : ''}`,
-          ),
-        ].join('\n')
     })
 
     vela.on('tool_call', 'tool_search', async () => {
       // tool_search waits for servers that are still connecting, so it can find their tools
-      if (started) await started
+      await lease.waitForAll()
     })
 
     vela.registerCommand('mcp', {
@@ -203,76 +194,31 @@ export function mcp(options: McpOptions = {}): VelaExtension {
       handler: async (args, ctx) => {
         const [action, server] = args.split(/\s+/)
         if (action === 'reconnect') {
-          const connection = server ? connections.get(server) : undefined
-          if (!connection)
-            return ctx.notify(
-              `Unknown MCP server "${server ?? ''}". Servers: ${[...connections.keys()].join(', ') || 'none'}`,
-              'error',
-            )
-          try {
-            await connection.reconnect()
-            ctx.notify(
-              `MCP server "${connection.name}" connected (${connection.tools.length} tools)`,
-            )
-          } catch (error) {
-            ctx.notify(
-              error instanceof Error ? error.message : String(error),
-              'error',
-            )
+          const result = await lease.reconnect(server)
+          if (!result.ok) {
+            if (result.kind === 'unknown')
+              return ctx.notify(
+                `Unknown MCP server "${server ?? ''}". Servers: ${result.available.join(', ') || 'none'}`,
+                'error',
+              )
+            return ctx.notify(result.message, 'error')
           }
-          return
+          return ctx.notify(
+            `MCP server "${result.connection.name}" connected (${result.connection.tools.length} tools)`,
+          )
         }
         if (action) return ctx.notify('Usage: /mcp [reconnect <server>]')
-        ctx.notify(statusReport(entries, connections, registered, errors))
+        ctx.notify(lease.status(registered))
       },
     })
 
     vela.onShutdown(async () => {
-      await Promise.all([...connections.values()].map((c) => c.close()))
+      reporters.clear()
+      await lease.release()
+      if (ownsPool) await pool.dispose()
     })
   }
   return Object.defineProperty(extension, 'name', { value: 'mcp' })
-}
-
-/** Whether any of the server's tools may be visible to the model (not all `hidden`). */
-function hasVisibleTools(entry: McpServerEntry): boolean {
-  const { config } = entry
-  return (
-    config.exposure !== 'hidden' ||
-    Object.values(config.toolExposure ?? {}).some((e) => e !== 'hidden')
-  )
-}
-
-/** Whether any of the server's tools may have `direct` exposure. */
-function hasDirectTools(entry: McpServerEntry): boolean {
-  const { config } = entry
-  return (
-    config.exposure === 'direct' ||
-    Object.values(config.toolExposure ?? {}).includes('direct')
-  )
-}
-
-function statusReport(
-  entries: McpServerEntry[],
-  connections: Map<string, McpConnection>,
-  registered: Map<string, string[]>,
-  errors: string[],
-): string {
-  if (entries.length === 0 && errors.length === 0)
-    return 'No MCP servers configured. Add mcpServers to ~/.vela/config.json or .vela/config.json (see docs/mcp.md).'
-  const lines: string[] = ['MCP servers:']
-  for (const entry of entries) {
-    const connection = connections.get(entry.name)
-    const state = connection ? connection.state : 'disabled'
-    const tools = registered.get(entry.name)?.length ?? 0
-    lines.push(
-      `- ${entry.name}: ${state}, ${tools} tool${tools === 1 ? '' : 's'}, exposure ${entry.config.exposure ?? 'deferred'} (${entry.source})`,
-    )
-    if (connection?.error)
-      lines.push(`  ${connection.error.replaceAll('\n', '\n  ')}`)
-  }
-  for (const error of errors) lines.push(`- error: ${error}`)
-  return lines.join('\n')
 }
 
 export { mcpConfig } from './config.ts'

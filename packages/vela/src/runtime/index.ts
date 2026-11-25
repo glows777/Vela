@@ -8,6 +8,7 @@ export type {
   ChannelInboundMessage,
   ChannelOutboundMessage,
 } from './channels.ts'
+export { EnvironmentRegistry } from './environments.ts'
 export type {
   RunEndStatus,
   RuntimeEvent,

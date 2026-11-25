@@ -6,3 +6,4 @@ export {
   type SqlParam,
   VelaDatabase,
 } from './sqlite.ts'
+export { savedTrust, saveTrust, trustLocationKey } from './trust.ts'

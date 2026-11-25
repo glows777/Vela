@@ -41,7 +41,7 @@ Review an extension before you load it, and load only extensions from sources yo
 
 A project directory can contain `.vela/config.json`, `.vela/extensions/`, prompt templates, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills, prompts and prompt files put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
 
-Interactive mode asks once per project and saves the answer in `~/.vela/trust.json`; `--approve` and `--no-approve` decide for one run; print, JSON and RPC modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
+Interactive mode asks once per project and saves the answer in `~/.vela/vela.db` (`trusted_paths`); `--approve` and `--no-approve` decide for one run; print, JSON and RPC modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
 
 Project trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read: a README or source comment can still try to steer the model.
 

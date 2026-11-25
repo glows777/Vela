@@ -240,7 +240,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
         names: [...(options.builtins ?? [])],
         defaultOff: [...(options.defaultOffBuiltins ?? [])],
       },
-      env: { ...env },
+      env: options.env ? { ...options.env } : undefined,
       userContextFiles: userContext ? [userContext] : [],
       hostSkillDirs,
       hostPromptDirs,

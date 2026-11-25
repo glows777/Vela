@@ -1,77 +1,21 @@
-import { createRequire } from 'node:module'
-import type { ExecutionEnv, VelaOptions } from '../driver/index.ts'
+import type { VelaOptions } from '../driver/index.ts'
 import type { VelaConfig } from '../load-config.ts'
-import { ownerDockerCredentials } from './docker-credentials.ts'
-
-const require = createRequire(import.meta.url)
-
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
+import { EnvironmentRegistry } from '../runtime/index.ts'
 
 /** Owner-only CLI composition. Local sessions keep the core's session-scoped login shell. */
 export function ownerDocker(config: VelaConfig) {
   const settings = config.sessionResources?.userSettings
   if (!settings || !('environments' in settings)) return
-  const definitions = settings.environments
-  if (!record(definitions)) throw Error('Owner environments must be an object')
-  const opened = new Map<string, Promise<ExecutionEnv>>()
-  const env: NonNullable<VelaOptions['env']> = ({
-    location: { environment: name, cwd },
-  }) => {
-    if (!Object.hasOwn(definitions, name)) return
-    const entry = definitions[name]
-    if (
-      !record(entry) ||
-      typeof entry.image !== 'string' ||
-      Object.keys(entry).some(
-        (key) => !['image', 'network', 'allow', 'credentials'].includes(key),
-      ) ||
-      (entry.network !== undefined &&
-        entry.network !== 'on' &&
-        entry.network !== 'off' &&
-        entry.network !== 'restricted') ||
-      (entry.allow !== undefined &&
-        (!Array.isArray(entry.allow) ||
-          entry.allow.some((host) => typeof host !== 'string')))
-    )
-      throw Error(
-        `Invalid Docker configuration for owner environment "${name}"`,
-      )
-    const key = JSON.stringify([name, cwd])
-    let pending = opened.get(key)
-    if (!pending) {
-      const options = {
-        name,
-        dataDir: config.dataDir,
-        image: entry.image,
-        network: entry.network,
-        allow: entry.allow as string[] | undefined,
-        credentials: ownerDockerCredentials(
-          entry.credentials,
-          entry.network,
-          name,
-        ),
-      } as const
-      // Source-only CLI consumers need the built guest only when opening a Docker location.
-      const adapter: typeof import('#docker-adapter') = require('#docker-adapter')
-      pending = adapter.openDockerEnvironment(options, cwd)
-      opened.set(key, pending)
-      void pending.catch(() => opened.delete(key))
-    }
-    return pending
-  }
+  const registry = new EnvironmentRegistry({
+    dataDir: config.dataDir,
+    environments: settings.environments,
+    hostEnv: config.sessionResources?.env ?? process.env,
+  })
+  const env: NonNullable<VelaOptions['env']> = (target) =>
+    registry.resolve(target)
   return {
     env,
-    async beforeDispose() {
-      const pending = [...opened.values()]
-      opened.clear()
-      const results = await Promise.allSettled(pending)
-      await Promise.all(
-        results.flatMap((result) =>
-          result.status === 'fulfilled' ? [result.value.cleanup()] : [],
-        ),
-      )
-    },
+    envOs: (environment: string) => registry.osFor(environment),
+    beforeDispose: () => registry.dispose(),
   }
 }

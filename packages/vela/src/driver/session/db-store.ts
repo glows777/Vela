@@ -618,9 +618,11 @@ export function upsertSessionRecord(
     discoveredTools: readonly string[]
     parentSessionId?: string
     channel?: string
+    createdAt?: string
   },
 ): void {
   const now = new Date().toISOString()
+  const createdAt = params.createdAt ?? now
   db.run(
     `INSERT INTO sessions (
        id, project_id, kind, driver, name, archived, model, thinking_level,
@@ -646,7 +648,7 @@ export function upsertSessionRecord(
       ? JSON.stringify(params.discoveredTools)
       : null,
     params.parentSessionId ?? null,
-    now,
+    createdAt,
     now,
   )
   if (params.channel) setSessionChannel(db, params.sessionId, params.channel)

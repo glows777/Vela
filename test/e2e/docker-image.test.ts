@@ -5,26 +5,29 @@ import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createServer, globalAgent } from 'node:https'
 import { join } from 'node:path'
 import { tempDir } from '@glows777/vela/testing'
-import { buildDockerAdapter } from '../../extensions/docker/build.ts'
-import { runDocker } from '../../extensions/docker/container.ts'
-import { createCredentialIdentity } from '../../extensions/docker/credential-identity.ts'
-import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
 import type { ExecutionEnv } from '../../packages/vela/src/driver/index.ts'
+import { openDockerEnvironment } from '../../packages/vela/src/runtime/docker/adapter.ts'
+import {
+  createDockerRunner,
+  runDocker,
+} from '../../packages/vela/src/runtime/docker/container.ts'
+import { createCredentialIdentity } from '../../packages/vela/src/runtime/docker/credential-identity.ts'
+import { prepareDocker } from '../../packages/vela/src/runtime/docker/lifecycle.ts'
+import { buildDockerGuest } from '../../scripts/build-docker-guest.ts'
 import { checkDockerOperations } from '../support/docker-conformance.ts'
 
 const image = process.env.VELA_TEST_DOCKER_IMAGE
 const volumeImage = process.env.VELA_TEST_DOCKER_VOLUME_IMAGE
 describe.skipIf(!image)('prepared Docker image', () => {
   let dir: ReturnType<typeof tempDir>
-  let openDockerEnvironment: typeof import('../../extensions/docker/adapter.ts').openDockerEnvironment
+  const dockerHost = process.env.DOCKER_HOST
+  const docker = createDockerRunner(dockerHost)
   const owners = new Set<string>()
   const adapters: ExecutionEnv[] = []
 
   beforeAll(async () => {
     dir = tempDir('vela-image-')
-    await buildDockerAdapter(dir.path)
-    const adapter = await import(join(dir.path, 'adapter.mjs'))
-    openDockerEnvironment = adapter.openDockerEnvironment
+    await buildDockerGuest(dir.path)
   })
   function owner(name: string) {
     return createHash('sha256')
@@ -32,7 +35,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
       .digest('hex')
   }
   function lookup(key: string) {
-    return runDocker([
+    return docker([
       'ps',
       '-aq',
       '--no-trunc',
@@ -40,9 +43,22 @@ describe.skipIf(!image)('prepared Docker image', () => {
       `label=org.vela.environment=${key}`,
     ])
   }
-  function config(name: string) {
+  function lifecycleConfig(name: string) {
     owners.add(owner(name))
-    return { dataDir: dir.path, name, image: image!, network: 'off' as const }
+    return {
+      dataDir: dir.path,
+      name,
+      image: image!,
+      network: 'off' as const,
+    }
+  }
+  function config(name: string) {
+    return {
+      ...lifecycleConfig(name),
+      guestPath: join(dir.path, 'guest.cjs'),
+      ...(dockerHost ? { dockerHost } : {}),
+      hostEnv: process.env,
+    }
   }
   async function open(name: string) {
     const env = await openDockerEnvironment(config(name))
@@ -55,7 +71,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
     } finally {
       for (const key of owners) {
         const id = await lookup(key)
-        if (/^[a-f0-9]{64}$/.test(id)) await runDocker(['rm', '-fv', id])
+        if (/^[a-f0-9]{64}$/.test(id)) await docker(['rm', '-fv', id])
       }
       dir.cleanup()
     }
@@ -198,7 +214,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
           id = await lookup(owner(name))
           expect(id).toMatch(/^[a-f0-9]{64}$/)
           const mounts = JSON.parse(
-            await runDocker(['inspect', '--format', '{{json .Mounts}}', id]),
+            await docker(['inspect', '--format', '{{json .Mounts}}', id]),
           ) as {
             Type: string
             Destination: string
@@ -256,7 +272,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
       expect((await existing.writeFile('note', 'off fixture')).ok).toBe(true)
       const id = await lookup(owner(name))
       expect(id).toMatch(/^[a-f0-9]{64}$/)
-      await runDocker(['stop', '--timeout', '1', id])
+      await docker(['stop', '--timeout', '1', id])
       await expect(
         openDockerEnvironment({
           ...config(name),
@@ -266,7 +282,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
       ).rejects.toThrow(/explicit owner restart required/)
       expect(await lookup(owner(name))).toBe(id)
       expect(
-        await runDocker(['inspect', '--format', '{{.State.Running}}', id]),
+        await docker(['inspect', '--format', '{{.State.Running}}', id]),
       ).toBe('false')
       expect(
         await readFile(
@@ -365,12 +381,12 @@ describe.skipIf(!image)('prepared Docker image', () => {
     const id = await lookup(owner('reopen-failure'))
     expect(id).toMatch(/^[a-f0-9]{64}$/)
     for (const running of [true, false]) {
-      if (!running) await runDocker(['stop', '--timeout', '1', id])
+      if (!running) await docker(['stop', '--timeout', '1', id])
       await expect(open('reopen-failure')).rejects.toThrow(
         /EEXIST:.*mkdir '\/tmp\/vela-home'/,
       )
       expect(
-        await runDocker(['inspect', '--format', '{{.State.Running}}', id]),
+        await docker(['inspect', '--format', '{{.State.Running}}', id]),
       ).toBe(String(running))
     }
   }, 240000)
@@ -380,11 +396,11 @@ describe.skipIf(!image)('prepared Docker image', () => {
     const file = join(dir.path, 'home-conflict')
     await Bun.write(file, 'fixture')
     await expect(
-      prepareDocker(config(name), async (args) => {
-        const result = await runDocker(args)
+      prepareDocker(lifecycleConfig(name), async (args) => {
+        const result = await docker(args)
         // Seed the fresh container's filesystem before first start, keeping the same offline image.
         if (args[0] === 'create')
-          await runDocker(['cp', file, `${result}:/tmp/vela-home`])
+          await docker(['cp', file, `${result}:/tmp/vela-home`])
         return result
       }),
     ).rejects.toThrow(/EEXIST:.*mkdir '\/tmp\/vela-home'/)
@@ -396,6 +412,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
     async () => {
       const name = 'extra-volume'
       const options = { ...config(name), image: volumeImage! }
+      const lifecycleOptions = { ...lifecycleConfig(name), image: volumeImage! }
       const rejection = {
         name: 'Error',
         message:
@@ -403,10 +420,10 @@ describe.skipIf(!image)('prepared Docker image', () => {
       }
       let volume = ''
       const findVolume = () =>
-        runDocker(['volume', 'ls', '-q', '--filter', `name=^${volume}$`])
+        docker(['volume', 'ls', '-q', '--filter', `name=^${volume}$`])
       await expect(
-        prepareDocker(options, async (args) => {
-          const result = await runDocker(args)
+        prepareDocker(lifecycleOptions, async (args) => {
+          const result = await docker(args)
           if (args[0] === 'inspect') {
             const [container] = JSON.parse(result)
             const mount = container.Mounts.find(

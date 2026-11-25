@@ -235,8 +235,10 @@ export async function prepareDocker(
       const missing = ['rg','fd'].filter(tool =>
         spawnSync(tool,['--version'], {stdio:'ignore'}).status !== 0)
       if (missing.length) {
+        // vela-boundary: allow
         console.log(missing.join(', '))
       } else {
+        // vela-boundary: allow
         require('node:fs').mkdirSync(process.env.HOME, {recursive:true,mode:0o700})
       }
     `,

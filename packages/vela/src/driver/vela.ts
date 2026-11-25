@@ -20,18 +20,18 @@ import { silentLogger, type VelaLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import type { VelaSessionEventListener } from './agent/events.ts'
 import type { ConfigResourceSplit } from './config/runtime-resources.ts'
-import {
-  createLocalExecutionEnv,
-  createSessionLocalExecutionEnv,
-  scopeLocalResults,
-} from './execution/local.ts'
+import { createLocalExecutionEnv } from './execution/local.ts'
 import { abortable, sameLocation } from './execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
 import type { VelaExtension } from './extensions/types.ts'
 import type { ContextFile } from './prompt/context-files.ts'
-import type { DocsPaths, SystemPromptBuilder } from './prompt/index.ts'
+import {
+  type DocsPaths,
+  localDateString,
+  type SystemPromptBuilder,
+} from './prompt/index.ts'
 import {
   expandPromptTemplate,
   loadPromptTemplates,
@@ -45,7 +45,10 @@ import {
 import type { SessionSummary } from './session/entries.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
-import { ProjectConfig } from './session/project-config.ts'
+import {
+  canonicalEnvironmentPath,
+  ProjectConfig,
+} from './session/project-config.ts'
 import { ProjectExtensions } from './session/project-extensions.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
 import { WorkspaceResources } from './session/resources.ts'
@@ -56,6 +59,7 @@ import {
   disposeVelaRuntime,
   loadWorkspaceInventory,
   openVelaStorage,
+  resolveSessionExecution,
   workspaceKey,
 } from './session/workspace.ts'
 import { expandEnvironmentSkill } from './skills/environment-skills.ts'
@@ -69,6 +73,8 @@ import { VelaSession } from './vela-session.ts'
 export interface VelaOptions {
   /** @internal Host/workspace resource split from the frontend configuration. */
   sessionResources?: ConfigResourceSplit
+  /** @internal Synchronous OS metadata lookup by environment name. */
+  envOs?: (environment: string) => string | undefined
   /** Resolve the execution environment for a session tool call. */
   env?: (target: {
     sessionId: string
@@ -345,6 +351,8 @@ function initVelaInstance(
   const resourceSplit = options.sessionResources
   const projectConfig = new ProjectConfig(resourceSplit, dataDir, logger)
   const sessionShells = new Map<string, string | undefined>()
+  const sessionOs = new Map<string, string>()
+  const sessionDates = new Map<string, string>()
   const skillLoader = new SkillLoader(
     resourceSplit?.hostSkillDirs ?? options.skillDirs ?? [],
   )
@@ -388,6 +396,16 @@ function initVelaInstance(
         ? (sessionShells.get(activeKey(id)) ?? options.shellPath)
         : undefined,
     options.docs,
+    (id) => (sessions.get(id)?.location.environment ?? 'local') === 'local',
+    (id) => {
+      const envName = sessions.get(id)?.location.environment ?? 'local'
+      return (
+        sessionOs.get(activeKey(id)) ??
+        options.envOs?.(envName) ??
+        (envName === 'local' ? process.platform : 'linux')
+      )
+    },
+    (id) => sessionDates.get(id),
   )
 
   const listeners = new Set<VelaSessionEventListener>()
@@ -411,6 +429,14 @@ function initVelaInstance(
         ? defaultThinkingLevel
         : options.thinkingLevel,
     })
+    const savedRow = !ephemeralSessions
+      ? db.get<{ created_at: string }>(
+          'SELECT created_at FROM sessions WHERE id = ?',
+          id,
+        )
+      : undefined
+    const sessionCreatedAt = savedRow?.created_at ?? new Date().toISOString()
+    sessionDates.set(id, localDateString(new Date(sessionCreatedAt)))
     const created: VelaSession = new VelaSession(
       id,
       {
@@ -438,6 +464,7 @@ function initVelaInstance(
           join(dataDir, 'sessions', sessionId, 'tool-results'),
         cwd,
         shellPath: options.shellPath,
+        createdAt: sessionCreatedAt,
         registry,
         builder,
         // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)
@@ -479,6 +506,7 @@ function initVelaInstance(
           if (sessions.get(closed.id) === closed) {
             sessions.delete(closed.id)
             hostDefaults.delete(closed.id)
+            sessionDates.delete(closed.id)
           }
           await discardWorkspace(closed, closed.location)
         },
@@ -530,62 +558,29 @@ function initVelaInstance(
     resources.clear(key)
     projectConfig.clear(key)
     sessionShells.delete(key)
+    sessionOs.delete(key)
     identities.delete(key)
     await projects.release(key)
   }
-  const resolveExecution = async (
+  const resolveExecution = (
     session: VelaSession,
     location = session.location,
     signal?: AbortSignal,
-  ) => {
-    const key = workspaceKey(session.id, location)
-    const local = location.environment === 'local'
-    const target = { sessionId: session.id, location }
-    const resolver =
-      local && resourceSplit?.useBuiltinLocal ? undefined : options.env
-    let env = resolver
-      ? await resolver(target)
-      : local
-        ? createSessionLocalExecutionEnv({
-            cwd: location.cwd,
-            shellPath: options.shellPath,
-            tempRoot:
-              session.registry.spillDir ??
-              join(dataDir, 'sessions', session.id, 'tool-results'),
-          })
-        : undefined
-    signal?.throwIfAborted()
-    if (
-      !env?.id ||
-      (env.id === 'node:local') !== local ||
-      env.cwd !== location.cwd ||
-      (identities.has(key) && identities.get(key) !== env.id)
-    )
-      throw new Error(
-        `Execution environment unavailable for ${location.environment}:${location.cwd}`,
-      )
-    identities.set(key, env.id)
-    if (local && resourceSplit) {
-      const settings = await projectConfig.get(key, env)
-      const shellPath =
-        options.shellPath ??
-        settings.shellPath ??
-        resourceSplit?.fallbackShellPath
-      signal?.throwIfAborted()
-      sessionShells.set(key, shellPath)
-      if (!resolver && shellPath !== options.shellPath)
-        env = createSessionLocalExecutionEnv({
-          cwd: location.cwd,
-          shellPath,
-          tempRoot:
-            session.registry.spillDir ??
-            join(dataDir, 'sessions', session.id, 'tool-results'),
-        })
-    }
-    return local && resolver && session.registry.spillDir
-      ? scopeLocalResults(env, session.registry.spillDir)
-      : env
-  }
+  ) =>
+    resolveSessionExecution({
+      sessionId: session.id,
+      location,
+      spillDir: session.registry.spillDir,
+      envResolver: options.env,
+      shellPath: options.shellPath,
+      dataDir,
+      resourceSplit,
+      projectConfig,
+      identities,
+      sessionOs,
+      sessionShells,
+      signal,
+    })
 
   const prepareWorkspace = async (
     session: VelaSession,
@@ -604,10 +599,17 @@ function initVelaInstance(
           resolveExecution(session, target, signal),
           signal,
         )
-        const workspaceMode = local ? projectConfig.mode(location) : undefined
-        const settings = await projectConfig.get(key, env)
+        const resolvedLocation =
+          local || !resourceSplit
+            ? location
+            : await canonicalEnvironmentPath(env, location, signal)
+        const workspaceMode = projectConfig.mode(
+          resolvedLocation,
+          target.environment,
+        )
+        const settings = await projectConfig.get(key, env, target.environment)
         signal.throwIfAborted()
-        await projects.prepare(key, env)
+        await projects.prepare(key, env, target.environment)
         signal.throwIfAborted()
         const inventory = await loadWorkspaceInventory(
           env,

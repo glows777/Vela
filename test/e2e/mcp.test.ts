@@ -80,15 +80,12 @@ test('MCP tools are deferred under mcp__<server>__<tool>; tool_search loads them
     responses: [
       (req) => {
         expect(req.tools).not.toContain('mcp__docs__search_pages')
-        // Connected or still connecting, the server is named in the system prompt
-        expect(req.system).toContain('mcp__docs')
+        expect(req.system).not.toContain('<mcp_servers>')
         return fauxToolCall('tool_search', { query: 'search pages', limit: 1 })
       },
       (req) => {
-        // The system prompt lists the server once, keeping deferred_tools immutable for prefix caching
-        expect(req.system).toContain(
-          '- mcp__docs (2 tools) — Use docs tools for docs things.',
-        )
+        // The system prompt lists the configured deferred namespace statically, keeping <deferred_tools> immutable across connects
+        expect(req.system).toContain('- mcp__docs')
         expect(req.system).not.toContain('mcp__docs__delete_page')
         expect(req.toolResults[0]!.output).toContain(
           'Use docs tools for docs things.\nMore detail.',
@@ -294,7 +291,7 @@ test('configuration errors and failed servers are reported once; /mcp shows stat
   expect(closed).toBe(true)
 })
 
-test('servers still connecting are listed after the direct wait; dispose stops a connect in progress', async () => {
+test('direct wait avoids transient <mcp_servers> injection and dispose stops connects in progress', async () => {
   // Servers that never answer initialize
   const closed: string[] = []
   const hanging = async (entry: { name: string }): Promise<Transport> => {
@@ -334,6 +331,7 @@ test('servers still connecting are listed after the direct wait; dispose stops a
     ],
     responses: [
       (req) => {
+        expect(req.system).not.toContain('<mcp_servers>')
         expect(req.system).toContain('- mcp__slow — Slow docs')
         expect(req.system).toContain('- mcp__partly')
         expect(req.system).not.toContain('mcp__gone')
@@ -347,6 +345,50 @@ test('servers still connecting are listed after the direct wait; dispose stops a
   expect(closed).toEqual([])
   await t.vela.dispose()
   expect(closed.sort()).toEqual(['gone', 'partly', 'slow'])
+})
+
+test('deferred MCP server connecting after turn 1 keeps the complete system prompt byte-identical', async () => {
+  let releaseConnect!: () => void
+  const gate = new Promise<void>((resolve) => {
+    releaseConnect = resolve
+  })
+  const fake = servers({ docs })
+  const t = createTestVela({
+    extensions: [
+      mcp({
+        servers: {
+          docs: { command: 'unused', description: 'Project docs' },
+        },
+        createTransport: async (entry) => {
+          await gate
+          return fake.createTransport(entry)
+        },
+      }),
+    ],
+    responses: [
+      (req) => {
+        expect(req.system).toContain('- mcp__docs — Project docs')
+        return fauxText('first')
+      },
+      (req) => {
+        expect(req.system).toContain('- mcp__docs — Project docs')
+        return fauxText('second')
+      },
+    ],
+  })
+  await t.run('first')
+  releaseConnect()
+  for (
+    let i = 0;
+    i < 100 && !t.internals.registry.get('mcp__docs__search_pages');
+    i++
+  ) {
+    await Bun.sleep(10)
+  }
+  expect(t.internals.registry.get('mcp__docs__search_pages')).toBeDefined()
+  await t.run('second')
+  const [first, second] = t.model.calls
+  expect(second!.system).toBe(first!.system)
 })
 
 test('a stdio server: Vela starts the process, calls its tool and stops it on dispose', async () => {

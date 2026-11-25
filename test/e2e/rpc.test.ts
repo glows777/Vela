@@ -2,6 +2,7 @@ import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { PhotonImage } from '@silvia-odwyer/photon-node'
+import { saveTrust } from '../../packages/vela/src/db/index.ts'
 import { tempDir } from '../support/vela.ts'
 
 // `vela --mode rpc` child process: write JSONL commands to stdin, read responses / events / extension_ui_request from stdout
@@ -558,9 +559,10 @@ test('rpc: a failed project tool selection leaves the active session and can be 
   dirs.push(b)
   mkdirSync(join(b.path, '.vela'))
   const settings = join(b.path, '.vela', 'config.json')
+  saveTrust(home.path, a.path, true)
+  saveTrust(home.path, b.path, true)
   const files = {
     'config.json': JSON.stringify({ dataDir: join(home.path, 'data') }),
-    'trust.json': JSON.stringify({ [a.path]: true, [b.path]: true }),
   }
   writeFileSync(settings, JSON.stringify({ tools: ['read'] }))
   const model = `faux:${scenario('hello')}`

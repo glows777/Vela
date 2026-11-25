@@ -16,9 +16,8 @@ import { parseArgs } from '../../src/cli/setup.ts'
 import {
   assertNoLegacyConfigFiles,
   parseConfig,
-  savedTrust,
-  saveTrust,
 } from '../../src/config/index.ts'
+import { savedTrust, saveTrust } from '../../src/db/index.ts'
 import { SessionDefaultState } from '../../src/driver/session/defaults.ts'
 import { loadConfig } from '../../src/load-config.ts'
 import { loadMcpServers } from '../../src/mcp/config.ts'
@@ -91,8 +90,8 @@ test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag
   expect(lstatSync(sharedAgentDir).mode & 0o777).toBe(origMode)
   symlinkSync(deniedReal, deniedLink)
   saveTrust(sharedAgentDir, deniedLink, false)
-  const trustPath = join(sharedAgentDir, 'trust.json')
-  expect(lstatSync(trustPath).mode & 0o777).toBe(0o600)
+  const dbPath = join(sharedAgentDir, 'vela.db')
+  expect(lstatSync(dbPath).mode & 0o777).toBe(0o600)
   expect(savedTrust(sharedAgentDir, deniedLink)).toBe(false)
   expect(savedTrust(sharedAgentDir, deniedReal)).toBe(false)
 

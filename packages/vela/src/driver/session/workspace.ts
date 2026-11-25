@@ -5,11 +5,21 @@ import type { VelaSettings } from '../../config/index.ts'
 import { openDatabase, type VelaDatabase } from '../../db/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
 import type { ConfigResourceSplit } from '../config/runtime-resources.ts'
-import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
+import {
+  createSessionLocalExecutionEnv,
+  scopeLocalResults,
+} from '../execution/local.ts'
+import {
+  type ExecutionEnv,
+  type ExecutionLocation,
+  executionEnvOs,
+  type InternalExecutionEnv,
+} from '../execution/types.ts'
 import { loadEnvironmentContextFiles } from '../prompt/environment-context-files.ts'
 import { loadEnvironmentTemplates } from '../prompt/environment-templates.ts'
 import { loadEnvironmentSkills } from '../skills/environment-skills.ts'
 import { readEnvironmentInventory } from './environment-inventory.ts'
+import type { ProjectConfig } from './project-config.ts'
 import { type SessionResources, sessionSystemFile } from './resources.ts'
 import { type InventoryEnv, workspaceDiscovery } from './workspace-discovery.ts'
 
@@ -46,15 +56,35 @@ export async function loadWorkspaceInventory(
     sessionSystemFile(
       env,
       name,
-      local && workspaceMode === 'all',
+      workspaceMode === 'all',
       split?.agentDir,
       signal,
     )
   if (!local) {
+    if (workspaceMode === 'none') {
+      return {
+        systemPrompt: host.systemPrompt ?? (await readSystem('SYSTEM.md')),
+        appendSystemPrompt:
+          host.appendSystemPrompt ?? (await readSystem('APPEND_SYSTEM.md')),
+        skills: [],
+        promptTemplates: [],
+        contextFiles: contextEnabled
+          ? [...(split?.userContextFiles ?? [])]
+          : [],
+      }
+    }
     const batch = (env as InventoryEnv)[workspaceDiscovery]
+    const declaredSkills = settings.skills ?? []
+    const declaredPrompts = settings.prompts ?? []
     const result = batch
-      ? await batch(contextEnabled, signal)
-      : await readEnvironmentInventory(env, contextEnabled, signal)
+      ? await batch(contextEnabled, signal, declaredSkills, declaredPrompts)
+      : await readEnvironmentInventory(
+          env,
+          contextEnabled,
+          signal,
+          declaredSkills,
+          declaredPrompts,
+        )
     for (const { path, message } of result.diagnostics)
       logger.warn(`[resources] ${path}: ${message}`)
     return {
@@ -233,4 +263,74 @@ export function cleanupFailedVelaInit(
 ): void {
   if (ownsDb && db.open) db.close()
   if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
+}
+
+export async function resolveSessionExecution(params: {
+  sessionId: string
+  location: ExecutionLocation
+  spillDir?: string
+  envResolver?: (target: {
+    sessionId: string
+    location: ExecutionLocation
+  }) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>
+  shellPath?: string
+  dataDir: string
+  resourceSplit?: ConfigResourceSplit
+  projectConfig: ProjectConfig
+  identities: Map<string, string>
+  sessionOs: Map<string, string>
+  sessionShells: Map<string, string | undefined>
+  signal?: AbortSignal
+}): Promise<ExecutionEnv> {
+  const { sessionId, location, signal } = params
+  const key = workspaceKey(sessionId, location)
+  const local = location.environment === 'local'
+  const resolver =
+    local && params.resourceSplit?.useBuiltinLocal
+      ? undefined
+      : params.envResolver
+  let env = resolver
+    ? await resolver({ sessionId, location })
+    : local
+      ? createSessionLocalExecutionEnv({
+          cwd: location.cwd,
+          shellPath: params.shellPath,
+          tempRoot:
+            params.spillDir ??
+            join(params.dataDir, 'sessions', sessionId, 'tool-results'),
+        })
+      : undefined
+  signal?.throwIfAborted()
+  if (
+    !env?.id ||
+    (env.id === 'node:local') !== local ||
+    env.cwd !== location.cwd ||
+    (params.identities.has(key) && params.identities.get(key) !== env.id)
+  )
+    throw new Error(
+      `Execution environment unavailable for ${location.environment}:${location.cwd}`,
+    )
+  params.identities.set(key, env.id)
+  const detectedOs = (env as InternalExecutionEnv)[executionEnvOs]
+  if (detectedOs) params.sessionOs.set(key, detectedOs)
+  if (local && params.resourceSplit) {
+    const settings = await params.projectConfig.get(key, env, 'local')
+    const shellPath =
+      params.shellPath ??
+      settings.shellPath ??
+      params.resourceSplit.fallbackShellPath
+    signal?.throwIfAborted()
+    params.sessionShells.set(key, shellPath)
+    if (!resolver && shellPath !== params.shellPath)
+      env = createSessionLocalExecutionEnv({
+        cwd: location.cwd,
+        shellPath,
+        tempRoot:
+          params.spillDir ??
+          join(params.dataDir, 'sessions', sessionId, 'tool-results'),
+      })
+  }
+  return local && resolver && params.spillDir
+    ? scopeLocalResults(env, params.spillDir)
+    : env
 }

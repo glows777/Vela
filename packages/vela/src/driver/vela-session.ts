@@ -28,7 +28,7 @@ import type {
   InputSource,
 } from './extensions/events.ts'
 import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
-import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
+import type { PromptContext } from './prompt/index.ts'
 import {
   cloneLeaf,
   copyFork,
@@ -196,7 +196,6 @@ export class VelaSession {
   /** Tools' display data from `tool_execution_end`, recorded on their tool message. */
   private readonly toolDetails = new Map<string, unknown>()
   private readonly userBash: UserBash
-  private readonly builder: SystemPromptBuilder
   private readonly deps: SessionDeps
   /** Options the session was opened with (a fork opens with the same) */
   private readonly options: InternalSessionOptions
@@ -233,13 +232,13 @@ export class VelaSession {
     this.backgroundWork = new SessionWork(options.unattended === true)
     this.defaults = new SessionDefaultState(deps, options)
     this.limits = limitsForModel({}, deps.limitOverrides)
-    this.builder = deps.builder
     this.store = new SessionStore(id, deps.db, {
       uploadsDir: deps.uploadsRoot(id),
       logger: deps.logger,
       ephemeral: deps.ephemeral,
       cwd: this.cwd,
       location: this.location,
+      createdAt: deps.createdAt,
       onSaved: () => deps.onSaved(id),
     })
     this.registry = deps.registry.fork(
@@ -542,7 +541,7 @@ export class VelaSession {
 
   /** @internal This session's system prompt (rebuilt before each turn's requests). */
   buildSystem(sections?: Record<string, string>, override?: string | null) {
-    return this.builder.build(this.promptContext(sections, override))
+    return this.deps.builder.build(this.promptContext(sections, override))
   }
 
   /** @internal Runs this turn's handlers on a fresh prompt for /context, keeping nothing */

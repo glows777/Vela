@@ -112,7 +112,7 @@ The running process keeps the old code until the restart. A run in progress is s
 
 | Path | What |
 |---|---|
-| `config.json`, `trust.json` | Unified configuration (model, channels, providers) and saved project-trust answers |
+| `config.json`, `vela.db` | Unified configuration (model, channels, providers) and saved project-trust decisions (`trusted_paths`) |
 | `auth.json` | Provider credentials saved by `/login`, mode `0600` |
 | `projects/<working folder>/vela.db` | SQLite WAL database holding conversations, tool calls, runs, approvals, and usage records (mode `0600` in `0700` directories) |
 | `projects/<working folder>/sessions/` | Per-session spilled long tool outputs (`tool-results/`) and upload metadata |
