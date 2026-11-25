@@ -35,7 +35,7 @@ interface SessionHeader {
 }
 ```
 
-The header records the initial location. Local sessions start with `{ environment: 'local', cwd }`. A trusted move persists the active location on `sessions.location_json` in `vela.db` (and per-entry `vela_messages.location_json` / `vela_tool_calls.location_json`). `resume()` restores the saved session location across restarts. `exportJsonl()`, `fork()` and `clone()` copy the active location into the exported header / new session.
+The header records the initial location. Local sessions start with `{ environment: 'local', cwd }`. A trusted move persists the active location on `sessions.location_json` in `vela.db` (and per-entry `vela_messages.location_json` / `vela_tool_calls.location_json`). `resume()` restores the saved session location across restarts, and a record without `location` uses the caller's local cwd or the default local cwd when there is no saved move. `exportJsonl()`, `fork()` and `clone()` copy the active location into the exported header / new session.
 
 ## Entries
 

@@ -210,7 +210,9 @@ export async function prepareSeedBranch(params: {
     if (!sourcePath || spillRewrites.has(sourcePath)) return
     const effectiveLoc = location ?? params.parentLocation
     const srcIsLocal =
-      effectiveLoc === undefined || effectiveLoc.environment === 'local'
+      effectiveLoc === undefined ||
+      effectiveLoc.environment === 'local' ||
+      effectiveLoc.environment === 'node:local'
     if (srcIsLocal && targetIsLocal) {
       if (!targetSpillDir || targetSpillDir === params.parentSpillDir) return
       const localSrc = resolveConfinedLocalSource(sourcePath)
