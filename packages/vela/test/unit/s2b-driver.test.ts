@@ -16,6 +16,7 @@ import { SessionStore } from '../../src/driver/session/index.ts'
 import { loadStepToolCallRows } from '../../src/driver/step-recovery.ts'
 import { executeStepCalls } from '../../src/driver/tool-executor.ts'
 import { ToolRegistry } from '../../src/driver/tools/registry.ts'
+import { ToolExecutionResult } from '../../src/driver/tools/types.ts'
 import { TokenTracker } from '../../src/driver/usage/tracker.ts'
 import { VelaDriver } from '../../src/driver/vela-driver.ts'
 import {
@@ -1281,5 +1282,428 @@ test('R1 #8/#18/#19: hosted+client filter, discovery order + prompt exclusion + 
     ['client-1', 'pending'],
     ['client-sdk-err', 'failed'],
   ])
+  db.close()
+})
+
+test('R2 #1/#2: pre-mutation session claim blocks concurrent instances, rejects live PID owners, and recovers dead-owner running sessions on ordinary prompt()', async () => {
+  const cwd = setupDir()
+  const dbPath = join(cwd, 'vela.db')
+  const db = openDatabase({ path: dbPath })
+
+  let releaseHook!: () => void
+  let insideHook!: () => void
+  const enteredHook = new Promise<void>((resolve) => {
+    insideHook = resolve
+  })
+  function hookExt(api: ExtensionAPI) {
+    api.on('before_agent_start', async () => {
+      insideHook()
+      await new Promise<void>((resolve) => {
+        releaseHook = resolve
+      })
+    })
+  }
+  const vela1 = createVela({
+    cwd,
+    dataDir: cwd,
+    db,
+    model: createFauxModel({ responses: [fauxText('first done')] }),
+    extensions: [hookExt],
+  })
+  const vela1B = createVela({
+    cwd,
+    dataDir: cwd,
+    db,
+    model: createFauxModel({ responses: [fauxText('never')] }),
+  })
+  const s1 = vela1.session('claim-order')
+  const p1 = s1.prompt('hello one')
+  await enteredHook
+
+  const s1Again = vela1B.session('claim-order')
+  await s1Again.resume()
+  await expect(s1Again.prompt('second before loop')).rejects.toThrow(
+    /already has an active run/i,
+  )
+  releaseHook()
+  await p1
+  await vela1B.dispose()
+  await vela1.dispose()
+
+  // Live external PID owner_token rejects prompt(); dead PID owner_token recovers even on ordinary prompt().
+  const now = new Date().toISOString()
+  db.run(
+    "UPDATE sessions SET state = 'running', updated_at = ? WHERE id = 'claim-order'",
+    now,
+  )
+  db.run(
+    `INSERT INTO runs (id, session_id, driver, trigger, status, model, owner_token, started_at, updated_at)
+     VALUES ('live-ext-run', 'claim-order', 'vela', 'user', 'running', 'mock/model', ?, ?, ?)`,
+    `other-proc:${process.pid}:nonce-1`,
+    now,
+    now,
+  )
+  const vela2 = createVela({
+    cwd,
+    dataDir: cwd,
+    db,
+    model: createFauxModel({ responses: [fauxText('reclaimed ok')] }),
+  })
+  const resumedLive = vela2.session('claim-order')
+  await resumedLive.resume()
+  await expect(resumedLive.prompt('blocked by live pid')).rejects.toThrow(
+    /already has an active run/i,
+  )
+
+  db.run(
+    "UPDATE runs SET owner_token = 'other-proc:99999999:dead' WHERE id = 'live-ext-run'",
+  )
+  await resumedLive.prompt('recovered after dead crash')
+  const deadRun = db.get<{ status: string }>(
+    "SELECT status FROM runs WHERE id = 'live-ext-run'",
+  )
+  expect(deadRun?.status).toBe('stopped')
+  expect(
+    db.get<{ state: string }>(
+      "SELECT state FROM sessions WHERE id = 'claim-order'",
+    )?.state,
+  ).toBe('idle')
+
+  await vela2.dispose()
+  db.close()
+})
+
+test('R2 #3/#4: queued bash/custom_message wait until post-recovery tool result and append rolls back atomically on SQLite failure', async () => {
+  const cwd = setupDir()
+  const db = openDatabase({ path: join(cwd, 'vela.db') })
+  const store = new SessionStore('rollback-test', db)
+  const msg1 = { role: 'user' as const, content: 'ok' }
+  store.appendMessage(msg1)
+  db.close()
+  expect(() =>
+    store.appendMessage({ role: 'user', content: 'should fail' }),
+  ).toThrow()
+  expect(store.getEntries()).toHaveLength(1)
+
+  const dbPath = join(cwd, 'recovery-order.db')
+  const rdb = openDatabase({ path: dbPath })
+  function r2order(api: ExtensionAPI) {
+    api.registerTool({
+      name: 'gated_echo',
+      description: 'requires approval',
+      inputSchema: z.object({ v: z.string() }),
+      execute: async ({ v }) => `echo:${v}`,
+    })
+    api.on('tool_call', async (ev) => {
+      if (ev.toolName === 'r2order_gated_echo') {
+        return { approval: { summary: 'Confirm echo' } }
+      }
+    })
+  }
+  const vela = createVela({
+    cwd,
+    dataDir: cwd,
+    db: rdb,
+    extensions: [r2order],
+    model: createFauxModel({
+      responses: [
+        fauxToolCall('r2order_gated_echo', { v: 'ok' }),
+        fauxText('all ordered'),
+      ],
+    }),
+  })
+  created.vela = vela
+  const s = vela.session('rec-order')
+  await s.prompt('run gated tool')
+  const [ap] = s.pendingApprovals()
+  s.resolveApproval(ap!.id, { approved: true })
+  await s.executeBash('echo queued-before-resume')
+  await s.continueInterrupted()
+
+  const roles = s.messages.map((m) => m.role)
+  const asstIdx = roles.indexOf('assistant')
+  const toolIdx = roles.indexOf('tool')
+  const userAfterIdx = roles.lastIndexOf('user')
+  expect(toolIdx).toBe(asstIdx + 1)
+  expect(userAfterIdx).toBeGreaterThan(toolIdx)
+  expect(JSON.stringify(s.messages[userAfterIdx])).toContain(
+    'queued-before-resume',
+  )
+  await vela.dispose()
+  rdb.close()
+})
+
+test('R2 #5/#6/#7/#8/#11/#14: TX1 terminalError, Promise.allSettled + waitForIdle, tool_call_row_id binding, hidden guard, single schema transform, and empty takeDetails', async () => {
+  const cwd = setupDir()
+  const db = openDatabase({ path: join(cwd, 'vela.db') })
+
+  // #5: persistAssistantStepTx marks terminalError client calls directly as failed
+  const store5 = new SessionStore('tx1-term', db)
+  store5.appendMessage({ role: 'user', content: 'go' })
+  const now = new Date().toISOString()
+  db.run(
+    "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-term', 'tx1-term', 'vela', 'user', 'running', ?, ?)",
+    now,
+    now,
+  )
+  const termEntry = persistAssistantStepTx({
+    db,
+    store: store5,
+    registry: new ToolRegistry(),
+    sessionId: 'tx1-term',
+    runId: 'r-term',
+    producer: 'mock/model',
+    assistant: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 'tc-len',
+          toolName: 'bash',
+          input: {},
+        },
+      ],
+    },
+    responseMessages: [],
+    clientCalls: [
+      { type: 'tool_call', toolCallId: 'tc-len', toolName: 'bash', input: {} },
+    ],
+    stepRecord: {
+      ts: Date.now(),
+      model: 'mock/model',
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    },
+    rawUsage: { inputTokens: 1, outputTokens: 1 },
+    terminalError: (name) => `truncated:${name}`,
+  })
+  const termRows = loadStepToolCallRows(db, 'tx1-term', termEntry.id)
+  expect(termRows[0]!.status).toBe('failed')
+  expect(termRows[0]!.preview).toBe('truncated:bash')
+
+  // #7: duplicate tool_call_id across steps isolates approval resolution by tool_call_row_id
+  const store7 = new SessionStore('dup-ap', db)
+  store7.appendMessage({ role: 'user', content: 'two steps' })
+  db.run(
+    "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-dup', 'dup-ap', 'vela', 'user', 'waiting_human', ?, ?)",
+    now,
+    now,
+  )
+  const eA = store7.appendMessage({
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_call',
+        toolCallId: 'dup-1',
+        toolName: 'hidden_or_safe',
+        input: {},
+      },
+    ],
+  })
+  const eB = store7.appendMessage({
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_call',
+        toolCallId: 'dup-1',
+        toolName: 'hidden_or_safe',
+        input: {},
+      },
+    ],
+  })
+  db.run(
+    `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, created_at, updated_at)
+     VALUES ('row-a', 'dup-ap', 'r-dup', ?, 'dup-1', 0, 'hidden_or_safe', '{}', 'parallel', 'none', 'awaiting_approval', 0, ?, ?),
+            ('row-b', 'dup-ap', 'r-dup', ?, 'dup-1', 0, 'hidden_or_safe', '{}', 'parallel', 'none', 'awaiting_approval', 0, ?, ?)`,
+    eA.id,
+    now,
+    now,
+    eB.id,
+    now,
+    now,
+  )
+  db.run(
+    `INSERT INTO approvals (id, session_id, run_id, tool_call_row_id, tool_call_id, tool_name, summary, status, created_at)
+     VALUES ('ap-a', 'dup-ap', 'r-dup', 'row-a', 'dup-1', 'hidden_or_safe', 'A', 'pending', ?),
+            ('ap-b', 'dup-ap', 'r-dup', 'row-b', 'dup-1', 'hidden_or_safe', 'B', 'pending', ?)`,
+    now,
+    now,
+  )
+  let transformCount = 0
+  let siblingSettled = false
+  const events: string[] = []
+
+  function r2probe(api: ExtensionAPI) {
+    api.registerTool({
+      name: 'hidden_safe',
+      description: 'hidden safe tool',
+      exposure: 'hidden',
+      replay: 'safe',
+      inputSchema: z.object({}),
+      execute: async () => 'should not run',
+    })
+    api.registerTool({
+      name: 'count_transform',
+      description: 'counts transforms and emits details',
+      inputSchema: z.object({
+        n: z.number().transform((v) => {
+          transformCount++
+          return v * 2
+        }),
+      }),
+      execute: async ({ n }) =>
+        new ToolExecutionResult({ diff: 'ok' }, `val=${n}`),
+    })
+    api.registerTool({
+      name: 'parallel_slow',
+      description: 'slow parallel sibling',
+      executionMode: 'parallel',
+      inputSchema: z.object({}),
+      execute: async () => {
+        await Bun.sleep(25)
+        siblingSettled = true
+        return 'sibling ok'
+      },
+    })
+    api.registerTool({
+      name: 'parallel_fast',
+      description: 'fast parallel sibling',
+      executionMode: 'parallel',
+      inputSchema: z.object({}),
+      execute: async () => 'ok',
+    })
+  }
+  const vela = createVela({
+    cwd,
+    dataDir: cwd,
+    db,
+    extensions: [r2probe],
+    model: createFauxModel({
+      responses: [
+        fauxToolCall('r2probe_count_transform', { n: 5 }),
+        fauxText('done-1'),
+        fauxToolCall('r2probe_hidden_safe', {}),
+        fauxText('done-2'),
+      ],
+    }),
+  })
+  created.vela = vela
+  const sess = vela.session('r2-tools')
+  sess.subscribe((ev) => {
+    if (ev.type === 'tool_execution_end')
+      events.push(`${ev.toolName}:${Boolean(ev.details)}`)
+  })
+  const { resolveApproval } = await import('../../src/driver/step-recovery.ts')
+  resolveApproval(db, 'dup-ap', 'ap-b', { approved: true })
+  expect(
+    db.get<{ status: string }>(
+      "SELECT status FROM vela_tool_calls WHERE id = 'row-a'",
+    )?.status,
+  ).toBe('awaiting_approval')
+  expect(
+    db.get<{ status: string }>(
+      "SELECT status FROM vela_tool_calls WHERE id = 'row-b'",
+    )?.status,
+  ).toBe('pending')
+
+  // #11 & #14: single schema transform + no leftover registry.takeDetails
+  await sess.prompt('transform')
+  expect(transformCount).toBe(1)
+  expect(sess.registry.takeDetails('faux-call-1-1')).toBeUndefined()
+  expect(events).toContain('r2probe_count_transform:true')
+
+  // #8: hidden tool rejected in live call & safe replay
+  await sess.prompt('call hidden')
+  const hiddenCall = db.get<{
+    id: string
+    assistant_message_id: string
+    status: string
+    preview: string | null
+  }>(
+    "SELECT id, assistant_message_id, status, preview FROM vela_tool_calls WHERE session_id = 'r2-tools' AND tool_name = 'r2probe_hidden_safe'",
+  )!
+  expect(hiddenCall.status).toBe('failed')
+  expect(hiddenCall.preview).toContain('unavailable')
+
+  // #6: Promise.allSettled waits for parallel sibling before rejecting & registry.waitForIdle() settles
+  const reg6 = sess.registry.fork(undefined)
+  reg6.setInterception({
+    after: async (name) => {
+      if (name === 'r2probe_parallel_fast') throw new Error('boom-after')
+      return 'sibling ok'
+    },
+  })
+  const store6 = new SessionStore('p-settle', db)
+  store6.appendMessage({ role: 'user', content: 'parallel' })
+  db.run(
+    "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-p6', 'p-settle', 'vela', 'user', 'running', ?, ?)",
+    now,
+    now,
+  )
+  const asst6 = store6.appendMessage({
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_call',
+        toolCallId: 'ps-1',
+        toolName: 'r2probe_parallel_slow',
+        input: {},
+      },
+      {
+        type: 'tool_call',
+        toolCallId: 'ps-2',
+        toolName: 'r2probe_parallel_fast',
+        input: {},
+      },
+    ],
+  })
+  db.run(
+    `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, created_at, updated_at)
+     VALUES ('p6-1', 'p-settle', 'r-p6', ?, 'ps-1', 0, 'r2probe_parallel_slow', '{}', 'parallel', 'none', 'pending', 0, ?, ?),
+            ('p6-2', 'p-settle', 'r-p6', ?, 'ps-2', 1, 'r2probe_parallel_fast', '{}', 'parallel', 'none', 'pending', 0, ?, ?)`,
+    asst6.id,
+    now,
+    now,
+    asst6.id,
+    now,
+    now,
+  )
+  await expect(
+    executeStepCalls({
+      db,
+      store: store6,
+      registry: reg6,
+      sessionId: 'p-settle',
+      rows: loadStepToolCallRows(db, 'p-settle', asst6.id),
+      emit: () => {},
+    }),
+  ).rejects.toThrow('boom-after')
+  expect(siblingSettled).toBe(true)
+  expect(reg6.hasActiveCalls).toBe(false)
+
+  // Verify hidden tool is also rejected during executeStepCalls recovery replay
+  db.run(
+    "UPDATE vela_tool_calls SET status = 'running', replay = 'safe' WHERE id = ?",
+    hiddenCall.id,
+  )
+  await executeStepCalls({
+    db,
+    store: new SessionStore('r2-tools', db),
+    registry: sess.registry,
+    sessionId: 'r2-tools',
+    rows: loadStepToolCallRows(db, 'r2-tools', hiddenCall.assistant_message_id),
+    emit: () => {},
+    isRecovery: true,
+  })
+  expect(
+    db.get<{ status: string }>(
+      'SELECT status FROM vela_tool_calls WHERE id = ?',
+      hiddenCall.id,
+    )?.status,
+  ).toBe('failed')
+
+  await vela.dispose()
   db.close()
 })

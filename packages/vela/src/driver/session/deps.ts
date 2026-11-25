@@ -138,7 +138,10 @@ export interface SessionDeps<Session> {
     location: ExecutionLocation,
   ) => Promise<void>
   bindWorkspace: (session: Session) => void
-  resolveExecution: (session: Session) => Promise<ExecutionEnv>
+  resolveExecution: (
+    session: Session,
+    location?: ExecutionLocation,
+  ) => Promise<ExecutionEnv>
   prepareWorkspace: (
     session: Session,
     signal?: AbortSignal,

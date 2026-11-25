@@ -370,7 +370,8 @@ test('R1 #10/#12/#14/#15: spill confinement + remote copy, fork/clone rejects wa
       parentUploads: pStore.uploads,
       targetUploads: cStore.uploads,
       resolveEnv: async () => fakeRemoteEnv,
-      isRemote: true,
+      parentLocation: { environment: 'docker', cwd: '/remote' },
+      targetLocation: { environment: 'docker', cwd: '/remote' },
     })
     expect(wroteRemote).toBe(true)
     expect(preparedRemote.spillRewrites.get('/remote/spill.txt')).toBe(
@@ -379,5 +380,195 @@ test('R1 #10/#12/#14/#15: spill confinement + remote copy, fork/clone rejects wa
     db.close()
   } finally {
     rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('R2 #9/#10/#12/#13: cross-env spill clone after relocate, ephemeral+db guard, open override & tree model/thinking restore, and custom_message details', async () => {
+  // #10: ephemeralSessions: true with persistent db throws
+  const tmpFile = mkdtempSync(join(tmpdir(), 'vela-r2-e2e-'))
+  try {
+    const fileDb = openDatabase({ path: join(tmpFile, 'vela.db') })
+    try {
+      expect(() =>
+        createTestVela({
+          cwd: tmpFile,
+          dataDir: tmpFile,
+          db: fileDb,
+          ephemeralSessions: true,
+        }),
+      ).toThrow(/ephemeralSessions/i)
+    } finally {
+      fileDb.close()
+    }
+  } finally {
+    rmSync(tmpFile, { recursive: true, force: true })
+  }
+
+  // #12 & #13: open model/thinking override persisted + navigateTree restores historical model/thinking + custom_message reserved keys
+  const m1 = createFauxModel({
+    modelId: 'm1',
+    responses: [fauxText('r1'), fauxText('r3')],
+  })
+  const m2 = createFauxModel({
+    modelId: 'm2',
+    responses: [fauxText('r2')],
+  })
+  const providers = {
+    switch: {
+      models: [{ id: 'm1' }, { id: 'm2' }],
+      createModel: (id: string) => (id === 'm1' ? m1 : m2),
+    },
+  }
+  const t = createTestVela({
+    model: 'switch/m1',
+    providers,
+    thinkingLevel: 'medium',
+  })
+  await t.run('first turn')
+  const firstAssistantId = t.session.getLeafId()!
+  t.session.setModel('switch/m2')
+  t.session.setThinkingLevel('low')
+  await t.session.sendMessage({
+    customType: 'note',
+    content: 'hello',
+    display: true,
+    details: { _choice: 'keep-me', _primitiveDetails: 42 },
+  })
+  await t.run('second turn')
+  expect(t.session.modelInfo.ref).toBe('switch/m2')
+  expect(t.session.thinkingLevel).toBe('low')
+
+  await t.session.navigateTree(firstAssistantId)
+  expect(t.session.modelInfo.ref).toBe('switch/m1')
+  expect(t.session.thinkingLevel).toBe('medium')
+
+  const reopen = createTestVela({
+    cwd: t.cwd,
+    providers,
+    session: { model: 'switch/m1', thinkingLevel: 'high' },
+  })
+  expect(await reopen.session.resume()).toBe(true)
+  const dbRead = openDatabase({
+    path: join(t.dataDir, 'vela.db'),
+    readonly: true,
+  })
+  try {
+    const row = dbRead.get<{
+      model: string | null
+      thinking_level: string | null
+    }>("SELECT model, thinking_level FROM sessions WHERE id = 'default'")
+    expect(row?.model).toBe('switch/m1')
+    expect(row?.thinking_level).toBe('high')
+
+    const customRow = dbRead.get<{ details_json: string | null }>(
+      "SELECT details_json FROM vela_messages WHERE session_id = 'default' AND kind = 'custom_message' LIMIT 1",
+    )
+    expect(JSON.parse(customRow?.details_json ?? '{}')).toEqual({
+      _choice: 'keep-me',
+      _primitiveDetails: 42,
+    })
+  } finally {
+    dbRead.close()
+  }
+
+  // #9: local -> remote and remote -> local spill cloning using per-row/entry location_json
+  const dir = mkdtempSync(join(tmpdir(), 'vela-r2-spill-'))
+  try {
+    const db = openDatabase({ path: join(dir, 'vela.db') })
+    const pSpillDir = join(dir, 'p-spill')
+    const cSpillDir = join(dir, 'c-spill')
+    mkdirSync(pSpillDir, { recursive: true })
+    const localSpill = join(pSpillDir, 'local.txt')
+    writeFileSync(localSpill, 'from-local-disk')
+
+    const pStore = new SessionStore('p-loc', db, {
+      location: { environment: 'docker', cwd: '/remote' },
+    })
+    const cStore = new SessionStore('c-loc', db, {
+      location: { environment: 'local', cwd: dir },
+    })
+    const e1 = pStore.appendBashExecution({
+      type: 'bash_execution',
+      command: 'echo hi',
+      output: 'hi',
+      cancelled: false,
+      truncated: true,
+      fullOutputPath: '/remote/from-docker.txt',
+    })
+    const fakeRemoteEnv = {
+      id: 'docker:box1',
+      cwd: '/remote',
+      openBinaryReader: async (p: string) => ({
+        ok: p === '/remote/from-docker.txt',
+        value: {
+          info: async () => ({ ok: true, value: { kind: 'file', size: 11 } }),
+          read: async () => ({
+            ok: true,
+            value: new TextEncoder().encode('from-docker'),
+          }),
+          close: async () => {},
+        },
+      }),
+    } as unknown as ExecutionEnv
+    const branch = pStore.getBranch()
+    const prepared = await prepareSeedBranch({
+      db,
+      branch,
+      parentId: 'p-loc',
+      parentUploads: pStore.uploads,
+      targetUploads: cStore.uploads,
+      resolveEnv: async () => {
+        throw new Error('local target env does not need remote')
+      },
+      resolveSourceEnv: async () => fakeRemoteEnv,
+      parentLocation: { environment: 'local', cwd: dir },
+      targetLocation: { environment: 'local', cwd: dir },
+      entryLocations: new Map([
+        [e1.id, { environment: 'docker', cwd: '/remote' }],
+      ]),
+      parentSpillDir: pSpillDir,
+      spillDir: cSpillDir,
+    })
+    const copiedLocal = prepared.spillRewrites.get('/remote/from-docker.txt')!
+    expect(copiedLocal.startsWith(cSpillDir)).toBe(true)
+    expect(readFileSync(copiedLocal, 'utf8')).toBe('from-docker')
+
+    // Local spill -> remote target
+    let remoteWrittenText = ''
+    const remoteTarget = {
+      id: 'docker:box2',
+      cwd: '/remote2',
+      createTempFile: async () => ({ ok: true, value: '/remote2/spill-1.txt' }),
+      writeFile: async (_p: string, data: Uint8Array) => {
+        remoteWrittenText = new TextDecoder().decode(data)
+        return { ok: true, value: undefined }
+      },
+    } as unknown as ExecutionEnv
+    const preparedL2R = await prepareSeedBranch({
+      db,
+      branch: [
+        {
+          ...e1,
+          id: 'l1',
+          fullOutputPath: localSpill,
+        },
+      ],
+      parentId: 'p-loc',
+      parentUploads: pStore.uploads,
+      targetUploads: cStore.uploads,
+      resolveEnv: async () => remoteTarget,
+      parentLocation: { environment: 'local', cwd: dir },
+      targetLocation: { environment: 'docker', cwd: '/remote2' },
+      entryLocations: new Map([['l1', { environment: 'local', cwd: dir }]]),
+      parentSpillDir: pSpillDir,
+      spillDir: cSpillDir,
+    })
+    expect(preparedL2R.spillRewrites.get(localSpill)).toBe(
+      '/remote2/spill-1.txt',
+    )
+    expect(remoteWrittenText).toBe('from-local-disk')
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

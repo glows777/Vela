@@ -77,6 +77,7 @@ export function persistTerminalRow(
   options: {
     preview?: string
     spillPath?: string
+    location?: ExecutionLocation
     details?: unknown
     durationMs?: number
     discoveredTools?: Iterable<string>
@@ -86,6 +87,9 @@ export function persistTerminalRow(
   const now = new Date().toISOString()
   const preview = options.preview ?? outputPreviewText(output)
   const resultJson = JSON.stringify(output)
+  const locationJson = options.location
+    ? JSON.stringify(options.location)
+    : null
   const detailsJson =
     options.details === undefined ? null : JSON.stringify(options.details)
   db.transaction(() => {
@@ -93,6 +97,7 @@ export function persistTerminalRow(
       `UPDATE vela_tool_calls
        SET status = ?, is_error = ?, preview = ?, result_json = ?,
            spill_path = COALESCE(?, spill_path),
+           location_json = COALESCE(?, location_json),
            details_json = ?, duration_ms = COALESCE(?, duration_ms),
            finished_at = ?, updated_at = ?
        WHERE id = ?`,
@@ -101,6 +106,7 @@ export function persistTerminalRow(
       preview,
       resultJson,
       options.spillPath ?? null,
+      locationJson,
       detailsJson,
       options.durationMs === undefined ? null : Math.round(options.durationMs),
       now,
@@ -181,11 +187,12 @@ export function markApprovalRequested(
     }
     db.run(
       `INSERT INTO approvals (
-         id, session_id, run_id, tool_call_id, tool_name, summary, input_json, status, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+         id, session_id, run_id, tool_call_row_id, tool_call_id, tool_name, summary, input_json, status, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
       approvalId,
       row.session_id,
       row.run_id,
+      row.id,
       row.tool_call_id,
       row.tool_name,
       safeSummary,
@@ -216,10 +223,10 @@ export function checkCallableTool(
       reason: `Tool ${toolName} was not executed because the session is shutting down`,
     }
   }
-  if (tool?.hostedOnly) {
+  if (tool?.hostedOnly || tool?.exposure === 'hidden') {
     return {
       ok: false,
-      reason: `[Rejected] ${toolName} is unavailable locally`,
+      reason: `[Rejected] ${toolName} is unavailable${tool.hostedOnly ? ' locally' : ''}`,
     }
   }
   if (!tool || !registry.isAvailable(toolName)) {

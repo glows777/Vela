@@ -26,11 +26,7 @@ import type {
   ProviderUsage,
   ReasoningOption,
 } from '../shared/provider-types.ts'
-import {
-  isVelaJsonSchema,
-  type ToolInputSchema,
-  toJsonSchema,
-} from '../shared/tool-schema.ts'
+import { type ToolInputSchema, toJsonSchema } from '../shared/tool-schema.ts'
 import { withPromptCache } from './cache.ts'
 import { fromAiResponseMessage, toAiModelMessages } from './messages.ts'
 import type { HostedToolModel } from './models/index.ts'
@@ -134,27 +130,8 @@ export async function resolveProviderTools(
     })
 
     // Wrap every inputSchema with aiJsonSchema so AI SDK preserves raw parsed JSON args
-    // without running Zod .transform() twice (tool-executor runs full schema validation once).
-    const sdkSchema = isVelaJsonSchema(spec.inputSchema)
-      ? aiJsonSchema(jsonSchemaObj, {
-          validate: spec.inputSchema.validate
-            ? async (value) => {
-                const validator = spec.inputSchema as {
-                  validate: (
-                    v: unknown,
-                  ) => Promise<
-                    | { success: true; value: unknown }
-                    | { success: false; error: Error }
-                  >
-                }
-                const res = await validator.validate(value)
-                return res.success
-                  ? { success: true as const, value: res.value }
-                  : { success: false as const, error: res.error }
-              }
-            : undefined,
-        })
-      : aiJsonSchema(jsonSchemaObj)
+    // without running Zod .transform() or custom validate() twice (tool-executor runs full schema validation once).
+    const sdkSchema = aiJsonSchema(jsonSchemaObj)
 
     sdkTools[spec.name] = AITool({
       description: spec.description,

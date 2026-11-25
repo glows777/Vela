@@ -268,6 +268,15 @@ export function velaInternals(vela: Vela): VelaInternals {
 
 /** Assembles one host with per-session history, execution and location-bound project capabilities. */
 export function createVela(options: VelaOptions = {}): Vela {
+  if (
+    options.ephemeralSessions === true &&
+    options.db &&
+    options.db.path !== ':memory:'
+  ) {
+    throw new Error(
+      'Cannot combine ephemeralSessions: true with a persistent db',
+    )
+  }
   const cwd = resolve(options.cwd ?? process.cwd())
   // Without dataDir, use a temp dir (long tool output, tool history, extension data) deleted on dispose
   const ephemeral = options.dataDir === undefined

@@ -7,11 +7,14 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
   realpathSync,
+  writeFileSync,
 } from 'node:fs'
 import { basename, join, sep } from 'node:path'
 import type { VelaDatabase } from '../../db/index.ts'
-import type { ExecutionEnv } from '../execution/types.ts'
+import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
+import { parseRowLocation } from './db-store.ts'
 import { copyBranch, entriesToMessages, type SessionEntry } from './entries.ts'
 import { pendingToolCalls } from './recovery.ts'
 import type { SessionUploads } from './uploads.ts'
@@ -62,7 +65,10 @@ export async function prepareSeedBranch(params: {
   parentUploads: SessionUploads
   targetUploads: SessionUploads
   resolveEnv: () => Promise<ExecutionEnv>
-  isRemote?: boolean
+  resolveSourceEnv?: (location?: ExecutionLocation) => Promise<ExecutionEnv>
+  parentLocation?: ExecutionLocation
+  targetLocation?: ExecutionLocation
+  entryLocations?: ReadonlyMap<string, ExecutionLocation>
   parentSpillDir?: string
   spillDir?: string
 }): Promise<PreparedSeedBranch> {
@@ -98,84 +104,161 @@ export async function prepareSeedBranch(params: {
     params.parentSpillDir && existsSync(params.parentSpillDir)
       ? realpathSync(params.parentSpillDir)
       : undefined
-  let remoteEnv: ExecutionEnv | undefined
-  const copyLocalConfinedSpill = (sourcePath: string): boolean => {
-    if (!targetSpillDir || !realParentSpillDir) return false
-    if (targetSpillDir === params.parentSpillDir) return true
-    if (!existsSync(sourcePath)) return false
+  const targetIsLocal =
+    params.targetLocation === undefined ||
+    params.targetLocation.environment === 'local'
+  let targetRemoteEnv: ExecutionEnv | undefined
+  const sourceEnvCache = new Map<string, ExecutionEnv>()
+
+  const getSourceEnv = async (
+    location?: ExecutionLocation,
+  ): Promise<ExecutionEnv | undefined> => {
+    const effective = location ?? params.parentLocation
+    const key = effective ? JSON.stringify(effective) : '__default__'
+    const cached = sourceEnvCache.get(key)
+    if (cached) return cached
+    const env = await (params.resolveSourceEnv
+      ? params.resolveSourceEnv(effective)
+      : resolveEnv())
+    sourceEnvCache.set(key, env)
+    return env
+  }
+
+  const getTargetRemoteEnv = async (): Promise<ExecutionEnv | undefined> => {
+    if (targetIsLocal) return undefined
+    targetRemoteEnv ??= await resolveEnv()
+    return targetRemoteEnv.id === 'node:local' ? undefined : targetRemoteEnv
+  }
+
+  const uniqueLocalDest = (sourcePath: string): string | undefined => {
+    if (!targetSpillDir) return undefined
+    mkdirSync(targetSpillDir, { recursive: true })
+    const name = basename(sourcePath)
+    let dest = join(targetSpillDir, name)
+    if (existsSync(dest)) {
+      dest = join(targetSpillDir, `${randomUUID().slice(0, 8)}-${name}`)
+    }
+    return dest
+  }
+
+  const resolveConfinedLocalSource = (
+    sourcePath: string,
+  ): { realSource: string; size: number } | undefined => {
+    if (!realParentSpillDir || !existsSync(sourcePath)) return undefined
     let realSource: string
     try {
       realSource = realpathSync(sourcePath)
     } catch {
-      return false
+      return undefined
     }
-    if (!realSource.startsWith(realParentSpillDir + sep)) return false
+    if (!realSource.startsWith(realParentSpillDir + sep)) return undefined
     let fd: number | undefined
     try {
       fd = openSync(realSource, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
-      if (!fstatSync(fd).isFile()) return false
+      const st = fstatSync(fd)
+      if (!st.isFile()) return undefined
+      return { realSource, size: st.size }
     } catch {
-      return false
+      return undefined
     } finally {
       if (fd !== undefined) closeSync(fd)
     }
-    mkdirSync(targetSpillDir, { recursive: true })
-    let dest = join(targetSpillDir, basename(sourcePath))
-    if (existsSync(dest)) {
-      dest = join(
-        targetSpillDir,
-        `${randomUUID().slice(0, 8)}-${basename(sourcePath)}`,
-      )
-    }
-    copyFileSync(realSource, dest)
-    spillRewrites.set(sourcePath, dest)
-    rewrites.push([sourcePath, dest])
-    return true
   }
-  const copyRemoteSpill = async (sourcePath: string) => {
-    remoteEnv ??= await resolveEnv()
-    if (remoteEnv.id === 'node:local') return
-    const opened = await remoteEnv.openBinaryReader(sourcePath, {
-      noFollow: true,
-    })
-    if (!opened.ok) return
+
+  const readRemoteBytes = async (
+    env: ExecutionEnv,
+    sourcePath: string,
+  ): Promise<Uint8Array | undefined> => {
+    if (env.id === 'node:local') return undefined
+    const opened = await env.openBinaryReader(sourcePath, { noFollow: true })
+    if (!opened.ok) return undefined
     const reader = opened.value
     try {
       const info = await reader.info()
-      if (!info.ok || info.value.kind !== 'file') return
-      if (info.value.size > MAX_REMOTE_SPILL_COPY_BYTES) return
+      if (!info.ok || info.value.kind !== 'file') return undefined
+      if (info.value.size > MAX_REMOTE_SPILL_COPY_BYTES) return undefined
       const read = await reader.read(0, info.value.size)
-      if (!read.ok) return
-      const temp = await remoteEnv.createTempFile({
-        prefix: 'vela-result-',
-        suffix: '.txt',
-      })
-      if (!temp.ok) return
-      const written = await remoteEnv.writeFile(temp.value, read.value)
-      if (!written.ok) {
-        await remoteEnv.remove(temp.value, { force: true }).catch(() => {})
-        return
-      }
-      spillRewrites.set(sourcePath, temp.value)
-      rewrites.push([sourcePath, temp.value])
+      return read.ok ? read.value : undefined
     } finally {
       await reader.close()
     }
   }
-  const copySpillFile = async (sourcePath: string | undefined) => {
-    if (!sourcePath || spillRewrites.has(sourcePath)) return
-    if (params.isRemote) {
-      await copyRemoteSpill(sourcePath)
+
+  const writeRemoteSpill = async (
+    destEnv: ExecutionEnv,
+    sourcePath: string,
+    bytes: Uint8Array,
+  ): Promise<void> => {
+    const temp = await destEnv.createTempFile({
+      prefix: 'vela-result-',
+      suffix: '.txt',
+    })
+    if (!temp.ok) return
+    const written = await destEnv.writeFile(temp.value, bytes)
+    if (!written.ok) {
+      await destEnv.remove(temp.value, { force: true }).catch(() => {})
       return
     }
-    copyLocalConfinedSpill(sourcePath)
+    spillRewrites.set(sourcePath, temp.value)
+    rewrites.push([sourcePath, temp.value])
   }
+
+  const copySpillFile = async (
+    sourcePath: string | undefined,
+    location?: ExecutionLocation,
+  ) => {
+    if (!sourcePath || spillRewrites.has(sourcePath)) return
+    const effectiveLoc = location ?? params.parentLocation
+    const srcIsLocal =
+      effectiveLoc === undefined || effectiveLoc.environment === 'local'
+    if (srcIsLocal && targetIsLocal) {
+      if (!targetSpillDir || targetSpillDir === params.parentSpillDir) return
+      const localSrc = resolveConfinedLocalSource(sourcePath)
+      if (!localSrc) return
+      const dest = uniqueLocalDest(sourcePath)
+      if (!dest) return
+      copyFileSync(localSrc.realSource, dest)
+      spillRewrites.set(sourcePath, dest)
+      rewrites.push([sourcePath, dest])
+      return
+    }
+
+    let bytes: Uint8Array | undefined
+    if (srcIsLocal) {
+      const localSrc = resolveConfinedLocalSource(sourcePath)
+      if (!localSrc || localSrc.size > MAX_REMOTE_SPILL_COPY_BYTES) return
+      bytes = readFileSync(localSrc.realSource)
+    } else {
+      const srcEnv = await getSourceEnv(effectiveLoc)
+      if (!srcEnv) return
+      bytes = await readRemoteBytes(srcEnv, sourcePath)
+    }
+    if (!bytes) return
+
+    if (targetIsLocal) {
+      const dest = uniqueLocalDest(sourcePath)
+      if (!dest) return
+      writeFileSync(dest, bytes)
+      spillRewrites.set(sourcePath, dest)
+      rewrites.push([sourcePath, dest])
+      return
+    }
+    const destEnv = await getTargetRemoteEnv()
+    if (destEnv) await writeRemoteSpill(destEnv, sourcePath, bytes)
+  }
+
   for (const row of parentCalls) {
-    await copySpillFile(row.spill_path ?? undefined)
+    await copySpillFile(
+      row.spill_path ?? undefined,
+      parseRowLocation(row.location_json),
+    )
   }
   for (const entry of branch) {
     if (entry.type === 'bash_execution') {
-      await copySpillFile(entry.fullOutputPath)
+      await copySpillFile(
+        entry.fullOutputPath,
+        params.entryLocations?.get(entry.id),
+      )
     }
   }
 

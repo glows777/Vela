@@ -29,6 +29,18 @@ const MIGRATIONS: readonly Migration[] = [
       db.exec(INITIAL_SCHEMA_SQL)
     },
   },
+  {
+    version: 2,
+    name: '002_s2b_columns',
+    migrate: (db) => {
+      db.exec(`
+        ALTER TABLE runs ADD COLUMN owner_token TEXT;
+        ALTER TABLE approvals ADD COLUMN tool_call_row_id TEXT REFERENCES vela_tool_calls(id) ON DELETE CASCADE;
+        ALTER TABLE vela_messages ADD COLUMN choice_json TEXT;
+        ALTER TABLE vela_messages ADD COLUMN location_json TEXT;
+      `)
+    },
+  },
 ]
 
 export function applyMigrations(

@@ -460,6 +460,7 @@ export function persistAssistantStepTx(options: {
   stepRecord: StepRecord
   rawUsage: ProviderUsage
   sdkToolErrors?: ReadonlyMap<string, string>
+  terminalError?: (toolName: string) => string
 }): SessionMessageEntry {
   const {
     db,
@@ -474,6 +475,7 @@ export function persistAssistantStepTx(options: {
     stepRecord,
     rawUsage,
     sdkToolErrors,
+    terminalError,
   } = options
   const txNow = new Date().toISOString()
   return store.runInTransaction(() => {
@@ -535,7 +537,8 @@ export function persistAssistantStepTx(options: {
       const def = registry.get(call.toolName)
       const execMode = def?.executionMode ?? 'parallel'
       const replay = def?.replay === 'safe' ? 'safe' : 'none'
-      const sdkError = sdkToolErrors?.get(call.toolCallId)
+      const failureText =
+        sdkToolErrors?.get(call.toolCallId) ?? terminalError?.(call.toolName)
       db.run(
         `INSERT INTO vela_tool_calls (
            id, session_id, run_id, assistant_message_id, tool_call_id, call_index,
@@ -552,13 +555,13 @@ export function persistAssistantStepTx(options: {
         JSON.stringify(call.input ?? {}),
         execMode,
         replay,
-        sdkError !== undefined ? 'failed' : 'pending',
-        sdkError !== undefined ? 1 : 0,
-        sdkError ?? null,
-        sdkError !== undefined
-          ? JSON.stringify({ type: 'error-text', value: sdkError })
+        failureText !== undefined ? 'failed' : 'pending',
+        failureText !== undefined ? 1 : 0,
+        failureText ?? null,
+        failureText !== undefined
+          ? JSON.stringify({ type: 'error-text', value: failureText })
           : null,
-        sdkError !== undefined ? txNow : null,
+        failureText !== undefined ? txNow : null,
         txNow,
         txNow,
       )

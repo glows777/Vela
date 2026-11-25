@@ -41,12 +41,13 @@ import {
   executeTreeNavigation,
   forkPoint,
 } from './session/branch-selection.ts'
+import { extractToolMessageDetails } from './session/db-store.ts'
 import { SessionDefaultState } from './session/defaults.ts'
 import type {
   SessionDeps as SessionDependencies,
   ForkResult as SessionForkResult,
 } from './session/deps.ts'
-import { waitForDrain } from './session/drain.ts'
+import { shutdownSession, waitForDrain } from './session/drain.ts'
 import {
   assertCustomType,
   entriesToMessages,
@@ -740,6 +741,7 @@ export class VelaSession {
     await this.store.seedFrom(branch, parent, this.execEnv, {
       parentSpillDir: parent.registry.spillDir,
       spillDir: this.registry.spillDir,
+      resolveSourceEnv: (loc) => this.deps.resolveExecution(parent, loc),
     })
     if (branch.length) await this.loadBranch(this.store.buildContext())
     await this.store.flush()
@@ -789,8 +791,14 @@ export class VelaSession {
     await this.loadBranch(saved)
     if (saved.channel !== undefined)
       routing.bindSavedChannel(this, saved.channel)
-    this.defaults.applyOpenChoices(this.options, (m) =>
-      this.selectModel(m, false),
+    this.defaults.applyOpenChoices(
+      this.options,
+      (m) => this.selectModel(m, false),
+      {
+        store: this.store,
+        modelRef: () => this.resolveModel().info.ref,
+        thinkingLevel: () => this.thinkingLevel,
+      },
     )
     if (needsRestoredWorkspace(this.options, target)) await this.prepare(signal)
     return true
@@ -828,32 +836,25 @@ export class VelaSession {
 
   /** Appends a message to history and the session (without calling the model). */
   append(message: ModelMessage): void {
+    this.record(message)
     this.messages.push(message)
     this.tracker.addMessage(message)
-    this.record(message)
     this.emit({ type: 'message_start', message })
     this.emit({ type: 'message_end', message })
   }
 
   /** Appends a message that entered the history to the session; a tool message carries its tools' details. */
   private record(message: ModelMessage, producedBy?: string): void {
-    this.timestamps.set(message, Date.now())
     const custom = this.messageQueue.customMessages.get(message)
     if (custom && message.role === 'user') {
       this.store.appendCustomMessage(message, custom)
+      this.timestamps.set(message, Date.now())
       return
     }
-    const details: Record<string, unknown> = {}
-    if (message.role === 'tool') {
-      for (const part of message.content) {
-        if (part.type !== 'tool_result') continue
-        if (this.toolDetails.has(part.toolCallId)) {
-          details[part.toolCallId] = this.toolDetails.get(part.toolCallId)
-          this.toolDetails.delete(part.toolCallId)
-        }
-      }
-    }
+    const details = extractToolMessageDetails(message, this.toolDetails)
     this.store.appendMessage(message, { details, producedBy })
+    for (const key of Object.keys(details)) this.toolDetails.delete(key)
+    this.timestamps.set(message, Date.now())
   }
 
   /** Whether an `executeBash()` command is running */
@@ -1168,17 +1169,6 @@ export class VelaSession {
     try {
       await this.start(controller.signal)
       await this.store.assertNew()
-      if (input !== undefined) {
-        const stateRow = this.deps.db.get<{ state: string }>(
-          'SELECT state FROM sessions WHERE id = ?',
-          this.id,
-        )
-        if (stateRow?.state === 'waiting_human') {
-          throw new Error(
-            'Session is waiting for human approval; call resolveApproval() and continueInterrupted() before prompting',
-          )
-        }
-      }
       const hasPending = pendingToolCalls(this.messages).length > 0
       const recoverPending = input === undefined || hasPending
       if (recoverPending) {
@@ -1193,6 +1183,7 @@ export class VelaSession {
             inputs,
             controller.signal,
             firstRun && recoverPending,
+            input === undefined,
           )
           stopForHuman = outcome.reason === 'waiting_human'
           if (
@@ -1251,81 +1242,100 @@ export class VelaSession {
     inputs: ModelMessage[],
     signal: AbortSignal,
     recoverPending = false,
+    allowWaitingHuman = false,
   ): Promise<{ reason: 'done' | 'waiting_human' }> {
     await this.start(signal)
     signal.throwIfAborted()
-    const { info } = this.resolveModel()
-    if (this.defaults.modelChoice === undefined) {
-      this.defaults.modelChoice = info.ref
-      this.store.setModelChoice(info.ref)
-    }
-    inputs = await Promise.all(
-      inputs.map((message) => this.messageQueue.normalizeInput(message)),
-    )
-    signal.throwIfAborted()
-    const input = inputs.map(messageText).join('\n\n')
-    this.turn = { sections: {}, messages: [] }
-    const started = await this.deps.extensions.beforeAgentStart(this, input)
-    this.turn = started
-    const added = started.messages.map((message) =>
-      this.messageQueue.customMessage(message),
-    )
     await this.store.assertNew()
-    this.userBash.flush()
-    this.messageQueue.flushPendingCustom((message) => this.append(message))
-    this.emit({ type: 'agent_start', input })
-    const newMessages: ModelMessage[] = []
-    const appendTurnInputs = () => {
-      for (const message of [
-        ...inputs,
-        ...this.messageQueue.nextTurnMessages.splice(0),
-        ...added,
-      ]) {
-        this.append(message)
-        newMessages.push(message)
-      }
-    }
-    if (!recoverPending) {
-      appendTurnInputs()
-    }
-    const { info: servingInfo } = this.resolveModel()
+    const { info } = this.resolveModel()
     const serving = {
       model: this.requestModel(),
-      maxOutputTokens: servingInfo.maxTokens,
+      maxOutputTokens: info.maxTokens,
     }
-    const takeSteering = () =>
-      Promise.all(
-        this.dequeueSteering().map((m) => this.messageQueue.normalizeInput(m)),
-      )
-    return this.driver.run({
-      model: serving.model,
-      trigger: this.channel ? 'channel' : 'user',
-      maxOutputTokens: serving.maxOutputTokens,
-      supportsImages: servingInfo.input?.includes('image') ?? true,
-      reasoning: () =>
-        reasoningOption(
-          this.defaults.thinkingLevelFor(servingInfo),
-          servingInfo,
-        ),
-      systemPrompt: () => this.buildSystem(),
-      messages: this.messages,
-      newMessages,
-      prepareContext: (request) => this.prepareContext(request, serving),
-      transformContext: (messages, producer) =>
-        this.deps.extensions.transformContext(this, messages, producer),
-      compactOnOverflow: this.autoCompaction
-        ? (overflow) =>
-            this.runCompaction('overflow', undefined, overflow, serving)
-        : undefined,
-      abortSignal: signal,
-      isDraining: () => this.draining,
-      takeSteering,
-      hasSteering: () => !this.draining && this.messageQueue.hasSteering,
-      limits: this.limits,
+    const trigger = this.channel ? 'channel' : 'user'
+    const claim = this.driver.claim({
       recoverPending,
-      onRecoveryComplete: recoverPending ? appendTurnInputs : undefined,
-      appendInput: (msg) => this.append(msg),
+      allowWaitingHuman,
+      trigger,
+      model: serving.model,
     })
+    let handedOff = false
+    try {
+      if (this.defaults.modelChoice === undefined) {
+        this.defaults.modelChoice = info.ref
+        this.store.setModelChoice(info.ref)
+      }
+      inputs = await Promise.all(
+        inputs.map((m) => this.messageQueue.normalizeInput(m)),
+      )
+      signal.throwIfAborted()
+      const input = inputs.map(messageText).join('\n\n')
+      this.turn = { sections: {}, messages: [] }
+      const started = await this.deps.extensions.beforeAgentStart(this, input)
+      this.turn = started
+      const added = started.messages.map((m) =>
+        this.messageQueue.customMessage(m),
+      )
+      this.emit({ type: 'agent_start', input })
+      const newMessages: ModelMessage[] = []
+      const flushAndAppend = () => {
+        this.userBash.flush()
+        this.messageQueue.flushPendingCustom((m) => this.append(m))
+        for (const m of [
+          ...inputs,
+          ...this.messageQueue.nextTurnMessages.splice(0),
+          ...added,
+        ]) {
+          this.append(m)
+          newMessages.push(m)
+        }
+      }
+      if (!recoverPending) flushAndAppend()
+      const { info: servingInfo } = this.resolveModel()
+      serving.model = this.requestModel()
+      serving.maxOutputTokens = servingInfo.maxTokens
+      handedOff = true
+      return await this.driver.run({
+        claim,
+        model: serving.model,
+        trigger,
+        maxOutputTokens: serving.maxOutputTokens,
+        supportsImages: servingInfo.input?.includes('image') ?? true,
+        reasoning: () =>
+          reasoningOption(
+            this.defaults.thinkingLevelFor(servingInfo),
+            servingInfo,
+          ),
+        systemPrompt: () => this.buildSystem(),
+        messages: this.messages,
+        newMessages,
+        prepareContext: (req) => this.prepareContext(req, serving),
+        transformContext: (msgs, p) =>
+          this.deps.extensions.transformContext(this, msgs, p),
+        compactOnOverflow: this.autoCompaction
+          ? (sig) => this.runCompaction('overflow', undefined, sig, serving)
+          : undefined,
+        abortSignal: signal,
+        isDraining: () => this.draining,
+        takeSteering: () =>
+          Promise.all(
+            this.dequeueSteering().map((m) =>
+              this.messageQueue.normalizeInput(m),
+            ),
+          ),
+        hasSteering: () => !this.draining && this.messageQueue.hasSteering,
+        limits: this.limits,
+        recoverPending,
+        onRecoveryComplete: recoverPending ? flushAndAppend : undefined,
+        appendInput: (msg) => this.append(msg),
+      })
+    } catch (error) {
+      if (!handedOff)
+        claim.release(
+          claim.resumedFromWaitingHuman ? 'waiting_human' : 'stopped',
+        )
+      throw error
+    }
   }
 
   private buildSnapshot(
@@ -1390,39 +1400,22 @@ export class VelaSession {
   /** Aborts the running task, waits for it to finish and save, then removes the session from Vela. */
   close(): Promise<void> {
     this.closed = true
-    this.closing ??= this.shutdown()
+    this.closing ??= shutdownSession({
+      abortBash: () => this.abortBash(),
+      abort: (reason) => this.abort(reason),
+      commands: this.commands.values(),
+      running: this.running,
+      bashRunning: this.userBash.running,
+      waitForRegistry: () => this.registry.waitForIdle(),
+      started: this.started,
+      onShutdown: () => this.deps.extensions.sessionShutdown(this),
+      save: () => this.save(),
+      release: () => {
+        this.store.releaseTransient()
+        this.listeners.clear()
+      },
+      onClose: () => this.deps.onClose(this),
+    })
     return this.closing
-  }
-
-  private async shutdown(): Promise<void> {
-    this.abortBash()
-    this.abort(new DOMException('Session closed', 'AbortError'))
-    // Let extension commands finish first (commands like /dream wait on the prompt they started)
-    await Promise.allSettled(this.commands.values())
-    await this.running
-    // A cancelled `!` command still records itself; wait for that before the final save
-    await this.userBash.running?.catch(() => {})
-    await this.registry.waitForIdle().catch(() => {})
-    const errors: unknown[] = []
-    // Only sessions that fired session_start emit session_shutdown.
-    if (this.started) {
-      await this.started.catch(() => {})
-      try {
-        await this.deps.extensions.sessionShutdown(this)
-      } catch (error) {
-        errors.push(error)
-      }
-    }
-    try {
-      await this.save()
-    } catch (error) {
-      errors.push(error)
-    } finally {
-      this.store.releaseTransient()
-      this.listeners.clear()
-      await this.deps.onClose(this)
-    }
-    if (errors.length)
-      throw new AggregateError(errors, 'Session shutdown failed')
   }
 }

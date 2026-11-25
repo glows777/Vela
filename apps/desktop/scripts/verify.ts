@@ -20,6 +20,7 @@ import {
   type ElectronApplication,
   type Page,
 } from 'playwright'
+import { projectDataDir } from '../../../packages/vela/src/driver/config/paths.ts'
 import tokens from '../design/tokens.json'
 import type { DesktopBridge } from '../src/shared/bridge.ts'
 import { verifyControls } from './verify-controls.ts'
@@ -425,23 +426,31 @@ const bridgeJourney = async (page: Page) => {
   await waitForText(page, created.id, created.sessionId, 'Image processed')
   const deadline = Date.now() + 5000
   let savedImage = false
-  const dbPath = resolve(data, 'vela.db')
+  const dbPaths = [
+    resolve(projectDataDir(data, project), 'vela.db'),
+    resolve(data, 'vela.db'),
+  ]
   while (!savedImage && Date.now() < deadline) {
-    let db: DatabaseSync | undefined
-    try {
-      db = new DatabaseSync(dbPath, { readOnly: true })
-      const hit = db
-        .prepare(
-          `SELECT 1 AS ok FROM vela_messages
-           WHERE session_id = ? AND content_json LIKE '%"type":"image"%'
-           LIMIT 1`,
-        )
-        .get(created.sessionId)
-      if (hit) savedImage = true
-    } catch {
-      // vela.db may not be initialized yet while polling
-    } finally {
-      db?.close()
+    for (const dbPath of dbPaths) {
+      let db: DatabaseSync | undefined
+      try {
+        db = new DatabaseSync(dbPath, { readOnly: true })
+        const hit = db
+          .prepare(
+            `SELECT 1 AS ok FROM vela_messages
+             WHERE session_id = ? AND content_json LIKE '%"type":"image"%'
+             LIMIT 1`,
+          )
+          .get(created.sessionId)
+        if (hit) {
+          savedImage = true
+          break
+        }
+      } catch {
+        // vela.db may not be initialized yet while polling
+      } finally {
+        db?.close()
+      }
     }
     if (!savedImage) await Bun.sleep(50)
   }

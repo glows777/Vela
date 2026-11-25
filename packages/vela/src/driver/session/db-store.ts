@@ -57,6 +57,8 @@ export type MessageRow = {
   cost_usd: number | null
   duration_ms: number | null
   details_json: string | null
+  choice_json: string | null
+  location_json: string | null
   created_at: string
 }
 
@@ -107,8 +109,9 @@ const INSERT_MESSAGE_SQL = `INSERT INTO vela_messages (
   session_id, id, parent_id, seq, run_id, kind, role, content_json,
   include_in_context, stop_reason, produced_by, first_kept_id,
   tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
-  cache_write_tokens, cost_usd, duration_ms, details_json, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  cache_write_tokens, cost_usd, duration_ms, details_json, choice_json,
+  location_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 export function insertMessageRow(
   db: VelaDatabase,
@@ -133,6 +136,7 @@ export function entryToRowParams(
     costUsd?: number
     durationMs?: number
     choice?: { model?: string; thinkingLevel?: ThinkingLevel }
+    location?: ExecutionLocation
   } = {},
 ) {
   let role: string | null = null
@@ -142,7 +146,7 @@ export function entryToRowParams(
   let producedBy: string | null = null
   let firstKeptId: string | null = null
   let tokensBefore: number | null = null
-  let detailsObj: Record<string, unknown> | undefined
+  let detailsJson: string | null = null
 
   switch (entry.type) {
     case 'message':
@@ -151,7 +155,8 @@ export function entryToRowParams(
       includeInContext = entry.stopReason ? 0 : 1
       stopReason = entry.stopReason ?? null
       producedBy = entry.producedBy ?? null
-      detailsObj = entry.details ? { ...entry.details } : undefined
+      detailsJson =
+        entry.details !== undefined ? JSON.stringify(entry.details) : null
       break
     case 'compaction':
       role = 'user'
@@ -191,11 +196,8 @@ export function entryToRowParams(
         content: entry.content,
         display: entry.display,
       })
-      detailsObj = isPlainObject(entry.details)
-        ? { ...entry.details }
-        : entry.details === undefined
-          ? undefined
-          : ({ _primitiveDetails: entry.details } as Record<string, unknown>)
+      detailsJson =
+        entry.details !== undefined ? JSON.stringify(entry.details) : null
       break
     case 'custom':
       includeInContext = 0
@@ -210,20 +212,17 @@ export function entryToRowParams(
     extra.choice &&
     (extra.choice.model !== undefined ||
       extra.choice.thinkingLevel !== undefined)
-  if (hasChoice) {
-    detailsObj = {
-      ...(detailsObj ?? {}),
-      _choice: {
+  const choiceJson = hasChoice
+    ? JSON.stringify({
         ...(extra.choice!.model === undefined
           ? {}
           : { model: extra.choice!.model }),
         ...(extra.choice!.thinkingLevel === undefined
           ? {}
           : { thinkingLevel: extra.choice!.thinkingLevel }),
-      },
-    }
-  }
-  const detailsJson = detailsObj ? JSON.stringify(detailsObj) : null
+      })
+    : null
+  const locationJson = extra.location ? JSON.stringify(extra.location) : null
 
   return [
     sessionId,
@@ -247,48 +246,43 @@ export function entryToRowParams(
     extra.costUsd ?? null,
     extra.durationMs ?? null,
     detailsJson,
+    choiceJson,
+    locationJson,
     entry.timestamp,
   ] as const
 }
 
-export function parseStoredDetails(detailsJson: string | null): {
-  details?: unknown
-  choice?: { model?: string; thinkingLevel?: ThinkingLevel }
-} {
-  if (!detailsJson) return {}
-  const parsed = JSON.parse(detailsJson) as unknown
-  if (!isPlainObject(parsed)) return { details: parsed }
-  const rawChoice = parsed._choice as
-    | { model?: unknown; thinkingLevel?: unknown }
-    | undefined
-  let choice: { model?: string; thinkingLevel?: ThinkingLevel } | undefined
-  if (rawChoice && typeof rawChoice === 'object') {
-    choice = {
-      ...(typeof rawChoice.model === 'string'
-        ? { model: rawChoice.model }
-        : {}),
-      ...(typeof rawChoice.thinkingLevel === 'string'
-        ? { thinkingLevel: rawChoice.thinkingLevel as ThinkingLevel }
-        : {}),
-    }
+function parseRowChoice(
+  choiceJson: string | null,
+): { model?: string; thinkingLevel?: ThinkingLevel } | undefined {
+  if (!choiceJson) return undefined
+  const parsed = JSON.parse(choiceJson) as unknown
+  if (!isPlainObject(parsed)) return undefined
+  const choice: { model?: string; thinkingLevel?: ThinkingLevel } = {}
+  if (typeof parsed.model === 'string') choice.model = parsed.model
+  if (typeof parsed.thinkingLevel === 'string') {
+    choice.thinkingLevel = parsed.thinkingLevel as ThinkingLevel
   }
-  const rest = '_choice' in parsed ? { ...parsed } : parsed
-  if ('_choice' in rest) delete rest._choice
-  if ('_primitiveDetails' in rest && Object.keys(rest).length === 1) {
-    return {
-      details: rest._primitiveDetails,
-      ...(choice ? { choice } : {}),
-    }
-  }
-  return {
-    ...(Object.keys(rest).length ? { details: rest } : {}),
-    ...(choice ? { choice } : {}),
-  }
+  return choice.model !== undefined || choice.thinkingLevel !== undefined
+    ? choice
+    : undefined
+}
+
+export function parseRowLocation(
+  locationJson: string | null,
+): ExecutionLocation | undefined {
+  if (!locationJson) return undefined
+  const parsed = JSON.parse(locationJson) as unknown
+  if (!isPlainObject(parsed)) return undefined
+  return parsed as unknown as ExecutionLocation
 }
 
 export function rowToEntry(row: MessageRow): SessionEntry {
   const parsed = JSON.parse(row.content_json) as Record<string, unknown>
-  const { details } = parseStoredDetails(row.details_json)
+  const details =
+    row.details_json !== null
+      ? (JSON.parse(row.details_json) as unknown)
+      : undefined
   const base = {
     id: row.id,
     parentId: row.parent_id,
@@ -385,19 +379,22 @@ export function queryBranchRows(
        session_id, id, parent_id, seq, run_id, kind, role, content_json,
        include_in_context, stop_reason, produced_by, first_kept_id,
        tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
-       cache_write_tokens, cost_usd, duration_ms, details_json, created_at
+       cache_write_tokens, cost_usd, duration_ms, details_json, choice_json,
+       location_json, created_at
      ) AS (
        SELECT session_id, id, parent_id, seq, run_id, kind, role, content_json,
               include_in_context, stop_reason, produced_by, first_kept_id,
               tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
-              cache_write_tokens, cost_usd, duration_ms, details_json, created_at
+              cache_write_tokens, cost_usd, duration_ms, details_json, choice_json,
+              location_json, created_at
        FROM vela_messages
        WHERE session_id = ? AND id = ?
        UNION ALL
        SELECT m.session_id, m.id, m.parent_id, m.seq, m.run_id, m.kind, m.role, m.content_json,
               m.include_in_context, m.stop_reason, m.produced_by, m.first_kept_id,
               m.tokens_before, m.label, m.input_tokens, m.output_tokens, m.cache_read_tokens,
-              m.cache_write_tokens, m.cost_usd, m.duration_ms, m.details_json, m.created_at
+              m.cache_write_tokens, m.cost_usd, m.duration_ms, m.details_json, m.choice_json,
+              m.location_json, m.created_at
        FROM vela_messages m
        JOIN branch b ON m.session_id = b.session_id AND m.id = b.parent_id
      )
@@ -691,4 +688,43 @@ export function insertUsageRecord(
     record.usage ? JSON.stringify(record.usage) : null,
     new Date(record.ts).toISOString(),
   )
+}
+
+export function extractToolMessageDetails(
+  message: ModelMessage,
+  toolDetails: Map<string, unknown>,
+): Record<string, unknown> {
+  const details: Record<string, unknown> = {}
+  if (message.role !== 'tool') return details
+  for (const part of message.content) {
+    if (part.type === 'tool_result' && toolDetails.has(part.toolCallId)) {
+      details[part.toolCallId] = toolDetails.get(part.toolCallId)
+    }
+  }
+  return details
+}
+
+export function startsConversationEntry(entry: SessionEntry): boolean {
+  return (
+    entry.type === 'custom_message' ||
+    entry.type === 'bash_execution' ||
+    (entry.type === 'message' &&
+      (entry.message.role === 'user' || entry.message.role === 'assistant'))
+  )
+}
+
+export function collectRowMetadata(
+  rows: readonly MessageRow[],
+  entryModel: Map<string, string>,
+  entryThinking: Map<string, ThinkingLevel>,
+  entryLocations: Map<string, ExecutionLocation>,
+): void {
+  for (const row of rows) {
+    const choice = parseRowChoice(row.choice_json)
+    if (choice?.model !== undefined) entryModel.set(row.id, choice.model)
+    if (choice?.thinkingLevel !== undefined)
+      entryThinking.set(row.id, choice.thinkingLevel)
+    const rowLoc = parseRowLocation(row.location_json)
+    if (rowLoc !== undefined) entryLocations.set(row.id, rowLoc)
+  }
 }

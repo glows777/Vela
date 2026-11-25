@@ -100,11 +100,12 @@ export function resolveApproval(
     const approval = db.get<{
       id: string
       run_id: string
+      tool_call_row_id: string | null
       tool_call_id: string | null
       tool_name: string
       status: string
     }>(
-      'SELECT id, run_id, tool_call_id, tool_name, status FROM approvals WHERE id = ? AND session_id = ?',
+      'SELECT id, run_id, tool_call_row_id, tool_call_id, tool_name, status FROM approvals WHERE id = ? AND session_id = ?',
       approvalId,
       sessionId,
     )
@@ -128,35 +129,59 @@ export function resolveApproval(
       now,
       approvalId,
     )
-    if (approval.tool_call_id) {
+    if (approval.tool_call_row_id || approval.tool_call_id) {
       if (decision.approved) {
-        db.run(
-          `UPDATE vela_tool_calls
-           SET status = 'pending', updated_at = ?
-           WHERE session_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'awaiting_approval'`,
-          now,
-          sessionId,
-          approval.run_id,
-          approval.tool_call_id,
-        )
+        if (approval.tool_call_row_id) {
+          db.run(
+            `UPDATE vela_tool_calls
+             SET status = 'pending', updated_at = ?
+             WHERE id = ? AND status = 'awaiting_approval'`,
+            now,
+            approval.tool_call_row_id,
+          )
+        } else {
+          db.run(
+            `UPDATE vela_tool_calls
+             SET status = 'pending', updated_at = ?
+             WHERE session_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'awaiting_approval'`,
+            now,
+            sessionId,
+            approval.run_id,
+            approval.tool_call_id,
+          )
+        }
       } else {
         const reason = decision.reason
           ? `[Denied] ${decision.reason}`
           : `[Denied] ${approval.tool_name} was denied by user`
         const out: ToolResultOutput = { type: 'error-text', value: reason }
-        db.run(
-          `UPDATE vela_tool_calls
-           SET status = 'failed', is_error = 1, preview = ?, result_json = ?,
-               finished_at = ?, updated_at = ?
-           WHERE session_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'awaiting_approval'`,
-          reason,
-          JSON.stringify(out),
-          now,
-          now,
-          sessionId,
-          approval.run_id,
-          approval.tool_call_id,
-        )
+        if (approval.tool_call_row_id) {
+          db.run(
+            `UPDATE vela_tool_calls
+             SET status = 'failed', is_error = 1, preview = ?, result_json = ?,
+                 finished_at = ?, updated_at = ?
+             WHERE id = ? AND status = 'awaiting_approval'`,
+            reason,
+            JSON.stringify(out),
+            now,
+            now,
+            approval.tool_call_row_id,
+          )
+        } else {
+          db.run(
+            `UPDATE vela_tool_calls
+             SET status = 'failed', is_error = 1, preview = ?, result_json = ?,
+                 finished_at = ?, updated_at = ?
+             WHERE session_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'awaiting_approval'`,
+            reason,
+            JSON.stringify(out),
+            now,
+            now,
+            sessionId,
+            approval.run_id,
+            approval.tool_call_id,
+          )
+        }
       }
     }
     return {
@@ -328,8 +353,10 @@ export async function recoverPendingStep(options: {
         decision_reason: string | null
       }>(
         `SELECT status, decision_reason FROM approvals
-         WHERE session_id = ? AND run_id = ? AND tool_call_id = ?
+         WHERE tool_call_row_id = ?
+            OR (tool_call_row_id IS NULL AND session_id = ? AND run_id = ? AND tool_call_id = ?)
          ORDER BY created_at DESC LIMIT 1`,
+        row.id,
         sessionId,
         row.run_id,
         row.tool_call_id,
@@ -368,7 +395,11 @@ export async function recoverPendingStep(options: {
 
     if (row.status === 'running') {
       const tool = registry.get(row.tool_name)
-      const safe = row.replay === 'safe' && tool?.replay === 'safe'
+      const safe =
+        row.replay === 'safe' &&
+        tool?.replay === 'safe' &&
+        tool.exposure !== 'hidden' &&
+        registry.isAvailable(row.tool_name)
       if (row.attempt >= 5) {
         const msg = `Tool ${row.tool_name} was interrupted ${row.attempt} times in a row; it is not run again`
         const out: ToolResultOutput = { type: 'error-text', value: msg }

@@ -6,19 +6,19 @@ For the API, see [SDK](sdk.md#sessions). For the file contents, see [Session for
 
 ## Session ids and storage
 
-Every session has an id, which is also the name of its directory. Ids use letters, digits, `.`, `_` and `-`, don't start with `.`, and are at most 128 characters.
+Every session has an id (`sessions.id`). Ids use letters, digits, `.`, `_` and `-`, don't start with `.`, and are at most 128 characters.
 
 - The CLI starts a new session on every launch with an id made from the local time and four random characters, such as `20261008-081441-da14`.
 - Channel sessions get `<channel>-<conversationId>`, one shared session per chat (hashed when the ids have other characters). See [Channels](channels.md).
 - In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
 
-The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>/transcript.jsonl` holds the session's entries (messages, compactions, setting changes), next to the long tool output and tool call history in the same directory. Vela 0.5 kept the transcript as `sessions/<id>.jsonl`; such a session is listed from that file and moved into its directory the first time it is opened or written. Stop other Vela processes on the data directory before upgrading, so an older process cannot recreate the old file after the move. `--no-session` keeps the transcript, tool history and usage log out of that directory; tool history and long output go to a temporary directory removed when the session closes. Memory and the knowledge base are unchanged.
+Vela persists active sessions in SQLite at `<dataDir>/vela.db` (`sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`), inside the [project data directory](settings.md#data-directory). Spilled long tool outputs for a session live under `<dataDir>/sessions/<id>/tool-results/`. Opening and closing an empty session leaves no rows in `vela.db`; `--no-session` (`ephemeralSessions: true`) uses an in-memory SQLite database (`:memory:`) and a temporary spill directory removed when the session closes. Memory and the knowledge base are unchanged.
 
-Persistent session deletion is manual. Before removing `<dataDir>/sessions/<id>/`, record the exact session ID and the environments in its transcript header and [location entries](session-format.md#entries). For each Docker environment the session used, match the container to that environment name and the same owner data directory. Inside that container, `~/.vela/uploads/<id>/` under the guest user's home is the cache for this session. A fork or clone has its own ID and cache.
+Persistent session deletion is manual. Before deleting a session's rows from `vela.db` or removing `<dataDir>/sessions/<id>/`, record the exact session ID and the environments in its saved `location` metadata and branch entries. For each Docker environment the session used, match the container to that environment name and the same owner data directory. Inside that container, `~/.vela/uploads/<id>/` under the guest user's home is the cache for this session. A fork or clone has its own ID and cache.
 
-The owner can retain or remove each matching guest directory as part of the same retention decision. Removing the host session directory alone leaves these caches in place. The canonical downloads belong to the chat's private `files/` directory and can be shared across topics. Archiving and closing a persistent session preserve its files.
+The owner can retain or remove each matching guest directory as part of the same retention decision. Deleting the host session alone leaves these container caches in place. The canonical downloads belong to the chat's private `files/` directory and can be shared across topics. Archiving and closing a persistent session preserve its files.
 
-In the SDK, sessions are stored in `<dataDir>/sessions/` when you pass `dataDir`, in memory when you don't, or wherever a custom `sessionStorage` puts them. See [SDK](sdk.md#session-storage).
+In the SDK, sessions are stored in `<dataDir>/vela.db` when you pass `dataDir`, in memory (`:memory:`) when you don't, or in an explicitly shared `db` handle. See [SDK](sdk.md#session-storage).
 
 ## Continue or switch sessions
 
@@ -108,8 +108,8 @@ When the size reaches `summaryThreshold` and there is an earlier turn to summari
 
 1. It picks a split point at a user message, at least six messages from the end, where every tool call before it has its result.
 2. It sends only the dropped messages, serialized as text in a `<conversation>` block, plus a `context_compaction` instruction. The instruction asks for a free-text checkpoint with Goal, Constraints & Preferences, Progress (Done / In Progress / Blocked), Key Decisions, Next Steps and Critical Context. The model synthesizes facts rather than selecting verbatim quotes.
-3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary. Code appends sorted, deduplicated `<read-files>` and `<modified-files>` lists from `read`, `write` and `edit` calls. A modified file appears only in the modified list; empty lists are omitted. Prior compacted calls and calls behind branch summaries are read from the session log so the lists survive tree navigation, repeated compaction and resume. The summary keeps one line with the earlier-output snapshot location, `Earlier tool output: /.../snapshots/through-<seq>.jsonl (through seq <seq>).`, so the model can still look up earlier tool output.
-4. Like pi, a `compaction` entry is appended to the session (summary and the first kept message); the summarized messages stay in the file. `compaction_start` and `compaction_end` events (`reason: 'threshold'`) are emitted around it.
+3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary. Code appends sorted, deduplicated `<read-files>` and `<modified-files>` lists from `read`, `write` and `edit` calls. A modified file appears only in the modified list; empty lists are omitted. Prior compacted calls and calls behind branch summaries are read from SQLite (`vela_tool_calls`) so the lists survive tree navigation, repeated compaction and resume.
+4. Like pi, a `compaction` entry is appended to the session (summary and the first kept message); the summarized entries stay in `vela_messages`. `compaction_start` and `compaction_end` events (`reason: 'threshold'`) are emitted around it.
 
 If there is no earlier turn to summarize, the request is still sent to the provider (if it exceeds the provider's window, the provider reports overflow).
 
@@ -133,7 +133,7 @@ The token thresholds are `summaryThreshold` and `maxInputTokens`. Their defaults
 
 A tool result longer than the tool's line limit (200 lines for `grep` and `find`, 500 lines by default and for web tools; `read` pages and `bash` previews have their own limits; see [Tools](tools.md#result-size-and-truncation)) is saved in full to `<dataDir>/sessions/<id>/tool-results/<callId>.txt`. The model gets the head up to the limit, followed by one line with the file path and a hint to page through the rest with `read` and `offset`. Bash keeps its existing tail preview, with the file path only when truncated.
 
-Every tool call and its result is also appended to a tool call history file (`<dataDir>/sessions/<id>/<historyId>/tool-history.jsonl`), which survives compaction. See [Session format](session-format.md#tool-call-history).
+Every tool call and its result is also recorded in SQLite (`vela_tool_calls` in `<dataDir>/vela.db`), which survives compaction. See [Session format](session-format.md#tool-call-history).
 
 Vela doesn't expire tool results by age: content changes only through compaction summaries when reached.
 
@@ -175,6 +175,6 @@ Every model request records input, output, cache-read and cache-write tokens and
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.
 - `session.usage` in the SDK returns `{ tokens, percent, needsAction, totals }`.
-- Each request is appended to `<dataDir>/usage/requests.jsonl`. Versions up to 0.5 wrote `today.jsonl`; the next run that logs usage renames it, so earlier records stay in the ledger. `--no-session` keeps the same totals in memory and does not write that file.
+- Each request records input, output, cache-read, cache-write tokens and cost in `usage_records` in `<dataDir>/vela.db`. `--no-session` keeps the same totals in memory without persisting to disk.
 
 `usage` events carry the same numbers per request. See [SDK](sdk.md#events).

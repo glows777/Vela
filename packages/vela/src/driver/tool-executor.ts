@@ -243,6 +243,7 @@ async function runSingleToolCall(
         )
         persistTerminalRow(db, row, 'failed', modelOut, true, {
           preview: errorText,
+          location: located?.getLocation(),
           durationMs,
         })
         emit({
@@ -291,9 +292,6 @@ async function runSingleToolCall(
       const durationMs = performance.now() - startedAt
       const isError = Boolean(execution.isError)
       const details = !isError ? rawDetails : undefined
-      if (details !== undefined) {
-        registry.setDetails(row.tool_call_id, details)
-      }
       const modelOut: ToolResultOutput = isError
         ? errorOutput(
             new ToolResultError(
@@ -303,6 +301,11 @@ async function runSingleToolCall(
             ),
           )
         : normalOutput(output)
+      const resolvedAfterLoc =
+        located?.getLocation() ??
+        (context.execution
+          ? { environment: context.execution.id, cwd: context.execution.cwd }
+          : undefined)
 
       // TX2b: finalize outcome and discovered tools atomically.
       persistTerminalRow(
@@ -314,6 +317,7 @@ async function runSingleToolCall(
         {
           preview: outputPreviewText(modelOut),
           spillPath: stored?.path,
+          location: resolvedAfterLoc,
           details,
           durationMs,
           discoveredTools:
@@ -401,8 +405,10 @@ export async function executeStepCalls(
       input_json: string | null
     }>(
       `SELECT status, input_json FROM approvals
-       WHERE session_id = ? AND run_id = ? AND tool_call_id = ?
+       WHERE tool_call_row_id = ?
+          OR (tool_call_row_id IS NULL AND session_id = ? AND run_id = ? AND tool_call_id = ?)
        ORDER BY created_at DESC LIMIT 1`,
+      row.id,
       row.session_id,
       row.run_id,
       row.tool_call_id,
@@ -542,7 +548,7 @@ export async function executeStepCalls(
   }
 
   if (runnable.length > 0) {
-    await Promise.all(
+    const results = await Promise.allSettled(
       runnable.map((item) =>
         runSingleToolCall(
           options,
@@ -554,6 +560,10 @@ export async function executeStepCalls(
         ),
       ),
     )
+    const rejected = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    )
+    if (rejected) throw rejected.reason
   }
 
   const waitingHuman = rows.some((row) => row.status === 'awaiting_approval')
