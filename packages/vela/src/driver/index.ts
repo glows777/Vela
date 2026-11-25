@@ -180,6 +180,11 @@ export type {
 } from './session/options.ts'
 export type { SessionScope } from './session/scope.ts'
 export type { SessionSearchHit } from './session/search.ts'
+export type {
+  ApprovalDecision,
+  PendingApprovalInfo,
+  ResolvedApprovalInfo,
+} from './step-recovery.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export { defineJsonSchemaTool } from './tools/json-schema.ts'
 export type { ToolContext, ToolDefinition } from './tools/registry.ts'
@@ -204,4 +209,5 @@ export {
   type Vela,
   type VelaOptions,
 } from './vela.ts'
-export { type ForkResult, VelaSession } from './vela-session.ts'
+export type { ForkResult } from './vela-session.ts'
+export { VelaSession } from './vela-session.ts'

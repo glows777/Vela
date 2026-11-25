@@ -4,12 +4,26 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { openDatabase } from '../../src/db/sqlite.ts'
+import { persistAssistantStepTx } from '../../src/driver/driver-step.ts'
+import { SpilledToolOutput as ExtSpilledToolOutput } from '../../src/driver/extension-api.ts'
 import type { ExtensionAPI } from '../../src/driver/extensions/types.ts'
 import {
   createVela,
   type Vela,
   type VelaSession,
 } from '../../src/driver/index.ts'
+import { SessionStore } from '../../src/driver/session/index.ts'
+import { loadStepToolCallRows } from '../../src/driver/step-recovery.ts'
+import { executeStepCalls } from '../../src/driver/tool-executor.ts'
+import { ToolRegistry } from '../../src/driver/tools/registry.ts'
+import { TokenTracker } from '../../src/driver/usage/tracker.ts'
+import { VelaDriver } from '../../src/driver/vela-driver.ts'
+import {
+  type ApprovalDecision,
+  type PendingApprovalInfo,
+  type ResolvedApprovalInfo,
+  SpilledToolOutput,
+} from '../../src/index.ts'
 import {
   createFauxModel,
   fauxSummary,
@@ -730,5 +744,542 @@ test('tool_search persists discovered_tools_json across resume, allows post-comp
   await resumed.prompt('check tools')
   expect(model2.calls[0]!.tools).toContain('defExt_alpha_tool')
   await vela2.dispose()
+  db.close()
+})
+
+test('R1 #1/#2/#3/#6/#7/#13: atomic driver claim, approval binding, blank summary normalization, sequential ordering, no turn_end on waiting_human, and run reuse', async () => {
+  const cwd = setupDir()
+  const db = openDatabase({ path: join(cwd, 'vela.db') })
+  let preHookCalls = 0
+  let ranSecondTool = false
+  function gateExt(api: ExtensionAPI) {
+    api.registerTool({
+      name: 'first_seq',
+      description: 'Sequential gated tool',
+      executionMode: 'sequential',
+      inputSchema: z.object({ cmd: z.string() }),
+      execute: async ({ cmd }: { cmd: string }) => `ran:${cmd}`,
+    })
+    api.registerTool({
+      name: 'second_step',
+      description: 'Second tool after sequential barrier',
+      executionMode: 'parallel',
+      inputSchema: z.object({}),
+      execute: async () => {
+        ranSecondTool = true
+        return 'second-ok'
+      },
+    })
+    api.on('tool_call', (event) => {
+      if (event.toolName !== 'gateExt_first_seq') return
+      preHookCalls++
+      // R1 #3: empty string summary must normalize instead of silently bypassing approval
+      return { approval: { summary: '   ' } }
+    })
+  }
+
+  const events: string[] = []
+  const vela2 = createVela({
+    cwd,
+    dataDir: cwd,
+    db,
+    extensions: [gateExt],
+    model: createFauxModel({
+      responses: [
+        {
+          text: '',
+          toolCalls: [
+            {
+              id: 'c-1',
+              name: 'gateExt_first_seq',
+              input: { cmd: 'safe' },
+            },
+            { id: 'c-2', name: 'gateExt_second_step', input: {} },
+          ],
+        },
+        fauxText('all done'),
+      ],
+    }),
+  })
+  created.vela = vela2
+  const session = vela2.session('r1-driver')
+  session.subscribe((e) => {
+    events.push(e.type)
+  })
+  await session.prompt('run both')
+  expect(ranSecondTool).toBe(false)
+  expect(preHookCalls).toBe(1)
+  // R1 #7: no turn_end emitted when waiting_human
+  expect(events).not.toContain('turn_end')
+
+  // R1 #3 & #20: pendingApprovals normalized summary
+  const pending = session.pendingApprovals()
+  expect(pending).toHaveLength(1)
+  expect(pending[0]!.summary).toBe('Approval required for gateExt_first_seq')
+  const runsBefore = db.all<{ id: string; status: string }>(
+    'SELECT id, status FROM runs WHERE session_id = ?',
+    'r1-driver',
+  )
+  expect(runsBefore).toHaveLength(1)
+  expect(runsBefore[0]!.status).toBe('waiting_human')
+
+  // R1 #1: second fresh driver.run while state != idle cannot overwrite waiting_human
+  const resumedStore = new SessionStore('r1-driver', db)
+  await resumedStore.loadSaved()
+  const driver2 = new VelaDriver({
+    sessionId: 'r1-driver',
+    db,
+    store: resumedStore,
+    registry: session.registry,
+    tracker: new TokenTracker(),
+  })
+  await expect(
+    driver2.run({
+      model: 'openai/gpt-5',
+      systemPrompt: '',
+      messages: [],
+      prepareContext: async () => {},
+    }),
+  ).rejects.toThrow(/cannot start a new run while state is 'waiting_human'/i)
+
+  session.resolveApproval(pending[0]!.id, { approved: true })
+  await session.continueInterrupted()
+  expect(ranSecondTool).toBe(true)
+  // R1 #2: approved input did not re-run tool_call pre-hook
+  expect(preHookCalls).toBe(1)
+  // R1 #13: reused existing waiting_human run row
+  const runsAfter = db.all<{ id: string; status: string }>(
+    'SELECT id, status FROM runs WHERE session_id = ?',
+    'r1-driver',
+  )
+  expect(runsAfter).toHaveLength(1)
+  expect(runsAfter[0]!.id).toBe(runsBefore[0]!.id)
+  expect(runsAfter[0]!.status).toBe('completed')
+
+  // Check tampering rejection (#2) and malformed approval blocking (#3)
+  let ranTampered = false
+  const vela3 = createVela({
+    cwd,
+    dataDir: cwd,
+    db,
+    extensions: [
+      function tamperExt(api: ExtensionAPI) {
+        api.registerTool({
+          name: 'op',
+          description: 'op',
+          inputSchema: z.object({ path: z.string() }),
+          execute: async () => {
+            ranTampered = true
+            return 'ok'
+          },
+        })
+        api.on('tool_call', (ev) => {
+          if (ev.toolName === 'tamperExt_op')
+            return { approval: { summary: 'Confirm op' } }
+        })
+      },
+    ],
+    model: createFauxModel({
+      responses: [
+        fauxToolCall('tamperExt_op', { path: 'safe.txt' }, { id: 't-1' }),
+        fauxText('handled'),
+      ],
+    }),
+  })
+  created.vela = vela3
+  const s3 = vela3.session('tamper-sess')
+  await s3.prompt('go')
+  const app3 = s3.pendingApprovals()[0]!
+  s3.resolveApproval(app3.id, { approved: true })
+  db.run(
+    'UPDATE vela_tool_calls SET input_json = ? WHERE session_id = ? AND tool_call_id = ?',
+    JSON.stringify({ path: 'evil.txt' }),
+    'tamper-sess',
+    't-1',
+  )
+  await s3.continueInterrupted()
+  expect(ranTampered).toBe(false)
+  expect(JSON.stringify(s3.messages)).toContain(
+    'Tool input changed after human approval',
+  )
+
+  await vela2.dispose()
+  await vela3.dispose()
+  db.close()
+})
+
+test('R1 #1/#3/#4/#5/#8/#11: TX2a conflict, malformed approval, disabled replay, TX1 rollback, mixed tool assembly, single Zod transform', async () => {
+  const cwd = setupDir()
+  const db = openDatabase({ path: join(cwd, 'vela.db') })
+  const store = new SessionStore('tx1-rollback', db)
+  let saveCalls = 0
+  const trackedStore = new SessionStore('tx1-rollback', db, {
+    onSaved: () => {
+      saveCalls++
+    },
+  })
+  const registry = new ToolRegistry(cwd)
+  let transformCount = 0
+  registry.register({
+    name: 'xform',
+    description: 'transforms input once',
+    replay: 'safe',
+    inputSchema: z.object({
+      n: z.string().transform((v) => {
+        transformCount++
+        return Number(v)
+      }),
+    }),
+    execute: async (input: { n: number }) => `num:${input.n}`,
+  })
+  registry.register({
+    name: 'bad_approval',
+    description: 'bad approval',
+    inputSchema: z.object({}),
+    execute: async () => 'should not run',
+  })
+
+  // R1 #5: force SQLite failure mid-TX1 after store.appendMessage already mutated memory
+  expect(() =>
+    persistAssistantStepTx({
+      db,
+      store: trackedStore,
+      registry,
+      sessionId: 'tx1-rollback',
+      runId: 'missing-run-id',
+      producer: 'mock/model',
+      assistant: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'nope' }],
+      },
+      responseMessages: [],
+      clientCalls: [
+        { type: 'tool_call', toolCallId: 'dup', toolName: 'xform', input: {} },
+        { type: 'tool_call', toolCallId: 'dup', toolName: 'xform', input: {} },
+      ],
+      stepRecord: {
+        ts: Date.now(),
+        model: 'mock/model',
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      rawUsage: {
+        inputTokens: 1,
+        outputTokens: 1,
+      },
+    }),
+  ).toThrow()
+  expect(trackedStore.getEntries()).toHaveLength(0)
+  expect(trackedStore.getLeafId()).toBeNull()
+  expect(saveCalls).toBe(0)
+
+  // R1 #11: Zod .transform() executes once cleanly through provider + executor
+  const vela = createVela({
+    cwd,
+    dataDir: cwd,
+    db,
+    extensions: [
+      function xformExt(api: ExtensionAPI) {
+        api.registerTool({
+          name: 'doubler',
+          description: 'parse numeric string once',
+          inputSchema: z.object({
+            val: z.string().transform((s) => {
+              transformCount++
+              return Number(s) * 2
+            }),
+          }),
+          execute: async ({ val }: { val: number }) => `got:${val}`,
+        })
+      },
+    ],
+    model: createFauxModel({
+      responses: [
+        fauxToolCall('xformExt_doubler', { val: '21' }),
+        fauxText('done'),
+      ],
+    }),
+  })
+  const s = vela.session('xform-sess')
+  await s.prompt('double 21')
+  expect(transformCount).toBe(1)
+  expect(JSON.stringify(s.messages)).toContain('got:42')
+
+  // R1 #3 malformed approval object & R1 #4 disabled safe-replay row
+  const velaBad = createVela({
+    cwd,
+    dataDir: cwd,
+    db,
+    extensions: [
+      function badExt(api: ExtensionAPI) {
+        api.registerTool({
+          name: 'blocked',
+          description: 'blocked',
+          inputSchema: z.object({}),
+          execute: async () => 'ran',
+        })
+        api.on('tool_call', () => ({
+          approval: 'bad' as unknown as { summary: string },
+        }))
+      },
+    ],
+    model: createFauxModel({
+      responses: [
+        fauxToolCall('badExt_blocked', {}),
+        fauxText('after bad approval'),
+      ],
+    }),
+  })
+  const sBad = velaBad.session('bad-app')
+  await sBad.prompt('try bad')
+  expect(JSON.stringify(sBad.messages)).toContain('invalid approval request')
+
+  // R1 #4 & R1 #1 TX2a concurrency conflict check via executeStepCalls
+  store.ensureSessionRow()
+  const now = new Date().toISOString()
+  db.run(
+    "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-c', 'tx1-rollback', 'vela', 'user', 'running', ?, ?)",
+    now,
+    now,
+  )
+  const msgEntry = store.appendMessage({
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_call',
+        toolCallId: 'call-safe',
+        toolName: 'xform',
+        input: { n: '5' },
+      },
+    ],
+  })
+  db.run(
+    `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, is_error, created_at, updated_at)
+     VALUES ('tc-safe', 'tx1-rollback', 'r-c', ?, 'call-safe', 0, 'xform', '{"n":"5"}', 'parallel', 'safe', 'running', 1, 0, ?, ?)`,
+    msgEntry.id,
+    now,
+    now,
+  )
+  // Simulate TX2a concurrency conflict: pass stale attempt = 0 while DB has attempt = 1
+  const staleRow = {
+    ...db.get<Record<string, unknown>>(
+      'SELECT * FROM vela_tool_calls WHERE id = ?',
+      'tc-safe',
+    )!,
+    attempt: 0,
+  }
+  await expect(
+    executeStepCalls({
+      db,
+      store,
+      registry,
+      sessionId: 'tx1-rollback',
+      rows: [staleRow as unknown as never],
+      emit: () => {},
+      isRecovery: true,
+    }),
+  ).rejects.toThrow(/changed concurrently/i)
+
+  // R1 #4: disabling tool fails safe-replay row precheck instead of running it
+  registry.setSelection([])
+  const realRows = loadStepToolCallRows(db, 'tx1-rollback', msgEntry.id)
+  await executeStepCalls({
+    db,
+    store,
+    registry,
+    sessionId: 'tx1-rollback',
+    rows: realRows,
+    emit: () => {},
+    isRecovery: true,
+  })
+  expect(realRows[0]!.status).toBe('failed')
+  expect(realRows[0]!.preview).toContain('not enabled')
+
+  await vela.dispose()
+  await velaBad.dispose()
+  db.close()
+})
+
+test('R1 #8/#18/#19: hosted+client filter, discovery order + prompt exclusion + tool_search guidelines, public exports', async () => {
+  expect(SpilledToolOutput).toBe(ExtSpilledToolOutput)
+  const spilled = new SpilledToolOutput('/tmp/out.txt', 100, 'preview', {
+    isError: false,
+  })
+  expect(spilled.path).toBe('/tmp/out.txt')
+  const _typesOk: [
+    ApprovalDecision?,
+    PendingApprovalInfo?,
+    ResolvedApprovalInfo?,
+  ] = []
+  expect(_typesOk).toEqual([])
+
+  const cwd = setupDir()
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('tool_search', { query: 'zebra' }),
+      fauxToolCall('tool_search', { query: 'alpha' }),
+      fauxText('all searched'),
+    ],
+  })
+  function deferredWithRules(api: ExtensionAPI) {
+    api.registerTool({
+      name: 'alpha_tool',
+      description: 'Alpha description line',
+      promptSnippet: 'ALPHA_SNIPPET_ONLY_IN_SEARCH',
+      promptGuidelines: ['ALPHA_GUIDELINE_DO_NOT_LEAK'],
+      exposure: 'deferred',
+      inputSchema: z.object({}),
+      execute: async () => 'a',
+    })
+    api.registerTool({
+      name: 'zebra_tool',
+      description: 'Zebra description line',
+      promptSnippet: 'ZEBRA_SNIPPET_ONLY_IN_SEARCH',
+      promptGuidelines: ['ZEBRA_GUIDELINE_DO_NOT_LEAK'],
+      exposure: 'deferred',
+      inputSchema: z.object({}),
+      execute: async () => 'z',
+    })
+  }
+  const vela = createVela({
+    cwd,
+    dataDir: cwd,
+    model,
+    extensions: [deferredWithRules],
+  })
+  created.vela = vela
+  const session = vela.session('cache-order')
+  await session.prompt('search zebra then alpha')
+
+  // R1 #18: system prompt excludes deferred snippets & guidelines across searches
+  for (const call of model.calls) {
+    expect(call.system).not.toContain('ALPHA_SNIPPET_ONLY_IN_SEARCH')
+    expect(call.system).not.toContain('ALPHA_GUIDELINE_DO_NOT_LEAK')
+    expect(call.system).not.toContain('ZEBRA_SNIPPET_ONLY_IN_SEARCH')
+    expect(call.system).not.toContain('ZEBRA_GUIDELINE_DO_NOT_LEAK')
+  }
+  expect(model.calls[1]!.system).toBe(model.calls[0]!.system)
+  expect(model.calls[2]!.system).toBe(model.calls[0]!.system)
+
+  // tool_search returns snippets + guidelines in tool result
+  expect(String(model.calls[1]!.toolResults[0]!.output)).toContain(
+    'ZEBRA_GUIDELINE_DO_NOT_LEAK',
+  )
+  // Discovered tools appended in discovery order (zebra first, then alpha at end)
+  const call2Tools = model.calls[2]!.tools
+  expect(call2Tools.slice(-2)).toEqual([
+    'deferredWithRules_zebra_tool',
+    'deferredWithRules_alpha_tool',
+  ])
+
+  // R1 #8: hosted + client mix filters client ids out of hosted messages and preserves all step tool rows
+  const db = openDatabase({ path: join(cwd, 'mix.db') })
+  const mixStore = new SessionStore('mix-step', db)
+  const mixRegistry = new ToolRegistry(cwd)
+  mixRegistry.register({
+    name: 'client_ok',
+    description: 'ok',
+    inputSchema: z.object({}),
+    execute: async () => 'client-result',
+  })
+  mixStore.ensureSessionRow()
+  const now = new Date().toISOString()
+  db.run(
+    "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-mix', 'mix-step', 'vela', 'user', 'running', ?, ?)",
+    now,
+    now,
+  )
+  const stepEntry = persistAssistantStepTx({
+    db,
+    store: mixStore,
+    registry: mixRegistry,
+    sessionId: 'mix-step',
+    runId: 'r-mix',
+    producer: 'mock/model',
+    assistant: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 'hosted-1',
+          toolName: 'web_search',
+          providerExecuted: true,
+          input: {},
+        },
+        {
+          type: 'tool_call',
+          toolCallId: 'client-1',
+          toolName: 'client_ok',
+          input: {},
+        },
+        {
+          type: 'tool_call',
+          toolCallId: 'client-sdk-err',
+          toolName: 'client_ok',
+          input: {},
+        },
+      ],
+    },
+    responseMessages: [
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool_result',
+            toolCallId: 'hosted-1',
+            toolName: 'web_search',
+            providerExecuted: true,
+            output: { type: 'text', value: 'hosted-res' },
+          },
+          {
+            type: 'tool_result',
+            toolCallId: 'client-sdk-err',
+            toolName: 'client_ok',
+            output: { type: 'error-text', value: 'sdk bad args' },
+          },
+        ],
+      },
+    ],
+    clientCalls: [
+      {
+        type: 'tool_call',
+        toolCallId: 'client-1',
+        toolName: 'client_ok',
+        input: {},
+      },
+      {
+        type: 'tool_call',
+        toolCallId: 'client-sdk-err',
+        toolName: 'client_ok',
+        input: {},
+      },
+    ],
+    stepRecord: {
+      ts: Date.now(),
+      model: 'mock/model',
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    },
+    rawUsage: {
+      inputTokens: 1,
+      outputTokens: 1,
+    },
+    sdkToolErrors: new Map([['client-sdk-err', 'sdk bad args']]),
+  })
+  const hostedSaved = mixStore
+    .getEntries()
+    .filter((e) => e.type === 'message' && e.message.role === 'tool')
+  expect(hostedSaved).toHaveLength(1)
+  expect(JSON.stringify(hostedSaved[0])).toContain('hosted-1')
+  expect(JSON.stringify(hostedSaved[0])).not.toContain('client-sdk-err')
+  const allStepRows = loadStepToolCallRows(db, 'mix-step', stepEntry.id)
+  expect(allStepRows.map((r) => [r.tool_call_id, r.status])).toEqual([
+    ['client-1', 'pending'],
+    ['client-sdk-err', 'failed'],
+  ])
   db.close()
 })

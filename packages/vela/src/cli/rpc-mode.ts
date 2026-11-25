@@ -138,6 +138,27 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       await session.abort()
     },
     clear_queue: () => session.clearQueue(),
+    pending_approvals: () => ({ approvals: session.pendingApprovals() }),
+    resolve_approval(command) {
+      if (typeof command.approvalId !== 'string' || !command.approvalId.trim())
+        throw new Error('approvalId must be a non-empty string')
+      if (typeof command.approved !== 'boolean')
+        throw new Error('approved must be true or false')
+      return session.resolveApproval(command.approvalId, {
+        approved: command.approved,
+        ...(typeof command.reason === 'string'
+          ? { reason: command.reason }
+          : {}),
+        ...(typeof command.decidedBy === 'string'
+          ? { decidedBy: command.decidedBy }
+          : {}),
+      })
+    },
+    async continue_interrupted(command) {
+      idle()
+      start(session.continueInterrupted(), command)
+      return { disposition: 'started' }
+    },
     // Like pi: runs a shell command for the user (the TUI's `!`), answered with its result when it finishes
     bash(command) {
       if (typeof command.command !== 'string' || !command.command.trim())

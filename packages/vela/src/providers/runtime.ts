@@ -133,6 +133,8 @@ export async function resolveProviderTools(
       inputSchema: jsonSchemaObj,
     })
 
+    // Wrap every inputSchema with aiJsonSchema so AI SDK preserves raw parsed JSON args
+    // without running Zod .transform() twice (tool-executor runs full schema validation once).
     const sdkSchema = isVelaJsonSchema(spec.inputSchema)
       ? aiJsonSchema(jsonSchemaObj, {
           validate: spec.inputSchema.validate
@@ -152,7 +154,7 @@ export async function resolveProviderTools(
               }
             : undefined,
         })
-      : spec.inputSchema
+      : aiJsonSchema(jsonSchemaObj)
 
     sdkTools[spec.name] = AITool({
       description: spec.description,

@@ -659,3 +659,92 @@ test.concurrent('rpc: background_tasks moves one bash call by id, or every runni
     await rpc.close()
   }
 })
+
+test.concurrent('rpc R1 #20: pending_approvals, resolve_approval, and continue_interrupted resume suspended tool calls', async () => {
+  const work = tempDir('vela-rpc-approval-')
+  dirs.push(work)
+  const extPath = join(work.path, 'approval-ext.ts')
+  const scenarioPath = join(work.path, 'approval-scenario.json')
+  writeFileSync(
+    extPath,
+    `import { z } from 'zod'
+export default function (api) {
+  api.registerTool({
+    name: 'gated',
+    description: 'requires human approval',
+    inputSchema: z.object({ action: z.string() }),
+    execute: async ({ action }) => 'executed:' + action,
+  })
+  api.on('tool_call', (ev) => {
+    if (ev.toolName === 'approval-ext_gated') {
+      return { approval: { summary: 'Approve ' + ev.input.action } }
+    }
+  })
+}
+`,
+  )
+  writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      responses: [
+        {
+          toolCalls: [
+            {
+              id: 'rpc-c1',
+              name: 'approval-ext_gated',
+              input: { action: 'deploy' },
+            },
+          ],
+        },
+        { text: 'deployment finished' },
+      ],
+    }),
+  )
+  const rpc = startRpc(`faux:${scenarioPath}`, ['-e', extPath])
+  try {
+    expect(
+      await rpc.call({ type: 'prompt', message: 'please deploy' }),
+    ).toMatchObject({ success: true, data: { disposition: 'started' } })
+    const endWait = await rpc.waitFor(
+      (r) => r.type === 'agent_end' && r.reason === 'waiting_human',
+    )
+    expect(endWait.reason).toBe('waiting_human')
+    await rpc.waitFor((r) => r.type === 'agent_settled')
+
+    const listed = await rpc.call({ type: 'pending_approvals' })
+    const approvals = (
+      listed.data as { approvals: { id: string; summary: string }[] }
+    ).approvals
+    expect(approvals).toHaveLength(1)
+    expect(approvals[0]!.summary).toBe('Approve deploy')
+
+    expect(
+      await rpc.call({
+        type: 'resolve_approval',
+        approvalId: approvals[0]!.id,
+        approved: true,
+        reason: 'looks good',
+        decidedBy: 'rpc-operator',
+      }),
+    ).toMatchObject({
+      success: true,
+      data: { id: approvals[0]!.id, status: 'approved' },
+    })
+
+    const beforeResume = rpc.records.length
+    expect(await rpc.call({ type: 'continue_interrupted' })).toMatchObject({
+      success: true,
+      data: { disposition: 'started' },
+    })
+    await rpc.waitFor((r) => r.type === 'agent_end' && r.reason === 'done')
+    await rpc.waitFor(
+      (r) =>
+        r.type === 'agent_settled' && rpc.records.indexOf(r) >= beforeResume,
+    )
+    const msgs = await rpc.call({ type: 'get_messages' })
+    expect(JSON.stringify(msgs.data)).toContain('executed:deploy')
+    expect(JSON.stringify(msgs.data)).toContain('deployment finished')
+  } finally {
+    await rpc.close()
+  }
+})

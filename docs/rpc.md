@@ -143,6 +143,30 @@ Aborts the running loop and extension commands, and responds once the agent loop
 
 Removes all queued messages and returns them: `{ "steering": string[] }`. To mirror the TUI's Esc behavior, send `clear_queue`, then `abort`, then put the returned text back in your input box.
 
+#### pending_approvals
+
+```json
+{"id":"6a","type":"pending_approvals"}
+```
+
+Lists pending human tool approvals (`{ "approvals": PendingApprovalInfo[] }`) while a session is suspended in `waiting_human`.
+
+#### resolve_approval
+
+```json
+{"id":"6b","type":"resolve_approval","approvalId":"...","approved":true,"reason":"Verified command","decidedBy":"operator"}
+```
+
+Records a human decision (`approved: boolean`, optional `reason` and `decidedBy`) for a pending approval. Returns the resolved approval record; follow with `continue_interrupted` to resume execution.
+
+#### continue_interrupted
+
+```json
+{"id":"6c","type":"continue_interrupted"}
+```
+
+Resumes an interrupted or approval-resolved session (`disposition: "started"`). Follow events until `agent_settled`.
+
 ### Shell commands
 
 #### bash

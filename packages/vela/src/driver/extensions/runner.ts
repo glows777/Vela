@@ -641,9 +641,30 @@ export class ExtensionRunner {
             reason: result.reason ?? 'Blocked by an extension',
             input,
           }
-        if (result?.approval && !approval) {
-          const summary = result.approval.summary?.trim()
-          if (summary) approval = { summary }
+        if (
+          result?.approval !== undefined &&
+          result.approval !== null &&
+          !approval
+        ) {
+          if (
+            typeof result.approval !== 'object' ||
+            Array.isArray(result.approval) ||
+            ('summary' in result.approval &&
+              result.approval.summary !== undefined &&
+              typeof result.approval.summary !== 'string')
+          ) {
+            return {
+              block: true,
+              reason: 'Extension returned an invalid approval request',
+              input,
+            }
+          }
+          const rawSummary = result.approval.summary
+          const summary =
+            typeof rawSummary === 'string' && rawSummary.trim()
+              ? rawSummary.trim()
+              : `Approval required for ${toolName}`
+          approval = { summary }
         }
       } catch (error) {
         this.report(extension, event.type, error)

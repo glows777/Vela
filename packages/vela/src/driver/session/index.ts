@@ -11,11 +11,12 @@ import type { ModelMessage } from '../messages.ts'
 import type { StepRecord } from '../usage/tracker.ts'
 import {
   computeLatestAssistantUsage,
-  entryToRowParams,
   getSessionChannel,
+  insertMessageRow,
   insertUsageRecord,
   loadAllSessionRows,
   loadSessionMeta,
+  parseStoredDetails,
   queryBranchRows,
   rowToEntry,
   setSessionChannel,
@@ -70,13 +71,6 @@ export interface SessionStoreOptions {
   onSaved?: () => void
 }
 
-const INSERT_MESSAGE_SQL = `INSERT INTO vela_messages (
-  session_id, id, parent_id, seq, run_id, kind, role, content_json,
-  include_in_context, stop_reason, produced_by, first_kept_id,
-  tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
-  cache_write_tokens, cost_usd, duration_ms, details_json, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
 /**
  * One session's durable SQLite store (`vela.db`: `sessions`, `vela_messages`, `usage_records`).
  * Like pi, nothing is written to `vela.db` until the session has conversation content (or an
@@ -95,6 +89,8 @@ export class SessionStore {
   private started = false
   private checked = false
   private seq = 0
+  private txDepth = 0
+  private pendingSave = false
   private channel?: string
   private sessionName?: string
   private modelName?: string
@@ -192,66 +188,42 @@ export class SessionStore {
   setModelChoice(model: string): void {
     if (this.modelName === model) return
     this.modelName = model
-    if (this.started) {
-      this.db.transaction(() => {
-        this.db.run(
-          'UPDATE sessions SET model = ?, updated_at = ? WHERE id = ?',
-          model,
-          new Date().toISOString(),
-          this.sessionId,
-        )
-      })
-      this.saved()
-    }
+    this.updateStartedColumn('model', model)
   }
 
   setThinkingLevelChoice(level: ThinkingLevel): void {
     if (this.thinking === level) return
     this.thinking = level
-    if (this.started) {
-      this.db.transaction(() => {
-        this.db.run(
-          'UPDATE sessions SET thinking_level = ?, updated_at = ? WHERE id = ?',
-          level,
-          new Date().toISOString(),
-          this.sessionId,
-        )
-      })
-      this.saved()
-    }
+    this.updateStartedColumn('thinking_level', level)
   }
 
   setSessionName(name: string | undefined): void {
     if (this.sessionName === name) return
     this.sessionName = name
-    if (this.started) {
-      this.db.transaction(() => {
-        this.db.run(
-          'UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?',
-          name ?? null,
-          new Date().toISOString(),
-          this.sessionId,
-        )
-      })
-      this.saved()
-    }
+    this.updateStartedColumn('name', name ?? null)
   }
 
   setDiscoveredTools(tools: Iterable<string>): void {
     const list = [...tools]
     if (JSON.stringify(list) === JSON.stringify(this.discovered)) return
     this.discovered = list
-    if (this.started) {
-      this.db.transaction(() => {
-        this.db.run(
-          'UPDATE sessions SET discovered_tools_json = ?, updated_at = ? WHERE id = ?',
-          JSON.stringify(list),
-          new Date().toISOString(),
-          this.sessionId,
-        )
-      })
-      this.saved()
-    }
+    this.updateStartedColumn('discovered_tools_json', JSON.stringify(list))
+  }
+
+  private updateStartedColumn(
+    column: 'model' | 'thinking_level' | 'name' | 'discovered_tools_json',
+    value: string | null,
+  ): void {
+    if (!this.started) return
+    this.db.transaction(() =>
+      this.db.run(
+        `UPDATE sessions SET ${column} = ?, updated_at = ? WHERE id = ?`,
+        value,
+        new Date().toISOString(),
+        this.sessionId,
+      ),
+    )
+    this.saved()
   }
 
   /** Updates `sessions.discovered_tools_json` inside an existing DB transaction and syncs memory. */
@@ -384,6 +356,48 @@ export class SessionStore {
     return context
   }
 
+  /** Runs a synchronous DB transaction and rolls back in-memory SessionStore state if it throws. */
+  runInTransaction<T>(fn: () => T): T {
+    const snap = {
+      len: this.entries.length,
+      leaf: this.leafId,
+      seq: this.seq,
+      started: this.started,
+      checked: this.checked,
+      producers: new Map(this.producers),
+      ids: new Map(this.ids),
+      entryModel: new Map(this.entryModel),
+      entryThinking: new Map(this.entryThinking),
+      entryIds: new Set(this.entryIds),
+      byId: new Map(this.byId),
+    }
+    this.txDepth++
+    try {
+      return this.db.transaction(fn)
+    } catch (error) {
+      this.entries.length = snap.len
+      this.leafId = snap.leaf
+      this.seq = snap.seq
+      this.started = snap.started
+      this.checked = snap.checked
+      this.producers = snap.producers
+      restoreMap(this.ids, snap.ids)
+      restoreMap(this.entryModel, snap.entryModel)
+      restoreMap(this.entryThinking, snap.entryThinking)
+      restoreMap(this.byId, snap.byId)
+      this.entryIds.clear()
+      for (const id of snap.entryIds) this.entryIds.add(id)
+      this.pendingSave = false
+      throw error
+    } finally {
+      this.txDepth--
+      if (this.txDepth === 0 && this.pendingSave) {
+        this.pendingSave = false
+        this.saved()
+      }
+    }
+  }
+
   modelAt(entryId: string | null): string | undefined {
     if (entryId === null) return undefined
     const branch = this.getBranch(entryId)
@@ -410,7 +424,7 @@ export class SessionStore {
 
   async seedFrom(
     branch: SessionEntry[],
-    parent: { id: string; store: SessionStore },
+    parent: { id: string; store: SessionStore; location?: ExecutionLocation },
     resolveEnv: () => Promise<ExecutionEnv>,
     spillOptions: { parentSpillDir?: string; spillDir?: string } = {},
   ): Promise<void> {
@@ -424,17 +438,25 @@ export class SessionStore {
       parentUploads: parent.store.uploads,
       targetUploads: this.uploads,
       resolveEnv,
+      isRemote:
+        parent.location !== undefined &&
+        parent.location.environment !== 'local',
       ...spillOptions,
     })
     this.parentSessionId = parent.id
     this.discovered = [...parent.store.discovered]
     this.replaceEntries(prepared.entries)
+    for (const entry of prepared.entries) {
+      const m = parent.store.entryModel.get(entry.id)
+      if (m !== undefined) this.entryModel.set(entry.id, m)
+      const t = parent.store.entryThinking.get(entry.id)
+      if (t !== undefined) this.entryThinking.set(entry.id, t)
+    }
     if (prepared.entries.some(startsConversation)) {
-      this.db.transaction(() => {
+      this.runInTransaction(() => {
         this.insertSessionAndBufferedEntries()
         insertClonedToolCalls(this.db, this.sessionId, this.modelName, prepared)
       })
-      this.saved()
     }
   }
 
@@ -442,6 +464,8 @@ export class SessionStore {
     this.entries.splice(0, this.entries.length, ...entries)
     this.entryIds.clear()
     this.byId.clear()
+    this.entryModel.clear()
+    this.entryThinking.clear()
     for (const entry of entries) {
       this.entryIds.add(entry.id)
       this.byId.set(entry.id, entry)
@@ -486,17 +510,22 @@ export class SessionStore {
     return entry
   }
 
+  private writeEntryRow(
+    entry: SessionEntry,
+    extra: Parameters<typeof insertMessageRow>[4] = {},
+  ): void {
+    insertMessageRow(this.db, this.sessionId, entry, ++this.seq, {
+      ...extra,
+      choice: {
+        model: this.entryModel.get(entry.id),
+        thinkingLevel: this.entryThinking.get(entry.id),
+      },
+    })
+  }
+
   private persistEntry(
     entry: SessionEntry,
-    extra: {
-      runId?: string
-      inputTokens?: number
-      outputTokens?: number
-      cacheReadTokens?: number
-      cacheWriteTokens?: number
-      costUsd?: number
-      durationMs?: number
-    } = {},
+    extra: Parameters<typeof insertMessageRow>[4] = {},
   ): void {
     if (!this.started) {
       if (!startsConversation(entry)) return
@@ -508,11 +537,7 @@ export class SessionStore {
       return
     }
     this.db.transaction(() => {
-      const seq = ++this.seq
-      this.db.run(
-        INSERT_MESSAGE_SQL,
-        ...entryToRowParams(this.sessionId, entry, seq, extra),
-      )
+      this.writeEntryRow(entry, extra)
       this.db.run(
         'UPDATE sessions SET leaf_message_id = ?, updated_at = ? WHERE id = ?',
         this.leafId,
@@ -523,13 +548,10 @@ export class SessionStore {
     this.saved()
   }
 
-  /** Ensure the `sessions` row exists (used by VelaDriver before writing `runs` / `vela_tool_calls`). */
   ensureSessionRow(): void {
     if (this.started) return
     this.checkNewSync()
-    this.db.transaction(() => {
-      this.insertSessionAndBufferedEntries()
-    })
+    this.db.transaction(() => this.insertSessionAndBufferedEntries())
     this.saved()
   }
 
@@ -551,13 +573,7 @@ export class SessionStore {
       parentSessionId: this.parentSessionId,
       channel: this.channel,
     })
-    for (const entry of this.entries) {
-      const seq = ++this.seq
-      this.db.run(
-        INSERT_MESSAGE_SQL,
-        ...entryToRowParams(this.sessionId, entry, seq),
-      )
-    }
+    for (const entry of this.entries) this.writeEntryRow(entry)
   }
 
   recordUsageRecord(
@@ -570,6 +586,10 @@ export class SessionStore {
   }
 
   private saved(): void {
+    if (this.txDepth > 0) {
+      this.pendingSave = true
+      return
+    }
     try {
       this.onSaved?.()
     } catch (error) {
@@ -713,7 +733,7 @@ export class SessionStore {
       : undefined
     if (location !== undefined) validateStoredLocation(location)
 
-    const leaf = meta.row.leaf_message_id ?? entries.at(-1)?.id ?? null
+    const leaf = meta.row.leaf_message_id
     const byId = new Map(entries.map((e) => [e.id, e]))
     const context = buildSessionContext(entries, leaf, byId)
 
@@ -737,6 +757,12 @@ export class SessionStore {
     this.discovered = meta.discoveredTools
     this.channel = meta.channel ?? getSessionChannel(this.db, this.sessionId)
     this.replaceEntries(entries)
+    for (const row of rows) {
+      const { choice } = parseStoredDetails(row.details_json)
+      if (choice?.model !== undefined) this.entryModel.set(row.id, choice.model)
+      if (choice?.thinkingLevel !== undefined)
+        this.entryThinking.set(row.id, choice.thinkingLevel)
+    }
     this.leafId = leaf
     this.ids.clear()
     for (const [message, id] of context.ids) this.ids.set(message, id)
@@ -755,6 +781,11 @@ export class SessionStore {
       latestAssistantUsage,
     }
   }
+}
+
+function restoreMap<K, V>(target: Map<K, V>, snap: ReadonlyMap<K, V>): void {
+  target.clear()
+  for (const [k, v] of snap) target.set(k, v)
 }
 
 function startsConversation(entry: SessionEntry): boolean {

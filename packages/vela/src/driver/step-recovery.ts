@@ -27,11 +27,62 @@ export interface ResolvedApprovalInfo {
   status: 'approved' | 'denied'
 }
 
+export interface PendingApprovalInfo {
+  id: string
+  runId: string
+  toolCallId: string | null
+  toolName: string
+  summary: string | null
+  input: unknown
+  createdAt: string
+}
+
 export interface RecoverStepResult {
   recovered: boolean
   waitingHuman: boolean
   toolMessage?: ToolModelMessage
   details?: Record<string, unknown>
+}
+
+/** Lists pending human approval requests for `sessionId` in creation order. */
+export function listPendingApprovals(
+  db: VelaDatabase,
+  sessionId: string,
+): PendingApprovalInfo[] {
+  const rows = db.all<{
+    id: string
+    run_id: string
+    tool_call_id: string | null
+    tool_name: string
+    summary: string | null
+    input_json: string | null
+    created_at: string
+  }>(
+    `SELECT id, run_id, tool_call_id, tool_name, summary, input_json, created_at
+     FROM approvals
+     WHERE session_id = ? AND status = 'pending'
+     ORDER BY created_at ASC`,
+    sessionId,
+  )
+  return rows.map((row) => {
+    let input: unknown
+    if (row.input_json !== null) {
+      try {
+        input = JSON.parse(row.input_json)
+      } catch {
+        input = row.input_json
+      }
+    }
+    return {
+      id: row.id,
+      runId: row.run_id,
+      toolCallId: row.tool_call_id,
+      toolName: row.tool_name,
+      summary: row.summary,
+      input,
+      createdAt: row.created_at,
+    }
+  })
 }
 
 /** Resolve a pending human approval row and transition its corresponding tool call row. */

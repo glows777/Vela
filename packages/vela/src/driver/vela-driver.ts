@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
 import { resolveProviderTools } from '../providers/index.ts'
 import { describeModel } from '../providers/models/index.ts'
@@ -19,6 +20,7 @@ import {
   type RequestSnapshot,
 } from './context/request.ts'
 import {
+  filterHostedToolMessages,
   persistAssistantStepTx,
   streamSingleStepWithRetries,
 } from './driver-step.ts'
@@ -87,6 +89,15 @@ export interface VelaDriverRunOptions {
  * human approval suspension (`waiting_human`), and step recovery.
  */
 export class VelaDriver {
+  private static readonly activeSessions = new Map<
+    string | object,
+    Set<string>
+  >()
+
+  private static dbKey(db: VelaDatabase): string | object {
+    return db.path === ':memory:' ? db : resolve(db.path)
+  }
+
   readonly capabilities: DriverCapabilities = {
     recovery: 'step',
     executionEnv: 'managed',
@@ -155,25 +166,112 @@ export class VelaDriver {
     const { db, store, registry, tracker, sessionId } = this.deps
     const limits = resolveLimits(options.limits)
     const producer = describeModel(options.model).ref
-    const runId = crypto.randomUUID()
+    let runId: string = crypto.randomUUID()
     const newMessages = options.newMessages ?? []
     const now = new Date().toISOString()
 
-    store.ensureSessionRow()
-    db.transaction(() => {
-      db.run(
-        `INSERT INTO runs (
-           id, session_id, project_id, driver, trigger, status, model, started_at, updated_at
-         ) VALUES (?, ?, NULL, 'vela', ?, 'running', ?, ?, ?)`,
-        runId,
-        sessionId,
-        options.trigger ?? 'user',
-        producer,
-        now,
-        now,
-      )
-      this.setSessionState('running', null)
-    })
+    // Acquire in-process + SQLite session claim BEFORE entering the main try/catch so
+    // a rejected claim never calls finishRun() or clobbers an active run's state.
+    const key = VelaDriver.dbKey(db)
+    let active = VelaDriver.activeSessions.get(key)
+    if (!active) {
+      active = new Set()
+      VelaDriver.activeSessions.set(key, active)
+    }
+    if (active.has(sessionId)) {
+      throw new Error(`Session ${sessionId} already has an active run`)
+    }
+    active.add(sessionId)
+
+    let releaseLock = true
+    try {
+      store.ensureSessionRow()
+      db.transaction(() => {
+        const cur = db.get<{ state: string }>(
+          'SELECT state FROM sessions WHERE id = ?',
+          sessionId,
+        )
+        const existingState = cur?.state ?? 'unknown'
+        if (!options.recoverPending) {
+          const claimed = db.run(
+            `UPDATE sessions
+             SET state = 'running', waiting_reason = NULL, updated_at = ?
+             WHERE id = ? AND state = 'idle'`,
+            now,
+            sessionId,
+          )
+          if (claimed.changes !== 1) {
+            throw new Error(
+              `Session ${sessionId} cannot start a new run while state is '${existingState}'`,
+            )
+          }
+        } else {
+          if (existingState === 'running') {
+            db.run(
+              `UPDATE runs
+               SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
+               WHERE session_id = ? AND status = 'running'`,
+              now,
+              now,
+              sessionId,
+            )
+          }
+          const claimed = db.run(
+            `UPDATE sessions
+             SET state = 'running', waiting_reason = NULL, updated_at = ?
+             WHERE id = ? AND state IN ('idle', 'waiting_human', 'running')`,
+            now,
+            sessionId,
+          )
+          if (claimed.changes !== 1) {
+            throw new Error(
+              `Session ${sessionId} cannot resume run while state is '${existingState}'`,
+            )
+          }
+        }
+
+        const waitingRun = options.recoverPending
+          ? db.get<{ id: string }>(
+              `SELECT id FROM runs
+               WHERE session_id = ? AND status = 'waiting_human'
+               ORDER BY started_at DESC LIMIT 1`,
+              sessionId,
+            )
+          : undefined
+        if (waitingRun) {
+          const resumed = db.run(
+            `UPDATE runs
+             SET status = 'running', updated_at = ?
+             WHERE id = ? AND status = 'waiting_human'`,
+            now,
+            waitingRun.id,
+          )
+          if (resumed.changes !== 1) {
+            throw new Error(
+              `Waiting run ${waitingRun.id} changed state concurrently`,
+            )
+          }
+          runId = waitingRun.id
+        } else {
+          db.run(
+            `INSERT INTO runs (
+               id, session_id, project_id, driver, trigger, status, model, started_at, updated_at
+             ) VALUES (?, ?, NULL, 'vela', ?, 'running', ?, ?, ?)`,
+            runId,
+            sessionId,
+            options.trigger ?? 'user',
+            producer,
+            now,
+            now,
+          )
+        }
+      })
+    } catch (error) {
+      active.delete(sessionId)
+      if (active.size === 0) VelaDriver.activeSessions.delete(key)
+      releaseLock = false
+      throw error
+    }
 
     let turn = 0
     let hostedPauses = 0
@@ -427,14 +525,15 @@ export class VelaDriver {
           tracker.updateFromAPI(inputToken, outputToken, requestToolTokens)
         }
         if (pendingClientCalls.length === 0) emitUsage()
-        for (const hostedMsg of responseMessages) {
-          if (hostedMsg.role === 'tool') {
-            options.messages.push(hostedMsg)
-            newMessages.push(hostedMsg)
-            tracker.addMessage(hostedMsg)
-            this.emit({ type: 'message_start', message: hostedMsg })
-            this.emit({ type: 'message_end', message: hostedMsg })
-          }
+        for (const hostedMsg of filterHostedToolMessages(
+          responseMessages,
+          clientCalls,
+        )) {
+          options.messages.push(hostedMsg)
+          newMessages.push(hostedMsg)
+          tracker.addMessage(hostedMsg)
+          this.emit({ type: 'message_start', message: hostedMsg })
+          this.emit({ type: 'message_end', message: hostedMsg })
         }
 
         const isTruncated = finalStep.finishReason === 'length'
@@ -499,44 +598,37 @@ export class VelaDriver {
             })
             throw new Error(CONTENT_FILTER_ERROR)
           }
-        } else if (pendingClientCalls.length > 0) {
-          const rows = loadStepToolCallRows(db, sessionId, assistantEntry.id)
-          const execResult = await executeStepCalls({
-            db,
-            store,
-            registry,
-            sessionId,
-            rows,
-            emit: (event) => this.emit(event),
-            signal: options.abortSignal,
-            isDraining: options.isDraining,
-            shouldSkipForSteer: options.hasSteering,
-          })
-          if (execResult.waitingHuman) {
+        } else if (clientCalls.length > 0) {
+          if (pendingClientCalls.length > 0) {
+            const rows = loadStepToolCallRows(db, sessionId, assistantEntry.id)
+            const execResult = await executeStepCalls({
+              db,
+              store,
+              registry,
+              sessionId,
+              rows,
+              emit: (event) => this.emit(event),
+              signal: options.abortSignal,
+              isDraining: options.isDraining,
+              shouldSkipForSteer: options.hasSteering,
+            })
+            if (execResult.waitingHuman) {
+              emitUsage()
+              this.finishRun(runId, 'waiting_human')
+              this.emit({
+                type: 'agent_end',
+                messages: newMessages,
+                reason: 'waiting_human',
+              })
+              return { reason: 'waiting_human' }
+            }
             emitUsage()
-            this.emit({
-              type: 'turn_end',
-              turn,
-              message: assistant,
-              toolResults: toolResultsOf([assistant]),
-            })
-            this.finishRun(runId, 'waiting_human')
-            this.emit({
-              type: 'agent_end',
-              messages: newMessages,
-              reason: 'waiting_human',
-            })
-            return { reason: 'waiting_human' }
           }
-          emitUsage()
-          const runnableIds = new Set(
-            pendingClientCalls.map((call) => call.toolCallId),
-          )
           const finalRows = loadStepToolCallRows(
             db,
             sessionId,
             assistantEntry.id,
-          ).filter((row) => runnableIds.has(row.tool_call_id))
+          )
           const { message: toolMsg, details } =
             assembleCompletedToolMessage(finalRows)
           appendAndTrack(toolMsg, true, { details })
@@ -637,6 +729,10 @@ export class VelaDriver {
       })
       throw error
     } finally {
+      if (releaseLock) {
+        active.delete(sessionId)
+        if (active.size === 0) VelaDriver.activeSessions.delete(key)
+      }
       if (options.abortSignal?.aborted) {
         await registry.waitForIdle().catch(() => {})
       }

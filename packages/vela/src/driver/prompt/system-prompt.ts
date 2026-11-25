@@ -5,6 +5,7 @@
  */
 interface ToolPrompt {
   name: string
+  exposure?: string
   /** One line for `<tools>`; a tool without one is not listed (pi's `promptSnippet`) */
   promptSnippet?: string
   /** Rules for `<rules>` while the tool is active (pi's `promptGuidelines`) */

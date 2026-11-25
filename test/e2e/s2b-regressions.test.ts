@@ -1,10 +1,26 @@
 import { afterEach, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { z } from 'zod'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
+import type { ExtensionAPI } from '../../packages/vela/src/driver/extensions/types.ts'
+import { SessionStore } from '../../packages/vela/src/driver/session/index.ts'
+import { prepareSeedBranch } from '../../packages/vela/src/driver/session/seed-clone.ts'
+import type { ExecutionEnv } from '../../packages/vela/src/index.ts'
+import {
+  createFauxModel,
   fauxHang,
   fauxText,
+  fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -138,4 +154,230 @@ test('!cmd sanitizes ANSI sequences and carriage returns, and mid-stream abort m
   expect(JSON.stringify(t.model.calls.at(-1)!.prompt)).not.toContain(
     'partial answer before abort',
   )
+})
+
+test('R1 #10/#12/#14/#15: spill confinement + remote copy, fork/clone rejects waiting_human, root leaf_message_id NULL persists, per-entry choice & details round-trip', async () => {
+  // R1 #14: navigateTree to first user message persists leaf_message_id = NULL across resume
+  const tLeaf = createTestVela({
+    responses: [fauxText('first reply')],
+  })
+  await tLeaf.run('first prompt')
+  const firstUser = tLeaf.session.getEntries()[0]!
+  const nav = await tLeaf.session.navigateTree(firstUser.id)
+  expect(nav.editorText).toBe('first prompt')
+  expect(tLeaf.session.getLeafId()).toBeNull()
+  const reopenedLeaf = createTestVela({ cwd: tLeaf.cwd })
+  expect(await reopenedLeaf.session.resume()).toBe(true)
+  expect(reopenedLeaf.session.getLeafId()).toBeNull()
+  expect(reopenedLeaf.session.messages).toHaveLength(0)
+
+  // R1 #15: per-entry model & thinkingLevel persist across resume for fork, without leaking _choice, plus primitive details round-trip
+  const m1 = createFauxModel({
+    modelId: 'm1',
+    responses: [fauxText('m1 reply')],
+  })
+  const m2 = createFauxModel({
+    modelId: 'm2',
+    responses: [fauxText('m2 reply')],
+  })
+  const switchProviders = {
+    switch: {
+      models: [{ id: 'm1' }, { id: 'm2' }],
+      createModel: (id: string) => (id === 'm1' ? m1 : m2),
+    },
+  }
+  const tChoice = createTestVela({
+    model: 'switch/m1',
+    providers: switchProviders,
+    thinkingLevel: 'low',
+  })
+  tChoice.session.setThinkingLevel('high')
+  await tChoice.run('turn 1 high')
+  tChoice.session.setModel('switch/m2')
+  tChoice.session.setThinkingLevel('off')
+  await tChoice.run('turn 2 off')
+  await tChoice.session.sendMessage({
+    customType: 'note',
+    content: 'custom note',
+    display: true,
+    details: ['tag-1', 'tag-2'],
+  })
+
+  const resumedChoice = createTestVela({
+    cwd: tChoice.cwd,
+    model: 'switch/m1',
+    providers: switchProviders,
+  })
+  expect(await resumedChoice.session.resume()).toBe(true)
+  const resumedEntries = resumedChoice.session.getEntries()
+  // _choice must never leak onto visible entry details
+  for (const e of resumedEntries) {
+    if (e.type === 'message') {
+      expect(
+        (e.details as Record<string, unknown> | undefined)?._choice,
+      ).toBeUndefined()
+    }
+  }
+  const customLoaded = resumedEntries.find((e) => e.type === 'custom_message')!
+  expect(customLoaded.type).toBe('custom_message')
+  if (customLoaded.type === 'custom_message') {
+    expect(customLoaded.details).toEqual(['tag-1', 'tag-2'])
+  }
+  const turn2User = resumedEntries.find(
+    (e) => e.type === 'message' && JSON.stringify(e).includes('turn 2 off'),
+  )!
+  const forkedChoice = await resumedChoice.session.fork(turn2User.id, {
+    sessionId: 'fork-branch1-choice',
+  })
+  expect(forkedChoice.session!.modelInfo.ref).toBe('switch/m1')
+  expect(forkedChoice.session!.thinkingLevel).toBe('high')
+
+  // R1 #12: fork/clone rejects unresolved/awaiting_approval branch, allows before suspended turn
+  const tApp = createTestVela({
+    extensions: [
+      function appExt(api: ExtensionAPI) {
+        api.registerTool({
+          name: 'danger',
+          description: 'danger',
+          inputSchema: z.object({}),
+          execute: async () => 'done',
+        })
+        api.on('tool_call', (ev) => {
+          if (ev.toolName === 'appExt_danger')
+            return { approval: { summary: 'Confirm danger' } }
+        })
+      },
+    ],
+    responses: [fauxText('safe reply'), fauxToolCall('appExt_danger', {})],
+  })
+  await tApp.run('safe turn')
+  await tApp.run('unsafe turn')
+  const unsafeUser = tApp.session
+    .getEntries()
+    .find(
+      (e) => e.type === 'message' && JSON.stringify(e).includes('unsafe turn'),
+    )!
+  await expect(tApp.session.clone({ sessionId: 'bad-clone' })).rejects.toThrow(
+    /unresolved|awaiting-approval/i,
+  )
+  await expect(
+    tApp.session.fork(tApp.session.getLeafId()!, {
+      position: 'at',
+      sessionId: 'bad-fork',
+    }),
+  ).rejects.toThrow(/unresolved|awaiting-approval/i)
+  const cleanFork = await tApp.session.fork(unsafeUser.id, {
+    position: 'before',
+    sessionId: 'clean-before-wait',
+  })
+  expect(cleanFork.cancelled).toBe(false)
+
+  // R1 #10: local spill confinement ignores outside files/symlinks; remote copy uses ExecutionEnv
+  const tmp = mkdtempSync(join(tmpdir(), 'vela-spill-sec-'))
+  try {
+    const parentSpillDir = join(tmp, 'parent-spill')
+    const targetSpillDir = join(tmp, 'target-spill')
+    const secretFile = join(tmp, 'host-secret.txt')
+    const escapedLink = join(parentSpillDir, 'escape-link.txt')
+    const validFile = join(parentSpillDir, 'valid-out.txt')
+    mkdirSync(parentSpillDir, { recursive: true })
+    writeFileSync(secretFile, 'TOP_SECRET_KEY')
+    writeFileSync(validFile, 'VALID_SPILL')
+    symlinkSync(secretFile, escapedLink)
+
+    const db = openDatabase({ path: join(tmp, 'spill.db') })
+    const pStore = new SessionStore('parent', db)
+    const cStore = new SessionStore('child', db)
+    const branch = [
+      pStore.appendBashExecution({
+        type: 'bash_execution',
+        command: 'cat',
+        output: 'prev',
+        cancelled: false,
+        truncated: true,
+        fullOutputPath: validFile,
+      }),
+      pStore.appendBashExecution({
+        type: 'bash_execution',
+        command: 'sec',
+        output: 'sec',
+        cancelled: false,
+        truncated: true,
+        fullOutputPath: secretFile,
+      }),
+      pStore.appendBashExecution({
+        type: 'bash_execution',
+        command: 'lnk',
+        output: 'lnk',
+        cancelled: false,
+        truncated: true,
+        fullOutputPath: escapedLink,
+      }),
+    ]
+    const preparedLocal = await prepareSeedBranch({
+      db,
+      branch,
+      parentId: 'parent',
+      parentUploads: pStore.uploads,
+      targetUploads: cStore.uploads,
+      resolveEnv: async () => {
+        throw new Error('local fork must not resolve remote env')
+      },
+      parentSpillDir,
+      spillDir: targetSpillDir,
+    })
+    expect(existsSync(join(targetSpillDir, 'valid-out.txt'))).toBe(true)
+    expect(existsSync(join(targetSpillDir, 'host-secret.txt'))).toBe(false)
+    expect(existsSync(join(targetSpillDir, 'escape-link.txt'))).toBe(false)
+    expect(preparedLocal.spillRewrites.size).toBe(1)
+
+    // Remote ExecutionEnv copy
+    let wroteRemote = false
+    const fakeRemoteEnv = {
+      id: 'remote:ssh',
+      cwd: '/remote',
+      openBinaryReader: async (p: string) => ({
+        ok: p === '/remote/spill.txt',
+        value: {
+          info: async () => ({ ok: true, value: { kind: 'file', size: 6 } }),
+          read: async () => ({
+            ok: true,
+            value: new TextEncoder().encode('REMOTE'),
+          }),
+          close: async () => {},
+        },
+        error: { code: 'not_found' },
+      }),
+      createTempFile: async () => ({
+        ok: true,
+        value: '/remote/new-spill.txt',
+      }),
+      writeFile: async () => {
+        wroteRemote = true
+        return { ok: true, value: undefined }
+      },
+    } as unknown as ExecutionEnv
+    const preparedRemote = await prepareSeedBranch({
+      db,
+      branch: [
+        {
+          ...branch[0]!,
+          id: 'r1',
+          fullOutputPath: '/remote/spill.txt',
+        },
+      ],
+      parentId: 'parent',
+      parentUploads: pStore.uploads,
+      targetUploads: cStore.uploads,
+      resolveEnv: async () => fakeRemoteEnv,
+      isRemote: true,
+    })
+    expect(wroteRemote).toBe(true)
+    expect(preparedRemote.spillRewrites.get('/remote/spill.txt')).toBe(
+      '/remote/new-spill.txt',
+    )
+    db.close()
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
 })

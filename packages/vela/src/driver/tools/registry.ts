@@ -1,6 +1,6 @@
 import type { ProviderToolSpec } from '../../providers/index.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
-import { type ToolInputSchema, toJsonSchema } from '../../shared/tool-schema.ts'
+import type { ToolInputSchema } from '../../shared/tool-schema.ts'
 import { getRetiredToolError } from '../../shared/tool-selection.ts'
 import type { VelaEvent, VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
@@ -8,12 +8,13 @@ import type { SessionScope } from '../session/scope.ts'
 import type { BackgroundCommands } from './background.ts'
 import { validateToolDefinition } from './definition-validation.ts'
 import { ActiveCalls, ExecutionGate } from './execution-gate.ts'
-import { countToolTokens, toProviderTools } from './sdk-tools.ts'
 import {
-  createToolSearchDocument,
-  formatDeferredToolSummary,
-  rankTools,
-} from './tool-ranker.ts'
+  countToolTokens,
+  matchDeferredTools,
+  orderActiveTools,
+  toProviderTools,
+} from './sdk-tools.ts'
+import { formatDeferredToolSummary } from './tool-ranker.ts'
 import type {
   ToolAnnotations,
   ToolExecutionMode,
@@ -265,26 +266,23 @@ export class ToolRegistry {
   getAllTools(): ToolDefinition[] {
     return Array.from(this.tools.values())
   }
-
   toProviderTools(): ProviderToolSpec[] {
     return toProviderTools(this.getActiveTools())
   }
-
-  /** Display data (`ToolExecutionResult.value`) of a finished call, for its `tool_execution_end`; removes it. */
+  /** Display data (`ToolExecutionResult.value`) of a finished call; removes it. */
   takeDetails(toolCallId: string): unknown {
     const details = this.details.get(toolCallId)
     this.details.delete(toolCallId)
     return details
   }
 
-  /** Tools declared to the model: allowed, and direct / model-only, or deferred and loaded with tool_search. */
+  /** Tools declared to the model: allowed direct/model-only, then discovered deferred in order. */
   getActiveTools() {
-    return this.getAllTools().filter((tool) => {
-      if (!this.isAvailable(tool.name)) return false
-      const exposure = tool.exposure ?? 'direct'
-      if (exposure === 'deferred') return this.discoveredTools.has(tool.name)
-      return exposure === 'direct' || exposure === 'model-only'
-    })
+    return orderActiveTools(
+      this.getAllTools(),
+      (name) => this.isAvailable(name),
+      this.discoveredTools,
+    )
   }
 
   /** Tools tool_search can load in this session: allowed deferred tools (not yet loaded, unless `loaded`). */
@@ -305,27 +303,11 @@ export class ToolRegistry {
 
   /** Loads deferred tools (comma-separated exact names, or top `limit` BM25 matches). */
   async searchTools(query: string, limit = 8): Promise<ToolDefinition[]> {
-    const loadable = this.searchableTools(true)
-    const names = query
-      .split(',')
-      .map((n) => n.trim())
-      .filter(Boolean)
-    const exact = names.map((name) => loadable.find((t) => t.name === name))
-    const results =
-      names.length > 0 && exact.every((tool) => tool !== undefined)
-        ? (exact as ToolDefinition[])
-        : rankTools(
-            query,
-            await Promise.all(
-              loadable.map(async (tool) =>
-                createToolSearchDocument({
-                  ...tool,
-                  jsonSchema: await toJsonSchema(tool.inputSchema),
-                }),
-              ),
-            ),
-            limit,
-          ).flatMap((m) => loadable.find((t) => t.name === m.name) ?? [])
+    const results = await matchDeferredTools(
+      this.searchableTools(true),
+      query,
+      limit,
+    )
     for (const tool of results) this.discoveredTools.add(tool.name)
     return results
   }
@@ -333,7 +315,7 @@ export class ToolRegistry {
   countTokenEstimate(): { active: number; deferred: number; total: number } {
     return countToolTokens(
       this.getAllTools(),
-      new Set(this.getActiveTools().map((tool) => tool.name)),
+      new Set(this.getActiveTools().map((t) => t.name)),
     )
   }
 

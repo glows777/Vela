@@ -428,6 +428,25 @@ export async function streamSingleStepWithRetries(options: {
   }
 }
 
+export function filterHostedToolMessages(
+  responseMessages: readonly ModelMessage[],
+  clientCalls: readonly ToolCallPart[],
+): ModelMessage[] {
+  const clientCallIds = new Set(clientCalls.map((call) => call.toolCallId))
+  const out: ModelMessage[] = []
+  for (const msg of responseMessages) {
+    if (msg.role !== 'tool') continue
+    const hostedParts = msg.content.filter(
+      (part) =>
+        part.type !== 'tool_result' || !clientCallIds.has(part.toolCallId),
+    )
+    if (hostedParts.length > 0) {
+      out.push({ ...msg, content: hostedParts })
+    }
+  }
+  return out
+}
+
 export function persistAssistantStepTx(options: {
   db: VelaDatabase
   store: SessionStore
@@ -457,7 +476,7 @@ export function persistAssistantStepTx(options: {
     sdkToolErrors,
   } = options
   const txNow = new Date().toISOString()
-  return db.transaction(() => {
+  return store.runInTransaction(() => {
     const entry = store.appendMessage(assistant, {
       producedBy: producer,
       runId,
@@ -544,10 +563,11 @@ export function persistAssistantStepTx(options: {
         txNow,
       )
     }
-    for (const hostedMsg of responseMessages) {
-      if (hostedMsg.role === 'tool') {
-        store.appendMessage(hostedMsg, { runId })
-      }
+    for (const hostedMsg of filterHostedToolMessages(
+      responseMessages,
+      clientCalls,
+    )) {
+      store.appendMessage(hostedMsg, { runId })
     }
     return entry
   })

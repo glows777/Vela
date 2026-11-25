@@ -14,6 +14,10 @@
   interface ApiKeyCredential
     key: string
     type: "api_key"
+  interface ApprovalDecision
+    approved: boolean
+    decidedBy?: string | undefined
+    reason?: string | undefined
   type AssistantMessageEvent = | { type: 'text_start'; contentIndex: number }
       | { type: 'text_delta'; contentIndex: number; delta: string }
       | { type: 'text_end'; contentIndex: number; content: string }
@@ -695,6 +699,14 @@
     routine?: { id: string; scheduledAt: string; } | undefined
     text: string
     topic?: { rootId: string; threadId: string; } | undefined
+  interface PendingApprovalInfo
+    createdAt: string
+    id: string
+    input: unknown
+    runId: string
+    summary: string | null
+    toolCallId: string | null
+    toolName: string
   interface PromptOptions
     images?: ImageContent[] | undefined
     signal?: AbortSignal | undefined
@@ -756,6 +768,12 @@
       | 'xhigh'
       | 'max'
   function resolveBinary: (vela: Vela, name: "rg" | "fd") => Promise<string>
+  interface ResolvedApprovalInfo
+    id: string
+    runId: string
+    status: "approved" | "denied"
+    toolCallId: string | null
+    toolName: string
   type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
   type RunEndStatus = | 'completed'
       | 'stopped'
@@ -955,6 +973,11 @@
     exitCode: number
     spillPath?: string | undefined
   const silentLogger: VelaLogger
+  class SpilledToolOutput
+    readonly bytes: number
+    readonly execution: ExecutionMetadata
+    readonly path: string
+    readonly preview: string
   interface StepRecord
     cacheReadTokens: number
     cacheWriteTokens: number
@@ -1431,6 +1454,7 @@
     getTree: () => SessionTreeNode[]
     navigateTree: (targetId: string, options?: NavigateTreeOptions) => Promise<{ editorText?: string; cancelled: boolean; }>
     notify: (message: string, level?: "info" | "warning" | "error") => void
+    pendingApprovals: () => PendingApprovalInfo[]
     prompt: (input: string, options?: PromptOptions) => Promise<void>
     readonly cwd: string
     readonly id: string
@@ -1649,6 +1673,11 @@
     summaryEntry?: BranchSummaryEntry | undefined
     type: "session_tree"
   const silentLogger: VelaLogger
+  class SpilledToolOutput
+    readonly bytes: number
+    readonly execution: ExecutionMetadata
+    readonly path: string
+    readonly preview: string
   interface StepRecord
     cacheReadTokens: number
     cacheWriteTokens: number
@@ -1937,6 +1966,7 @@
     getTree: () => SessionTreeNode[]
     navigateTree: (targetId: string, options?: NavigateTreeOptions) => Promise<{ editorText?: string; cancelled: boolean; }>
     notify: (message: string, level?: "info" | "warning" | "error") => void
+    pendingApprovals: () => PendingApprovalInfo[]
     prompt: (input: string, options?: PromptOptions) => Promise<void>
     readonly cwd: string
     readonly id: string

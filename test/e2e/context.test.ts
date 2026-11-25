@@ -170,7 +170,7 @@ test('a model switch drops the size the previous model reported', async () => {
   expect(t.lastAssistantText()).toBe('Answer 1')
 })
 
-test('an incomplete summary stops the turn and leaves history untouched', async () => {
+test('an incomplete summary leaves history untouched: post-turn auto-compaction logs without failing completed turn; manual compact rejects', async () => {
   const t = createTestVela({
     limits: { summaryThreshold: 50_000 },
     responses: [
@@ -181,17 +181,26 @@ test('an incomplete summary stops the turn and leaves history untouched', async 
     ],
     generate: [
       fauxText('## Goal\nPartial summary', { finishReason: 'length' }),
+      fauxText('## Goal\nPartial summary', { finishReason: 'length' }),
     ],
   })
   for (let i = 0; i < 3; i++)
     await t.run(`Question ${i}: ${'Background. '.repeat(100)}`)
   const before = JSON.stringify(t.messages)
 
-  await expect(
-    t.run(`Question 3: ${'Background. '.repeat(100)}`),
-  ).rejects.toThrow('original history kept')
+  await t.run(`Question 3: ${'Background. '.repeat(100)}`)
 
+  expect(t.eventsOf('compaction_end')).toEqual([
+    expect.objectContaining({
+      type: 'compaction_end',
+      reason: 'threshold',
+      errorMessage: expect.stringContaining('original history kept'),
+    }),
+  ])
   expect(JSON.stringify(t.messages.slice(0, 6))).toBe(before)
+  expect(t.session.contextManager.state.summary).toBe('')
+
+  await expect(t.session.compact()).rejects.toThrow('original history kept')
   expect(t.session.contextManager.state.summary).toBe('')
 })
 

@@ -55,7 +55,7 @@ import {
   type SessionTreeNode,
 } from './session/entries.ts'
 import { exportBranch } from './session/export.ts'
-import { SessionStore } from './session/index.ts'
+import { type LoadedSessionContext, SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
 import {
   assertSessionId,
@@ -83,6 +83,8 @@ import { UserBash } from './session/user-bash.ts'
 import { SessionWork } from './session/work.ts'
 import {
   type ApprovalDecision,
+  listPendingApprovals,
+  type PendingApprovalInfo,
   type ResolvedApprovalInfo,
   resolveApproval as resolveApprovalRecord,
 } from './step-recovery.ts'
@@ -480,9 +482,8 @@ export class VelaSession {
       this.toolDetails.set(event.toolCallId, event.details)
     for (const listener of this.listeners) listener(event)
     this.deps.forward(event, this.id)
-    // Like pi: the step's assistant and tool messages are in the history now, so a custom message cannot land
-    // between a tool call and its result
-    if (event.type === 'turn_end')
+    // Like pi: only flush queued custom messages once no assistant tool call is awaiting its tool result.
+    if (event.type === 'turn_end' && !pendingToolCalls(this.messages).length)
       this.messageQueue.flushPendingCustom((message) => this.append(message))
   }
 
@@ -659,34 +660,23 @@ export class VelaSession {
         beforeTree: (s, prep, sig) =>
           this.deps.extensions.beforeTree(s, prep, sig),
         afterTree: (s, event) => this.deps.extensions.tree(s, event),
-        summarizeBranch: (entries, focus, sig) =>
-          this.summarizeBranch(entries, focus, sig),
+        summarizeBranch: async (entries, focus, sig) => {
+          const branchMessages = entriesToMessages(entries)
+          if (!branchMessages.length) return undefined
+          const request = await resolveRequestSnapshot(
+            this.model,
+            this.buildSystem(),
+            this.registry.toProviderTools(),
+            branchMessages,
+            sig,
+            this.modelInfo.maxTokens,
+          )
+          return this.contextManager.summarizeBranch(request, 0, focus)
+        },
         loadBranch: (ctx) => this.loadBranch(ctx),
         save: () => this.save(),
       })
     })
-  }
-
-  /**
-   * Summarizes the context messages after the common ancestor (the branch being left). Returns undefined
-   * when that part has no messages.
-   */
-  private async summarizeBranch(
-    entries: SessionEntry[],
-    focus: string | undefined,
-    signal: AbortSignal,
-  ): Promise<string | undefined> {
-    const branchMessages = entriesToMessages(entries)
-    if (!branchMessages.length) return undefined
-    const request = await resolveRequestSnapshot(
-      this.model,
-      this.buildSystem(),
-      this.registry.toProviderTools(),
-      branchMessages,
-      signal,
-      this.modelInfo.maxTokens,
-    )
-    return this.contextManager.summarizeBranch(request, 0, focus)
   }
 
   /** Makes the store's current branch the session's context, model and thinking level. */
@@ -698,15 +688,7 @@ export class VelaSession {
     await this.defaults.restore(context, this.deps, this.id, (model) =>
       this.selectModel(model, false),
     )
-    const latest = (
-      context as {
-        latestAssistantUsage?: {
-          inputTokens: number
-          outputTokens: number
-          trailingMessages: ModelMessage[]
-        }
-      }
-    ).latestAssistantUsage
+    const latest = (context as LoadedSessionContext).latestAssistantUsage
     if (latest) {
       this.tracker.restoreCalibration(
         latest.inputTokens,
@@ -735,13 +717,12 @@ export class VelaSession {
         typeof this.defaults.modelChoice === 'string'
           ? (this.store.modelAt(point.leafId) ?? this.defaults.modelChoice)
           : this.defaults.modelChoice
-      const branchThinking =
-        this.store.thinkingAt(point.leafId) ?? this.defaults.thinking
       return copyFork(this, point, options.sessionId, this.deps.openSession, {
         ...routing.unroutedOptions(this.options),
         location: this.location,
         model: branchModel,
-        thinkingLevel: branchThinking,
+        thinkingLevel:
+          this.store.thinkingAt(point.leafId) ?? this.defaults.thinking,
         autoCompaction: this.autoCompaction,
       })
     })
@@ -799,7 +780,6 @@ export class VelaSession {
     return this.locationTask((signal) => this.restoreHistory(signal))
   }
   private async restoreHistory(signal: AbortSignal): Promise<boolean> {
-    // Entries not yet written would be replaced by the loaded ones
     await this.store.flush()
     const saved = await this.store.loadSaved()
     if (!saved) return false
@@ -809,8 +789,8 @@ export class VelaSession {
     await this.loadBranch(saved)
     if (saved.channel !== undefined)
       routing.bindSavedChannel(this, saved.channel)
-    this.defaults.applyOpenChoices(this.options, (model) =>
-      this.selectModel(model, false),
+    this.defaults.applyOpenChoices(this.options, (m) =>
+      this.selectModel(m, false),
     )
     if (needsRestoredWorkspace(this.options, target)) await this.prepare(signal)
     return true
@@ -829,6 +809,12 @@ export class VelaSession {
       return Promise.reject(new Error(`Session ${this.id} is already running`))
     assertInterruptedTurn(this.messages)
     return this.trackRun(this.run(undefined, {}))
+  }
+
+  /** Lists pending human approval requests (`waiting_human`) for this session. */
+  pendingApprovals(): PendingApprovalInfo[] {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    return listPendingApprovals(this.deps.db, this.id)
   }
 
   /** Records a human decision for a suspended tool approval (`waiting_human`). Call `continueInterrupted()` next to resume. */
@@ -1215,13 +1201,20 @@ export class VelaSession {
             !this.draining &&
             this.autoCompaction
           ) {
-            const { info } = this.resolveModel()
-            await this.contextManager.compactIfNeeded(
-              await this.buildSnapshot(controller.signal, {
-                model: this.requestModel(),
-                maxOutputTokens: info.maxTokens,
-              }),
-            )
+            try {
+              const { info } = this.resolveModel()
+              await this.contextManager.compactIfNeeded(
+                await this.buildSnapshot(controller.signal, {
+                  model: this.requestModel(),
+                  maxOutputTokens: info.maxTokens,
+                }),
+              )
+            } catch (error) {
+              if (controller.signal.aborted || this.draining) throw error
+              this.deps.logger.warn(
+                `[session:${this.id}] Post-turn compaction failed: ${error instanceof Error ? error.message : String(error)}`,
+              )
+            }
           }
         } catch (error) {
           failure ??= { error }
@@ -1229,7 +1222,7 @@ export class VelaSession {
         firstRun = false
         if (stopForHuman || controller.signal.aborted) break
         inputs = next()
-        if (!inputs.length) {
+        if (!inputs.length && !pendingToolCalls(this.messages).length) {
           this.messageQueue.flushPendingCustom((message) =>
             this.append(message),
           )
@@ -1238,13 +1231,16 @@ export class VelaSession {
       } while (inputs.length)
     } finally {
       options.signal?.removeEventListener('abort', forward)
-      this.messageQueue.flushPendingCustom((message) => this.append(message))
+      const hasPendingCalls = pendingToolCalls(this.messages).length > 0
+      if (!hasPendingCalls)
+        this.messageQueue.flushPendingCustom((message) => this.append(message))
       this.toolDetails.clear()
-      while (this.userBash.flush()) await this.save()
+      if (!hasPendingCalls) while (this.userBash.flush()) await this.save()
       busy.locked = false
       busy.controller = undefined
       this.prompting = false
-      this.messageQueue.flushPendingCustom((message) => this.append(message))
+      if (!hasPendingCalls)
+        this.messageQueue.flushPendingCustom((message) => this.append(message))
       this.emit({ type: 'agent_settled' })
     }
     if (failure) throw failure.error

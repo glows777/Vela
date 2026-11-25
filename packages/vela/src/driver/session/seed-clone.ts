@@ -1,11 +1,28 @@
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  constants as fsConstants,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+} from 'node:fs'
+import { basename, join, sep } from 'node:path'
 import type { VelaDatabase } from '../../db/index.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
-import type { SessionEntry } from './entries.ts'
-import { copyBranch } from './entries.ts'
+import { copyBranch, entriesToMessages, type SessionEntry } from './entries.ts'
+import { pendingToolCalls } from './recovery.ts'
 import type { SessionUploads } from './uploads.ts'
+
+const MAX_REMOTE_SPILL_COPY_BYTES = 20 * 1024 * 1024
+const TERMINAL_TOOL_STATUSES = new Set([
+  'completed',
+  'failed',
+  'skipped',
+  'interrupted',
+])
 
 type ClonedToolCallRow = {
   run_id: string
@@ -45,16 +62,15 @@ export async function prepareSeedBranch(params: {
   parentUploads: SessionUploads
   targetUploads: SessionUploads
   resolveEnv: () => Promise<ExecutionEnv>
+  isRemote?: boolean
   parentSpillDir?: string
   spillDir?: string
 }): Promise<PreparedSeedBranch> {
   const { db, branch, parentId, parentUploads, targetUploads, resolveEnv } =
     params
-  const rewrites = await targetUploads.inherit(
-    parentUploads,
-    branch,
-    resolveEnv,
-  )
+  if (pendingToolCalls(entriesToMessages(branch)).length > 0) {
+    throw new Error('Cannot fork or clone through unresolved tool calls')
+  }
   const branchIds = new Set(branch.map((entry) => entry.id))
   const parentCalls = branchIds.size
     ? db
@@ -64,13 +80,45 @@ export async function prepareSeedBranch(params: {
         )
         .filter((row) => branchIds.has(row.assistant_message_id))
     : []
+  if (parentCalls.some((row) => !TERMINAL_TOOL_STATUSES.has(row.status))) {
+    throw new Error(
+      'Cannot fork or clone through unresolved or awaiting-approval tool calls',
+    )
+  }
+
+  const rewrites = await targetUploads.inherit(
+    parentUploads,
+    branch,
+    resolveEnv,
+  )
 
   const spillRewrites = new Map<string, string>()
   const targetSpillDir = params.spillDir
-  const copySpillFile = (sourcePath: string | undefined) => {
-    if (!sourcePath || !targetSpillDir) return
-    if (targetSpillDir === params.parentSpillDir) return
-    if (spillRewrites.has(sourcePath) || !existsSync(sourcePath)) return
+  const realParentSpillDir =
+    params.parentSpillDir && existsSync(params.parentSpillDir)
+      ? realpathSync(params.parentSpillDir)
+      : undefined
+  let remoteEnv: ExecutionEnv | undefined
+  const copyLocalConfinedSpill = (sourcePath: string): boolean => {
+    if (!targetSpillDir || !realParentSpillDir) return false
+    if (targetSpillDir === params.parentSpillDir) return true
+    if (!existsSync(sourcePath)) return false
+    let realSource: string
+    try {
+      realSource = realpathSync(sourcePath)
+    } catch {
+      return false
+    }
+    if (!realSource.startsWith(realParentSpillDir + sep)) return false
+    let fd: number | undefined
+    try {
+      fd = openSync(realSource, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+      if (!fstatSync(fd).isFile()) return false
+    } catch {
+      return false
+    } finally {
+      if (fd !== undefined) closeSync(fd)
+    }
     mkdirSync(targetSpillDir, { recursive: true })
     let dest = join(targetSpillDir, basename(sourcePath))
     if (existsSync(dest)) {
@@ -79,16 +127,55 @@ export async function prepareSeedBranch(params: {
         `${randomUUID().slice(0, 8)}-${basename(sourcePath)}`,
       )
     }
-    copyFileSync(sourcePath, dest)
+    copyFileSync(realSource, dest)
     spillRewrites.set(sourcePath, dest)
     rewrites.push([sourcePath, dest])
+    return true
+  }
+  const copyRemoteSpill = async (sourcePath: string) => {
+    remoteEnv ??= await resolveEnv()
+    if (remoteEnv.id === 'node:local') return
+    const opened = await remoteEnv.openBinaryReader(sourcePath, {
+      noFollow: true,
+    })
+    if (!opened.ok) return
+    const reader = opened.value
+    try {
+      const info = await reader.info()
+      if (!info.ok || info.value.kind !== 'file') return
+      if (info.value.size > MAX_REMOTE_SPILL_COPY_BYTES) return
+      const read = await reader.read(0, info.value.size)
+      if (!read.ok) return
+      const temp = await remoteEnv.createTempFile({
+        prefix: 'vela-result-',
+        suffix: '.txt',
+      })
+      if (!temp.ok) return
+      const written = await remoteEnv.writeFile(temp.value, read.value)
+      if (!written.ok) {
+        await remoteEnv.remove(temp.value, { force: true }).catch(() => {})
+        return
+      }
+      spillRewrites.set(sourcePath, temp.value)
+      rewrites.push([sourcePath, temp.value])
+    } finally {
+      await reader.close()
+    }
+  }
+  const copySpillFile = async (sourcePath: string | undefined) => {
+    if (!sourcePath || spillRewrites.has(sourcePath)) return
+    if (params.isRemote) {
+      await copyRemoteSpill(sourcePath)
+      return
+    }
+    copyLocalConfinedSpill(sourcePath)
   }
   for (const row of parentCalls) {
-    copySpillFile(row.spill_path ?? undefined)
+    await copySpillFile(row.spill_path ?? undefined)
   }
   for (const entry of branch) {
     if (entry.type === 'bash_execution') {
-      copySpillFile(entry.fullOutputPath)
+      await copySpillFile(entry.fullOutputPath)
     }
   }
 

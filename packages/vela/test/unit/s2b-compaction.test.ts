@@ -9,6 +9,7 @@ import {
 } from '../../src/driver/context/compressor.ts'
 import { ContextManager } from '../../src/driver/context/manager.ts'
 import { createRequestSnapshot } from '../../src/driver/context/request.ts'
+import { createVela } from '../../src/driver/index.ts'
 import type { ModelMessage } from '../../src/driver/messages.ts'
 import { SessionStore } from '../../src/driver/session/index.ts'
 import { TokenTracker } from '../../src/driver/usage/tracker.ts'
@@ -179,4 +180,97 @@ test('PR #569 P2 #5: pre-API setEstimatedTokens preserves contextHookDeltaTokens
   const ran = await manager.compactIfNeeded(snapshot)
   expect(ran).toBe(true)
   expect(events).toContain('compaction_end')
+})
+
+test('R1 #9/#16/#17: non-initial oversized turn splits at assistant boundary, compaction halts loadSaved calibration scan, and post-turn compact error warns without rejecting prompt', async () => {
+  // R1 #9: oversized turn 2 must split inside turn 2 instead of rewinding to turn 2's user message
+  const multiOversized: ModelMessage[] = [
+    { role: 'user', content: 'turn 1 question' },
+    { role: 'assistant', content: 'turn 1 answer' },
+    { role: 'user', content: 'turn 2 oversized start' },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 'tc2',
+          toolName: 'bash',
+          input: { command: 'pwd' },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool_result',
+          toolCallId: 'tc2',
+          toolName: 'bash',
+          output: { type: 'text', value: 'z'.repeat(85_000) },
+        },
+      ],
+    },
+    { role: 'assistant', content: `big assistant step ${'y'.repeat(85_000)}` },
+    { role: 'assistant', content: 'final tail' },
+  ]
+  const cut = findCompactionCut(multiOversized)
+  expect(cut.isSplitTurn).toBe(true)
+  expect(cut.turnStartIndex).toBe(2)
+  expect(cut.cutIndex).toBe(5)
+
+  // R1 #16: computeLatestAssistantUsage stops at compaction boundary so pre-compaction tokens don't miscalibrate
+  const store = new SessionStore('comp-scan', dir)
+  store.appendMessage({ role: 'user', content: 'pre' })
+  const asst = store.appendMessage(
+    { role: 'assistant', content: 'pre answer' },
+    { inputTokens: 190_000, outputTokens: 500 },
+  )
+  const keptMsg: ModelMessage = { role: 'user', content: 'kept follow up' }
+  store.appendMessage(keptMsg)
+  store.appendCompaction(
+    { role: 'user', content: 'summary msg' },
+    'Compacted',
+    keptMsg,
+    190_500,
+  )
+  const loaded = await store.loadSaved()
+  expect(loaded?.latestAssistantUsage).toBeUndefined()
+  expect(asst.type).toBe('message')
+
+  // R1 #17: post-turn compactIfNeeded failure warns instead of rejecting already-completed prompt()
+  const warnings: string[] = []
+  const cdir = mkdtempSync(join(tmpdir(), 'vela-s2b-postcomp-'))
+  try {
+    const vela = createVela({
+      cwd: cdir,
+      dataDir: cdir,
+      limits: { summaryThreshold: 500 },
+      model: createFauxModel({
+        responses: [
+          fauxText('first turn done', { usage: { input: 100, output: 20 } }),
+          fauxText(`done ${'w'.repeat(4_000)}`, {
+            usage: { input: 600, output: 1000 },
+          }),
+        ],
+        generate: [{ error: 'transient summary 503' }],
+      }),
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: (msg) => warnings.push(msg),
+        error: () => {},
+      },
+    })
+    const sess = vela.session('post-comp')
+    await sess.prompt('turn 1')
+    await expect(
+      sess.prompt('trigger post-turn compact'),
+    ).resolves.toBeUndefined()
+    expect(
+      warnings.some((w) => w.includes('Post-turn compaction failed')),
+    ).toBe(true)
+    await vela.dispose()
+  } finally {
+    rmSync(cdir, { recursive: true, force: true })
+  }
 })

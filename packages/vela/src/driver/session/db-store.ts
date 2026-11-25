@@ -100,6 +100,26 @@ export function setSessionChannel(
   setKvMeta(db, `${CHANNEL_META_PREFIX}${sessionId}`, channel)
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+const INSERT_MESSAGE_SQL = `INSERT INTO vela_messages (
+  session_id, id, parent_id, seq, run_id, kind, role, content_json,
+  include_in_context, stop_reason, produced_by, first_kept_id,
+  tokens_before, label, input_tokens, output_tokens, cache_read_tokens,
+  cache_write_tokens, cost_usd, duration_ms, details_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+export function insertMessageRow(
+  db: VelaDatabase,
+  sessionId: string,
+  entry: SessionEntry,
+  seq: number,
+  extra: Parameters<typeof entryToRowParams>[3] = {},
+): void {
+  db.run(INSERT_MESSAGE_SQL, ...entryToRowParams(sessionId, entry, seq, extra))
+}
+
 export function entryToRowParams(
   sessionId: string,
   entry: SessionEntry,
@@ -112,6 +132,7 @@ export function entryToRowParams(
     cacheWriteTokens?: number
     costUsd?: number
     durationMs?: number
+    choice?: { model?: string; thinkingLevel?: ThinkingLevel }
   } = {},
 ) {
   let role: string | null = null
@@ -121,7 +142,7 @@ export function entryToRowParams(
   let producedBy: string | null = null
   let firstKeptId: string | null = null
   let tokensBefore: number | null = null
-  let detailsJson: string | null = null
+  let detailsObj: Record<string, unknown> | undefined
 
   switch (entry.type) {
     case 'message':
@@ -130,7 +151,7 @@ export function entryToRowParams(
       includeInContext = entry.stopReason ? 0 : 1
       stopReason = entry.stopReason ?? null
       producedBy = entry.producedBy ?? null
-      detailsJson = entry.details ? JSON.stringify(entry.details) : null
+      detailsObj = entry.details ? { ...entry.details } : undefined
       break
     case 'compaction':
       role = 'user'
@@ -170,8 +191,11 @@ export function entryToRowParams(
         content: entry.content,
         display: entry.display,
       })
-      detailsJson =
-        entry.details === undefined ? null : JSON.stringify(entry.details)
+      detailsObj = isPlainObject(entry.details)
+        ? { ...entry.details }
+        : entry.details === undefined
+          ? undefined
+          : ({ _primitiveDetails: entry.details } as Record<string, unknown>)
       break
     case 'custom':
       includeInContext = 0
@@ -181,6 +205,25 @@ export function entryToRowParams(
       })
       break
   }
+
+  const hasChoice =
+    extra.choice &&
+    (extra.choice.model !== undefined ||
+      extra.choice.thinkingLevel !== undefined)
+  if (hasChoice) {
+    detailsObj = {
+      ...(detailsObj ?? {}),
+      _choice: {
+        ...(extra.choice!.model === undefined
+          ? {}
+          : { model: extra.choice!.model }),
+        ...(extra.choice!.thinkingLevel === undefined
+          ? {}
+          : { thinkingLevel: extra.choice!.thinkingLevel }),
+      },
+    }
+  }
+  const detailsJson = detailsObj ? JSON.stringify(detailsObj) : null
 
   return [
     sessionId,
@@ -208,8 +251,44 @@ export function entryToRowParams(
   ] as const
 }
 
+export function parseStoredDetails(detailsJson: string | null): {
+  details?: unknown
+  choice?: { model?: string; thinkingLevel?: ThinkingLevel }
+} {
+  if (!detailsJson) return {}
+  const parsed = JSON.parse(detailsJson) as unknown
+  if (!isPlainObject(parsed)) return { details: parsed }
+  const rawChoice = parsed._choice as
+    | { model?: unknown; thinkingLevel?: unknown }
+    | undefined
+  let choice: { model?: string; thinkingLevel?: ThinkingLevel } | undefined
+  if (rawChoice && typeof rawChoice === 'object') {
+    choice = {
+      ...(typeof rawChoice.model === 'string'
+        ? { model: rawChoice.model }
+        : {}),
+      ...(typeof rawChoice.thinkingLevel === 'string'
+        ? { thinkingLevel: rawChoice.thinkingLevel as ThinkingLevel }
+        : {}),
+    }
+  }
+  const rest = '_choice' in parsed ? { ...parsed } : parsed
+  if ('_choice' in rest) delete rest._choice
+  if ('_primitiveDetails' in rest && Object.keys(rest).length === 1) {
+    return {
+      details: rest._primitiveDetails,
+      ...(choice ? { choice } : {}),
+    }
+  }
+  return {
+    ...(Object.keys(rest).length ? { details: rest } : {}),
+    ...(choice ? { choice } : {}),
+  }
+}
+
 export function rowToEntry(row: MessageRow): SessionEntry {
   const parsed = JSON.parse(row.content_json) as Record<string, unknown>
+  const { details } = parseStoredDetails(row.details_json)
   const base = {
     id: row.id,
     parentId: row.parent_id,
@@ -226,9 +305,7 @@ export function rowToEntry(row: MessageRow): SessionEntry {
           ? { stopReason: row.stop_reason as 'aborted' | 'error' }
           : {}),
         ...(row.produced_by ? { producedBy: row.produced_by } : {}),
-        ...(row.details_json
-          ? { details: JSON.parse(row.details_json) as Record<string, unknown> }
-          : {}),
+        ...(details && isPlainObject(details) ? { details } : {}),
       }
       return entry
     }
@@ -279,9 +356,7 @@ export function rowToEntry(row: MessageRow): SessionEntry {
         customType: String(parsed.customType ?? ''),
         content: parsed.content as CustomMessageEntry['content'],
         display: Boolean(parsed.display),
-        ...(row.details_json === null
-          ? {}
-          : { details: JSON.parse(row.details_json) }),
+        ...(details === undefined ? {} : { details }),
       }
       return entry
     }
@@ -472,6 +547,7 @@ export function computeLatestAssistantUsage(
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i]!
     if (!activeIds.has(row.id)) continue
+    if (row.kind === 'compaction') break
     if (
       row.kind === 'message' &&
       row.role === 'assistant' &&

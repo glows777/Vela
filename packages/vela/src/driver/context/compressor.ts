@@ -100,16 +100,22 @@ export function findCompactionCut(
     }
   }
 
-  // Prefer the newest valid user turn boundary once the token budget is reached, or when
-  // explicit compaction runs on a multi-turn conversation below the budget.
+  // Prefer the turn's user boundary only if rewinding to it keeps total recent tokens
+  // within keepRecentTokens; otherwise split inside this turn at budgetCut (#536 #5).
   if (budgetCut > 0) {
-    for (let i = budgetCut; i >= 1; i--) {
-      if (messages[i]?.role === 'user' && isValidCutBoundary(messages, i)) {
-        return { cutIndex: i, turnStartIndex: i, isSplitTurn: false }
+    const turnStart = turnStartBefore(messages, budgetCut)
+    if (
+      turnStart > 0 &&
+      messages[turnStart]?.role === 'user' &&
+      isValidCutBoundary(messages, turnStart) &&
+      estimateMessagesTokens(messages.slice(turnStart)) <= keepRecentTokens
+    ) {
+      return {
+        cutIndex: turnStart,
+        turnStartIndex: turnStart,
+        isSplitTurn: false,
       }
     }
-    // Single oversized turn: split at the assistant boundary within the turn (#536 #5).
-    const turnStart = turnStartBefore(messages, budgetCut)
     return {
       cutIndex: budgetCut,
       turnStartIndex: turnStart,

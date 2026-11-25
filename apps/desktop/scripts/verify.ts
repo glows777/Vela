@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import {
   _electron,
   chromium,
@@ -424,12 +425,24 @@ const bridgeJourney = async (page: Page) => {
   await waitForText(page, created.id, created.sessionId, 'Image processed')
   const deadline = Date.now() + 5000
   let savedImage = false
+  const dbPath = resolve(data, 'vela.db')
   while (!savedImage && Date.now() < deadline) {
-    for await (const file of new Bun.Glob('**/transcript.jsonl').scan(data))
-      if (
-        (await Bun.file(resolve(data, file)).text()).includes('"type":"image"')
-      )
-        savedImage = true
+    let db: DatabaseSync | undefined
+    try {
+      db = new DatabaseSync(dbPath, { readOnly: true })
+      const hit = db
+        .prepare(
+          `SELECT 1 AS ok FROM vela_messages
+           WHERE session_id = ? AND content_json LIKE '%"type":"image"%'
+           LIMIT 1`,
+        )
+        .get(created.sessionId)
+      if (hit) savedImage = true
+    } catch {
+      // vela.db may not be initialized yet while polling
+    } finally {
+      db?.close()
+    }
     if (!savedImage) await Bun.sleep(50)
   }
   assert(savedImage, 'Image survived normalization into the session')

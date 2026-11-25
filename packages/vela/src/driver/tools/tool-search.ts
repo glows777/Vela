@@ -49,7 +49,19 @@ export const registerToolSearchTool = (registry: ToolRegistry) => {
       if (tools.length === 0) return 'No matching tools found.'
       const lines = [
         `Loaded ${tools.length} tool${tools.length === 1 ? '' : 's'}. They are available from your next call:`,
-        ...tools.map((t) => `- ${t.name}: ${firstLine(t.description)}`),
+        ...tools.map((t) => {
+          const desc = firstLine(t.description)
+          const extra: string[] = []
+          const snippet = t.promptSnippet?.trim()
+          if (snippet && snippet !== desc) extra.push(`  Note: ${snippet}`)
+          for (const g of t.promptGuidelines ?? []) {
+            const text = g.trim()
+            if (text) extra.push(`  - ${text}`)
+          }
+          return extra.length
+            ? `- ${t.name}: ${desc}\n${extra.join('\n')}`
+            : `- ${t.name}: ${desc}`
+        }),
       ]
       // Vela has no codemode describeNamespace() yet, so the namespace instructions (e.g. MCP server
       // instructions) come with the loaded tools, once per namespace
