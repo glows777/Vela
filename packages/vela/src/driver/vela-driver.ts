@@ -391,9 +391,9 @@ export class VelaDriver {
         )
         tracker.syncToolTokens(requestToolTokens)
         const stepProducer = resolveProducer()
-        const refreshMessages = async () => {
+        const refreshMessages = async (producerForStep = stepProducer) => {
           const transformed = options.transformContext
-            ? await options.transformContext(options.messages, stepProducer)
+            ? await options.transformContext(options.messages, producerForStep)
             : options.messages
           if (options.transformContext) {
             tracker.setContextDelta(
@@ -403,37 +403,43 @@ export class VelaDriver {
           }
           return transformed
         }
-        let requestMessages = await refreshMessages()
+        let requestMessages = await refreshMessages(stepProducer)
         await options.prepareContext?.(request)
         options.abortSignal?.throwIfAborted()
 
-        const { finalStep, sources, startedAt, sdkToolErrors } =
-          await streamSingleStepWithRetries({
-            model: options.model,
-            sessionId,
-            systemPrompt: currentSystem(),
-            supportsImages: options.supportsImages ?? true,
-            reasoning: requestReasoning,
-            maxOutputTokens: currentMaxOutputTokens(),
-            tools: request.tools,
-            messages: options.messages,
-            newMessages,
-            getMessages: () => requestMessages,
-            refreshMessages: async () => {
-              requestMessages = await refreshMessages()
-              return requestMessages
-            },
-            abortSignal: options.abortSignal,
-            isDraining: options.isDraining,
-            compactOnOverflow: options.compactOnOverflow,
-            limits,
-            tracker,
-            emit: (event) => this.emit(event),
-            turn,
-            runId,
-            store,
-            hostedCalls,
-          })
+        const {
+          finalStep,
+          sources,
+          startedAt,
+          sdkToolErrors,
+          producer: winningProducer,
+        } = await streamSingleStepWithRetries({
+          model: options.model,
+          sessionId,
+          systemPrompt: currentSystem(),
+          supportsImages: options.supportsImages ?? true,
+          reasoning: requestReasoning,
+          maxOutputTokens: currentMaxOutputTokens(),
+          tools: request.tools,
+          messages: options.messages,
+          newMessages,
+          getMessages: () => requestMessages,
+          refreshMessages: async (producerForAttempt) => {
+            requestMessages = await refreshMessages(producerForAttempt)
+            return requestMessages
+          },
+          resolveProducer,
+          abortSignal: options.abortSignal,
+          isDraining: options.isDraining,
+          compactOnOverflow: options.compactOnOverflow,
+          limits,
+          tracker,
+          emit: (event) => this.emit(event),
+          turn,
+          runId,
+          store,
+          hostedCalls,
+        })
 
         for (const sdkErr of sdkToolErrors) {
           this.emit({
@@ -553,7 +559,7 @@ export class VelaDriver {
             registry,
             sessionId,
             runId,
-            producer: stepProducer,
+            producer: winningProducer ?? stepProducer,
             assistant,
             responseMessages,
             clientCalls,
@@ -636,13 +642,13 @@ export class VelaDriver {
                     row.status === 'failed' ||
                     row.status === 'skipped'),
               )
-              const completedResults =
-                settledRows.length > 0
-                  ? toolResultsOf([
-                      assistant,
-                      assembleCompletedToolMessage(settledRows).message,
-                    ])
-                  : []
+              const completedResults = toolResultsOf([
+                assistant,
+                ...hostedMessages,
+                ...(settledRows.length > 0
+                  ? [assembleCompletedToolMessage(settledRows).message]
+                  : []),
+              ])
               this.emit({
                 type: 'turn_end',
                 turn,

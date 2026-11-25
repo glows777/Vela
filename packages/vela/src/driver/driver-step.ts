@@ -118,7 +118,8 @@ export async function streamSingleStepWithRetries(options: {
   messages?: ModelMessage[]
   newMessages?: ModelMessage[]
   getMessages: () => ModelMessage[]
-  refreshMessages: () => Promise<ModelMessage[]>
+  refreshMessages: (producer?: string) => Promise<ModelMessage[]>
+  resolveProducer?: () => string
   abortSignal?: AbortSignal
   isDraining?: () => boolean
   compactOnOverflow?: (signal?: AbortSignal) => Promise<void>
@@ -134,6 +135,7 @@ export async function streamSingleStepWithRetries(options: {
   sources: Map<string, string>
   startedAt: number
   sdkToolErrors: SdkToolError[]
+  producer?: string
 }> {
   const {
     model,
@@ -180,10 +182,12 @@ export async function streamSingleStepWithRetries(options: {
 
   let retried = 0
   let compactedForOverflow = false
+  let attemptProducer = options.resolveProducer?.()
   const recoverOverflow = async () => {
     compactedForOverflow = true
     await compactOnOverflow?.(abortSignal)
-    requestMessages = await options.refreshMessages()
+    attemptProducer = options.resolveProducer?.() ?? attemptProducer
+    requestMessages = await options.refreshMessages(attemptProducer)
   }
 
   const startedAt = performance.now()
@@ -301,7 +305,13 @@ export async function streamSingleStepWithRetries(options: {
         if (retried) {
           emit({ type: 'auto_retry_end', success: true, attempt: retried })
         }
-        return { finalStep, sources, startedAt, sdkToolErrors }
+        return {
+          finalStep,
+          sources,
+          startedAt,
+          sdkToolErrors,
+          producer: attemptProducer,
+        }
       }
     } catch (error) {
       if (abortSignal?.aborted) {
@@ -388,6 +398,11 @@ export async function streamSingleStepWithRetries(options: {
           emitEmptyTurnEnd()
           throw sleepError
         })
+        const nextProducer = options.resolveProducer?.()
+        if (nextProducer !== undefined && nextProducer !== attemptProducer) {
+          attemptProducer = nextProducer
+          requestMessages = await options.refreshMessages(nextProducer)
+        }
         continue
       }
       if (retried) {

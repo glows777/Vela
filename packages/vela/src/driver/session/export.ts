@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { openDatabase } from '../../db/index.ts'
@@ -120,6 +120,7 @@ function assertSafeExportTarget(
   if (!outputPath) return
   const target = resolve(baseCwd, outputPath)
   const canonicalTarget = canonicalPath(target)
+  const targetStat = existsSync(target) ? statSync(target) : undefined
   const protectedPaths = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
   for (const reserved of protectedPaths) {
     if (
@@ -127,6 +128,15 @@ function assertSafeExportTarget(
       canonicalTarget === canonicalPath(reserved)
     ) {
       throw new Error(`Refusing to overwrite database file: ${target}`)
+    }
+    if (targetStat && existsSync(reserved)) {
+      const reservedStat = statSync(reserved)
+      if (
+        targetStat.dev === reservedStat.dev &&
+        targetStat.ino === reservedStat.ino
+      ) {
+        throw new Error(`Refusing to overwrite database file: ${target}`)
+      }
     }
   }
 }

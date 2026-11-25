@@ -343,6 +343,20 @@ export async function prepareAgentTurn(params: {
 export const defaultAbortError = () =>
   new DOMException('User cancelled the current operation', 'AbortError')
 
+export function linkAbortSignal(signal?: AbortSignal): {
+  controller: AbortController
+  unlink: () => void
+} {
+  const controller = new AbortController()
+  const forward = () => controller.abort(signal?.reason)
+  signal?.addEventListener('abort', forward, { once: true })
+  if (signal?.aborted) forward()
+  return {
+    controller,
+    unlink: () => signal?.removeEventListener('abort', forward),
+  }
+}
+
 export function userPromptMessage(
   input: string,
   images?: readonly ImageContent[],

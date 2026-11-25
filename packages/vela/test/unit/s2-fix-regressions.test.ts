@@ -1,5 +1,6 @@
 import { afterAll, expect, test } from 'bun:test'
 import {
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -1244,6 +1245,14 @@ test('Round 1 Codex P1/P2 fixes: crash waiting_human preservation, flush rollbac
       provider: 'mock',
       modelId: 'm-hosted-raw',
       supportedUrls: {},
+      hostedTools: async () => ({
+        web_search: {
+          type: 'provider',
+          id: 'openai.web_search',
+          name: 'web_search',
+          args: {},
+        },
+      }),
       doGenerate: async () => {
         throw new Error('unused')
       },
@@ -1283,12 +1292,20 @@ test('Round 1 Codex P1/P2 fixes: crash waiting_human preservation, flush rollbac
     const hostedRawStore = new SessionStore('drv-hosted-raw', db)
     const hostedRawMsgs: ModelMessage[] = [{ role: 'user', content: 'search' }]
     hostedRawStore.appendMessage(hostedRawMsgs[0]!)
+    const hostedRawReg = new ToolRegistry(join(workDir, 'hosted-raw-spill'))
+    hostedRawReg.register({
+      name: 'web_search',
+      description: 'hosted search',
+      hostedOnly: true,
+      inputSchema: z.object({ query: z.string() }),
+      execute: async () => 'unused',
+    })
     await expect(
       new VelaDriver({
         sessionId: 'drv-hosted-raw',
         db,
         store: hostedRawStore,
-        registry: new ToolRegistry(join(workDir, 'hosted-raw-spill')),
+        registry: hostedRawReg,
         tracker: new TokenTracker(),
       }).run({
         model: hostedRawModel,
@@ -1427,11 +1444,14 @@ test('Round 1 Codex P1/P2 fixes: crash waiting_human preservation, flush rollbac
   }
   const dbAlias = join(exportDir, 'db-alias.html')
   symlinkSync(guardDbPath, dbAlias)
+  const dbHardlink = join(exportDir, 'db-hardlink.html')
+  linkSync(guardDbPath, dbHardlink)
   for (const dangerous of [
     guardDbPath,
     `${guardDbPath}-wal`,
     `${guardDbPath}-shm`,
     dbAlias,
+    dbHardlink,
   ]) {
     await expect(
       exportSavedSession({
@@ -1789,5 +1809,404 @@ test('Round 1 Codex P2 fixes: steer after async before-hook, per-wave resolveEnv
   } finally {
     await v.dispose()
     await vScoped.dispose()
+  }
+})
+
+test('Round 2 Codex P2 fixes: chained approvals in continueInterrupted, steer during input validation, hosted turn_end, retry producer refresh, ancestor-trimmed entriesToMessages, same-branch transcript failures', async () => {
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    // 1) Public SDK continueInterrupted() cleanly suspends on a second sequential approval
+    let gateTool = ''
+    const ranCalls: string[] = []
+    const chainedFaux = createFauxModel({
+      responses: [
+        () => ({
+          toolCalls: [
+            { name: gateTool, input: { step: 'first' }, id: 'ch-1' },
+            { name: gateTool, input: { step: 'second' }, id: 'ch-2' },
+          ],
+        }),
+        fauxText('both done'),
+      ],
+    })
+    const chainedReasons: string[] = []
+    const chainedVela = createVela({
+      db,
+      model: 'mock/chained',
+      providers: {
+        mock: {
+          models: [{ id: 'chained', name: 'chained' }],
+          createModel: () => chainedFaux,
+        },
+      },
+      extensions: [
+        (api) => {
+          gateTool = api.registerTool({
+            name: 'chain_gate',
+            description: 'sequential gated tool',
+            executionMode: 'sequential',
+            inputSchema: z.object({ step: z.string() }),
+            execute: async ({ step }) => {
+              ranCalls.push(step)
+              return `ok:${step}`
+            },
+          })
+          api.on('tool_call', gateTool, () => ({
+            approval: { summary: 'approve step' },
+          }))
+        },
+      ],
+    })
+    try {
+      const cs = chainedVela.session('chained-wh')
+      cs.subscribe((ev) => {
+        if (ev.type === 'agent_end') chainedReasons.push(ev.reason)
+      })
+      await cs.prompt('run two gated calls')
+      const p1 = cs.pendingApprovals()
+      expect(p1).toHaveLength(1)
+      cs.resolveApproval(p1[0]!.id, { approved: true })
+      await cs.continueInterrupted()
+      expect(ranCalls).toEqual(['first'])
+      expect(chainedReasons).toEqual(['waiting_human', 'waiting_human'])
+      const p2 = cs.pendingApprovals()
+      expect(p2).toHaveLength(1)
+      cs.resolveApproval(p2[0]!.id, { approved: true })
+      await cs.continueInterrupted()
+      expect(ranCalls).toEqual(['first', 'second'])
+      expect(chainedReasons).toEqual(['waiting_human', 'waiting_human', 'done'])
+    } finally {
+      await chainedVela.dispose()
+    }
+
+    // 2) Steer queued while async validateInput runs after interception.before mutates input skips call
+    const valStore = new SessionStore('steer-val', db)
+    const now = new Date().toISOString()
+    const asstVal = valStore.appendMessage({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 'sv-1',
+          toolName: 'val_gate',
+          input: { flag: false },
+        },
+      ],
+    })
+    db.run(
+      "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-sv', 'steer-val', 'vela', 'user', 'running', ?, ?)",
+      now,
+      now,
+    )
+    db.run(
+      `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, created_at, updated_at)
+       VALUES ('sv-row', 'steer-val', 'r-sv', ?, 'sv-1', 0, 'val_gate', '{"flag":false}', 'sequential', 'none', 'pending', 0, ?, ?)`,
+      asstVal.id,
+      now,
+      now,
+    )
+    let steerArrived = false
+    const valReg = new ToolRegistry(join(workDir, 'sv-spill'))
+    valReg.register({
+      name: 'val_gate',
+      description: 'async refine schema',
+      inputSchema: z.object({ flag: z.boolean() }).refine(async (val) => {
+        if (val.flag) steerArrived = true
+        return true
+      }),
+      execute: async () => 'must-not-run',
+    })
+    valReg.setInterception({
+      before: async () => ({
+        block: false,
+        input: { flag: true },
+        approval: { summary: 'confirm' },
+      }),
+    })
+    const valRes = await executeStepCalls({
+      db,
+      store: valStore,
+      registry: valReg,
+      sessionId: 'steer-val',
+      rows: loadStepToolCallRows(db, 'steer-val', asstVal.id),
+      emit: () => {},
+      shouldSkipForSteer: () => steerArrived,
+    })
+    expect(valRes.waitingHuman).toBe(false)
+    expect(loadStepToolCallRows(db, 'steer-val', asstVal.id)[0]?.status).toBe(
+      'skipped',
+    )
+
+    // 3) Waiting human turn_end preserves completed hosted web_search toolResult alongside pending local call
+    const hostedWhStore = new SessionStore('hosted-wh-turnend', db)
+    const hMsgs: ModelMessage[] = [
+      { role: 'user', content: 'search then edit' },
+    ]
+    hostedWhStore.appendMessage(hMsgs[0]!)
+    const hReg = new ToolRegistry(join(workDir, 'hwh-spill'))
+    hReg.register({
+      name: 'web_search',
+      description: 'hosted search',
+      hostedOnly: true,
+      inputSchema: z.object({ query: z.string() }),
+      execute: async () => 'unused',
+    })
+    hReg.register({
+      name: 'local_gate',
+      description: 'local approval tool',
+      executionMode: 'sequential',
+      inputSchema: z.object({}),
+      execute: async () => 'done',
+    })
+    hReg.setInterception({
+      before: async (toolName, input) =>
+        toolName === 'local_gate'
+          ? { block: false, input, approval: { summary: 'ok?' } }
+          : { block: false, input },
+    })
+    let hostedTurnResults: Array<{ toolCallId: string; toolName: string }> = []
+    const hostedWhModel = {
+      specificationVersion: 'v4',
+      provider: 'mock',
+      modelId: 'm-hwh',
+      supportedUrls: {},
+      hostedTools: async () => ({
+        web_search: {
+          type: 'provider',
+          id: 'openai.web_search',
+          name: 'web_search',
+          args: {},
+        },
+      }),
+      doGenerate: async () => {
+        throw new Error('unused')
+      },
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              type: 'tool-call',
+              toolCallId: 'ws-h1',
+              toolName: 'web_search',
+              input: '{"query":"vela"}',
+              providerExecuted: true,
+            })
+            controller.enqueue({
+              type: 'tool-result',
+              toolCallId: 'ws-h1',
+              toolName: 'web_search',
+              result: { hits: ['v1'] },
+            })
+            controller.enqueue({
+              type: 'tool-call',
+              toolCallId: 'loc-1',
+              toolName: 'local_gate',
+              input: '{}',
+            })
+            controller.enqueue({
+              type: 'finish',
+              finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+              usage: { inputTokens: 10, outputTokens: 5 },
+            })
+            controller.close()
+          },
+        }),
+      }),
+    } as unknown as LanguageModelV4
+    const hRes = await new VelaDriver({
+      sessionId: 'hosted-wh-turnend',
+      db,
+      store: hostedWhStore,
+      registry: hReg,
+      tracker: new TokenTracker(),
+      onEvent: (ev) => {
+        if (ev.type === 'turn_end') {
+          hostedTurnResults = ev.toolResults.map((r) => ({
+            toolCallId: r.toolCallId,
+            toolName: r.toolName,
+          }))
+        }
+      },
+    }).run({
+      model: hostedWhModel,
+      systemPrompt: '',
+      messages: hMsgs,
+    })
+    expect(hRes.reason).toBe('waiting_human')
+    expect(hostedTurnResults).toEqual([
+      { toolCallId: 'ws-h1', toolName: 'web_search' },
+    ])
+
+    // 4) Credential switch during auto_retry_start updates transformContext producer and persisted produced_by
+    const retryProdStore = new SessionStore('retry-prod', db)
+    const priorMsg: ModelMessage = { role: 'user', content: 'hello' }
+    retryProdStore.appendMessage(priorMsg)
+    const rpMsgs: ModelMessage[] = [priorMsg]
+    let isOAuth = true
+    let rpAttempts = 0
+    const seenProducers: string[] = []
+    const retryProdModel = {
+      specificationVersion: 'v4',
+      provider: 'mock',
+      modelId: 'm-rp',
+      supportedUrls: {},
+      doGenerate: async () => {
+        throw new Error('unused')
+      },
+      doStream: async () => {
+        rpAttempts++
+        if (rpAttempts === 1) throw new Error('ECONNRESET')
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'text-start', id: 't1' })
+              controller.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' })
+              controller.enqueue({ type: 'text-end', id: 't1' })
+              controller.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'stop', raw: 'stop' },
+                usage: { inputTokens: 5, outputTokens: 2 },
+              })
+              controller.close()
+            },
+          }),
+        } as never
+      },
+    } as unknown as LanguageModelV4
+    await new VelaDriver({
+      sessionId: 'retry-prod',
+      db,
+      store: retryProdStore,
+      registry: new ToolRegistry(join(workDir, 'rp-spill')),
+      tracker: new TokenTracker(),
+      onEvent: (ev) => {
+        if (ev.type === 'auto_retry_start') isOAuth = false
+      },
+    }).run({
+      model: retryProdModel,
+      producer: () => (isOAuth ? 'mock/m-rp:oauth' : 'mock/m-rp'),
+      systemPrompt: '',
+      messages: rpMsgs,
+      limits: { maxRetries: 1, retryBaseMs: 0 },
+      transformContext: async (msgs, producer) => {
+        seenProducers.push(producer)
+        return msgs
+      },
+    })
+    expect(seenProducers).toEqual(['mock/m-rp:oauth', 'mock/m-rp'])
+    expect(
+      db.get<{ produced_by: string | null }>(
+        "SELECT produced_by FROM vela_messages WHERE session_id = 'retry-prod' AND role = 'assistant' ORDER BY seq DESC LIMIT 1",
+      )?.produced_by,
+    ).toBe('mock/m-rp')
+
+    // 5) entriesToMessages filters superseded compaction even when firstKeptEntryId precedes the slice
+    const branchSliceMsgs = entriesToMessages([
+      {
+        type: 'message',
+        id: 'b1',
+        parentId: 'common-ancestor',
+        timestamp: now,
+        message: { role: 'user', content: 'branch turn 1' },
+      },
+      {
+        type: 'compaction',
+        id: 'c-superseded',
+        parentId: 'b1',
+        timestamp: now,
+        summary: 'OLD BRANCH CHECKPOINT',
+        firstKeptEntryId: 'common-ancestor',
+        tokensBefore: 50,
+      },
+      {
+        type: 'message',
+        id: 'b2',
+        parentId: 'c-superseded',
+        timestamp: now,
+        message: { role: 'user', content: 'branch turn 2' },
+      },
+      {
+        type: 'compaction',
+        id: 'c-latest',
+        parentId: 'b2',
+        timestamp: now,
+        summary: 'LATEST BRANCH CHECKPOINT',
+        firstKeptEntryId: 'common-ancestor',
+        tokensBefore: 100,
+      },
+    ])
+    const branchText = JSON.stringify(branchSliceMsgs)
+    expect(branchText).toContain('LATEST BRANCH CHECKPOINT')
+    expect(branchText).toContain('branch turn 1')
+    expect(branchText).toContain('branch turn 2')
+    expect(branchText).not.toContain('OLD BRANCH CHECKPOINT')
+
+    // 6) In-memory/transcript summarize() scopes failed tool_result by matching call instance
+    const sameBranchStore = new SessionStore('same-branch-id', db)
+    const sbReq = await createRequestSnapshot(
+      createFauxModel({ generate: [fauxText('Same branch summary')] }),
+      '',
+      { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
+      [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_call',
+              toolCallId: 'dup-id',
+              toolName: 'write',
+              input: { path: 'failed.ts' },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool_result',
+              toolCallId: 'dup-id',
+              toolName: 'write',
+              output: { type: 'error-text', value: 'disk full' },
+            },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_call',
+              toolCallId: 'dup-id',
+              toolName: 'write',
+              input: { path: 'success.ts' },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool_result',
+              toolCallId: 'dup-id',
+              toolName: 'write',
+              output: { type: 'text', value: 'wrote success.ts' },
+            },
+          ],
+        },
+      ],
+    )
+    const sbOut = await summarize(
+      sbReq,
+      sameBranchStore,
+      new TokenTracker(),
+      100_000,
+      undefined,
+      0,
+    )
+    expect(sbOut.summary).toContain(
+      '<modified-files>\nsuccess.ts\n</modified-files>',
+    )
+    expect(sbOut.summary).not.toContain('failed.ts')
+  } finally {
+    db.close()
   }
 })

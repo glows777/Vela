@@ -236,17 +236,17 @@ export function entriesToMessages(
       compaction.firstKeptEntryId === compaction.id
         ? compactionIndex
         : entries.findIndex((entry) => entry.id === compaction.firstKeptEntryId)
-    if (firstKept >= 0 && firstKept <= compactionIndex) {
-      effectiveEntries = [
-        compaction,
-        ...entries
-          .slice(firstKept, compactionIndex)
-          .filter((entry) => entry.type !== 'compaction'),
-        ...entries
-          .slice(compactionIndex + 1)
-          .filter((entry) => entry.type !== 'compaction'),
-      ]
-    }
+    const keepFrom =
+      firstKept >= 0 && firstKept <= compactionIndex ? firstKept : 0
+    effectiveEntries = [
+      compaction,
+      ...entries
+        .slice(keepFrom, compactionIndex)
+        .filter((entry) => entry.type !== 'compaction'),
+      ...entries
+        .slice(compactionIndex + 1)
+        .filter((entry) => entry.type !== 'compaction'),
+    ]
   }
   const messages: ModelMessage[] = []
   for (const entry of effectiveEntries) {

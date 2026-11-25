@@ -598,6 +598,12 @@ export async function executeStepCalls(
               )
               continue
             }
+            if (options.shouldSkipForSteer?.()) {
+              runnable.length = 0
+              skipRemainingWaves(waveIndex)
+              steered = true
+              break
+            }
             const inputJson = JSON.stringify(input)
             row.input_json = inputJson
             db.run(

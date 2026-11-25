@@ -39,6 +39,7 @@ import { extractToolMessageDetails } from './session/db-store.ts'
 import {
   buildForkSessionOptions,
   defaultAbortError,
+  linkAbortSignal,
   prepareAgentTurn,
   resolveRunProducer,
   restoreBranchState,
@@ -1158,6 +1159,10 @@ export class VelaSession {
 
   private prompting = false
 
+  private flushCustom(): void {
+    this.messageQueue.flushPendingCustom((m) => this.append(m))
+  }
+
   private async run(
     input: ModelMessage | undefined,
     options: PromptOptions,
@@ -1165,11 +1170,8 @@ export class VelaSession {
     const busy = this.busy
     busy.locked = true
     this.prompting = true
-    const controller = new AbortController()
+    const { controller, unlink } = linkAbortSignal(options.signal)
     busy.controller = controller
-    const forward = () => controller.abort(options.signal?.reason)
-    options.signal?.addEventListener('abort', forward, { once: true })
-    if (options.signal?.aborted) forward()
     let failure: { error: unknown } | undefined
     const next = () => this.dequeueSteering()
     try {
@@ -1214,24 +1216,20 @@ export class VelaSession {
         if (stopForHuman || controller.signal.aborted) break
         inputs = next()
         if (!inputs.length && !pendingToolCalls(this.messages).length) {
-          this.messageQueue.flushPendingCustom((message) =>
-            this.append(message),
-          )
+          this.flushCustom()
           inputs = next()
         }
       } while (inputs.length)
     } finally {
-      options.signal?.removeEventListener('abort', forward)
+      unlink()
       const hasPendingCalls = pendingToolCalls(this.messages).length > 0
-      if (!hasPendingCalls)
-        this.messageQueue.flushPendingCustom((message) => this.append(message))
+      if (!hasPendingCalls) this.flushCustom()
       this.toolDetails.clear()
       if (!hasPendingCalls) while (this.userBash.flush()) await this.save()
       busy.locked = false
       busy.controller = undefined
       this.prompting = false
-      if (!hasPendingCalls)
-        this.messageQueue.flushPendingCustom((message) => this.append(message))
+      if (!hasPendingCalls) this.flushCustom()
       this.emit({ type: 'agent_settled' })
     }
     if (failure) throw failure.error
@@ -1325,6 +1323,7 @@ export class VelaSession {
         hasSteering: () => !this.draining && this.messageQueue.hasSteering,
         limits: this.limits,
         recoverPending,
+        allowWaitingHuman,
         onRecoveryComplete: recoverPending ? flushAndAppend : undefined,
         appendInput: (msg) => this.append(msg),
       })

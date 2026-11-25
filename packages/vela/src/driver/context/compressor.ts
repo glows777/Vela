@@ -409,7 +409,9 @@ export async function summarize(
     input: unknown
   }[] = []
   const failedDbCalls = new Set<string>()
-  const failedBranchCallIds = new Set<string>()
+  const lastCallById = new Map<string, number>()
+  const failedCallIndices = new Set<number>()
+  const unpairedFailedIds = new Set<string>()
   if (store.db.open) {
     const dbRows = store.db.all<{
       assistant_message_id: string
@@ -489,7 +491,9 @@ export async function summarize(
           out.type === 'execution-denied' ||
           (out.type === 'content' && out.isError === true)
         ) {
-          failedBranchCallIds.add(part.toolCallId)
+          const matched = lastCallById.get(part.toolCallId)
+          if (matched !== undefined) failedCallIndices.add(matched)
+          else unpairedFailedIds.add(part.toolCallId)
         }
       }
       continue
@@ -497,12 +501,17 @@ export async function summarize(
     if (message.role !== 'assistant' || !Array.isArray(message.content))
       continue
     const assistantMessageId = entryId ?? store.idOf(message)
-    for (const part of message.content)
-      if (part.type === 'tool_call') calls.push({ ...part, assistantMessageId })
+    for (const part of message.content) {
+      if (part.type !== 'tool_call') continue
+      const idx = calls.push({ ...part, assistantMessageId }) - 1
+      lastCallById.set(part.toolCallId, idx)
+    }
   }
-  for (const call of calls) {
+  for (let i = 0; i < calls.length; i++) {
+    const call = calls[i]!
     if (
-      failedBranchCallIds.has(call.toolCallId) ||
+      failedCallIndices.has(i) ||
+      unpairedFailedIds.has(call.toolCallId) ||
       (call.assistantMessageId &&
         failedDbCalls.has(`${call.assistantMessageId}:${call.toolCallId}`))
     ) {
