@@ -111,6 +111,9 @@ export class LocalChannel implements ChannelDefinition {
         { type: 'session', data: { ...session, channel: 'local' } },
         { ...address, runId: session.runId },
       )
+      // A run boundary ends any stage the previous run left waiting: a backoff a Stop cut short must
+      // not publish into the run that follows, and an idle session keeps no stage at all (#571).
+      if (run) this.endProgress(session.sessionId)
       if (run?.type === 'started')
         this.events.publish(
           { type: 'run_started', data: {} },
@@ -156,9 +159,8 @@ export class LocalChannel implements ChannelDefinition {
   async stop(): Promise<void> {
     this.stopped = true
     this.started = false
-    for (const entry of this.progress.values())
-      if (entry.timer) clearTimeout(entry.timer)
-    this.progress.clear()
+    for (const sessionId of [...this.progress.keys()])
+      this.endProgress(sessionId)
     this.unsubscribe?.()
     this.unsubscribeSession?.()
     try {
@@ -515,6 +517,13 @@ export class LocalChannel implements ChannelDefinition {
       )
     }, event.delayMs)
     entry.timer.unref?.()
+  }
+
+  /** A run boundary: nothing the previous stage would still publish, and no entry left behind. */
+  private endProgress(sessionId: string): void {
+    const entry = this.progress.get(sessionId)
+    if (entry?.timer) clearTimeout(entry.timer)
+    this.progress.delete(sessionId)
   }
 
   private visible(projectId: string, message: LocalMessage): void {

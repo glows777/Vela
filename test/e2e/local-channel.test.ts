@@ -565,6 +565,70 @@ test('a retry ends with its backoff while the retried request is still running (
   }
 })
 
+test('a backoff a Stop cut short never publishes into the next run (#571)', async () => {
+  const { t, client } = await setup({
+    // Long enough to stop inside it, then an answer for the run that follows
+    limits: { retryBaseMs: 500, retryMaxMs: 500 },
+    responses: [
+      fauxError('429 Too Many Requests - Rate limit exceeded'),
+      fauxText('Second run answered'),
+    ],
+  })
+  const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })
+  const watch = await watchLocal(client, project.id)
+  try {
+    await client.request(`${sessionPath(project)}/messages`, {
+      text: 'retry me',
+    })
+    const events = () =>
+      watch.events.map((event) => event.data as LocalEventData)
+    await until(() =>
+      events().some(
+        (event) =>
+          event.type === 'progress' &&
+          (event.data as { state?: string }).state === 'started',
+      ),
+    )
+    const session = (
+      await client.request<{ sessions: Snapshot[] }>(
+        `/v1/projects/${project.id}/sessions`,
+      )
+    ).sessions[0]!
+    await client.request(`${sessionPath(project)}/stop`, {
+      runId: session.runId,
+    })
+    await until(() => events().some((event) => event.type === 'run_finished'))
+    // A new run starts right away; the aborted backoff must not land inside it, or after its end
+    await client.request(`${sessionPath(project)}/messages`, {
+      text: 'ask again',
+    })
+    await until(() =>
+      events().some(
+        (event) =>
+          event.type === 'message' &&
+          (event.data as { text?: string }).text === 'Second run answered',
+      ),
+    )
+    // Past the moment the abandoned backoff would have ended
+    await Bun.sleep(700)
+    const finishedAt = events().findIndex(
+      (event) => event.type === 'run_finished',
+    )
+    expect(
+      events()
+        .slice(finishedAt + 1)
+        .filter(
+          (event) =>
+            event.type === 'progress' &&
+            (event.data as { stage?: string }).stage === 'retry',
+        ),
+    ).toEqual([])
+  } finally {
+    await watch.close()
+    await drainChannels(t.vela)
+  }
+})
+
 function latch() {
   let release!: () => void
   const promise = new Promise<void>((resolve) => {
