@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { savedTrust } from '../config/index.ts'
+import { savedTrust } from '../db/index.ts'
 import { registerExtensionHostModules } from '../driver/config/extensions.ts'
 import { newSessionId, resolveModel } from '../driver/diagnostics.ts'
 import type { ImageContent, VelaSession } from '../driver/index.ts'
@@ -332,10 +332,19 @@ const vela = createVela({
       ? `openai/${env.OPENAI_API_MODEL_NAME}`
       : undefined,
     fallbackShellPath: resolveShellPath(undefined, { env }),
-    workspaceModeAt: (location) =>
-      join(location, '.vela') === config.agentDir
-        ? 'home'
-        : args.approve !== false && savedTrust(config.agentDir, location)
+    workspaceModeAt: (location, environment = 'local') =>
+      environment === 'local'
+        ? join(location, '.vela') === config.agentDir
+          ? 'home'
+          : args.approve === true ||
+              (args.approve !== false &&
+                savedTrust(config.agentDir, location) === true)
+            ? 'all'
+            : 'none'
+        : args.approve === true ||
+            (args.approve !== false &&
+              savedTrust(config.agentDir, { environment, cwd: location }) ===
+                true)
           ? 'all'
           : 'none',
   },

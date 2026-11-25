@@ -43,9 +43,13 @@ export async function createCredentialIdentity(hosts: readonly string[]) {
         `subjectAltName=${hosts.map((name) => `DNS:${name}`).join(',')}`,
       ].join('\n'),
     )
+    const pathEnv =
+      process.platform === 'darwin'
+        ? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
+        : '/usr/local/bin:/usr/bin:/bin'
     const run = (args: string[]) =>
       exec('openssl', args, {
-        env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
+        env: { PATH: pathEnv },
         timeout: 10_000,
       })
     for (const path of [caKey, leafKey])

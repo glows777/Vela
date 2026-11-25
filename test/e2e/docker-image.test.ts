@@ -5,26 +5,24 @@ import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createServer, globalAgent } from 'node:https'
 import { join } from 'node:path'
 import { tempDir } from '@glows777/vela/testing'
-import { buildDockerAdapter } from '../../extensions/docker/build.ts'
-import { runDocker } from '../../extensions/docker/container.ts'
-import { createCredentialIdentity } from '../../extensions/docker/credential-identity.ts'
-import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
 import type { ExecutionEnv } from '../../packages/vela/src/driver/index.ts'
+import { openDockerEnvironment } from '../../packages/vela/src/runtime/docker/adapter.ts'
+import { runDocker } from '../../packages/vela/src/runtime/docker/container.ts'
+import { createCredentialIdentity } from '../../packages/vela/src/runtime/docker/credential-identity.ts'
+import { prepareDocker } from '../../packages/vela/src/runtime/docker/lifecycle.ts'
+import { buildDockerGuest } from '../../scripts/build-docker-guest.ts'
 import { checkDockerOperations } from '../support/docker-conformance.ts'
 
 const image = process.env.VELA_TEST_DOCKER_IMAGE
 const volumeImage = process.env.VELA_TEST_DOCKER_VOLUME_IMAGE
 describe.skipIf(!image)('prepared Docker image', () => {
   let dir: ReturnType<typeof tempDir>
-  let openDockerEnvironment: typeof import('../../extensions/docker/adapter.ts').openDockerEnvironment
   const owners = new Set<string>()
   const adapters: ExecutionEnv[] = []
 
   beforeAll(async () => {
     dir = tempDir('vela-image-')
-    await buildDockerAdapter(dir.path)
-    const adapter = await import(join(dir.path, 'adapter.mjs'))
-    openDockerEnvironment = adapter.openDockerEnvironment
+    await buildDockerGuest(dir.path)
   })
   function owner(name: string) {
     return createHash('sha256')
@@ -42,7 +40,14 @@ describe.skipIf(!image)('prepared Docker image', () => {
   }
   function config(name: string) {
     owners.add(owner(name))
-    return { dataDir: dir.path, name, image: image!, network: 'off' as const }
+    return {
+      dataDir: dir.path,
+      name,
+      image: image!,
+      network: 'off' as const,
+      guestPath: join(dir.path, 'guest.cjs'),
+      hostEnv: process.env,
+    }
   }
   async function open(name: string) {
     const env = await openDockerEnvironment(config(name))

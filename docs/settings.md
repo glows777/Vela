@@ -8,7 +8,7 @@ Vela reads its configuration from `~/.vela/config.json` (or `$VELA_DIR/config.js
 |---|---|
 | `~/.vela/config.json` | User configuration (model, tools, providers, channels, MCP servers, limits, resources). |
 | `<project>/.vela/config.json` | Project configuration. Read only when the project is [trusted](#project-trust). Host-owned keys (`environments`, `location`, `providers`, `lark`, `local`, `webhooks`, `eventDefaultTarget`) are ignored in project config. |
-| `~/.vela/trust.json` | Saved project trust decisions. |
+| `~/.vela/vela.db` (`trusted_paths`) | Saved project trust decisions (`vela.db` SQLite table). |
 | `~/.vela/extensions/` | User extensions, loaded in every project. |
 | `<project>/.vela/extensions/` | Project extensions. Loaded only when the project is trusted. |
 | `~/.vela/skills/`, `~/.agents/skills/`, `<project>/.vela/skills/`, `<project>/.agents/skills/`, `<project>/.skills/` | Skills. Project skills load only when the project is trusted. See [Skills](#skills). |
@@ -182,7 +182,7 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
 ```text
 ~/.vela/
 ├── config.json
-├── trust.json
+├── vela.db                           trusted_paths (project trust decisions)
 ├── debug.log                         VELA_DEBUG=1 in interactive mode
 ├── bin/                              rg / fd downloaded by the CLI
 ├── extensions/
@@ -210,18 +210,11 @@ A project's `.vela/config.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/S
 | Situation | Result |
 |---|---|
 | `--approve` / `--no-approve` | Trusted / not trusted for this run. Nothing is saved. |
-| A decision is saved in `~/.vela/trust.json` | That decision is used. A decision for a directory also applies to the directories under it; the closest one wins. |
+| A decision is saved in `~/.vela/vela.db` (`trusted_paths`) | That decision is used. A decision for a directory also applies to the directories under it; the closest one wins. Non-local workspaces use `env:<name>:<posixCwd>` keys. |
 | Interactive mode, no saved decision | Vela asks `Trust this project and load it? (y/N)` and saves the answer. |
 | Print, JSON or RPC mode, no saved decision | Not trusted. A notice on stderr says to pass `--approve`. |
 
-When a project is not trusted, Vela prints a `[trust]` notice and runs with the user configuration only. To change a saved decision, edit or delete its entry in `~/.vela/trust.json` (or `$VELA_DIR/trust.json`), which maps absolute directory paths to `true` or `false`:
-
-```json
-{
-  "/home/me/code/app": true,
-  "/home/me/downloads": false
-}
-```
+When a project is not trusted, Vela prints a `[trust]` notice and runs with the user configuration only. Saved decisions live in the `trusted_paths` table of `~/.vela/vela.db` (or `$VELA_DIR/vela.db`), mapping canonical local paths (or `env:<name>:<posixCwd>` for container workspaces) to `1` (`true`) or `0` (`false`).
 
 Trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read; see [Security](security.md#project-trust).
 

@@ -4,13 +4,14 @@ import { constants } from 'node:os'
 import { signalProcessTree } from '../tools/process-tree.ts'
 import { StreamDecoder } from './decode.ts'
 import { LocalFiles } from './local-files.ts'
-import type {
-  ExecutionEnv,
-  ExecutionError,
-  ExecutionErrorCode,
-  Result,
-  ShellExecOptions,
-  ShellExecResult,
+import {
+  type ExecutionEnv,
+  type ExecutionError,
+  type ExecutionErrorCode,
+  executionEnvOs,
+  type Result,
+  type ShellExecOptions,
+  type ShellExecResult,
 } from './types.ts'
 
 function error(
@@ -26,6 +27,7 @@ function error(
 const STOP_GRACE_MS = 500
 
 export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
+  readonly [executionEnvOs] = process.platform
   constructor(options: {
     cwd: string
     shellPath?: string

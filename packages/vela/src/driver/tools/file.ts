@@ -2,7 +2,7 @@ import z from 'zod'
 import { imageMimeType, isBinaryFile } from '../../shared/images/metadata.ts'
 import { followFileInfo } from '../execution/file-info.ts'
 import { createLocalExecutionEnv } from '../execution/local.ts'
-import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
+import type { BinaryReader, FileError, Result } from '../execution/types.ts'
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -34,46 +34,38 @@ function unwrap<T>(result: Result<T, FileError>): T {
   return result.value
 }
 
-/** Inspect the environment's file header and return supported images whole. */
+/** Inspect the environment's file header and return supported images whole using an open reader. */
 async function readSpecialFile(
-  env: ExecutionEnv,
-  file: string,
+  handle: BinaryReader,
+  head: Buffer,
   path: string,
   signal?: AbortSignal,
 ): Promise<ToolExecutionResult | undefined> {
-  const handle = unwrap(await env.openBinaryReader(file, undefined, signal))
-  try {
-    const bytes = Buffer.from(
-      unwrap(await handle.read(0, FILE_HEADER_BYTES, signal)),
-    )
-    const mimeType = imageMimeType(bytes)
-    if (!mimeType) {
-      if (isBinaryFile(bytes, true)) throw binaryFileError(path)
-      return undefined
-    }
-    const tooLarge = () =>
-      new Error('Cannot read image: image exceeds the safe decoding size limit')
-    if (unwrap(await handle.info(signal)).size > READ_MAX_IMAGE_BYTES)
-      throw tooLarge()
-    const chunks: Uint8Array[] = []
-    let length = 0
-    while (true) {
-      const chunk = unwrap(await handle.read(length, 64 * 1024, signal))
-      if (!chunk.length) break
-      length += chunk.length
-      if (length > READ_MAX_IMAGE_BYTES) throw tooLarge()
-      chunks.push(chunk)
-    }
-    return new ToolExecutionResult({ path, mimeType, bytes: length }, [
-      {
-        type: 'image',
-        data: Buffer.concat(chunks, length).toString('base64'),
-        mimeType,
-      },
-    ])
-  } finally {
-    await handle.close()
+  const mimeType = imageMimeType(head)
+  if (!mimeType) {
+    if (isBinaryFile(head, true)) throw binaryFileError(path)
+    return undefined
   }
+  const tooLarge = () =>
+    new Error('Cannot read image: image exceeds the safe decoding size limit')
+  if (unwrap(await handle.info(signal)).size > READ_MAX_IMAGE_BYTES)
+    throw tooLarge()
+  const chunks: Uint8Array[] = head.length > 0 ? [head] : []
+  let length = head.length
+  while (true) {
+    const chunk = unwrap(await handle.read(length, 64 * 1024, signal))
+    if (!chunk.length) break
+    length += chunk.length
+    if (length > READ_MAX_IMAGE_BYTES) throw tooLarge()
+    chunks.push(chunk)
+  }
+  return new ToolExecutionResult({ path, mimeType, bytes: length }, [
+    {
+      type: 'image',
+      data: Buffer.concat(chunks, length).toString('base64'),
+      mimeType,
+    },
+  ])
 }
 
 /** UTF-8 size of one code point (a string from iterating a string) */
@@ -131,8 +123,9 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
         ? await context.requireEnv(context?.signal)
         : createLocalExecutionEnv({ cwd: cwd ?? process.cwd() }))
     const file = unwrap(await env.absolutePath(path, context?.signal))
-    const image = await readSpecialFile(env, file, path, context?.signal)
-    if (image) return image
+    const reader = unwrap(
+      await env.openBinaryReader(file, undefined, context?.signal),
+    )
     const decoder = new TextDecoder('utf-8', { fatal: true })
     // Validate every chunk the pager reads, starting at the requested line.
     // Streaming preserves UTF-8 characters split across chunks.
@@ -181,10 +174,12 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       }
       return true
     }
-    const reader = unwrap(
-      await env.openBinaryReader(file, undefined, context?.signal),
-    )
     try {
+      const head = Buffer.from(
+        unwrap(await reader.read(0, FILE_HEADER_BYTES, context?.signal)),
+      )
+      const image = await readSpecialFile(reader, head, path, context?.signal)
+      if (image) return image
       const scan =
         offset > 1
           ? unwrap(
@@ -197,7 +192,11 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       if (scan && offset - 1 > scan.newlines)
         throw new Error('offset/column is past the end of the file')
       let position = scan?.start ?? 0
-      while (true) {
+      if (offset === 1 && head.length > 0) {
+        position = head.length
+        if (!consume(decodeText(head))) more = true
+      }
+      while (!more) {
         const chunk = unwrap(
           await reader.read(position, 64 * 1024, context?.signal),
         )

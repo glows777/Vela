@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto'
 import { isIPv4 } from 'node:net'
 import { join } from 'node:path'
+import type { GuestCredentialConfig } from '../../shared/docker-guest-credentials.ts'
 import { createCredentialIdentity } from './credential-identity.ts'
 import {
   credentialOriginHost,
   openCredentialProxy,
 } from './credential-proxy.ts'
-import type { GuestCredentialConfig } from './guest-credential-env.ts'
 import { restrictedGuestDir } from './lifecycle.ts'
 
 export type DockerCredential = {

@@ -11,27 +11,24 @@
         ".skills/**/scripts/*.ts",
         "test/**/*.test.ts",
         "test/fixtures/mcp-echo-server.ts",
-        "test/support/github-setup-gh.ts",
-        "extensions/docker/adapter.ts",
-        "extensions/docker/guest.ts"
+        "test/support/github-setup-gh.ts"
       ],
       "project": [
         "scripts/**/*.ts",
         "test/**/*.ts",
         "examples/**/*.ts",
-        ".skills/**/*.ts",
-        "extensions/**/*.ts"
+        ".skills/**/*.ts"
       ]
     },
     "packages/vela": {
       "ignore": ["dist/**"],
-      "paths": { "#docker-adapter": ["../../extensions/docker/adapter.ts"] },
       "entry": [
         "src/index.ts!",
         "src/extension-api.ts!",
         "src/testing/index.ts!",
         "src/legacy-desktop.ts!",
         "src/cli/main.ts!",
+        "src/driver/execution/docker-guest.ts!",
         "test/**/*.test.ts"
       ],
       "project": ["src/**/*.ts!", "test/**/*.ts"]

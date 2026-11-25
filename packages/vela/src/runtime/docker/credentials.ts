@@ -1,6 +1,5 @@
 import { isIP } from 'node:net'
-
-type DockerCredential = { variable: string; value: string; origins: string[] }
+import type { DockerCredential } from './credential-binding.ts'
 
 const variableName = /^[A-Za-z_][A-Za-z0-9_]*$/
 const hostReference =
@@ -32,6 +31,7 @@ export function ownerDockerCredentials(
   credentials: unknown,
   network: 'on' | 'off' | 'restricted' | undefined,
   environment: string,
+  hostEnv: Record<string, string | undefined> = {},
 ): DockerCredential[] {
   const invalid = (description: string): never => {
     throw Error(
@@ -66,7 +66,7 @@ export function ownerDockerCredentials(
         ),
     )
     const host = (match[1] ?? match[2])!
-    const value = process.env[host]
+    const value = hostEnv[host]
     if (!value) return invalid(`host variable ${host} is unset or empty`)
     if (/[\r\n\0]/u.test(value))
       return invalid(`host variable ${host} contains invalid header characters`)

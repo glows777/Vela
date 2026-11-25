@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { getCACertificates } from 'node:tls'
-import { openGuestHttpsRouter } from './guest-https-router.ts'
+import { openGuestHttpsRouter } from './docker-guest-https-router.ts'
 
 export type GuestCredentialConfig = (
   | { proxyUrl: string }

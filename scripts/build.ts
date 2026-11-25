@@ -2,7 +2,7 @@
 import { chmod, cp, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { $ } from 'bun'
-import { buildDockerAdapter } from '../extensions/docker/build.ts'
+import { buildDockerGuest } from './build-docker-guest.ts'
 
 const root = resolve(import.meta.dir, '..')
 
@@ -34,5 +34,5 @@ if (import.meta.main) {
   }
   // Build into the clean package directory; development artifacts cannot enter the tarball.
   const docker = join(root, 'packages', 'vela', 'dist', 'docker')
-  await buildDockerAdapter(docker)
+  await buildDockerGuest(docker)
 }

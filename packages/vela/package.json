@@ -10,9 +10,6 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "imports": {
-    "#docker-adapter": "./dist/docker/adapter.mjs"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

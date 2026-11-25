@@ -80,8 +80,7 @@ test('MCP tools are deferred under mcp__<server>__<tool>; tool_search loads them
     responses: [
       (req) => {
         expect(req.tools).not.toContain('mcp__docs__search_pages')
-        // Connected or still connecting, the server is named in the system prompt
-        expect(req.system).toContain('mcp__docs')
+        expect(req.system).not.toContain('<mcp_servers>')
         return fauxToolCall('tool_search', { query: 'search pages', limit: 1 })
       },
       (req) => {
@@ -294,7 +293,7 @@ test('configuration errors and failed servers are reported once; /mcp shows stat
   expect(closed).toBe(true)
 })
 
-test('servers still connecting are listed after the direct wait; dispose stops a connect in progress', async () => {
+test('direct wait avoids transient <mcp_servers> injection and dispose stops connects in progress', async () => {
   // Servers that never answer initialize
   const closed: string[] = []
   const hanging = async (entry: { name: string }): Promise<Transport> => {
@@ -334,8 +333,9 @@ test('servers still connecting are listed after the direct wait; dispose stops a
     ],
     responses: [
       (req) => {
-        expect(req.system).toContain('- mcp__slow — Slow docs')
-        expect(req.system).toContain('- mcp__partly')
+        expect(req.system).not.toContain('<mcp_servers>')
+        expect(req.system).not.toContain('- mcp__slow')
+        expect(req.system).not.toContain('- mcp__partly')
         expect(req.system).not.toContain('mcp__gone')
         expect(req.system).not.toContain('- mcp__docs')
         expect(req.tools).toContain('mcp__docs__search_pages')

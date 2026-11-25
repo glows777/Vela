@@ -22,7 +22,11 @@ export function createSessionPrompt(
   cwdFor: (id: string) => string,
   shellFor: (id: string) => string | undefined,
   docsPaths: DocsPaths | false | undefined,
+  isLocalFor: (id: string) => boolean = () => true,
+  osFor: (id: string) => string | undefined = () => undefined,
+  dateFor: (id: string) => string | undefined = () => undefined,
 ): SystemPromptBuilder {
+  const renderDocs = docs(resolveDocs(docsPaths))
   return new SystemPromptBuilder({
     hasReplacement: (ctx) => resource(ctx.sessionId).systemPrompt !== undefined,
     sections: [
@@ -33,7 +37,11 @@ export function createSessionPrompt(
       { name: 'tools', core: true, render: toolList() },
       { name: 'deferred_tools', render: deferredTools() },
       { name: 'rules', core: true, render: rules() },
-      { name: 'docs', core: true, render: docs(resolveDocs(docsPaths)) },
+      {
+        name: 'docs',
+        core: true,
+        render: (ctx) => (isLocalFor(ctx.sessionId) ? renderDocs(ctx) : null),
+      },
       {
         name: 'addendum',
         render: (ctx) =>
@@ -60,7 +68,9 @@ export function createSessionPrompt(
         name: 'env',
         render: (ctx) =>
           environment({
+            os: osFor(ctx.sessionId),
             shell: shellFor(ctx.sessionId),
+            date: dateFor(ctx.sessionId),
           })(ctx),
       },
       { name: 'extensions', render: extensionSections() },

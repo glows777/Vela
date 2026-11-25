@@ -1,7 +1,11 @@
 import z from 'zod'
 import { followFileInfo } from '../execution/file-info.ts'
 import { createLocalExecutionEnv } from '../execution/local.ts'
-import type { ExecutionEnv } from '../execution/types.ts'
+import {
+  checkGitRepo,
+  type ExecutionEnv,
+  type InternalExecutionEnv,
+} from '../execution/types.ts'
 import { type BinaryResolver, createBinaryResolver } from './binaries.ts'
 import type { ToolDefinition } from './registry.ts'
 
@@ -320,6 +324,8 @@ async function insideGitRepo(
   path: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
+  const fast = (env as InternalExecutionEnv)[checkGitRepo]
+  if (fast) return fast(path, signal)
   for (let current = path; ; ) {
     const git = await env.joinPath([current, '.git'], signal)
     if (!git.ok) throw git.error

@@ -33,7 +33,10 @@ export interface ConfigResourceSplit<Factory = unknown> {
   agentDir: string
   cwd: string
   workspaceSkills: 'all' | 'none' | 'home'
-  workspaceModeAt?: (cwd: string) => ConfigResourceSplit['workspaceSkills']
+  workspaceModeAt?: (
+    cwd: string,
+    environment?: string,
+  ) => ConfigResourceSplit['workspaceSkills']
 }
 
 export type SystemFile = 'SYSTEM.md' | 'APPEND_SYSTEM.md'

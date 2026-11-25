@@ -1,17 +1,13 @@
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
-import { LocalExecutionEnv } from '../../packages/vela/src/driver/execution/local.ts'
-import type {
-  BinaryReader,
-  Result,
-  ShellExecOptions,
-} from '../../packages/vela/src/driver/execution/types.ts'
-import { readEnvironmentInventory } from '../../packages/vela/src/driver/session/environment-inventory.ts'
 import {
   type GuestCredentialConfig,
   prepareGuestCredentials,
-} from './guest-credential-env.ts'
+} from '../../shared/docker-guest-credentials.ts'
+import { readEnvironmentInventory } from '../session/environment-inventory.ts'
+import { LocalExecutionEnv } from './local.ts'
+import type { BinaryReader, Result, ShellExecOptions } from './types.ts'
 
 // This program is supplied by the host on docker exec's argv. Each process owns one operation or reader.
 async function main() {
@@ -121,6 +117,43 @@ async function main() {
             })
           }
           break
+        case 'insideGitRepo': {
+          const abs = await env.absolutePath(args[0], signal)
+          if (!abs.ok) {
+            reply(abs)
+            break
+          }
+          let current = abs.value
+          let inside = false
+          for (;;) {
+            const git = await env.joinPath([current, '.git'], signal)
+            if (!git.ok) {
+              reply(git)
+              current = ''
+              break
+            }
+            const found = await env.exists(git.value, signal)
+            if (!found.ok) {
+              reply(found)
+              current = ''
+              break
+            }
+            if (found.value) {
+              inside = true
+              break
+            }
+            const parent = await env.joinPath([current, '..'], signal)
+            if (!parent.ok) {
+              reply(parent)
+              current = ''
+              break
+            }
+            if (parent.value === current) break
+            current = parent.value
+          }
+          if (current !== '') reply({ ok: true, value: inside })
+          break
+        }
         case 'absolutePath':
           reply(await env.absolutePath(args[0], signal))
           break

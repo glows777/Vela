@@ -9,7 +9,6 @@ export {
   toExtensionConfigView,
   type VelaSettings,
 } from './schema.ts'
-export { savedTrust, saveTrust } from './trust.ts'
 export {
   assertNoLegacyConfigFiles,
   LEGACY_CONFIG_FILES,

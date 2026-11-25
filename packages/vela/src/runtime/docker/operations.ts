@@ -1,17 +1,18 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+// vela-boundary: allow
 import { createInterface } from 'node:readline'
-import type {
-  ExecutionEnv,
-  ExecutionError,
-  FileError,
-  Result,
-  ShellExecOptions,
-} from '../../packages/vela/src/driver/index.ts'
-import type { readEnvironmentInventory } from '../../packages/vela/src/driver/session/environment-inventory.ts'
 import {
-  type InventoryEnv,
+  checkGitRepo,
+  type ExecutionEnv,
+  type ExecutionError,
+  executionEnvOs,
+  type FileError,
+  type InternalExecutionEnv,
+  type Result,
+  type ShellExecOptions,
+  type WorkspaceInventorySnapshot,
   workspaceDiscovery,
-} from '../../packages/vela/src/driver/session/workspace-discovery.ts'
+} from '../../shared/execution.ts'
 
 type Failure = FileError | ExecutionError
 function failure<C extends Failure['code']>(code: C, message: string) {
@@ -170,11 +171,19 @@ export function dockerOperations(
       await channel?.stop()
     }
   }
-  const env: InventoryEnv = {
+  const env: InternalExecutionEnv = {
+    [executionEnvOs]: 'linux',
+    async [checkGitRepo](path, signal) {
+      const result = await file<boolean>('insideGitRepo', [path], signal)
+      if (!result.ok) throw result.error
+      return result.value
+    },
     async [workspaceDiscovery](contextEnabled, signal) {
-      const result = await file<
-        Awaited<ReturnType<typeof readEnvironmentInventory>>
-      >('discoverWorkspace', [contextEnabled], signal)
+      const result = await file<WorkspaceInventorySnapshot>(
+        'discoverWorkspace',
+        [contextEnabled],
+        signal,
+      )
       if (!result.ok) throw result.error
       return result.value
     },
@@ -253,7 +262,11 @@ export function dockerOperations(
         return failure('unavailable', String(e))
       }
       const { onOutput, ...settings } = options
-      return channel.request([command, settings], signal, onOutput)
+      try {
+        return await channel.request([command, settings], signal, onOutput)
+      } finally {
+        await channel.stop()
+      }
     },
     async cleanup() {
       await Promise.all([...active].map((channel) => channel.cleanup()))

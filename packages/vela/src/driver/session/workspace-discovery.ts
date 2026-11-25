@@ -1,7 +1,12 @@
-import type { ExecutionEnv } from '../execution/types.ts'
+import {
+  type ExecutionEnv,
+  workspaceDiscovery,
+} from '../../shared/execution.ts'
 import type { readEnvironmentInventory } from './environment-inventory.ts'
+
+export { workspaceDiscovery }
+
 /** Private fast path for the three discovery loaders, once per prepared location. */
-export const workspaceDiscovery = Symbol.for('vela.private.workspaceDiscovery')
 export type InventoryEnv = ExecutionEnv & {
   [workspaceDiscovery]?: (
     contextEnabled: boolean,

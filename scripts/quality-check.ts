@@ -26,7 +26,6 @@ const ROOT = resolve(import.meta.dir, '..')
 const SOURCES = [
   join(ROOT, 'packages/vela/src'),
   join(ROOT, 'apps/desktop/src'),
-  join(ROOT, 'extensions/docker'),
 ]
 const LINE_LIMIT = 800
 

@@ -59,11 +59,15 @@ export class ProjectExtensions {
     else registry.bindScope(this.deps.registry)
   }
 
-  async prepare(id: string, env: ExecutionEnv): Promise<void> {
+  async prepare(
+    id: string,
+    env: ExecutionEnv,
+    environment = 'local',
+  ): Promise<void> {
     if (!this.deps.split) return
     let pending = this.sessions.get(id)
     if (!pending) {
-      pending = this.acquire(id, env)
+      pending = this.acquire(id, env, environment)
       this.sessions.set(id, pending)
     }
     const shared = await pending
@@ -73,11 +77,15 @@ export class ProjectExtensions {
     this.bound.set(id, scope)
   }
 
-  private async acquire(id: string, env: ExecutionEnv): Promise<SharedScope> {
+  private async acquire(
+    id: string,
+    env: ExecutionEnv,
+    environment = 'local',
+  ): Promise<SharedScope> {
     const { split, config, host, registry, models, dataDir, logger } = this.deps
-    const trusted = env.id === 'node:local' && config.mode(env.cwd) === 'all'
-    const settings = await config.get(id, env)
-    const projectSettings = await config.project(id, env)
+    const trusted = config.mode(env.cwd, environment) === 'all'
+    const settings = await config.get(id, env, environment)
+    const projectSettings = await config.project(id, env, environment)
     const discovered = await loadProjectExtensionEntries(env, {
       trusted,
       agentDir: split!.agentDir,

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { selectTools } from '../../packages/vela/src/cli/setup.ts'
+import { saveTrust } from '../../packages/vela/src/db/index.ts'
 import {
   loadConfig,
   type ThinkingLevel,
@@ -204,10 +205,8 @@ test('real CLI launched from A resumes B and uses B declared prompt and default 
     join(home, 'config.json'),
     JSON.stringify({ dataDir: join(dir.path, 'data') }),
   )
-  writeFileSync(
-    join(home, 'trust.json'),
-    JSON.stringify({ [a]: true, [b]: true }),
-  )
+  saveTrust(home, a, true)
+  saveTrust(home, b, true)
   writeFileSync(
     join(home, 'scenario.json'),
     JSON.stringify({

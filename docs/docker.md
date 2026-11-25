@@ -1,12 +1,12 @@
 # Docker execution environment
 
-This private adapter runs Linux containers from a non-root Linux or macOS host and implements Vela's existing `ExecutionEnv` contract. The workspace build emits `dist/docker/adapter.mjs` and its sibling `guest.cjs`. The owner-side factory is `openDockerEnvironment({ dataDir, name, image, network }, cwd)`. Its cwd defaults to `/workspace`. The CLI ships both files under the installed package’s private `dist/docker` directory. It resolves named entries from the owner's `environments` settings.
+This runtime adapter runs Linux containers from a non-root Linux or macOS host and implements Vela's `ExecutionEnv` contract via `EnvironmentRegistry` (`packages/vela/src/runtime/environments.ts`). The workspace build emits `dist/docker/guest.cjs`, bundled inside the installed `@glows777/vela` package. The owner-side factory resolves named entries from the owner's `environments` settings.
 
-First preparation creates or reopens one labeled container per canonical data directory and environment name. It mounts the allocated workspace and, in restricted mode, one read-only proxy directory. It runs as the host's non-root uid:gid, and checks for both `rg` and `fd` before returning an adapter. The owner supplies a local image. The reference Dockerfile includes the expected tools. Network defaults to `on`. The `off` setting uses Docker's `none` network. Commands run through the fixed local Linux Docker socket at `unix:///var/run/docker.sock`.
+First preparation creates or reopens one labeled container per canonical data directory and environment name. It mounts the allocated workspace and, in restricted mode, one read-only proxy directory. It runs as the host's non-root uid:gid, and checks for both `rg` and `fd` before returning an adapter. The owner supplies a local image. The reference Dockerfile (`packages/vela/src/runtime/docker/Dockerfile`) includes the expected tools. Network defaults to `on`. The `off` setting uses Docker's `none` network. Commands run through `DOCKER_HOST` or the default local Linux Docker socket at `unix:///var/run/docker.sock`.
 
 Cleanup closes open readers and stops this adapter's command groups. The named container and result files survive adapter cleanup. A change to the image, network, restricted allowlist, or user requires explicit owner recreation of the labeled container. Recreating it preserves the bind-mounted workspace and discards container-local files.
 
-On macOS the engine must already serve the fixed socket and share the owner-allocated workspace. Files written there must be owned by the host user and writable from both sides. The group reported on the Mac can differ from the group seen in the Linux container.
+On macOS the engine must already serve the configured socket and share the owner-allocated workspace. Files written there must be owned by the host user and writable from both sides. The group reported on the Mac can differ from the group seen in the Linux container.
 
 ### Host credentials with networking on
 

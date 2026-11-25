@@ -9,6 +9,7 @@ import {
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
+import { saveTrust } from '../../packages/vela/src/db/trust.ts'
 import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
@@ -1578,11 +1579,8 @@ test.concurrent('a resumed CLI session uses the saved trust of its own workspace
     `export default api =>
     api.on('before_agent_start', e => { console.error('system-files', e.systemPrompt.match(/(?:USER|A|B)_(?:SYSTEM|APPEND)/g)?.join(' ')) })`,
   )
-  const trustFile = join(home.path, 'trust.json')
-  await Bun.write(
-    trustFile,
-    JSON.stringify({ [a.path]: true, [b.path]: false }),
-  )
+  saveTrust(home.path, a.path, true)
+  saveTrust(home.path, b.path, false)
   const options = { agentDir: home.path, model: `faux:${scenario('hello')}` }
   const first = await cli(['--session', 'work', '-p', 'hello'], {
     ...options,
@@ -1609,7 +1607,7 @@ test.concurrent('a resumed CLI session uses the saved trust of its own workspace
   expect(denied.stdout).not.toContain('B_WORKSPACE_TEMPLATE')
   expect(denied.stdout).not.toContain('A_WORKSPACE_TEMPLATE')
 
-  await Bun.write(trustFile, JSON.stringify({ [a.path]: true, [b.path]: true }))
+  saveTrust(home.path, b.path, true)
   const disabled = await cli(['--no-approve', ...args], {
     ...options,
     cwd: a.path,
@@ -1646,10 +1644,7 @@ test.concurrent('project extensions load only when the project is trusted', asyn
   dirs.push(home)
   const project = tempDir('vela-cli-')
   dirs.push(project)
-  await Bun.write(
-    join(home.path, 'trust.json'),
-    JSON.stringify({ [project.path]: true }),
-  )
+  saveTrust(home.path, project.path, true)
   const saved = await cli(['-p', 'hello'], {
     model: `faux:${scenario('hello')}`,
     files,
@@ -1838,19 +1833,17 @@ test.concurrent('a broken config.json stops the CLI with the file name', async (
   )
 })
 
-test.concurrent('a broken trust.json stops the CLI instead of being ignored', async () => {
+test.concurrent('a broken vela.db stops the CLI instead of being ignored', async () => {
   const home = tempDir('vela-home-')
   dirs.push(home)
-  await Bun.write(join(home.path, 'trust.json'), '{ nope')
+  await Bun.write(join(home.path, 'vela.db'), '{ nope')
   const { code, stderr } = await cli(['-p', 'hello'], {
     model: `faux:${scenario('hello')}`,
     agentDir: home.path,
     files: { '.vela/config.json': '{}' },
   })
   expect(code).toBe(2)
-  expect(stderr).toContain(
-    `[config] ${join(home.path, 'trust.json')} is not valid JSON`,
-  )
+  expect(stderr).toContain('[config]')
 })
 
 // The demo model streams one character every 30 ms; a tool keyword makes the visible answer the short

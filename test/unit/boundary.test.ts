@@ -7,8 +7,12 @@ import { join, relative, resolve } from 'node:path'
  */
 const SRC = resolve(import.meta.dir, '../../packages')
 
-/** Allowed places: the CLI and test tools */
-const ALLOWED = ['vela/src/cli/', 'vela/src/testing/']
+/** Allowed places: the CLI, the standalone Docker guest binary entrypoint, and test tools */
+const ALLOWED = [
+  'vela/src/cli/',
+  'vela/src/driver/execution/docker-guest.ts',
+  'vela/src/testing/',
+]
 
 const FORBIDDEN: [RegExp, string][] = [
   [/\bconsole\.\w+/, 'console'],

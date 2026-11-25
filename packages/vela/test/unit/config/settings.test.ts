@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
-import { savedTrust, saveTrust } from '../../../src/config/index.ts'
+import { savedTrust, saveTrust } from '../../../src/db/index.ts'
 import { projectDataDir } from '../../../src/driver/config/paths.ts'
 import { loadConfig, projectTrustRequired } from '../../../src/load-config.ts'
 import { interpolate } from '../../../src/shared/interpolate.ts'
@@ -467,16 +467,12 @@ test('trust decisions are saved per directory and apply to subdirectories', () =
   expect(savedTrust(agentDir, project)).toBe(true)
 })
 
-test('a broken trust.json fails loudly instead of being overwritten', () => {
+test('a broken vela.db fails loudly instead of being overwritten', () => {
   const { agentDir, root } = setup()
-  const file = join(agentDir, 'trust.json')
-  writeFileSync(file, '{ "/a": true,')
-  expect(() => savedTrust(agentDir, root)).toThrow(`${file} is not valid JSON`)
-  expect(() => saveTrust(agentDir, root, true)).toThrow(
-    `${file} is not valid JSON`,
-  )
-  writeFileSync(file, '[]')
-  expect(() => savedTrust(agentDir, root)).toThrow('must be an object')
+  const file = join(agentDir, 'vela.db')
+  writeFileSync(file, 'not a sqlite database')
+  expect(() => savedTrust(agentDir, root)).toThrow()
+  expect(() => saveTrust(agentDir, root, true)).toThrow()
 })
 
 test('running in the home directory reads ~/.vela once, as user settings, without asking for trust', () => {

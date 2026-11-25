@@ -1,6 +1,7 @@
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import { savedTrust, saveTrust, type VelaSettings } from '../config/index.ts'
+import type { VelaSettings } from '../config/index.ts'
+import { savedTrust, saveTrust } from '../db/index.ts'
 import {
   assertSessionId,
   getToolListError,
@@ -580,7 +581,7 @@ export async function resolveTrust(options: {
 }
 
 function notTrusted(cwd: string, agentDir: string, reason: string): string {
-  return `[trust] Did not load config, extensions, skills and prompts from ${resolve(cwd)} (${reason}; edit ${join(agentDir, 'trust.json')} to change this)`
+  return `[trust] Did not load config, extensions, skills and prompts from ${resolve(cwd)} (${reason}; pass --approve or update trusted_paths in ${join(agentDir, 'vela.db')} to change this)`
 }
 
 async function question(prompt: string): Promise<string> {

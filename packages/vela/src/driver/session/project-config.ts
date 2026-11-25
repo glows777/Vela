@@ -17,39 +17,51 @@ export class ProjectConfig {
     private readonly logger: VelaLogger,
   ) {}
 
-  mode(cwd: string) {
+  mode(cwd: string, environment = 'local') {
     const split = this.split
     return !split
       ? undefined
-      : cwd === split.cwd
+      : environment === 'local' && cwd === split.cwd
         ? split.workspaceSkills
-        : (split.workspaceModeAt?.(cwd) ?? 'none')
+        : (split.workspaceModeAt?.(cwd, environment) ?? 'none')
   }
 
   clear(id: string): void {
     this.snapshots.delete(id)
   }
 
-  async get(id: string, env: ExecutionEnv): Promise<VelaSettings> {
-    return (await this.snapshot(id, env)).settings
+  async get(
+    id: string,
+    env: ExecutionEnv,
+    environment = 'local',
+  ): Promise<VelaSettings> {
+    return (await this.snapshot(id, env, environment)).settings
   }
 
-  async project(id: string, env: ExecutionEnv): Promise<VelaSettings> {
-    return (await this.snapshot(id, env)).project
+  async project(
+    id: string,
+    env: ExecutionEnv,
+    environment = 'local',
+  ): Promise<VelaSettings> {
+    return (await this.snapshot(id, env, environment)).project
   }
 
-  private snapshot(id: string, env: ExecutionEnv) {
+  private snapshot(id: string, env: ExecutionEnv, environment = 'local') {
     let pending = this.snapshots.get(id)
     if (!pending) {
       const split = this.split
       pending = split
         ? loadProjectSettings(env, {
             cwd: env.cwd,
-            trusted: env.id === 'node:local' && this.mode(env.cwd) === 'all',
+            trusted: this.mode(env.cwd, environment) === 'all',
             agentDir: split.agentDir,
             env: split.env,
           }).then(async ({ settings }) => {
-            if (settings.dataDir && env.cwd !== split.cwd) {
+            if (
+              settings.dataDir &&
+              env.id === 'node:local' &&
+              env.cwd !== split.cwd
+            ) {
               const path = await env.absolutePath(settings.dataDir)
               if (!path.ok) throw path.error
               if (path.value !== this.hostDataDir)

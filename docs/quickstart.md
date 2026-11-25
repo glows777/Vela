@@ -209,7 +209,7 @@ Try `hello`, `list files`, `read package.json`, `test bash`, then `/status`, `/u
 
 ## Where things are stored
 
-Everything lives under `~/.vela` (set `VELA_DIR` to use another directory): `config.json`, `trust.json`, user `extensions/`, `skills/` and `prompts/` and an optional `AGENTS.md` at the top, and one data directory per project folder under `projects/`, holding its sessions, memory, usage records and knowledge base. The full layout is in [Settings](settings.md#data-directory).
+Everything lives under `~/.vela` (set `VELA_DIR` to use another directory): `config.json`, `vela.db` (`trusted_paths`), user `extensions/`, `skills/` and `prompts/` and an optional `AGENTS.md` at the top, and one data directory per project folder under `projects/`, holding its sessions, memory, usage records and knowledge base. The full layout is in [Settings](settings.md#data-directory).
 
 Vela never writes into the project folder itself. A project can add its own `.vela/config.json`, `.vela/extensions/`, prompt templates and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`), which load only after you trust the project. `AGENTS.md` or `CLAUDE.md` in the project is put into the system prompt either way, like pi. See [Project trust](settings.md#project-trust).
 
