@@ -50,7 +50,7 @@ test('oversized result is saved before returning a preview and can be read throu
   const result = await tools.large!.execute!({}, { toolCallId: 'large' })
   const path = String(result).match(/Full output: (.+?);/)![1]!
   expect(await Bun.file(path).text()).toBe(raw)
-  const page = await tools.read_file!.execute!(
+  const page = await tools.read!.execute!(
     { path, offset: 1001, limit: 1 },
     { toolCallId: 'read' },
   )
@@ -68,7 +68,7 @@ test('long Unicode lines can be continued without missing or splitting a charact
     const page = String(
       await readFileTool.execute({ path, offset: 1, limit: 1, column }),
     )
-    const body = page.split('\n\n[read_file:')[0]!
+    const body = page.split('\n\n[read:')[0]!
     expect(body.length).toBeGreaterThan(0)
     expect(body.isWellFormed()).toBe(true)
     recovered += body
@@ -245,7 +245,7 @@ test('AI SDK passes the saved reference to the next step and accepts a paged fol
         const path =
           req.toolResults[0]!.output.match(/Full output: (.+?);/)![1]!
         expect(req.toolResults[0]!.raw).toMatchObject({ type: 'text' })
-        return fauxToolCall('read_file', {
+        return fauxToolCall('read', {
           path,
           offset: 1001,
           limit: 1,
@@ -311,10 +311,7 @@ test('Bash rejects an invalid timeout and reports a missing shell without runnin
   if (!(result instanceof ToolExecutionResult))
     throw new Error('Expected an inline result')
   expect(result.text).toContain('The command did not run')
-  expect(result.execution).toMatchObject({
-    isError: true,
-    toolUnavailable: true,
-  })
+  expect(result.execution).toMatchObject({ isError: true })
 })
 
 test('Bash reports a missing working directory without disabling the shell', async () => {
@@ -334,7 +331,6 @@ test('Bash reports a missing working directory without disabling the shell', asy
     `Working directory unavailable: ${missingDirectory}`,
   )
   expect(result.execution).toMatchObject({ isError: true })
-  expect(result.execution?.toolUnavailable).toBeUndefined()
 })
 
 posixTest('Bash runs commands with the configured shellPath', async () => {

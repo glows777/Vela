@@ -10,14 +10,15 @@ import { createFauxModel } from '../../../../src/testing/core/faux.ts'
 
 const EMPTY_TOOLS = { sdkTools: {}, toolDefinitions: [], hasHostedTools: false }
 
-test('each image counts as 4800 characters, independent of base64 length', async () => {
+test('each image counts as 1200 tokens, independent of base64 length', async () => {
   const messages = (data: string): ModelMessage[] => [
     { role: 'user', content: [{ type: 'image', data, mimeType: 'image/png' }] },
   ]
   const small = messages('AAAA')
   const large = messages('A'.repeat(2_000_000))
-  expect(estimateMessageTokens(small)).toBe(1440)
-  expect(estimateMessageTokens(large)).toBe(1440)
+  expect(estimateMessageTokens(small)).toBeGreaterThanOrEqual(1200)
+  expect(estimateMessageTokens(small)).toBeLessThan(1260)
+  expect(estimateMessageTokens(large)).toBe(estimateMessageTokens(small))
   const request = createRequestSnapshot(
     createFauxModel(),
     '',
@@ -27,8 +28,8 @@ test('each image counts as 4800 characters, independent of base64 length', async
   expect(estimateRequestTokens(request, small)).toBe(
     estimateRequestTokens(request, large),
   )
-  expect(estimateRequestTokens(request)).toBeGreaterThanOrEqual(1440)
-  expect(estimateRequestTokens(request)).toBeLessThan(1500)
+  expect(estimateRequestTokens(request)).toBeGreaterThanOrEqual(1200)
+  expect(estimateRequestTokens(request)).toBeLessThan(1260)
 })
 
 test('request-only non-vision fallback covers user and tool images without changing history', async () => {
@@ -52,9 +53,7 @@ test('request-only non-vision fallback covers user and tool images without chang
           toolCallId: '1',
           output: {
             type: 'content',
-            value: [
-              { type: 'image-data', data: 'AAAA', mediaType: 'image/png' },
-            ],
+            value: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }],
           },
         },
       ],

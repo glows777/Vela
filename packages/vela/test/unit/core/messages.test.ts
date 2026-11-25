@@ -23,7 +23,7 @@ test('withoutForeignReasoning keeps text and tool calls, dropping another model 
       {
         type: 'tool_call',
         toolCallId: 'call-1',
-        toolName: 'read_file',
+        toolName: 'read',
         input: {},
       },
     ],

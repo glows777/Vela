@@ -254,14 +254,6 @@ export class ChatLog {
     return this.tools.get(id)
   }
 
-  /** The top-level block a nested call belongs to: nested ids are `<parent>/<n>`, at any depth */
-  rootTool(parentToolCallId: string): ToolBlock | undefined {
-    return (
-      this.tools.get(parentToolCallId) ??
-      this.tools.get(parentToolCallId.split('/', 1)[0] as string)
-    )
-  }
-
   /**
    * A tool call ended. A failure moves out of the fold: folding it would hide the one line the reader has
    * to see (Claude Code pops out failed calls the same way).

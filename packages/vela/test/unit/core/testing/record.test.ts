@@ -55,7 +55,7 @@ test('a recorded session replays offline with the same events and answers', asyn
   const { t, path, scenario, dir } = await record(
     {
       responses: [
-        fauxToolCall('read_file', { path: 'notes.txt' }),
+        fauxToolCall('read', { path: 'notes.txt' }),
         (req) => fauxText(`It says: ${req.toolResults[0]?.output}`),
         fauxText('Second turn'),
       ],
@@ -67,7 +67,7 @@ test('a recorded session replays offline with the same events and answers', asyn
     expect(scenario.inputs).toEqual(['Read notes.txt', 'Say one more thing'])
     expect(scenario.responses).toHaveLength(3)
     expect(scenario.responses[0]!.toolCalls).toMatchObject([
-      { name: 'read_file', input: { path: 'notes.txt' } },
+      { name: 'read', input: { path: 'notes.txt' } },
     ])
     expect(scenario.responses[1]!.text).toContain('remember the milk')
 

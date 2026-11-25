@@ -16,6 +16,7 @@ export async function prepareCallResult({
   name,
   results,
   environment,
+  resolveEnvironment,
   call,
   started,
   signal,
@@ -26,6 +27,7 @@ export async function prepareCallResult({
   name: string
   results: ToolResultStore
   environment?: ExecutionEnv
+  resolveEnvironment?: () => Promise<ExecutionEnv | undefined>
   call: CallRecord
   started: number
   signal?: AbortSignal
@@ -54,7 +56,7 @@ export async function prepareCallResult({
           : (JSON.stringify(raw, null, 2) ?? String(raw))
     // Only what the model gets decides: a string is the text itself (its JSON escaping
     // doesn't count), and a ToolExecutionResult's value is structured data for the
-    // history (e.g. edit_file's diff)
+    // history (e.g. edit's diff)
     if (
       !stored &&
       (text.length > maxChars ||
@@ -68,35 +70,47 @@ export async function prepareCallResult({
           : typeof value === 'string'
             ? value
             : (JSON.stringify(value, null, 2) ?? String(value))
-      const env =
-        environment ??
-        createSessionLocalExecutionEnv({
-          cwd: process.cwd(),
-          tempRoot: results.dir,
-        })
-      const temp = await env.createTempFile(
-        { prefix: 'vela-result-', suffix: '.txt' },
-        signal,
-      )
-      if (!temp.ok) spillFailed = true
-      else {
-        const written = await env.writeFile(temp.value, full, signal)
-        if (!written.ok) {
+      let spillEnv = environment
+      if (!spillEnv && resolveEnvironment) {
+        try {
+          spillEnv = await resolveEnvironment()
+        } catch {
           spillFailed = true
-          // Cleanup is best effort; an incomplete file is never published.
-          const removed = await env.remove(temp.value, { force: true }).then(
-            (result) => result.ok,
-            () => false,
-          )
-          if (!removed)
-            warning += ' The incomplete output file could not be removed.'
-        } else
-          stored = new StoredToolResult(
-            temp.value,
-            results.indexPath,
-            Buffer.byteLength(full),
-            truncateResult(text, maxChars),
-          )
+        }
+      }
+      if (!spillFailed) {
+        const env =
+          spillEnv ??
+          createSessionLocalExecutionEnv({
+            cwd: process.cwd(),
+            tempRoot: results.dir,
+          })
+        const temp = await env.createTempFile(
+          { prefix: 'vela-result-', suffix: '.txt' },
+          signal,
+        )
+        if (!temp.ok) spillFailed = true
+        else {
+          const written = await env.writeFile(temp.value, full, signal)
+          if (!written.ok) {
+            spillFailed = true
+            // Cleanup is best effort; an incomplete file is never published.
+            const removed = await env.remove(temp.value, { force: true }).then(
+              (result) => result.ok,
+              () => false,
+            )
+            if (!removed)
+              warning += ' The incomplete output file could not be removed.'
+          } else {
+            const cut = truncateByLines(text, maxChars)
+            stored = new StoredToolResult(
+              temp.value,
+              results.indexPath,
+              Buffer.byteLength(full),
+              cut.preview,
+            )
+          }
+        }
       }
     }
     const record = await history.append<ResultRecord>({
@@ -129,7 +143,7 @@ export async function prepareCallResult({
             }
           : {
               output: spillFailed
-                ? `${truncateResult(text, maxChars)}\n\n${warning}`
+                ? `${truncateByLines(text, maxChars).preview}\n\n${warning}`
                 : (value ?? null),
             }),
     })
@@ -156,21 +170,27 @@ export async function prepareCallResult({
     onPersistenceFailure(failure)
     throw failure
   }
+  const cut =
+    stored && !(raw instanceof StoredToolResult)
+      ? truncateByLines(text, maxChars)
+      : undefined
   const output: string | ToolContent =
     raw instanceof ToolExecutionResult && raw.content
       ? stored || spillFailed
         ? previewToolContent(
             raw.content,
             maxChars,
-            stored ? truncationNote(stored) : warning,
+            stored
+              ? truncationNote(stored, cut ?? truncateByLines(text, maxChars))
+              : warning,
           )
         : raw.content
       : stored
         ? raw instanceof StoredToolResult
           ? stored.preview
-          : `${stored.preview}\n\n${truncationNote(stored)}`
+          : `${stored.preview}\n\n${truncationNote(stored, cut!)}`
         : spillFailed
-          ? `${truncateResult(text, maxChars)}\n\n${warning}`
+          ? `${truncateByLines(text, maxChars).preview}\n\n${warning}`
           : text
   return { output, execution, stored }
 }
@@ -186,7 +206,10 @@ function previewToolContent(
   return [
     ...content.map((part) =>
       part.type === 'text'
-        ? { ...part, text: truncateResult(part.text, captionChars, true) }
+        ? {
+            ...part,
+            text: truncateByLines(part.text, captionChars, true).preview,
+          }
         : part,
     ),
     {
@@ -196,20 +219,67 @@ function previewToolContent(
   ]
 }
 
-function truncationNote(stored: StoredToolResult): string {
-  return `[Full output: ${stored.path}; use read_file with offset to read the rest.]`
+interface LineTruncation {
+  preview: string
+  shownLines: number
+  totalLines: number
+  partialLine: boolean
 }
 
-function truncateResult(text: string, maxChars: number, compact = false) {
-  if (text.length <= maxChars) return text
+function truncationNote(stored: StoredToolResult, cut: LineTruncation): string {
+  if (cut.partialLine)
+    return `[Showing part of line 1 of ${cut.totalLines} lines. Full output: ${stored.path}; use read with offset=1, column=${cut.preview.length} to read the rest.]`
+  return `[Showing lines 1-${cut.shownLines} of ${cut.totalLines}. Full output: ${stored.path}; use read with offset=${cut.shownLines + 1} to read the rest.]`
+}
 
-  const previewChars = compact ? Math.max(0, maxChars - 1) : maxChars
-  let headSize = previewChars
+function sliceUtf16Safe(text: string, limit: number): string {
+  let end = limit
   if (
-    text.charCodeAt(headSize - 1) >= 0xd800 &&
-    text.charCodeAt(headSize - 1) <= 0xdbff
+    end > 0 &&
+    text.charCodeAt(end - 1) >= 0xd800 &&
+    text.charCodeAt(end - 1) <= 0xdbff
   )
-    headSize--
-  const head = text.slice(0, headSize)
-  return compact && maxChars > 0 ? `${head}…` : head
+    end--
+  return text.slice(0, end)
+}
+
+function truncateByLines(
+  text: string,
+  maxChars: number,
+  compact = false,
+): LineTruncation {
+  const lines = text.split('\n')
+  const totalLines = lines.length
+  if (text.length <= maxChars)
+    return {
+      preview: text,
+      shownLines: totalLines,
+      totalLines,
+      partialLine: false,
+    }
+
+  const out: string[] = []
+  let used = 0
+  for (const line of lines) {
+    const added = out.length > 0 ? line.length + 1 : line.length
+    if (used + added > maxChars) break
+    out.push(line)
+    used += added
+  }
+  if (out.length === 0) {
+    const budget = compact ? Math.max(0, maxChars - 1) : maxChars
+    const head = sliceUtf16Safe(text, budget)
+    return {
+      preview: compact && maxChars > 0 ? `${head}…` : head,
+      shownLines: 1,
+      totalLines,
+      partialLine: true,
+    }
+  }
+  return {
+    preview: out.join('\n'),
+    shownLines: out.length,
+    totalLines,
+    partialLine: false,
+  }
 }

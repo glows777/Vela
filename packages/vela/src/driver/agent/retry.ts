@@ -106,21 +106,51 @@ function errorText(error: unknown): string {
   return text
 }
 
+const TRANSIENT_NETWORK =
+  /ECONNRESET|EPIPE|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|UND_ERR_SOCKET|timeout|timed out|fetch failed|network|No output generated/i
+const STRICT_HTTP_STATUS =
+  /(?:^|\bHTTP[ :]+|\bstatus(?: code)?[ :]+)([45]\d{2})\b/i
+
+function errorChainInfo(error: unknown): {
+  apiError?: ReturnType<typeof inspectProviderApiError>
+  text: string
+  headers?: Record<string, string>
+} {
+  let current = error
+  let text = ''
+  let firstApiError: ReturnType<typeof inspectProviderApiError>
+  let headers: Record<string, string> | undefined
+  for (let depth = 0; depth < 5 && current != null; depth++) {
+    const apiError = inspectProviderApiError(current)
+    if (apiError) {
+      firstApiError ??= apiError
+      headers ??= apiError.responseHeaders
+      text += `\n${apiError.responseBody ?? ''}`
+    }
+    text += `\n${current instanceof Error ? current.message : String(current)}`
+    if (current instanceof Error) {
+      if ('code' in current && current.code !== undefined)
+        text += `\n${String(current.code)}`
+      current = current.cause
+    } else break
+  }
+  return { apiError: firstApiError, text, headers }
+}
+
 export function isRetryable(error: unknown): boolean {
   // Provider HTTP errors: message is the response body text (e.g. "Rate limit reached ...") without
   // the status code, so use statusCode (AI SDK retries 408/409/429/5xx by default). A ChatGPT plan code
   // decides on its own, because the status would be wrong both ways: a plan limit is a 429 not to retry,
-  // and an unavailable plan check is a 503 to retry.
-  const apiError = inspectProviderApiError(error)
-  const text = errorText(error)
+  // and an unavailable plan check is a 503 to retry. Billing/quota exhaustion also takes precedence over 429.
+  const { apiError, text } = errorChainInfo(error)
   if (isNonRetryableSubscriptionError(text)) return false
   if (isRetryableSubscriptionError(text)) return true
-  if (apiError) return apiError.isRetryable
+  if (BILLING.test(text)) return false
+  if (apiError) return apiError.statusCode !== 402 && apiError.isRetryable
   if (!(error instanceof Error)) return false
 
   const message = error.message || ''
-
-  const statusMatch = message.match(/(\d{3})/)
+  const statusMatch = STRICT_HTTP_STATUS.exec(message)
   if (statusMatch) {
     const status = parseInt(statusMatch[1]!, 10)
     // 429 Too Many Requests, 529 Site is overloaded, 408 Request Timeout: transient, retry
@@ -133,16 +163,56 @@ export function isRetryable(error: unknown): boolean {
     if (status >= 400 && status < 500) return false
   }
 
-  // Network problems (connection reset, broken pipe, timeout, fetch failed) are retryable
-  if (message.includes('ECONNRESET') || message.includes('EPIPE')) return true
-  if (message.includes('ETIMEDOUT') || message.includes('timeout')) return true
-  if (message.includes('fetch failed') || message.includes('network'))
-    return true
-  // AI SDK wraps stream errors in NoOutputGeneratedError: the model produced no output,
-  // usually a transient model problem, so retry
-  if (message.includes('No output generated')) return true
+  // Network problems across the error/cause chain (reset, pipe, socket close, timeout, fetch failed) are retryable
+  return TRANSIENT_NETWORK.test(text)
+}
 
-  return false
+function headerValue(
+  headers: Record<string, string> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) return undefined
+  const lower = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers))
+    if (key.toLowerCase() === lower) return value
+  return undefined
+}
+
+/** Parses `retry-after-ms` or `retry-after` (seconds or HTTP date) from response headers, or returns undefined. */
+function parseRetryAfterMs(error: unknown): number | undefined {
+  const { headers } = errorChainInfo(error)
+  if (!headers) return undefined
+  const msHeader = headerValue(headers, 'retry-after-ms')
+  if (msHeader !== undefined) {
+    const parsed = Number(msHeader.trim())
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+  const afterHeader = headerValue(headers, 'retry-after')
+  if (afterHeader !== undefined) {
+    const trimmed = afterHeader.trim()
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      const seconds = Number(trimmed)
+      if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
+    }
+    const timestamp = Date.parse(trimmed)
+    if (Number.isFinite(timestamp)) return Math.max(0, timestamp - Date.now())
+  }
+  return undefined
+}
+
+/** Delay before retrying a failed request: honors Retry-After headers when present, else exponential backoff. */
+export function retryDelayMs(
+  error: unknown,
+  attempt: number,
+  baseMs = 500,
+  maxMs = 30000,
+): number {
+  const hinted = parseRetryAfterMs(error)
+  if (hinted !== undefined) {
+    const ceiling = Math.max(maxMs, 60_000)
+    return Math.min(Math.max(0, Math.round(hinted)), ceiling)
+  }
+  return calculateDelay(attempt, baseMs, maxMs)
 }
 
 // --- Exponential backoff with jitter ---

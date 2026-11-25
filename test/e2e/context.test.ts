@@ -11,7 +11,6 @@ import {
   fauxHang,
   fauxSummary,
   fauxText,
-  fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
 import {
   cleanupTestVelas,
@@ -37,113 +36,11 @@ async function requestTokens(t: TestVela): Promise<number> {
   )
 }
 
-const bigFile = (i: number) =>
-  `// file ${i}\n${'export const value = 42 // padding\n'.repeat(120)}`
-
-test('microcompact folds old tool results once more than five calls have completed', async () => {
-  const files = Object.fromEntries(
-    Array.from({ length: 8 }, (_, i) => [`f${i}.ts`, bigFile(i)]),
-  )
-  const t = createTestVela({
-    files,
-    // Try microcompact before every request; summary never triggers
-    limits: {
-      microcompactThreshold: 1,
-      minMicroSavings: 1,
-      summaryThreshold: 1e9,
-    },
-    responses: [
-      ...Array.from({ length: 8 }, (_, i) =>
-        fauxToolCall('read_file', { path: `f${i}.ts` }),
-      ),
-      fauxText('Read them all'),
-    ],
-  })
-
-  await t.run('Read f0 through f7')
-
-  const micro = t
-    .eventsOf('context_prepare')
-    .filter((e) => e.action === 'micro')
-  expect(micro.length).toBeGreaterThan(0)
-  expect(micro[0]!.after).toBeLessThan(micro[0]!.before)
-
-  // In the last request the earliest tool results are folded into references; the latest 5 stay as is
-  const last = JSON.stringify(t.model.calls.at(-1)!.prompt)
-  expect(last).toContain('tool result preview omitted')
-  expect(last).toContain('// file 7')
-  const omitted = t.model.calls
-    .at(-1)!
-    .prompt.flatMap((message) =>
-      message.role === 'tool' ? message.content : [],
-    )
-    .filter((part) => part.type === 'tool-result')
-    .find((part) =>
-      JSON.stringify(part.output).includes('tool result preview omitted'),
-    )!
-  expect(omitted.output.type).toBe('text')
-  const text = (omitted.output as { type: 'text'; value: string }).value
-  expect(text).toContain('Full output: ')
-  const path = text.match(/Full output: (.+?);/)![1]!
-  expect(await Bun.file(path).text()).toContain('// file 0')
-  // Folded results can be recovered from their path
-  const saved = await t.readData('sessions/default/transcript.jsonl')
-  expect(saved).toContain('tool result preview omitted')
-  expect(t.lastAssistantText()).toBe('Read them all')
-})
-
-test('turning microcompaction off keeps tool results and still summarizes at the threshold', async () => {
-  const files = Object.fromEntries(
-    Array.from({ length: 8 }, (_, i) => [`f${i}.ts`, bigFile(i)]),
-  )
-  const t = createTestVela({
-    files,
-    // Fold as soon as possible if microcompaction were on; summaries still have their own threshold
-    limits: {
-      microcompact: false,
-      microcompactThreshold: 1,
-      minMicroSavings: 1,
-      summaryThreshold: 50_000,
-    },
-    responses: [
-      ...Array.from({ length: 8 }, (_, i) =>
-        fauxToolCall('read_file', { path: `f${i}.ts` }),
-      ),
-      fauxText('Read them all'),
-      fauxText('Answer 0'),
-      fauxText('Answer 1'),
-      fauxText('Answer 2'),
-      // The provider reports a prompt size above the summary threshold; the local estimate
-      // for this history is far below it
-      fauxText('Answer 3', { usage: { input: 60_000 } }),
-      fauxText('Answer 4'),
-    ],
-    generate: [fauxSummary()],
-  })
-
-  await t.run('Read f0 through f7')
-
-  // The old tool results stay in the request instead of becoming file references
-  expect(
-    t.eventsOf('context_prepare').filter((e) => e.action === 'micro'),
-  ).toEqual([])
-  const last = JSON.stringify(t.model.calls.at(-1)!.prompt)
-  expect(last).toContain('// file 0')
-  expect(last).not.toContain('tool result preview omitted')
-
-  // Automatic summaries keep following autoCompaction
-  for (let i = 0; i < 5; i++) await t.run(`Question ${i}`)
-  expect(t.eventsOf('compaction_start')).toEqual([
-    { type: 'compaction_start', reason: 'threshold' },
-  ])
-  expect(t.lastAssistantText()).toBe('Answer 4')
-})
-
 test('summary compaction replaces old history with a structured summary and keeps recent messages', async () => {
   const filler = (i: number) => `Question ${i}: ${'Background. '.repeat(100)}`
   const t = createTestVela({
     // Summary triggers on the 5th question, after 4 rounds (8 messages)
-    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
+    limits: { summaryThreshold: 50_000 },
     responses: [
       fauxText('Answer 0'),
       fauxText('Answer 1'),
@@ -214,7 +111,7 @@ test('provider-reported usage above the summary threshold summarizes even when t
   const threshold = 50_000
   const t = createTestVela({
     // Only the provider's number crosses the threshold; chars × 0.3 stays far below it
-    limits: { microcompactThreshold: 1e9, summaryThreshold: threshold },
+    limits: { summaryThreshold: threshold },
     responses: [
       fauxText('Answer 0'),
       fauxText('Answer 1'),
@@ -254,7 +151,7 @@ test('a model switch drops the size the previous model reported', async () => {
         createModel: (id) => (id === 'before' ? before : after),
       },
     },
-    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
+    limits: { summaryThreshold: 50_000 },
   })
   await t.run('Question 0')
   expect(t.tracker().reportedContextTokens).toBeGreaterThan(50_000)
@@ -270,7 +167,7 @@ test('a model switch drops the size the previous model reported', async () => {
 
 test('an incomplete summary stops the turn and leaves history untouched', async () => {
   const t = createTestVela({
-    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
+    limits: { summaryThreshold: 50_000 },
     responses: [
       fauxText('Answer 0'),
       fauxText('Answer 1'),
@@ -400,7 +297,6 @@ test('an overflow recovers by summarizing only the dropped messages, without too
   const t = createTestVela({
     // Only the provider's size limit drives compaction here
     limits: {
-      microcompactThreshold: 1e9,
       summaryThreshold: 1e9,
       maxInputTokens: 1e9,
     },
@@ -440,7 +336,6 @@ test('the summary does not repeat the dropped text, so a long session of short t
     // This scenario scripts compaction only; dream has its own generate-call scenarios.
     extensionConfig: { memory: { dream: false } },
     limits: {
-      microcompactThreshold: 1e9,
       summaryThreshold: 1e9,
       maxInputTokens: 1e9,
     },
@@ -487,7 +382,6 @@ test('a message above the summary threshold is sent when nothing can be summariz
   const t = createTestVela({
     limits: {
       summaryThreshold: 6000,
-      microcompactThreshold: 5900,
       maxInputTokens: 100000,
     },
     responses: [fauxText('fits')],
@@ -564,79 +458,43 @@ test('encrypted reasoning is sent without counting its payload toward an unancho
   expect(t.eventsOf('compaction_start')).toHaveLength(0)
 })
 
-for (const overflow of [
-  'local-recoverable',
-  'local-terminal',
-  'provider-then-local',
-] as const) {
-  const stillTooLarge = overflow !== 'local-recoverable'
-  const providerFirst = overflow === 'provider-then-local'
-  test(
-    providerFirst
-      ? 'the local cap rechecks provider overflow recovery and closes a blocked turn'
-      : stillTooLarge
-        ? 'a request still above the local cap after recovery fails without sending'
-        : 'a request above the local cap compacts once and sends the shorter context',
-    async () => {
-      const t = createTestVela({
-        limits: { maxInputTokens: 20_000, summaryThreshold: 15_000 },
-        generate: [fauxSummary()],
-        responses: [
-          ...Array.from({ length: 5 }, () =>
-            fauxText('Seed reply', { usage: { input: 0, output: 1 } }),
-          ),
-          ...(providerFirst
-            ? [
-                fauxError(
-                  '400 prompt is too long: 213462 tokens > 200000 maximum',
-                ),
-              ]
-            : stillTooLarge
-              ? []
-              : [fauxText('fits after compaction')]),
-        ],
-        extensions: [
-          (vela) => {
-            vela.on('context', ({ messages }) => {
-              const hasOldTopic = messages.some(
-                (message) => message.content === 'Old topic',
-              )
-              if (
-                messages.at(-1)?.content === 'Continue' &&
-                (providerFirst ? !hasOldTopic : stillTooLarge || hasOldTopic)
-              )
-                messages.push({ role: 'user', content: 'z'.repeat(100_000) })
-            })
-          },
-        ],
-      })
-      await t.run('Old topic')
-      for (let i = 0; i < 4; i++) await t.run(`New topic ${i}`)
-      expect(t.tracker().reportedContextTokens).toBeUndefined()
-      const callsBefore = t.model.calls.length
+test('provider overflow compaction and requests above local maxInputTokens never pre-flight throw', async () => {
+  const t = createTestVela({
+    limits: { maxInputTokens: 20_000, summaryThreshold: 15_000 },
+    generate: [fauxSummary()],
+    responses: [
+      ...Array.from({ length: 5 }, () =>
+        fauxText('Seed reply', { usage: { input: 0, output: 0 } }),
+      ),
+      fauxError('400 prompt is too long: 213462 tokens > 200000 maximum'),
+      fauxText('fits after compaction'),
+    ],
+    extensions: [
+      (vela) => {
+        vela.on('context', ({ messages }) => {
+          const hasOldTopic = messages.some(
+            (message) => message.content === 'Old topic',
+          )
+          if (messages.at(-1)?.content === 'Continue' && !hasOldTopic)
+            messages.push({ role: 'user', content: 'z'.repeat(100_000) })
+        })
+      },
+    ],
+  })
+  await t.run('Old topic')
+  for (let i = 0; i < 4; i++) await t.run(`New topic ${i}`)
+  expect(t.tracker().reportedContextTokens).toBeUndefined()
+  const callsBefore = t.model.calls.length
 
-      if (stillTooLarge)
-        await expect(t.run('Continue')).rejects.toThrow(
-          'Request exceeds the safe input size',
-        )
-      else {
-        await t.run('Continue')
-        expect(t.lastAssistantText()).toBe('fits after compaction')
-      }
-
-      expect(t.eventsOf('compaction_start')).toEqual([
-        { type: 'compaction_start', reason: 'overflow' },
-      ])
-      expect(t.model.calls.slice(callsBefore).map((call) => call.kind)).toEqual(
-        providerFirst
-          ? ['stream', 'generate']
-          : stillTooLarge
-            ? ['generate']
-            : ['generate', 'stream'],
-      )
-      expect(t.eventsOf('turn_end')).toHaveLength(
-        t.eventsOf('turn_start').length,
-      )
-    },
-  )
-}
+  await t.run('Continue')
+  expect(t.lastAssistantText()).toBe('fits after compaction')
+  expect(t.eventsOf('compaction_start')).toEqual([
+    { type: 'compaction_start', reason: 'overflow' },
+  ])
+  expect(t.model.calls.slice(callsBefore).map((call) => call.kind)).toEqual([
+    'stream',
+    'generate',
+    'stream',
+  ])
+  expect(t.eventsOf('turn_end')).toHaveLength(t.eventsOf('turn_start').length)
+})

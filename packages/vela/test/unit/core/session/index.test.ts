@@ -188,25 +188,13 @@ test('compaction and context edits are appended; the originals stay and the cont
       {
         type: 'tool_result',
         toolCallId: 'c1',
-        toolName: 'read_file',
+        toolName: 'read',
         output: { type: 'text', value: 'long output' },
       },
     ],
   }
   for (const message of [old, assistant('old answer'), kept, tool])
     store.appendMessage(message)
-  const folded: ModelMessage = {
-    role: 'tool',
-    content: [
-      {
-        type: 'tool_result',
-        toolCallId: 'c1',
-        toolName: 'read_file',
-        output: { type: 'text', value: '[folded]' },
-      },
-    ],
-  }
-  store.appendContextEdit(tool, folded)
   const summary = user(summaryMessageText('S'))
   store.appendCompaction(summary, 'S', kept, 1234, 7)
   store.appendMessage(assistant('after'))
@@ -219,12 +207,11 @@ test('compaction and context edits are appended; the originals stay and the cont
     'message',
     'message',
     'message',
-    'context_edit',
     'compaction',
     'message',
   ])
   const context = buildSessionContext(entries.slice(1) as SessionEntry[])
-  expect(context.messages).toEqual([summary, kept, folded, assistant('after')])
+  expect(context.messages).toEqual([summary, kept, tool, assistant('after')])
   expect(context.summary).toBe('S')
   expect(context.toolHistoryViewSeq).toBe(7)
   // Every message, including the summarized ones, is still in the session

@@ -149,12 +149,12 @@ console.log('image sdk ok')
 const toolContent: ToolContent = [{ type: 'text', text: 'Caption' }, image]
 if (new ToolExecutionResult({ source: 'smoke' }, toolContent).text !== 'Caption')
   throw new Error('packaged ToolContent API failed')
-const imageTool = createTestVela({ responses: [fauxToolCall('read_file', { path: 'image.dat' }), fauxText('read')] })
+const imageTool = createTestVela({ responses: [fauxToolCall('read', { path: 'image.dat' }), fauxText('read')] })
 await writeFile(join(imageTool.cwd, 'image.dat'), Buffer.from(image.data, 'base64'))
 await imageTool.run('Read image.dat')
 const toolFiles = imageTool.model.calls[1]?.prompt.flatMap(m => m.role === 'tool' ? m.content.flatMap(p => p.type === 'tool-result' && p.output.type === 'content' ? p.output.value.filter(c => c.type === 'file' && c.mediaType.startsWith('image/')) : []) : []) ?? []
 if (toolFiles.length !== 1 || JSON.stringify(imageTool.session.messages).includes(image.data))
-  throw new Error('packaged read_file image was not resized and sent')
+  throw new Error('packaged read image was not resized and sent')
 console.log('tool image sdk ok')
 
 // grep / find run ripgrep / fd as child processes

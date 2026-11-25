@@ -2,7 +2,7 @@ import {
   type ToolResultOutput,
   toolResultOutputToText,
 } from '../context/tool-result-output.ts'
-import { type ModelMessage, normalizeVelaMessage } from '../messages.ts'
+import type { ModelMessage } from '../messages.ts'
 import { messageText, type SessionEntry } from './entries.ts'
 
 /** What `renderSessionHtml()` renders. */
@@ -43,11 +43,10 @@ function json(value: unknown): string {
 }
 
 function renderMessage(message: ModelMessage): string {
-  const normalized = normalizeVelaMessage(message)
-  const role = normalized.role
-  if (typeof normalized.content === 'string')
-    return `<section class="message ${role}"><div class="role">${role}</div>${text(normalized.content)}</section>`
-  const parts = normalized.content.map((part) => {
+  const role = message.role
+  if (typeof message.content === 'string')
+    return `<section class="message ${role}"><div class="role">${role}</div>${text(message.content)}</section>`
+  const parts = message.content.map((part) => {
     switch (part.type) {
       case 'text':
         return text(part.text)

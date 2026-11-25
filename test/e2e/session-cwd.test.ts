@@ -49,7 +49,7 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
     ],
   })
   try {
-    const search = { tools: ['+list_directory', '+grep', '+find'] }
+    const search = { tools: ['+ls', '+grep', '+find'] }
     const sa = vela.session('a', { cwd: '../a', model: modelA, ...search })
     const sb = vela.session('b', { cwd: b, model: modelB, ...search })
     expect(sa.cwd).toBe(a)
@@ -60,13 +60,13 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
       [sb, modelB, 'BETA', b],
     ] as const) {
       model.push(
-        fauxToolCall('read_file', { path: 'same.txt' }),
-        fauxToolCall('write_file', { path: 'result.txt', content: name }),
-        fauxToolCall('edit_file', {
+        fauxToolCall('read', { path: 'same.txt' }),
+        fauxToolCall('write', { path: 'result.txt', content: name }),
+        fauxToolCall('edit', {
           path: 'result.txt',
           edits: [{ oldText: name, newText: `${name}!` }],
         }),
-        fauxToolCall('list_directory', { path: '.' }),
+        fauxToolCall('ls', { path: '.' }),
         fauxToolCall('grep', { pattern: name, path: '.' }),
         fauxToolCall('find', { pattern: 'result.txt', path: '.' }),
         fauxToolCall('bash', { command: 'cat result.txt' }),

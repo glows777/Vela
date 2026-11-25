@@ -4,11 +4,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import type { ThinkingLevel } from '../../providers/models/index.ts'
 import { silentLogger, type VelaLogger } from '../../shared/logger.ts'
-import {
-  normalizeUserContent,
-  normalizeVelaContent,
-  normalizeVelaMessage,
-} from '../../shared/messages.ts'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import { validateStoredLocation } from '../execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
@@ -25,7 +20,6 @@ import {
   type CustomMessageEntry,
   copyBranch,
   createEntryId,
-  type NestedToolCalls,
   type NewEntry,
   SESSION_FORMAT_VERSION,
   type SessionContext,
@@ -292,7 +286,7 @@ export class SessionStore {
           continue
         if (part.output.type === 'text') {
           const path = part.output.value.match(
-            /\n\n\[Full output: (.+); use read_file with offset to read the rest\.\]$/,
+            /\n\n\[(?:[^\]]* )?Full output: (.+?); use read with offset[^\]]*\]$/,
           )?.[1]
           const text = path ? await readFile(path, 'utf8') : part.output.value
           names.push(...loadedToolNames(text))
@@ -501,7 +495,6 @@ export class SessionStore {
     message: ModelMessage,
     extra: {
       stopReason?: 'aborted' | 'error'
-      nestedCalls?: Record<string, NestedToolCalls>
       details?: Record<string, unknown>
       /** On an assistant message: the model that produced it */
       producedBy?: string
@@ -514,9 +507,6 @@ export class SessionStore {
         ? { producedBy: extra.producedBy }
         : {}),
       ...(extra.stopReason ? { stopReason: extra.stopReason } : {}),
-      ...(extra.nestedCalls && Object.keys(extra.nestedCalls).length
-        ? { nestedCalls: extra.nestedCalls }
-        : {}),
       ...(extra.details && Object.keys(extra.details).length
         ? { details: extra.details }
         : {}),
@@ -571,19 +561,6 @@ export class SessionStore {
 
   appendSessionInfo(name: string | undefined): void {
     this.append({ type: 'session_info', ...(name ? { name } : {}) })
-  }
-
-  /** Replaces a context message's content (`original` must be in the context); `replacement` takes over its entry id. */
-  appendContextEdit(original: ModelMessage, replacement: ModelMessage): void {
-    const targetId = this.ids.get(original)
-    if (!targetId)
-      throw new Error('Cannot edit a message that is not in the session')
-    this.append({
-      type: 'context_edit',
-      targetId,
-      replacement: { content: replacement.content },
-    })
-    this.ids.set(replacement, targetId)
   }
 
   /** Records a summary: the context becomes `summaryMessage` followed by the messages from `firstKept` on. */
@@ -659,50 +636,9 @@ export class SessionStore {
         location = entry.data
         markerParents.set(entry.id, parentId)
       } else {
-        const reparented =
-          entry.parentId === parentId ? entry : { ...entry, parentId }
-        if (reparented.type === 'message') {
-          const normalized = normalizeVelaMessage(reparented.message)
-          entries.push(
-            normalized === reparented.message
-              ? reparented
-              : { ...reparented, message: normalized },
-          )
-        } else if (
-          reparented.type === 'context_edit' &&
-          reparented.replacement &&
-          Array.isArray(reparented.replacement.content)
-        ) {
-          const { content, changed } = normalizeVelaContent(
-            reparented.replacement.content,
-          )
-          entries.push(
-            changed
-              ? {
-                  ...reparented,
-                  replacement: {
-                    ...reparented.replacement,
-                    content: content as ModelMessage['content'],
-                  },
-                }
-              : reparented,
-          )
-        } else if (
-          reparented.type === 'custom_message' &&
-          Array.isArray(reparented.content)
-        ) {
-          const { content, changed } = normalizeUserContent(reparented.content)
-          entries.push(
-            changed
-              ? {
-                  ...reparented,
-                  content,
-                }
-              : reparented,
-          )
-        } else {
-          entries.push(reparented)
-        }
+        entries.push(
+          entry.parentId === parentId ? entry : { ...entry, parentId },
+        )
       }
     }
     // Like pi: the leaf is the last entry

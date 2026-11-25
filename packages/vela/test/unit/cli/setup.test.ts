@@ -7,7 +7,6 @@ import {
   extensionConfigFromEnv,
   formatModelList,
   HELP,
-  legacyDataHint,
   loadCliExtensions,
   packageVersion,
   parseArgs,
@@ -104,7 +103,7 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
     ['serve', '--list-models'],
     ['serve', '-c'],
     ['serve', '--fork', 'x'],
-    ['serve', '--tools', 'read_file'],
+    ['serve', '--tools', 'read'],
     ['serve', 'hi'],
   ])
     expect(() => parseArgs(args)).toThrow('vela serve runs channels only')
@@ -212,59 +211,6 @@ test('config.json extension config overrides the environment defaults key by key
   )
   expect(config.web).toEqual({ tavilyKey: 'file', serperKey: 'env-serper' })
   expect(config.mine).toEqual({ a: 1 })
-})
-
-test('legacy data in the working directory gets a copy-and-remove hint', () => {
-  const dir = tempDir()
-  dirs.push(dir)
-  const dataDir = join(dir.path, 'home/projects/x')
-  expect(legacyDataHint(dir.path, dataDir)).toBeUndefined()
-  mkdirSync(join(dir.path, '.sessions'))
-  writeFileSync(join(dir.path, 'knowledge.db'), '')
-  const hint = legacyDataHint(dir.path, dataDir) ?? ''
-  expect(hint).toContain('.sessions')
-  expect(hint).not.toContain('knowledge.db')
-  const sessions = `'${join(dataDir, 'sessions')}'`
-  expect(hint).toContain(
-    `mkdir -p ${sessions} && cp -R '${join(dir.path, '.sessions')}'/. ${sessions}/ && rm -r '${join(dir.path, '.sessions')}'`,
-  )
-  // Still move when dataDir is the project directory (the new layout's subdirectories have no leading dot)
-  expect(legacyDataHint(dir.path, dir.path)).toContain('.sessions')
-})
-
-test('the migration commands keep old data, win over startup files and can run twice', () => {
-  const dir = tempDir()
-  dirs.push(dir)
-  // Must work with spaces and single quotes in the path
-  const cwd = join(dir.path, "my 'proj'")
-  const dataDir = join(dir.path, 'home/projects/x')
-  mkdirSync(join(cwd, '.sessions/default/tool-results'), { recursive: true })
-  writeFileSync(join(cwd, '.sessions/default.jsonl'), 'old session')
-  writeFileSync(join(cwd, '.sessions/default/tool-results/a.txt'), 'output')
-  mkdirSync(join(cwd, '.memory'))
-  writeFileSync(join(cwd, '.memory/MEMORY.md'), '# Memory Index\n- old')
-  // This startup already created an empty memory index in the new directory
-  mkdirSync(join(dataDir, 'memory'), { recursive: true })
-  writeFileSync(join(dataDir, 'memory/MEMORY.md'), '# Memory Index\n')
-
-  const commands = (legacyDataHint(cwd, dataDir) ?? '')
-    .split('\n')
-    .filter((line) => line.startsWith('  '))
-  expect(commands).toHaveLength(2)
-  const run = () =>
-    commands.map(
-      (command) =>
-        Bun.spawnSync(['sh', '-c', command], { cwd: dir.path }).exitCode,
-    )
-  expect(run()).toEqual([0, 0])
-  const read = (path: string) => readFileSync(join(dataDir, path), 'utf-8')
-  expect(read('sessions/default.jsonl')).toBe('old session')
-  expect(read('sessions/default/tool-results/a.txt')).toBe('output')
-  expect(read('memory/MEMORY.md')).toBe('# Memory Index\n- old')
-  expect(legacyDataHint(cwd, dataDir)).toBeUndefined()
-  // Run again: the old data is gone, the commands fail and the new directory is unchanged
-  expect(run().every((code) => code !== 0)).toBe(true)
-  expect(read('sessions/default.jsonl')).toBe('old session')
 })
 
 test('legacy -builtin:rag opt-out is accepted while positive builtin:rag fails loudly', () => {
@@ -397,16 +343,16 @@ test('parseArgs reads --fork and --export, and --fork excludes -c / -r / --sessi
 test('--tools / --no-tools / --exclude-tools pick tools by name or * pattern (like pi)', () => {
   const args = parseArgs([
     '-t',
-    'read_file, grep',
+    'read, grep',
     '--tools',
-    'edit_*',
+    'ed*',
     '-xt',
     'grep',
     '--list-models',
     'son',
   ])
   expect(args).toMatchObject({
-    tools: ['read_file', 'grep', 'edit_*'],
+    tools: ['read', 'grep', 'ed*'],
     excludeTools: ['grep'],
     listModels: 'son',
     messages: [],
@@ -414,16 +360,9 @@ test('--tools / --no-tools / --exclude-tools pick tools by name or * pattern (li
   expect(parseArgs(['--list-models', '-p']).listModels).toBe(true)
   expect(parseArgs(['-nt']).noTools).toBe(true)
 
-  const all = [
-    'read_file',
-    'write_file',
-    'edit_file',
-    'bash',
-    'grep',
-    'web_search',
-  ]
+  const all = ['read', 'write', 'edit', 'bash', 'grep', 'web_search']
   expect(selectTools(all, args)).toEqual({
-    selection: ['read_file', 'edit_file'],
+    selection: ['read', 'edit'],
   })
   expect(
     selectTools(all, { noTools: false, excludeTools: ['bash', 'web_*'] }),
@@ -435,11 +374,11 @@ test('--tools / --no-tools / --exclude-tools pick tools by name or * pattern (li
   // A typo fails loudly instead of leaving a tool on or off
   expect(() =>
     selectTools(all, {
-      tools: ['read'],
+      tools: ['missing_tool'],
       noTools: false,
       excludeTools: ['nope*'],
     }),
-  ).toThrow('Unknown tools: read, nope*. Available: read_file')
+  ).toThrow('Unknown tools: missing_tool, nope*. Available: read')
 })
 
 test('a tools list that names the removed background_start fails at startup', () => {
@@ -454,7 +393,7 @@ test('a tools list that names the removed background_start fails at startup', ()
 })
 
 test('+name / -name adjust the default set and defaultTools applies like pi', () => {
-  const all = ['read_file', 'write_file', 'edit_file', 'bash', 'grep']
+  const all = ['read', 'write', 'edit', 'bash', 'grep']
   const settings = ['+grep']
   expect(
     selectTools(all, { noTools: false, excludeTools: [] }, settings),
@@ -470,58 +409,55 @@ test('+name / -name adjust the default set and defaultTools applies like pi', ()
     selectTools(all, {
       tools: ['+grep'],
       noTools: false,
-      excludeTools: ['write_*'],
+      excludeTools: ['wr*'],
     }),
-  ).toEqual({ modifiers: ['+grep', '-write_file'] })
+  ).toEqual({ modifiers: ['+grep', '-write'] })
   // A plain --tools list replaces the setting; modifiers adjust a plain setting
   expect(
     selectTools(
       all,
-      { tools: ['read_file'], noTools: false, excludeTools: [] },
+      { tools: ['read'], noTools: false, excludeTools: [] },
       settings,
     ),
-  ).toEqual({ selection: ['read_file'] })
+  ).toEqual({ selection: ['read'] })
   expect(
     selectTools(all, { tools: ['+grep'], noTools: false, excludeTools: [] }, [
-      'read_file',
+      'read',
       'bash',
     ]),
-  ).toEqual({ selection: ['read_file', 'bash', 'grep'] })
+  ).toEqual({ selection: ['read', 'bash', 'grep'] })
   // defaultTools may use * patterns; the session gets the tools they match
   expect(
-    selectTools(all, { noTools: false, excludeTools: [] }, ['read_*']),
-  ).toEqual({ selection: ['read_file'] })
+    selectTools(all, { noTools: false, excludeTools: [] }, ['re*']),
+  ).toEqual({ selection: ['read'] })
   expect(
     selectTools(all, { tools: ['+bash'], noTools: false, excludeTools: [] }, [
-      'edit_*',
+      'ed*',
     ]),
-  ).toEqual({ selection: ['edit_file', 'bash'] })
+  ).toEqual({ selection: ['edit', 'bash'] })
   // A project-level -name removes a tool the user selected with a pattern (the layers are
   // merged into one list before this, so the modifier comes after the pattern it must remove)
   expect(
-    selectTools(all, { noTools: false, excludeTools: [] }, [
-      'read_*',
-      '-read_file',
-    ]),
+    selectTools(all, { noTools: false, excludeTools: [] }, ['re*', '-read']),
   ).toEqual({ selection: [] })
   expect(
     selectTools(all, { noTools: false, excludeTools: [] }, ['*', '-bash']),
   ).toEqual({
-    selection: ['read_file', 'write_file', 'edit_file', 'grep'],
+    selection: ['read', 'write', 'edit', 'grep'],
   })
   expect(() =>
     selectTools(all, { noTools: false, excludeTools: [] }, ['nope']),
   ).toThrow('Unknown tool: nope')
   expect(() =>
     selectTools(all, {
-      tools: ['+grep', 'read_file'],
+      tools: ['+grep', 'read'],
       noTools: false,
       excludeTools: [],
     }),
   ).toThrow('tool names cannot be mixed')
   expect(() =>
     selectTools(all, {
-      tools: ['+read_*'],
+      tools: ['+re*'],
       noTools: false,
       excludeTools: [],
     }),

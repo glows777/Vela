@@ -98,7 +98,7 @@ test('explicit gateway flags preserve reasoning, system role and inline tool his
       body,
       'text',
       f.requests.length === 1
-        ? { name: 'read_file', arguments: '{"path":"a.txt"}' }
+        ? { name: 'read', arguments: '{"path":"a.txt"}' }
         : undefined,
     )
   }) as typeof fetch

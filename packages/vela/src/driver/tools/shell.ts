@@ -1,7 +1,6 @@
 import z from 'zod'
 import type { ExecutionEnv } from '../execution/types.ts'
 import { backgroundBash, environmentBash } from './environment-bash.ts'
-import { foregroundBudgetOf } from './foreground-budget.ts'
 import {
   OUTPUT_MAX_BYTES,
   OUTPUT_MAX_LINES,
@@ -9,6 +8,8 @@ import {
 } from './output-tail.ts'
 import type { ToolDefinition } from './registry.ts'
 
+const DEFAULT_FOREGROUND_TIMEOUT_SECONDS = 120
+const MAX_FOREGROUND_TIMEOUT_SECONDS = 1800
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000 // setTimeout's limit
 
 const bashToolParamSchema = z.object({
@@ -17,7 +18,7 @@ const bashToolParamSchema = z.object({
     .number()
     .optional()
     .describe(
-      'Timeout in seconds for this command; without it the session’s foreground budget applies. When this session has the background tools, an expired timeout moves the command to the background instead of killing it (a command starting with sleep is killed); otherwise it kills the command.',
+      `Optional timeout in seconds. Foreground commands default to ${DEFAULT_FOREGROUND_TIMEOUT_SECONDS}s (max ${MAX_FOREGROUND_TIMEOUT_SECONDS}s) and are stopped if exceeded; background commands honor an explicit timeout (clamped at 7200s / 2 hours).`,
     ),
   run_in_background: z
     .boolean()
@@ -43,7 +44,7 @@ export const createBashTool = (
   { shellPath }: BashToolOptions = {},
 ): ToolDefinition => ({
   name: 'bash',
-  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. With run_in_background the command starts as a background task: the call returns at once with its id, and its result arrives here when it exits.`,
+  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read can page through. With run_in_background the command starts as a background task: the call returns at once with its id, and its result arrives here when it exits.`,
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },
   promptSnippet: 'Run a shell command',
@@ -55,28 +56,23 @@ export const createBashTool = (
     }: { command: string; timeout?: number; run_in_background?: boolean },
     context,
   ) => {
+    const maxTimeout = runInBackground
+      ? MAX_TIMEOUT_SECONDS
+      : MAX_FOREGROUND_TIMEOUT_SECONDS
     if (
       timeout !== undefined &&
-      (!Number.isFinite(timeout) ||
-        timeout <= 0 ||
-        timeout > MAX_TIMEOUT_SECONDS)
+      (!Number.isFinite(timeout) || timeout <= 0 || timeout > maxTimeout)
     )
       throw new Error(
-        `Invalid timeout: must be a positive number of seconds, at most ${MAX_TIMEOUT_SECONDS}`,
+        `Invalid timeout: must be a positive number of seconds, at most ${maxTimeout}`,
       )
     if (!runInBackground) {
-      // Without the job table and its stop tool there is nothing to move a command to, so the call
-      // keeps the old deadline: a `timeout` kills, and the budget does not apply at all.
-      const commands = context?.background
       return environmentBash(
         command,
-        timeout,
+        timeout ?? DEFAULT_FOREGROUND_TIMEOUT_SECONDS,
         cwd,
         shellPath,
         context,
-        commands && isStoppable(context)
-          ? foregroundBudgetOf(context ?? {})
-          : undefined,
       )
     }
     // Only the extension installs the capability, and a job needs the tool that reads and ends it:

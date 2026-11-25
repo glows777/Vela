@@ -1044,7 +1044,7 @@ test.concurrent('--mode json writes a session header and one JSON event per line
   const id = records[0].id
   expect(records.slice(1).every((r) => r.sessionId === id)).toBe(true)
   expect(records.find((r) => r.type === 'tool_execution_start')).toMatchObject({
-    toolName: 'read_file',
+    toolName: 'read',
     args: { path: 'notes.txt' },
   })
   expect(records.at(-1)).toEqual({ type: 'agent_settled', sessionId: id })
@@ -1123,7 +1123,6 @@ for (const { name, delay, input } of [
     delay: 7_200_000,
     input: { run_in_background: true, timeout: 7_201 },
   },
-  { name: 'post-escalation', delay: 1_800_000, input: { timeout: 0.1 } },
 ]) {
   test.concurrent(`print background applies the ${name} deadline and delivers one limit result`, async () => {
     const dir = tempDir('vela-cli-background-limit-')
@@ -1164,8 +1163,6 @@ for (const { name, delay, input } of [
       },
     })
     expect(code).toBe(0)
-    if (name === 'post-escalation')
-      expect(stdout).toContain('was moved to the background')
     const records = stdout
       .trim()
       .split('\n')
@@ -1319,22 +1316,26 @@ test.concurrent('--tools / --exclude-tools limit the tools; an unknown name stop
       .filter(Boolean)
       .map((line) => JSON.parse(line))
       .find((event) => event.type === 'tool_execution_end')
-  const allowed = await run(['--tools', 'read_*,grep'])
+  const allowed = await run(['--tools', 're*,grep'])
   expect(allowed.code).toBe(0)
   expect(ended(allowed.stdout)).toMatchObject({ isError: false })
-  const excluded = await run(['--exclude-tools', 'read_file'])
+  const excluded = await run(['--exclude-tools', 'read'])
   // The model isn't offered the tool, so the call fails as an unavailable tool
   expect(JSON.stringify(ended(excluded.stdout).result)).toContain(
-    "unavailable tool 'read_file'",
+    "unavailable tool 'read'",
   )
   const none = await run(['--no-tools'])
   expect(JSON.stringify(ended(none.stdout).result)).toContain(
     'Available tools: .',
   )
 
-  const typo = await run(['--tools', 'read'])
+  const typo = await run(['--tools', 'rea_typo'])
   expect(typo.code).toBe(2)
-  expect(typo.stderr).toContain('Unknown tool: read. Available: read_file')
+  expect(typo.stderr).toContain('Unknown tool: rea_typo. Available: read')
+
+  const retired = await run(['--tools', 'read_file'])
+  expect(retired.code).toBe(2)
+  expect(retired.stderr).toContain('tool "read_file" was renamed to "read"')
 })
 
 test.concurrent('+name / -name change the default tools, from --tools or defaultTools', async () => {
@@ -1386,7 +1387,7 @@ test.concurrent('+name / -name change the default tools, from --tools or default
   expect(fromSettings.code).toBe(0)
   expect(grepEnd(fromSettings.stdout)).toMatchObject({ isError: false })
 
-  const mixed = await run(['--tools', '+grep,read_file'])
+  const mixed = await run(['--tools', '+grep,read'])
   expect(mixed.code).toBe(2)
   expect(mixed.stderr).toContain(
     'tool names cannot be mixed with +name or -name entries',
@@ -1681,7 +1682,7 @@ test.concurrent('--no-extensions keeps core auditing for file writes and edits',
             {
               toolCalls: [
                 {
-                  name: 'write_file',
+                  name: 'write',
                   input: { path: 'audit.txt', content: 'before' },
                 },
               ],
@@ -1689,7 +1690,7 @@ test.concurrent('--no-extensions keeps core auditing for file writes and edits',
             {
               toolCalls: [
                 {
-                  name: 'edit_file',
+                  name: 'edit',
                   input: {
                     path: 'audit.txt',
                     oldText: 'before',
@@ -1710,8 +1711,8 @@ test.concurrent('--no-extensions keeps core auditing for file writes and edits',
     .split('\n')
     .map((line) => JSON.parse(line))
   expect(events.filter((event) => event.type === 'audit')).toMatchObject([
-    { type: 'audit', toolName: 'write_file', path: 'audit.txt' },
-    { type: 'audit', toolName: 'edit_file', path: 'audit.txt' },
+    { type: 'audit', toolName: 'write', path: 'audit.txt' },
+    { type: 'audit', toolName: 'edit', path: 'audit.txt' },
   ])
   expect(readFileSync(join(result.cwd, 'audit.txt'), 'utf8')).toBe('after')
 })

@@ -264,7 +264,7 @@ test('tool calls from sessions running at the same time are recorded in their ow
   const big = (tag: string) => `${tag}\n${'x'.repeat(5000)}`
   // Two sessions run concurrently in no fixed order: the user message in each request picks the file to read
   const readOwn = (req: { lastUserText: string }) =>
-    fauxToolCall('read_file', { path: `${req.lastUserText}.txt` })
+    fauxToolCall('read', { path: `${req.lastUserText}.txt` })
   const t = createTestVela({
     files: { 'a.txt': big('AAA'), 'b.txt': big('BBB') },
     responses: [
@@ -337,7 +337,7 @@ test('a session in the 0.5.0 flat layout lists, resumes and is converted on open
     indexPath: first.session.registry.results.indexPath,
     bytes: 7,
     preview: 'legacy\n',
-    read: 'Only a preview is shown. Use read_file to read more.',
+    read: 'Only a preview is shown. Use read to read more.',
   }
   await first.cleanup({ keepDir: true })
 

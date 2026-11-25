@@ -23,7 +23,7 @@ const MAX_FILE_CHARS = 4000
 export const MEMORY_RULES = [
   '[memory] How to use memory:',
   '- Save durable facts, preferences and decisions with the memory tool; saving the same name and type overwrites',
-  '- Memories are leads, not facts: verify with tools before relying on them (read_file, grep to confirm paths and content still exist)',
+  '- Memories are leads, not facts: verify with tools before relying on them (read, grep to confirm paths and content still exist)',
   '- Do not store what the code shows (tech stack, directory layout), what git can tell (who changed what), or what docs already say',
   '- Store only information from the conversation that cannot be derived elsewhere (user preferences, corrections, project decisions, external resources)',
   "- Use the memory tool's read action to read a memory; search for BM25 search; lint to check the store's health.",

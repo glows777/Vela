@@ -191,7 +191,7 @@ test('unsupported transports and explicit chat tool selections omit channel_send
     extensions: [
       lark({
         owners: [],
-        chats: [{ id: 'oc_group', tools: ['read_file'] }],
+        chats: [{ id: 'oc_group', tools: ['read'] }],
         transport: narrowed.transport,
       }),
     ],

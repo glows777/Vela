@@ -5,7 +5,6 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,7 +14,7 @@ import { join, resolve } from 'node:path'
 import { cliProjectExtensions } from '../../src/cli/project-extensions.ts'
 import { parseArgs } from '../../src/cli/setup.ts'
 import {
-  migrateLegacyConfigFiles,
+  assertNoLegacyConfigFiles,
   parseConfig,
   savedTrust,
   saveTrust,
@@ -68,18 +67,17 @@ test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag
   writeFileSync(
     join(agentDir, 'settings.json'),
     JSON.stringify({
-      $schema: 'https://example.com/schema.json',
-      extensions: ['+builtin:memory', '-builtin:rag', 'builtin:rag'],
+      extensions: ['+builtin:memory'],
     }),
   )
-  const mig = migrateLegacyConfigFiles(agentDir)
-  expect(mig.migrated).toBe(true)
-  expect(mig.warnings.join('\n')).toMatch(/builtin:rag/)
-  const written = JSON.parse(
-    readFileSync(join(agentDir, 'config.json'), 'utf8'),
+  expect(() => assertNoLegacyConfigFiles(agentDir)).toThrow(
+    /docs\/upgrading\.md/,
   )
-  expect(written.$schema).toBeUndefined()
-  expect(written.extensions).toEqual(['+builtin:memory'])
+  const valid = parseConfig(
+    JSON.stringify({ extensions: ['+builtin:memory'] }),
+    'test.json',
+  )
+  expect(valid.extensions).toEqual(['+builtin:memory'])
 
   // Trust canonicalizes symlinked dir, keeps denial over inherited parent grant (#3), and preserves existing dir mode (#10)
   const parentTrusted = join(dir, 'trusted-parent')

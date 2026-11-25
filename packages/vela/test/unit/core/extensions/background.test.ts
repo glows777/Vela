@@ -128,7 +128,7 @@ test('background({ shellPath }) runs a local job with that shell, and leaves oth
     results: new ToolResultStore(join(root, 'results')),
   }
   await backgroundBash('echo hi', undefined, root, undefined, context, jobs)
-  expect(argvs).toEqual([['/opt/bash', '-lc', 'echo hi']])
+  expect(argvs).toEqual([['/opt/bash', '-c', 'echo hi']])
 
   // An environment that is not the local adapter runs the command itself.
   const remote = { ...env, id: 'test:remote' } as typeof env
@@ -286,7 +286,7 @@ test('stopping a job ends its process group and returns the tail without another
   expect(reports).toEqual([])
 })
 
-test('stopping aborts the process tree without a graceful SIGTERM phase', async () => {
+test('stopping gives the process tree a graceful SIGTERM phase before SIGKILL', async () => {
   const root = directory()
   await Bun.write(
     join(root, 'graceful.cjs'),
@@ -314,7 +314,7 @@ setInterval(() => {}, 1000)
   const t0 = Date.now()
   const stopped = await jobs.stop('bg-1')
   expect(stopped.stopped).toBe(true)
-  expect(existsSync(join(root, 'shutdown-complete'))).toBe(false)
+  expect(existsSync(join(root, 'shutdown-complete'))).toBe(true)
   expect(Date.now() - t0).toBeLessThan(1000)
 })
 

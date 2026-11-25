@@ -103,7 +103,7 @@ test.each([
             {
               type: 'tool-call',
               toolCallId: 'call_read',
-              toolName: 'read_file',
+              toolName: 'read',
               input: { path: 'a.txt' },
               providerOptions: { openai: { itemId: 'fc_read' } },
             },
@@ -115,7 +115,7 @@ test.each([
             {
               type: 'tool-result',
               toolCallId: 'call_read',
-              toolName: 'read_file',
+              toolName: 'read',
               output: { type: 'text', value: 'cobalt' },
             },
           ],
@@ -138,7 +138,7 @@ test.each([
       {
         type: 'function_call',
         call_id: 'call_read',
-        name: 'read_file',
+        name: 'read',
         arguments: '{"path":"a.txt"}',
       },
       { type: 'function_call_output', call_id: 'call_read', output: 'cobalt' },

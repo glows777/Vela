@@ -14,7 +14,7 @@ import {
 const dir = mkdtempSync(join(tmpdir(), 'vela-file-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-test('edit_file writes newText literally, without $ replacement patterns', async () => {
+test('edit writes newText literally, without $ replacement patterns', async () => {
   writeFileSync(join(dir, 'price.txt'), 'cost: X\n')
   const tool = createEditFileTool(dir)
   await tool.execute({
@@ -35,7 +35,7 @@ const parseEdit = (input: unknown) =>
     ReturnType<typeof createEditFileTool>['execute']
   >[0]
 
-test('edit_file applies several disjoint edits matched against the original file', async () => {
+test('edit applies several disjoint edits matched against the original file', async () => {
   const tool = editIn('multi.txt', 'alpha\nbeta\ngamma\n')
   const result = (await tool.execute(
     parseEdit({
@@ -57,7 +57,7 @@ test('edit_file applies several disjoint edits matched against the original file
   expect(details.patch).toContain('+++ multi.txt')
 })
 
-test('edit_file fails loudly on a missing, duplicate or overlapping oldText and leaves the file alone', async () => {
+test('edit fails loudly on a missing, duplicate or overlapping oldText and leaves the file alone', async () => {
   const tool = editIn('strict.txt', 'one two one\n')
   const edit = (edits: unknown) =>
     tool.execute(parseEdit({ path: 'strict.txt', edits }))
@@ -81,7 +81,7 @@ test('edit_file fails loudly on a missing, duplicate or overlapping oldText and 
   expect(readFileSync(join(dir, 'strict.txt'), 'utf8')).toBe('one two one\n')
 })
 
-test('edit_file falls back to fuzzy matching and only rewrites the matched lines', async () => {
+test('edit falls back to fuzzy matching and only rewrites the matched lines', async () => {
   // Smart quotes and trailing spaces in the file; the model sends plain ASCII
   const tool = editIn('fuzzy.txt', 'keep  \nsay “hi” — now   \nkeep too  \n')
   await tool.execute(
@@ -95,7 +95,7 @@ test('edit_file falls back to fuzzy matching and only rewrites the matched lines
   )
 })
 
-test('edit_file keeps a BOM and CRLF line endings', async () => {
+test('edit keeps a BOM and CRLF line endings', async () => {
   const tool = editIn('crlf.txt', '﻿a\r\nb\r\n')
   await tool.execute(
     parseEdit({
@@ -106,7 +106,7 @@ test('edit_file keeps a BOM and CRLF line endings', async () => {
   expect(readFileSync(join(dir, 'crlf.txt'), 'utf8')).toBe('﻿a\r\nB\r\n')
 })
 
-test('edit_file accepts the argument shapes models get wrong, like pi', () => {
+test('edit accepts the argument shapes models get wrong, like pi', () => {
   const edits = [{ oldText: 'a', newText: 'b' }]
   expect(parseEdit({ path: 'p', edits: JSON.stringify(edits) })).toEqual({
     path: 'p',
@@ -140,23 +140,22 @@ test('writes to the same file queue up, different files run in parallel', async 
   expect(order.indexOf('c-end')).toBeLessThan(order.indexOf('a-end'))
 })
 
-test('read_file pages default to 2000 lines and stop at 50KB', async () => {
+test('read pages default to 2000 lines and stop at 50KB', async () => {
   const lines = Array.from({ length: 2500 }, (_, i) => `line ${i + 1}`).join(
     '\n',
   )
   writeFileSync(join(dir, 'long.txt'), `${lines}\n`)
   const read = createReadFileTool(dir)
   const first = (await read.execute({ path: 'long.txt' })) as string
-  expect(first).toContain('[read_file: lines 1-2000')
+  expect(first).toContain('[read: lines 1-2000')
   expect(first).toContain('offset=2001')
 
   writeFileSync(join(dir, 'wide.txt'), `${'x'.repeat(1000)}\n`.repeat(100))
   const wide = (await read.execute({ path: 'wide.txt' })) as string
   expect(wide).toContain(
-    '[read_file: lines 1-52, starting column=0; 51200 UTF-16 code units shown',
+    '[read: lines 1-52, starting column=0; 51200 UTF-16 code units shown',
   )
   expect(
-    new TextEncoder().encode(wide.slice(0, wide.indexOf('\n\n[read_file')))
-      .length,
+    new TextEncoder().encode(wide.slice(0, wide.indexOf('\n\n[read'))).length,
   ).toBeLessThanOrEqual(50 * 1024)
 })

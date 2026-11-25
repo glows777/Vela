@@ -238,7 +238,7 @@ test('owners and enabled chats from comma-separated config give permitted sender
   fake.deliver(event({ chat_id: 'oc_b' }, 'ou_stranger'))
   await waitFor(() => replies().length === 2)
   expect(replies()[1]).toContain('bash')
-  expect(replies()[1]).toContain('read_file')
+  expect(replies()[1]).toContain('read')
 })
 
 async function waitFor(condition: () => boolean) {

@@ -899,7 +899,7 @@ test('a custom local adapter reads the canonical Lark attachment after restart w
     for (let run = 1; run <= 2; run++) {
       const model = createFauxModel({
         responses: [
-          fauxToolCall('read_file', { path: expected }),
+          fauxToolCall('read', { path: expected }),
           fauxText('received'),
         ],
       })

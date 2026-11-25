@@ -2,17 +2,12 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { planMicrocompact } from '../../../../src/driver/context/compressor.ts'
 import {
   ContextManager,
   createRequestSnapshot,
 } from '../../../../src/driver/context/manager.ts'
-import type {
-  ModelMessage,
-  ToolResultPart,
-} from '../../../../src/driver/messages.ts'
+import type { ModelMessage } from '../../../../src/driver/messages.ts'
 import { SessionStore } from '../../../../src/driver/session/index.ts'
-import { getStoredResult } from '../../../../src/driver/session/tool-results.ts'
 import { TokenTracker } from '../../../../src/driver/usage/tracker.ts'
 import { resolveProviderTools } from '../../../../src/providers/index.ts'
 import {
@@ -34,7 +29,7 @@ function history(count: number, size: number): ModelMessage[] {
           {
             type: 'tool_call',
             toolCallId: `c${i}`,
-            toolName: 'read_file',
+            toolName: 'read',
             input: { path: `f${i}` },
           },
         ],
@@ -45,7 +40,7 @@ function history(count: number, size: number): ModelMessage[] {
           {
             type: 'tool_result',
             toolCallId: `c${i}`,
-            toolName: 'read_file',
+            toolName: 'read',
             output: {
               type: 'text',
               value: `evidence-${i}\n${'x'.repeat(size)}`,
@@ -76,25 +71,6 @@ test('old timestamps do not change history or create files below capacity', asyn
   expect(await Bun.file(store.results.indexPath).exists()).toBe(false)
 })
 
-test('micro protects five completed calls even when results share one message', async () => {
-  const messages = history(8, 25000)
-  const calls = messages.filter((m) => m.role === 'assistant')
-  const results = messages
-    .filter((m) => m.role === 'tool')
-    .flatMap((m) => m.content) as ToolResultPart[]
-  const mixed: ModelMessage[] = [
-    messages[0]!,
-    ...calls,
-    { role: 'tool', content: results },
-  ]
-  const store = new SessionStore('mixed', dir)
-  const plan = planMicrocompact(mixed, store.results)
-  expect(plan.candidates.map((c) => c.toolCallId)).toEqual(['c0', 'c1', 'c2'])
-  const parts = plan.messages.at(-1)!.content as ToolResultPart[]
-  expect(getStoredResult(parts[0]!.output)).toBeDefined()
-  expect(parts.slice(3)).toEqual(results.slice(3))
-})
-
 /** Summary model: by default produces a structured free-text summary; with '' it returns empty text. */
 function summaryModel(text?: string) {
   return createFauxModel({
@@ -102,81 +78,7 @@ function summaryModel(text?: string) {
   })
 }
 
-test('micro is recorded as context edits once, keeps references across restart and is idempotent; the original output stays in the session', async () => {
-  const store = new SessionStore('micro', dir)
-  const messages = history(10, 41000)
-  for (const message of messages) store.appendMessage(message)
-  const manager = new ContextManager(store, new TokenTracker(), {
-    messages,
-    timestamps: new Map(),
-    summary: 'old summary',
-  })
-  await manager.prepare(
-    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
-  )
-  const references = messages
-    .filter((m) => m.role === 'tool')
-    .flatMap((m) => m.content)
-    .filter((p) => p.type === 'tool_result' && getStoredResult(p.output))
-  expect(references).toHaveLength(5)
-  const first = references[0] as ToolResultPart
-  expect(await Bun.file(getStoredResult(first.output)!.path).text()).toContain(
-    'evidence-0',
-  )
-  const index = await Bun.file(store.results.indexPath).text()
-  await manager.prepare(
-    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
-  )
-  expect(await Bun.file(store.results.indexPath).text()).toBe(index)
-  await manager.save()
-  const reopened = new SessionStore('micro', dir)
-  const restored = await reopened.loadSaved()
-  expect(restored?.messages).toEqual(messages)
-  const entries = reopened.getEntries()
-  expect(entries.filter((e) => e.type === 'context_edit')).toHaveLength(5)
-  expect(JSON.stringify(entries)).toContain('evidence-0')
-})
-
-test('low net savings does not clear even above the micro trigger', async () => {
-  const store = new SessionStore('little', dir)
-  const messages = history(8, 2000)
-  messages.unshift({ role: 'user', content: 'x'.repeat(400000) })
-  const manager = new ContextManager(store, new TokenTracker(), {
-    messages,
-    timestamps: new Map(),
-    summary: '',
-  })
-  const before = JSON.stringify(messages)
-  await manager.prepare(
-    await createRequestSnapshot(model, 'stable', EMPTY_TOOLS, messages),
-  )
-  expect(JSON.stringify(messages)).toBe(before)
-  expect(await Bun.file(store.results.indexPath).exists()).toBe(false)
-})
-
-test('duplicates, unmatched, excluded and errors are not candidates', () => {
-  const messages = history(10, 25000)
-  const error = messages[2]!.content as ToolResultPart[]
-  error[0] = {
-    ...error[0]!,
-    output: { type: 'error-text', value: 'failed'.repeat(5000) },
-  }
-  const duplicate = messages[4]!
-  messages.splice(5, 0, duplicate)
-  const excludedCall = (messages[6]!.content as { toolName: string }[])[0]!
-  const excludedResult = (messages[7]!.content as { toolName: string }[])[0]!
-  excludedCall.toolName = 'memory'
-  excludedResult.toolName = 'memory'
-  const plan = planMicrocompact(
-    messages,
-    new SessionStore('exclude', dir).results,
-  )
-  expect(
-    plan.candidates.some((c) => ['c0', 'c1', 'c2'].includes(c.toolCallId)),
-  ).toBe(false)
-})
-
-test('summary chosen directly when a profitable micro still leaves >=150k', async () => {
+test('summary compacts earlier history and records tool history snapshot', async () => {
   const m = summaryModel()
   const messages = history(10, 16000)
   messages[0] = {
@@ -222,7 +124,7 @@ test('summary cannot execute tools and rejected summary leaves original history'
   const z = (await import('zod')).default
   const registry = new ToolRegistry()
   registry.register({
-    name: 'write_file',
+    name: 'write',
     description: 'write',
     inputSchema: z.object({}),
     execute: async () => {
@@ -231,10 +133,10 @@ test('summary cannot execute tools and rejected summary leaves original history'
     },
   })
   const m = createFauxModel({
-    responses: [fauxToolCall('write_file', EMPTY_TOOLS, { id: 'bad' })],
+    responses: [fauxToolCall('write', EMPTY_TOOLS, { id: 'bad' })],
   })
   const messages: ModelMessage[] = [
-    { role: 'user', content: 'x'.repeat(510000) },
+    { role: 'user', content: 'x'.repeat(650000) },
     { role: 'assistant', content: 'old' },
     ...Array.from(
       { length: 6 },
@@ -263,7 +165,7 @@ test('summary cannot execute tools and rejected summary leaves original history'
   expect(m.calls).toHaveLength(1)
 })
 
-test('a request with nothing to summarize is kept under the input cap and stopped above it', async () => {
+test('a request with nothing to summarize is passed through without a pre-flight throw', async () => {
   const m = summaryModel()
   const messages: ModelMessage[] = [
     { role: 'user', content: 'x'.repeat(520000) },
@@ -285,25 +187,17 @@ test('a request with nothing to summarize is kept under the input cap and stoppe
   await manager.prepare(request)
   expect(m.calls).toHaveLength(0)
   expect(JSON.stringify(messages)).toBe(before)
-  messages[0] = { role: 'user', content: 'x'.repeat(650000) }
-  messages.push(
-    ...Array.from(
-      { length: 7 },
-      (): ModelMessage => ({ role: 'user', content: 'x'.repeat(20000) }),
-    ),
+  messages[0] = { role: 'user', content: 'x'.repeat(800000) }
+  await manager.prepare(
+    await createRequestSnapshot(m, 'stable', EMPTY_TOOLS, messages),
   )
-  await expect(
-    manager.prepare(
-      await createRequestSnapshot(m, 'stable', EMPTY_TOOLS, messages),
-    ),
-  ).rejects.toThrow('safe input size')
   expect(m.calls).toHaveLength(0)
 })
 
 test('empty summary is rejected without changing the live summary or messages', async () => {
   const m = summaryModel('')
   const messages: ModelMessage[] = [
-    { role: 'user', content: 'x'.repeat(510000) },
+    { role: 'user', content: 'x'.repeat(650000) },
     ...Array.from(
       { length: 7 },
       (): ModelMessage => ({ role: 'user', content: 'retained' }),

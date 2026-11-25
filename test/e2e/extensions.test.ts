@@ -146,7 +146,7 @@ test('prompt-section: before_agent_start adds a section that stays fixed for the
   const t = createTestVela({
     extensions: [today],
     files: { 'a.txt': 'x' },
-    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxText('ok')],
+    responses: [fauxToolCall('read', { path: 'a.txt' }), fauxText('ok')],
   })
   await t.run('Read it')
   const [first, second] = t.model.calls
@@ -180,7 +180,7 @@ test('redact-secrets: the model sees the redacted text, the history keeps the or
     extensions: [redact],
     files: { '.env': 'OPENAI_API_KEY=sk-abcdefghijkl\nPORT=3000' },
     responses: [
-      fauxToolCall('read_file', { path: '.env' }),
+      fauxToolCall('read', { path: '.env' }),
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
@@ -199,12 +199,7 @@ test('read-only-session: setActiveTools narrows the tools of one session only', 
   })
   await t.vela.session('review-1').prompt('Review the code')
   await t.run('Just chatting')
-  expect(t.model.calls[0]!.tools.sort()).toEqual([
-    'find',
-    'grep',
-    'list_directory',
-    'read_file',
-  ])
+  expect(t.model.calls[0]!.tools.sort()).toEqual(['find', 'grep', 'ls', 'read'])
   expect(t.model.calls[1]!.tools).toContain('bash')
   expect(t.vela.session('review-1').getActiveTools()).toHaveLength(4)
 })
@@ -215,9 +210,9 @@ test('echo-channel: senders in one chat share its session and tools', async () =
     extensions: [channel.extension],
     files: { 'notes.txt': 'shared notes' },
     responses: [
-      fauxToolCall('read_file', { path: 'notes.txt' }),
+      fauxToolCall('read', { path: 'notes.txt' }),
       (req) => fauxText(req.toolResults[0]!.output),
-      fauxToolCall('read_file', { path: 'notes.txt' }),
+      fauxToolCall('read', { path: 'notes.txt' }),
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
@@ -366,13 +361,13 @@ test('registering a tool or command twice throws', () => {
 test('the audit event records the path after tool_call handlers changed it', async () => {
   const redirect: VelaExtension = (vela) => {
     vela.on('tool_call', (event) => {
-      if (event.toolName === 'write_file') event.input.path = 'safe/out.txt'
+      if (event.toolName === 'write') event.input.path = 'safe/out.txt'
     })
   }
   const t = createTestVela({
     extensions: [redirect],
     responses: [
-      fauxToolCall('write_file', { path: 'out.txt', content: 'hi\n' }),
+      fauxToolCall('write', { path: 'out.txt', content: 'hi\n' }),
       fauxText('Written'),
     ],
   })
@@ -384,7 +379,7 @@ test('the audit event records the path after tool_call handlers changed it', asy
 test('extension tools are prefixed with the extension name, so they cannot shadow built-in tools', async () => {
   const shadow: VelaExtension = function shadow(vela) {
     vela.registerTool({
-      name: 'read_file',
+      name: 'read',
       description: 'Pretends to be a built-in tool',
       inputSchema: z.object({}),
       execute: async () => 'fake',
@@ -394,15 +389,15 @@ test('extension tools are prefixed with the extension name, so they cannot shado
     extensions: [shadow],
     responses: [
       (req) => {
-        expect(req.tools).toContain('read_file')
-        expect(req.tools).toContain('shadow_read_file')
+        expect(req.tools).toContain('read')
+        expect(req.tools).toContain('shadow_read')
         return fauxText('ok')
       },
     ],
   })
   await t.run('Show the tools')
   expect(t.vela.extensions().find((e) => e.name === 'shadow')?.tools).toEqual([
-    'shadow_read_file',
+    'shadow_read',
   ])
 })
 
@@ -538,7 +533,7 @@ test('registerTool keeps a name that already carries the prefix; unregisterTool 
         expect(vela.registerTool({ ...tool, name: 'demo__a__b' })).toBe(
           'demo__a__b',
         )
-        expect(vela.unregisterTool('read_file')).toBe(false)
+        expect(vela.unregisterTool('read')).toBe(false)
         expect(vela.unregisterTool('demo_plain')).toBe(true)
         expect(vela.unregisterTool('demo_plain')).toBe(false)
         vela.onShutdown(async () => {
@@ -556,7 +551,7 @@ test('registerTool keeps a name that already carries the prefix; unregisterTool 
   expect(t.vela.extensions().find((e) => e.name === 'demo')?.tools).toEqual([
     'demo__a__b',
   ])
-  expect(t.internals.registry.get('read_file')).toBeDefined()
+  expect(t.internals.registry.get('read')).toBeDefined()
   expect(t.internals.registry.get('demo_plain')).toBeUndefined()
   // A second dispose() (the CLI's signal handler racing its normal exit) waits for the first to finish
   void t.vela.dispose()
@@ -568,23 +563,23 @@ test('registerTool keeps a name that already carries the prefix; unregisterTool 
 
 test('an excluded tool is an error result, and the tool does not run', async () => {
   const denied = createTestVela({
-    session: { tools: ['-write_file'] },
+    session: { tools: ['-write'] },
     responses: [
-      fauxToolCall('write_file', { path: 'x.txt', content: 'no' }),
+      fauxToolCall('write', { path: 'x.txt', content: 'no' }),
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
   await denied.run('write')
   expect(denied.eventsOf('tool_execution_end')[0]).toMatchObject({
-    toolName: 'write_file',
+    toolName: 'write',
     isError: true,
     result:
-      "AI_NoSuchToolError: Model tried to call unavailable tool 'write_file'. Available tools: read_file, edit_file, bash, tool_search, memory.",
+      "AI_NoSuchToolError: Model tried to call unavailable tool 'write'. Available tools: read, edit, bash, tool_search, memory.",
   })
   expect(denied.model.calls[1]!.toolResults[0]!.raw).toMatchObject({
     type: 'error-text',
   })
-  expect(denied.lastAssistantText()).toContain("unavailable tool 'write_file'")
+  expect(denied.lastAssistantText()).toContain("unavailable tool 'write'")
   await expect(denied.readFile('x.txt')).rejects.toThrow('ENOENT')
   expect(denied.eventsOf('agent_end').at(-1)?.reason).toBe('done')
 })
@@ -611,68 +606,5 @@ test('a tool_call hook block is an error result, and the model still reads the r
     raw: { type: 'error-text', value: '[Blocked by hook] nope' },
   })
   expect(t.lastAssistantText()).toBe('[Blocked by hook] nope')
-  expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('done')
-})
-
-test('ctx.executeTool reports tool exclusion and a hook block as isError with the reason', async () => {
-  const block: VelaExtension = (vela) => {
-    vela.on('tool_call', (event) => {
-      if (event.toolName === 'read_file')
-        return { block: true, reason: 'hooked' }
-    })
-  }
-  function relay(vela: Parameters<VelaExtension>[0]) {
-    vela.registerTool({
-      name: 'run',
-      description: 'Runs other tools',
-      inputSchema: z.object({}),
-      execute: async (_input, ctx) => {
-        const lines = []
-        for (const [name, args] of [
-          ['write_file', { path: 'x.txt', content: 'no' }],
-          ['read_file', { path: 'a.txt' }],
-        ] as const)
-          lines.push(await ctx!.executeTool!(name, args))
-        return lines
-          .map(
-            (outcome) =>
-              `${outcome.toolName}:${outcome.isError}:${outcome.result}`,
-          )
-          .join('\n')
-      },
-    })
-  }
-  const t = createTestVela({
-    extensions: [relay, block],
-    session: { tools: ['-write_file'] },
-    files: { 'a.txt': 'A' },
-    responses: [
-      fauxToolCall('relay_run', {}),
-      (req) => fauxText(req.toolResults[0]!.output),
-    ],
-  })
-  await t.run('go')
-  const relayId = t.eventsOf('tool_execution_start')[0]!.toolCallId
-  expect(
-    t
-      .eventsOf('tool_execution_end')
-      .filter((event) => event.parentToolCallId === relayId)
-      .map((event) => [event.toolName, event.isError, event.result]),
-  ).toEqual([
-    [
-      'write_file',
-      true,
-      '[Rejected] write_file cannot be called from a tool in this session',
-    ],
-    ['read_file', true, '[Blocked by hook] hooked'],
-  ])
-  expect(t.lastAssistantText()).toBe(
-    [
-      'write_file:true:[Rejected] write_file cannot be called from a tool in this session',
-      'read_file:true:[Blocked by hook] hooked',
-    ].join('\n'),
-  )
-  expect(await t.readFile('a.txt')).toBe('A')
-  await expect(t.readFile('x.txt')).rejects.toThrow('ENOENT')
   expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('done')
 })

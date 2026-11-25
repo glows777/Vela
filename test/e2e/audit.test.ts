@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { z } from 'zod'
 import {
   createVela,
   type VelaEvent,
@@ -15,12 +14,12 @@ import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
-test.each(['write_file', 'edit_file'] as const)(
+test.each(['write', 'edit'] as const)(
   'core audit runs after async factory and handler rewrites for %s',
   async (toolName) => {
     const atAudit: string[] = []
     const t = createTestVela({
-      files: toolName === 'edit_file' ? { 'final.txt': 'before' } : {},
+      files: toolName === 'edit' ? { 'final.txt': 'before' } : {},
       extensions: [
         async function redirect(api) {
           await Promise.resolve()
@@ -39,7 +38,7 @@ test.each(['write_file', 'edit_file'] as const)(
       responses: [
         fauxToolCall(
           toolName,
-          toolName === 'write_file'
+          toolName === 'write'
             ? { path: 'original.txt', content: 'after' }
             : { path: 'original.txt', oldText: 'before', newText: 'after' },
         ),
@@ -47,7 +46,7 @@ test.each(['write_file', 'edit_file'] as const)(
       ],
     })
     await t.run('Change the file')
-    expect(atAudit).toEqual([toolName === 'edit_file' ? 'before' : 'missing'])
+    expect(atAudit).toEqual([toolName === 'edit' ? 'before' : 'missing'])
     expect(t.eventsOf('audit')).toEqual([
       { type: 'audit', toolName, path: 'final.txt' },
     ])
@@ -64,18 +63,18 @@ test.each(['excluded', 'block', 'throw'] as const)(
   async (decision) => {
     const t = createTestVela({
       session: {
-        tools: decision === 'excluded' ? ['-write_file'] : undefined,
+        tools: decision === 'excluded' ? ['-write'] : undefined,
       },
       extensions: [
         (api) => {
-          api.on('tool_call', 'write_file', () => {
+          api.on('tool_call', 'write', () => {
             if (decision === 'block') return { block: true, reason: 'blocked' }
             if (decision === 'throw') throw new Error('check failed')
           })
         },
       ],
       responses: [
-        fauxToolCall('write_file', { path: 'rejected.txt', content: 'no' }),
+        fauxToolCall('write', { path: 'rejected.txt', content: 'no' }),
         fauxText('done'),
       ],
     })
@@ -86,49 +85,6 @@ test.each(['excluded', 'block', 'throw'] as const)(
   },
 )
 
-test('nested writes preserve session and call identity with core auditing', async () => {
-  const calls: unknown[] = []
-  const audits: unknown[] = []
-  const t = createTestVela({
-    sessionId: 'nested-audit',
-    extensions: [
-      function nested(api) {
-        api.registerTool({
-          name: 'write',
-          description: 'Write through the executor',
-          inputSchema: z.object({}),
-          execute: async (_, ctx) =>
-            (
-              await ctx!.executeTool!('write_file', {
-                path: 'nested.txt',
-                content: 'nested',
-              })
-            ).result,
-        })
-        api.on('tool_call', 'write_file', (event, ctx) => {
-          calls.push([ctx.session.id, event.toolCallId, event.parentToolCallId])
-        })
-        api.on('audit', (event, ctx) => {
-          audits.push([ctx.session.id, event.path])
-        })
-      },
-    ],
-    responses: [fauxToolCall('nested_write', {}), fauxText('done')],
-  })
-  await t.run('Nested write')
-  const parentId = t.eventsOf('tool_execution_start')[0]!.toolCallId
-  expect(calls).toEqual([['nested-audit', `${parentId}/1`, parentId]])
-  expect(audits).toEqual([['nested-audit', 'nested.txt']])
-  expect(await t.readFile('nested.txt')).toBe('nested')
-  expect(
-    t.eventsOf('tool_execution_end').find((e) => e.parentToolCallId),
-  ).toMatchObject({
-    toolCallId: `${parentId}/1`,
-    parentToolCallId: parentId,
-    isError: false,
-  })
-})
-
 test('the core SDK installs auditing with no user extensions', async () => {
   const dir = tempDir('vela-core-audit-')
   const vela = createVela({
@@ -136,7 +92,7 @@ test('the core SDK installs auditing with no user extensions', async () => {
     contextFiles: false,
     model: createFauxModel({
       responses: [
-        fauxToolCall('write_file', { path: 'sdk.txt', content: 'sdk' }),
+        fauxToolCall('write', { path: 'sdk.txt', content: 'sdk' }),
         fauxText('done'),
       ],
     }),
@@ -146,7 +102,7 @@ test('the core SDK installs auditing with no user extensions', async () => {
   try {
     await vela.session('sdk').prompt('Write')
     expect(events.filter((event) => event.type === 'audit')).toEqual([
-      { type: 'audit', toolName: 'write_file', path: 'sdk.txt' },
+      { type: 'audit', toolName: 'write', path: 'sdk.txt' },
     ])
     expect(readFileSync(join(dir.path, 'sdk.txt'), 'utf8')).toBe('sdk')
     expect(vela.extensions().map((extension) => extension.name)).toEqual([

@@ -1,7 +1,7 @@
 /**
  * Subscribe to session events (pi's shape): streamed text, tool calls and results, usage and the end of the run.
  *
- * The faux model first asks for the `read_file` tool, then answers. The tool really runs,
+ * The faux model first asks for the `read` tool, then answers. The tool really runs,
  * against a temporary working directory created here.
  *
  * Run: bun examples/sdk/02-events.ts
@@ -17,7 +17,7 @@ writeFileSync(join(cwd, 'notes.txt'), 'Ship the docs on Friday.\n')
 
 const model = createFauxModel({
   responses: [
-    fauxToolCall('read_file', { path: 'notes.txt' }),
+    fauxToolCall('read', { path: 'notes.txt' }),
     // A function step builds the reply from the request: here, from the tool result.
     (req) =>
       fauxText(`The note says: ${req.toolResults[0]?.output.split('\n')[0]}`),

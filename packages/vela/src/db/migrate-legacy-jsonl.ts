@@ -1,11 +1,11 @@
 import { isAbsolute } from 'node:path'
 import { isPlainObject } from '../shared/interpolate.ts'
+import type { VelaMessage } from '../shared/messages.ts'
 import {
   normalizeUserContent,
   normalizeVelaContent,
   normalizeVelaMessage,
-  type VelaMessage,
-} from '../shared/messages.ts'
+} from './migrate-legacy-messages.ts'
 import {
   convertV1ToEntries,
   isV1Transcript,

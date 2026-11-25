@@ -57,7 +57,7 @@ test.each(['before', 'after'] as const)(
             /Full output: (.+?);/,
           )?.[1]
           if (!path) throw new Error('The caption recovery path is missing')
-          return fauxToolCall('read_file', { path })
+          return fauxToolCall('read', { path })
         },
         fauxText('Recovered both captions'),
       ],

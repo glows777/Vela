@@ -4,9 +4,12 @@ import type { ModelPricing } from '../../shared/pricing.ts'
 import type { ProviderUsage } from '../../shared/provider-types.ts'
 import { toolResultOutputToText } from '../context/tool-result-output.ts'
 import {
-  IMAGE_CHARS,
+  estimateMessagesTokens,
+  estimateTextTokens,
+  IMAGE_TOKENS,
   isImageContentPart,
   type ModelMessage,
+  stripOpaqueFields,
 } from '../messages.ts'
 
 export type { ModelPricing }
@@ -99,12 +102,20 @@ export class TokenTracker {
   private steps: StepRecord[] = []
   /** Optional JSONL usage log path. */
   private logPath?: string
-  /** Full prompt token count from the last API response. */
+  /** Full context token count from the last API response (inputTokens + outputTokens). */
   private lastPreciseCount = 0
-  /** Prompt tokens of the latest response, while the estimate is anchored to a provider report. */
+  /** Prompt+output tokens of the latest response, while the estimate is anchored to a provider report. */
   private reportedPromptTokens?: number
-  /** Message chars added since the last API calibration, not yet reflected in the API count. */
-  private pendingChars = 0
+  /** Weighted token estimate of messages added since the last API calibration. */
+  private pendingTokens = 0
+  /** Baseline active tool definition tokens at the last API calibration. */
+  private baselineToolTokens?: number
+  /** Current active tool definition tokens. */
+  private currentToolTokens = 0
+  /** Additional token delta introduced by context hooks when preparing a request. */
+  private contextHookDeltaTokens = 0
+  /** Context hook token delta already included in the latest calibrated API usage. */
+  private baselineContextHookDeltaTokens = 0
   /** Price from the current model config (cost in models.json); overrides the built-in table and updates on model switch. */
   private pricing?: ModelPricing
   /** Sum of each step's hypothetical no-cache cost, at the price in effect at request time (old requests are not repriced after a model switch). */
@@ -119,46 +130,87 @@ export class TokenTracker {
     if (logPath) mkdirSync(dirname(logPath), { recursive: true })
   }
 
-  /** Calibrates the current context baseline with the full prompt token count from the API. */
-  updateFromAPI(promptTokens: number): void {
-    this.reportedPromptTokens = promptTokens
-    this.lastPreciseCount = promptTokens
-    this.pendingChars = 0
+  /** Calibrates the current context baseline with `inputTokens + outputTokens` from the API. */
+  updateFromAPI(
+    inputTokens: number,
+    outputTokens = 0,
+    toolTokens?: number,
+  ): void {
+    const total = Math.max(0, inputTokens + outputTokens)
+    this.reportedPromptTokens = total
+    this.lastPreciseCount = total
+    this.pendingTokens = 0
+    this.baselineContextHookDeltaTokens = this.contextHookDeltaTokens
+    if (toolTokens !== undefined) {
+      this.baselineToolTokens = toolTokens
+      this.currentToolTokens = toolTokens
+    }
+  }
+
+  /** Tracks active tool schema tokens so newly discovered tools update the reported estimate. */
+  syncToolTokens(toolTokens: number): void {
+    this.currentToolTokens = toolTokens
+    if (
+      this.reportedPromptTokens !== undefined &&
+      this.baselineToolTokens === undefined
+    )
+      this.baselineToolTokens = toolTokens
+  }
+
+  /** Tracks net token delta from extension context hooks relative to raw session history. */
+  setContextDelta(deltaTokens: number): void {
+    this.contextHookDeltaTokens = deltaTokens
+  }
+
+  /** Net token delta from extension context hooks since the last API usage calibration. */
+  get contextDelta(): number {
+    return this.reportedPromptTokens !== undefined
+      ? this.contextHookDeltaTokens - this.baselineContextHookDeltaTokens
+      : this.contextHookDeltaTokens
   }
 
   /** Builds a local context estimate (e.g. from loaded history); the request estimate is used until a provider reports usage. */
   setEstimatedTokens(tokens: number): void {
     this.reportedPromptTokens = undefined
     this.lastPreciseCount = Math.max(0, tokens)
-    this.pendingChars = 0
+    this.pendingTokens = 0
+    this.baselineToolTokens = undefined
+    this.contextHookDeltaTokens = 0
+    this.baselineContextHookDeltaTokens = 0
   }
 
-  /** Lowers the current estimate by a locally measured reduction (microcompaction) without dropping the provider baseline. */
-  reduceEstimatedTokens(tokens: number): void {
-    this.lastPreciseCount = Math.max(0, tokens)
-    this.pendingChars = 0
-  }
-
-  /** Adds a new message's estimated chars to the current context. */
+  /** Adds a new message's estimated tokens to the current context. */
   addMessage(message: ModelMessage): void {
-    this.pendingChars += countMessageChars(message)
+    this.pendingTokens += countMessageTokens(message)
   }
 
-  /** Adds several new messages' estimated chars to the current context. */
+  /** Adds several new messages' estimated tokens to the current context. */
   addMessages(messages: ModelMessage[]): void {
     for (const message of messages) {
       this.addMessage(message)
     }
   }
 
-  /** Adjusts the context estimate by the char difference before and after replacing messages. */
+  /** Adjusts the context estimate by the token difference before and after replacing messages. */
   replaceMessages(before: ModelMessage[], after: ModelMessage[]): void {
-    this.pendingChars += countMessagesChars(after) - countMessagesChars(before)
+    this.pendingTokens +=
+      countMessagesTokens(after) - countMessagesTokens(before)
   }
 
-  /** Current context token estimate: last API baseline plus local message delta. */
+  /** Current context token estimate: last API baseline plus local message, tool, and hook deltas. */
   get estimatedTokens(): number {
-    return Math.max(0, this.lastPreciseCount + Math.ceil(this.pendingChars / 4))
+    const toolDelta =
+      this.reportedPromptTokens !== undefined &&
+      this.baselineToolTokens !== undefined
+        ? Math.max(0, this.currentToolTokens - this.baselineToolTokens)
+        : 0
+    return Math.max(
+      0,
+      this.lastPreciseCount +
+        this.pendingTokens +
+        toolDelta +
+        this.contextDelta,
+    )
   }
 
   /**
@@ -181,6 +233,7 @@ export class TokenTracker {
     this.contextWindow = contextWindow
     this.pricing = pricing
     this.reportedPromptTokens = undefined
+    this.baselineContextHookDeltaTokens = 0
   }
 
   /** Current context status relative to the model window (default 200k). */
@@ -274,56 +327,60 @@ export class TokenTracker {
   }
 }
 
-function countMessageChars(message: ModelMessage): number {
-  let chars = 0
+function countMessageTokens(message: ModelMessage): number {
   if (typeof message.content === 'string') {
-    return message.content.length
+    return estimateTextTokens(message.content)
   }
-  if (!Array.isArray(message.content)) return chars
+  if (!Array.isArray(message.content)) return 0
 
+  let tokens = 0
   for (const part of message.content) {
     if (isImageContentPart(part)) {
-      chars += IMAGE_CHARS
+      tokens += IMAGE_TOKENS
     } else if ('text' in part && typeof part.text === 'string') {
-      chars += part.text.length
+      tokens += estimateTextTokens(part.text)
     } else if ('output' in part) {
       const output = part.output
-      chars +=
-        output.type === 'content'
-          ? output.value.reduce(
-              (total, item) =>
-                total +
-                (isImageContentPart(item)
-                  ? IMAGE_CHARS
-                  : item.type === 'text'
-                    ? item.text.length
-                    : toolResultOutputToText({ type: 'content', value: [item] })
-                        .length),
-              0,
-            )
-          : output.type === 'json'
-            ? JSON.stringify(output.value).length
-            : toolResultOutputToText(output).length
+      if (output.type === 'content') {
+        tokens += output.value.reduce(
+          (total, item) =>
+            total +
+            (isImageContentPart(item)
+              ? IMAGE_TOKENS
+              : item.type === 'text'
+                ? estimateTextTokens(item.text)
+                : estimateTextTokens(
+                    toolResultOutputToText({ type: 'content', value: [item] }),
+                  )),
+          0,
+        )
+      } else if (output.type === 'json') {
+        tokens += estimateTextTokens(
+          JSON.stringify(stripOpaqueFields(output.value)) ?? '',
+        )
+      } else {
+        tokens += estimateTextTokens(toolResultOutputToText(output))
+      }
     } else if ('input' in part) {
-      chars += JSON.stringify(part.input)?.length ?? 0
+      tokens += estimateTextTokens(
+        JSON.stringify(stripOpaqueFields(part.input)) ?? '',
+      )
     }
   }
-  return chars
+  return tokens
 }
 
-function countMessagesChars(messages: ModelMessage[]): number {
-  let chars = 0
+function countMessagesTokens(messages: ModelMessage[]): number {
+  let tokens = 0
   for (const message of messages) {
-    chars += countMessageChars(message)
+    tokens += countMessageTokens(message)
   }
-  return chars
+  return tokens
 }
 
-/** Estimates history tokens from message chars, for context defense. */
+/** Estimates history tokens from message content, for context defense. */
 export function estimateMessageTokens(messages: ModelMessage[]): number {
-  const chars = countMessagesChars(messages)
-  // 4 chars per token, with 1.2x safety factor for Chinese
-  return Math.ceil((chars / 4) * 1.2)
+  return estimateMessagesTokens(messages)
 }
 
 function computeCost(usage: StepUsage, p: ModelPricing): number {

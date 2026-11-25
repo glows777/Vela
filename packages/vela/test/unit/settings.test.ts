@@ -98,7 +98,7 @@ test('the Lark section adds, removes and escapes without losing the other keys',
     JSON.stringify({
       lark: {
         owners: ['owner'],
-        chats: [{ id: 'old', tools: ['read_file'] }, '$LARK_SETUP_CHAT'],
+        chats: [{ id: 'old', tools: ['read'] }, '$LARK_SETUP_CHAT'],
       },
     }),
   )
@@ -114,14 +114,14 @@ test('the Lark section adds, removes and escapes without losing the other keys',
   })
   expect(lark()).toEqual({
     owners: ['owner'],
-    chats: [{ id: 'old', tools: ['read_file'] }, '$LARK_SETUP_CHAT', 'new'],
+    chats: [{ id: 'old', tools: ['read'] }, '$LARK_SETUP_CHAT', 'new'],
     appId: 'app-id',
     appSecret: 'sec$$ret',
   })
   // A chat the environment expression already names stays as it is, not duplicated.
   await saveLarkSection({ agentDir: dir, addChat: 'from-env', env })
   expect(lark().chats).toEqual([
-    { id: 'old', tools: ['read_file'] },
+    { id: 'old', tools: ['read'] },
     '$LARK_SETUP_CHAT',
     'new',
   ])

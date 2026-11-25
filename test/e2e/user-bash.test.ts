@@ -144,19 +144,18 @@ test('closing the session during a command cancels it and still saves it', async
   ).toMatchObject([{ command: 'echo started; sleep 10', cancelled: true }])
 })
 
-test('a missing shell is not retried and enables read-only discovery tools for the session', async () => {
+test('a missing shell reports an error without mutating the active tool set', async () => {
   const t = createTestVela(
     {
       responses: [
         fauxToolCall('bash', { command: 'echo this must not run' }),
         (req) => {
-          expect(req.tools).not.toContain('bash')
-          expect(req.tools).toContain('list_directory')
-          expect(req.tools).toContain('grep')
-          expect(req.tools).toContain('find')
-          return fauxToolCall('list_directory', { path: '.' })
+          expect(req.tools).toContain('bash')
+          expect(req.tools).not.toContain('ls')
+          expect(req.tools).not.toContain('grep')
+          expect(req.tools).not.toContain('find')
+          return fauxText('Reported missing bash without mutating tools.')
         },
-        fauxText('Used file discovery after Bash became unavailable.'),
       ],
     },
     (options) =>
@@ -169,29 +168,24 @@ test('a missing shell is not retried and enables read-only discovery tools for t
   await t.run('inspect the project')
 
   expect(t.lastAssistantText()).toBe(
-    'Used file discovery after Bash became unavailable.',
+    'Reported missing bash without mutating tools.',
   )
-  expect(t.model.calls[1]!.tools).not.toContain('bash')
-  expect(t.model.calls[1]!.tools).toContain('list_directory')
-  expect(t.model.calls[1]!.tools).toContain('grep')
-  expect(t.model.calls[1]!.tools).toContain('find')
+  expect(t.model.calls[1]!.tools).toContain('bash')
+  expect(t.model.calls[1]!.tools).not.toContain('ls')
   const bashResult = t
     .eventsOf('tool_execution_end')
     .find((event) => event.toolName === 'bash')
   expect(bashResult?.isError).toBe(true)
 })
 
-test('a missing shell does not widen an explicit tool allowlist', async () => {
+test('a missing shell preserves an explicit tool allowlist', async () => {
   const t = createTestVela(
     {
       session: { tools: ['bash'] },
       responses: [
         fauxToolCall('bash', { command: 'echo this must not run' }),
         (req) => {
-          expect(req.tools).not.toContain('bash')
-          expect(req.tools).not.toContain('list_directory')
-          expect(req.tools).not.toContain('grep')
-          expect(req.tools).not.toContain('find')
+          expect(req.tools).toEqual(['bash'])
           return fauxText('The configured tool allowlist remains in force.')
         },
       ],
@@ -208,7 +202,7 @@ test('a missing shell does not widen an explicit tool allowlist', async () => {
   expect(t.lastAssistantText()).toBe(
     'The configured tool allowlist remains in force.',
   )
-  expect(t.model.calls[1]!.tools).toEqual([])
+  expect(t.model.calls[1]!.tools).toEqual(['bash'])
 })
 
 test('a session with only `!` commands is listed for resuming', async () => {
@@ -264,7 +258,7 @@ test("tool messages record each tool's details, so a resumed session can show ed
   const t = createTestVela({
     files: { 'a.txt': 'one\n' },
     responses: [
-      fauxToolCall('edit_file', {
+      fauxToolCall('edit', {
         path: 'a.txt',
         edits: [{ oldText: 'one', newText: 'two' }],
       }),

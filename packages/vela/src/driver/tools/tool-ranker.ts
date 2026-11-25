@@ -157,3 +157,35 @@ export function rankTools(
   })
   return matches.sort((x, y) => y.score - x.score).slice(0, limit)
 }
+
+/** Format `<deferred_tools>` summary lines, collapsing each namespace into a single line. */
+export function formatDeferredToolSummary(
+  deferred: ReadonlyArray<{
+    name: string
+    searchHint?: string
+    namespace?: ToolNamespace
+  }>,
+): string {
+  if (deferred.length === 0) return ''
+
+  const lines: string[] = []
+  const namespaces = new Map<string, (typeof deferred)[number][]>()
+  for (const tool of deferred) {
+    if (!tool.namespace) {
+      lines.push(
+        `- ${tool.name}${tool.searchHint ? ` — ${tool.searchHint}` : ''}`,
+      )
+      continue
+    }
+    const key = tool.namespace.name
+    namespaces.set(key, [...(namespaces.get(key) ?? []), tool])
+  }
+  for (const [key, tools] of namespaces) {
+    const description = tools.find((t) => t.namespace?.description)?.namespace
+      ?.description
+    lines.push(
+      `- ${key} (${tools.length} tool${tools.length === 1 ? '' : 's'})${description ? ` — ${description}` : ''}`,
+    )
+  }
+  return lines.join('\n')
+}

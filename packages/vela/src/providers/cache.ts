@@ -23,12 +23,14 @@ export function withPromptCache(request: {
   tools: ToolSet
   messages: ModelMessage[]
 }): {
-  instructions: SystemModelMessage
+  instructions?: SystemModelMessage
   tools: ToolSet
   messages: ModelMessage[]
 } {
   const names = Object.keys(request.tools)
-  const lastTool = names.at(-1)
+  const lastTool = names.findLast(
+    (name) => request.tools[name]?.type !== 'provider',
+  )
   const tools =
     lastTool === undefined
       ? request.tools
@@ -53,11 +55,15 @@ export function withPromptCache(request: {
           } as ModelMessage,
         ]
   return {
-    instructions: {
-      role: 'system',
-      content: request.system,
-      providerOptions: withCacheControl(undefined),
-    },
+    ...(request.system.trim()
+      ? {
+          instructions: {
+            role: 'system' as const,
+            content: request.system,
+            providerOptions: withCacheControl(undefined),
+          },
+        }
+      : {}),
     tools,
     messages,
   }

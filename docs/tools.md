@@ -8,10 +8,10 @@ Every tool runs inside the Vela process with the operating-system permissions of
 
 | Tool | Purpose | Annotations |
 |---|---|---|
-| `read_file` | Read an image, or a text/saved tool result file one page at a time | read-only |
-| `write_file` | Create or overwrite a file | destructive, idempotent |
-| `edit_file` | Replace one or more exact pieces of text in a file | destructive |
-| `list_directory` | List a directory's entries | read-only |
+| `read` | Read an image, or a text/saved tool result file one page at a time | read-only |
+| `write` | Create or overwrite a file | destructive, idempotent |
+| `edit` | Replace one or more exact pieces of text in a file | destructive |
+| `ls` | List a directory's entries | read-only |
 | `grep` | Search file contents with ripgrep | read-only |
 | `find` | Find files by glob pattern with fd | read-only |
 | `bash` | Run a shell command | destructive, open world |
@@ -19,15 +19,15 @@ Every tool runs inside the Vela process with the operating-system permissions of
 
 The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, the same as pi and MCP). Vela does not enforce these hints; a user extension can inspect them.
 
-Each core tool also contributes its own line and rules to the system prompt: `promptSnippet` supplies the `- name: what it does` line in `<tools>`, and `promptGuidelines` supplies rules in `<rules>` (for example "Read a file before you change it." from `edit_file`). The builder reads the session's active tools, so a tool the session does not have — `grep` until `+grep` enables it, or `bash` in a top-level group chat — contributes neither. Extensions set the same two fields. See [The system prompt](settings.md#the-system-prompt).
+Each core tool also contributes its own line and rules to the system prompt: `promptSnippet` supplies the `- name: what it does` line in `<tools>`, and `promptGuidelines` supplies rules in `<rules>` (for example "Read a file before you change it." from `edit`). The builder reads the session's active tools, so a tool the session does not have — `grep` until `+grep` enables it, or `bash` in a top-level group chat — contributes neither. Extensions set the same two fields. See [The system prompt](settings.md#the-system-prompt).
 
-The default set is `read_file`, `write_file`, `edit_file` and `bash`, plus `tool_search`. `list_directory`, `grep` and `find` stay registered but off: the model neither sees them nor can call them until a session enables one with `--tools +grep` (or `+grep,+find,+list_directory`) or the [`tools`](settings.md#tools) setting. pi keeps `ls`, `grep` and `find` off in the same way.
+The default set is `read`, `write`, `edit` and `bash`, plus `tool_search`. `ls`, `grep` and `find` stay registered but off: the model neither sees them nor can call them until a session enables one with `--tools +grep` (or `+grep,+find,+ls`) or the [`tools`](settings.md#tools) setting. pi keeps `ls`, `grep` and `find` off in the same way.
 
 Relative paths resolve against the working directory: the directory the CLI was started in, or `cwd` in `createVela()` (default `process.cwd()`). Paths outside it are not blocked.
 
-Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `list_directory` instead of `read`, `write`, `edit` and `ls`; `grep`, `find` and `bash` match pi's. Vela has no `powershell` or `codemode` tool, and `--tools` and `tools` in `config.json` take the same `+name` / `-name` entries as pi's.
+Compared with pi: Vela's core tool names (`read`, `write`, `edit`, `ls`, `grep`, `find`, `bash`) match pi's. Vela has no `powershell` or `codemode` tool, and `--tools` and `tools` in `config.json` take the same `+name` / `-name` entries as pi's.
 
-### read_file
+### read
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -42,16 +42,16 @@ Non-image PDFs (identified by `%PDF-`), NUL bytes and invalid UTF-8 are rejected
 
 For text files, one call returns at most `limit` lines and at most 50KB (UTF-8), the same page size as pi. When more content remains, the result ends with a footer naming the range shown and the exact `path`, `offset`, `column` and `limit` for the next call. At EOF, the result is only the page's file content, preserving any existing trailing newline and adding no footer or separator. The file is read as a stream, so large files are not loaded into memory.
 
-### write_file
+### write
 
 | Parameter | Type | Description |
 |---|---|---|
 | `path` | string | File path |
 | `content` | string | Full file content |
 
-Replaces the whole file and creates missing parent directories. Overwriting an existing file also needs this session to have read it to the end with `read_file` or written it with `write_file` / `edit_file`, and the file must not have changed on disk since; otherwise the call fails and asks for a full read or a targeted `edit_file`.
+Replaces the whole file and creates missing parent directories. For surgical changes to an existing file, prefer `edit`.
 
-### edit_file
+### edit
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -68,13 +68,13 @@ The parameters and matching are the same as pi's `edit` tool:
 
 The model gets `Successfully replaced N block(s) in <path>.`. The diff (with line numbers), a unified patch and the first changed line are kept in the tool history, not sent to the model.
 
-### list_directory
+### ls
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `path` | string | working directory | Directory to list |
 
-Returns one line per entry, `[DIR] name` or `[FILE] name`. It does not recurse.
+Returns sorted entries, one per line (`name/` for directories and symlinks to directories, `name` for files). It does not recurse.
 
 ### grep
 
@@ -90,7 +90,7 @@ Runs [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`).
 | `context` | number | `0` | Lines to show before and after each match |
 | `limit` | number | `100` | Maximum number of matches |
 
-Each match is printed as `path:line: text`; context lines use `path-line- text`. Paths are relative to the search directory. Lines longer than 500 characters are cut, with a notice telling the model to use `read_file`. When the limit is hit, rg is stopped and the result ends with a notice suggesting a larger `limit` or a narrower pattern.
+Each match is printed as `path:line: text`; context lines use `path-line- text`. Paths are relative to the search directory. Lines longer than 500 characters are cut, with a notice telling the model to use `read`. When the limit is hit, rg is stopped and the result ends with a notice suggesting a larger `limit` or a narrower pattern.
 
 grep respects `.gitignore`, searches hidden files, and skips `.git/`. An invalid regular expression or a missing path is returned as an error.
 
@@ -131,17 +131,16 @@ Without `binDir`, only `PATH` is searched and nothing is downloaded.
 | Parameter | Type | Description |
 |---|---|---|
 | `command` | string | Shell command |
-| `timeout` | number | Optional timeout in seconds; the session's foreground budget applies when the call names none |
+| `timeout` | number | Optional timeout in seconds (default `120`, max `1800`) |
 | `run_in_background` | boolean | Start the command as a background task and return at once with its id |
 
-Runs `bash -lc <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createVela({ shellPath })` to use another Bash-compatible shell). The CLI selects the Git for Windows `bin\\bash.exe` wrapper on Windows. Direct SDK users default to `bash.exe` on `PATH` and can set `shellPath` to the full Git Bash path. If the shell executable cannot start, the command is not run and `bash` is disabled for that session; default sessions then enable `list_directory`, `grep` and `find` unless a tool was explicitly turned off. An explicit allowlist stays in force. The environment streams combined stdout and stderr. Short output stays inline. When either output limit is crossed, the environment writes the full output to a file. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read_file`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`; like pi, these three are error results (`isError: true`), with the preview as the error text. While the command runs, the tail of its output is sent as `tool_execution_update` events (`partialResult` is `{ content: [{ type: 'text', text }] }`, at most every 100ms and only when the output grew).
+Runs `<shellPath> -c <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createVela({ shellPath })` to use another Bash-compatible shell). The CLI selects the Git for Windows `bin\\bash.exe` wrapper on Windows. Direct SDK users default to `bash.exe` on `PATH` and can set `shellPath` to the full Git Bash path. The environment streams combined stdout and stderr. Short output stays inline. When either output limit is crossed, the environment writes the full output to a file. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`; like pi, these three are error results (`isError: true`), with the preview as the error text. While the command runs, the tail of its output is sent as `tool_execution_update` events (`partialResult` is `{ content: [{ type: 'text', text }] }`, at most every 100ms and only when the output grew).
 
 A running call can also be moved to the background while it waits: `session.backgroundTasks()` (and the RPC request [`background_tasks`](rpc.md#background_tasks)) takes over the call, which returns `Command was manually moved to the background with ID: bg-1.` with the output so far, and the exit arrives as the job's result. The tool result's `execution` metadata carries `backgroundTaskId` and `backgroundedByUser: true`; the call is still recorded as `completed`. A job created either way answers `background_output` and stops through `background_stop` the same way, and Esc does not stop it (closing the session does). A `!!` command is left in the foreground: its exit would reach the model, so moving everything skips it.
 
-With `run_in_background: true` the call starts a job and returns without waiting: `Command running in background with ID: bg-1.` and `You will be notified when it completes; do not poll the file or start a second copy.` Any output the command already wrote comes with that result, which names no file: the environment only knows its spill path once the command ends. The job belongs to the session and delivers its exit as its own message; see [background](built-in-extensions.md#background). Only a session with that extension and its `background_stop` tool has the capability; without either, the call fails with `Background commands are not enabled in this session` instead of ignoring the parameter and running the command in the foreground. Because that depends on the session, the parameter's own description states the condition and the system prompt does not tell every `bash` session to use it. When the output passes the limits above, the session's execution environment spills it to a file there and the exit delivery names it (`Full output: <path>`), so `read_file` pages the whole log; the tail sent to the model stays bounded.
+With `run_in_background: true` the call starts a job and returns without waiting: `Command running in background with ID: bg-1.` and `You will be notified when it completes; do not poll the file or start a second copy.` Any output the command already wrote comes with that result, which names no file: the environment only knows its spill path once the command ends. The job belongs to the session and delivers its exit as its own message; see [background](built-in-extensions.md#background). Only a session with that extension and its `background_stop` tool has the capability; without either, the call fails with `Background commands are not enabled in this session` instead of ignoring the parameter and running the command in the foreground. Because that depends on the session, the parameter's own description states the condition and the system prompt does not tell every `bash` session to use it. When the output passes the limits above, the session's execution environment spills it to a file there and the exit delivery names it (`Full output: <path>`), so `read` pages the whole log; the tail sent to the model stays bounded.
 
-- Foreground budget: a call that outlives it is moved to the background instead of being killed, so the work is not lost. `Command did not complete within its 120s timeout and was moved to the background (ID: bg-1).`, then the output so far, and the exit arrives as the job's result; the result's `execution` metadata carries `backgroundTaskId` and `timedOutAfterMs`, which is how it differs from a declared job and from one moved with Ctrl+B. The foreground budget defaults to `120` seconds, and a requested `timeout` is capped at `600` seconds, with the result naming both values when clamped. A command that starts with `sleep` has no work to lose, so it keeps the kill.
-- Kill: with no `background` extension, no `background_stop` tool in the session, or a budget of `0`, an explicit `timeout` kills the shell and its child processes as before (the process group on POSIX, the process tree on Windows) and the result stays `Command timed out after N seconds`. Abort always kills.
+- Timeout and kill: foreground calls use `timeout` (default `120` seconds, clamped to `1800` seconds) and background calls also honor an explicit `timeout`. When `timeout` fires or the call is aborted, Vela terminates the shell and its child processes (`SIGTERM` grace, then `SIGKILL`) and reports `Command timed out after N seconds` or `Command aborted`.
 - Vela does not filter commands; a user extension can confirm or block calls through a `tool_call` hook. See [Security](security.md).
 
 ## How tools run
@@ -150,7 +149,7 @@ With `run_in_background: true` the call starts a job and returns without waiting
 
 The model can request several tool calls in one response. As in pi, they run in parallel by default:
 
-- `write_file` and `edit_file` queue per file (resolved through symlinks): two writes to the same file run one after the other, writes to different files run at the same time. The queue is shared by every session in the process.
+- `write` and `edit` queue per file (resolved through symlinks): two writes to the same file run one after the other, writes to different files run at the same time. The queue is shared by every session in the process.
 - `bash` and the read-only tools take no lock.
 - A tool with `executionMode: 'sequential'` runs alone within its session: it waits for the session's calls that started before it, and calls that start after it wait for it. Other sessions are not affected. The built-in `memory` tool is sequential.
 
@@ -158,34 +157,30 @@ Tool availability checks, hooks and extension confirmation prompts run before a 
 
 ### Result size and truncation
 
-Each tool has a result limit in characters:
+Each tool has a result line limit (plus the 50KB cap per preview):
 
 | Tool | Limit |
 |---|---|
-| `read_file` | one page (50KB) plus its continuation footer when needed, so a page is never saved again |
-| `grep`, `find` | 12,000 |
+| `read` | one page (50KB) plus its continuation footer when needed, so a page is never saved again |
+| `grep`, `find` | 200 lines |
 | `bash` | its own tail preview, see above |
-| `web_fetch`, `web_search`, default | 51,200 |
-| MCP tools | 20,000 |
+| `web_fetch`, `web_search`, default | 500 lines |
+| MCP tools | 300 lines |
 
-When a result is longer than its limit, Vela saves the full result through the selected execution environment (the default local adapter uses `sessions/<id>/tool-results/`) and gives the model a preview instead: the head up to the limit, followed by one line giving the full-output path and explaining that `read_file` with `offset` reads the rest. Bash retains its tail preview and adds a path only when truncated. Complete bash output is plain text. If shell output storage fails during execution, the adapter stops the command. The reported tail can include partial effects. If the terminal history write fails after a successful spill, the error names the actual file. The earlier call record cannot recover a path allocated later.
+When a result exceeds its line limit, Vela saves the full result through the selected execution environment (the default local adapter uses `sessions/<id>/tool-results/`) and gives the model a preview instead: the head up to the limit, followed by one line giving the full-output path and explaining that `read` with `offset` reads the rest. Bash retains its tail preview and adds a path only when truncated. Complete bash output is plain text. If shell output storage fails during execution, the adapter stops the command. The reported tail can include partial effects. If the terminal history write fails after a successful spill, the error names the actual file. The earlier call record cannot recover a path allocated later.
 
 Every call and result is also recorded in a tool history log (JSONL) in the session's directory. A `tool_response` record preserves the final normalized, post-hook model output separately from the native `tool_result`, so crash recovery can restore the exact response without rewriting native evidence. The compaction summary keeps one line with the earlier-output snapshot location.
-
-### Microcompaction
-
-When a long session's estimated input reaches `limits.microcompactThreshold`, Vela replaces older results of the core file, search and bash tools with a short reference to the saved file, and summarizes older history if that is not enough. See [Sessions](sessions.md#compaction).
 
 ## Deferred tools and tool_search
 
 A tool definition's `exposure` decides where the tool shows up. The values and their meaning are pi's:
 
-| `exposure` | Sent to the model | Found by `tool_search` | Callable with `ctx.executeTool()` |
-|---|---|---|---|
-| `direct` (default) | yes | yes | yes |
-| `model-only` | yes | yes | no |
-| `deferred` | after `tool_search` loads it | yes | yes |
-| `hidden` | no | no | no |
+| `exposure` | Sent to the model | Found by `tool_search` |
+|---|---|---|
+| `direct` (default) | yes | yes |
+| `model-only` | yes | yes |
+| `deferred` | after `tool_search` loads it | yes |
+| `hidden` | no | no |
 
 A `hidden` tool stays registered but unused, for example while it is turned off.
 
@@ -228,6 +223,6 @@ See [SDK](sdk.md) for the session API and [examples/extensions/read-only-session
 
 ## Image results
 
-`read_file` detects JPEG, PNG, GIF, WebP and BMP by file headers, including images with a text extension. Image reads are bounded at 96 MiB before base64 allocation; normal text pagination is unchanged. Images use the shared 2000px / 4.5 MiB base64 normalizer after tool-result hooks. Invalid images produce an omission reason. A text-only model receives a tool-image omission note while history retains the image for later vision use.
+`read` detects JPEG, PNG, GIF, WebP and BMP by file headers, including images with a text extension. Image reads are bounded at 96 MiB before base64 allocation; normal text pagination is unchanged. Images use the shared 2000px / 4.5 MiB base64 normalizer after tool-result hooks. Invalid images produce an omission reason. A text-only model receives a tool-image omission note while history retains the image for later vision use.
 
-Multimodal results are not folded into base64 text by microcompaction. Large text captions may be previewed with a separate full-caption path; native result details are still recorded in tool history.
+Large text captions may be previewed with a separate full-caption path; native result details are still recorded in tool history.

@@ -4,10 +4,6 @@
  * @internal
  */
 export {
-  type LegacyConfigMigrationResult,
-  migrateLegacyConfigFiles,
-} from './config/index.ts'
-export {
   type LegacyMigrationResult,
   type LegacyMigrationSummary,
   migrateLegacyVelaDir,

@@ -9,17 +9,10 @@ export interface ExecutionMetadata {
   signal?: string | null
   isError?: boolean
   timedOut?: boolean
-  /** The executable could not start, so this tool cannot run in the current session. */
-  toolUnavailable?: boolean
   /** The background job this call started, whose result arrives on its own. */
   backgroundTaskId?: string
   /** The job was a running call the user moved to the background instead of one the call declared. */
   backgroundedByUser?: boolean
-  /**
-   * The foreground budget that expired and moved this call to the background, in milliseconds: how a
-   * timed-out call is told apart from a declared one or one the user moved.
-   */
-  timedOutAfterMs?: number
 }
 
 export interface CallRecord {
@@ -78,11 +71,21 @@ export interface LegacyResultRecord {
   note: string
 }
 
+export interface LocationRecord {
+  version: 1
+  type: 'tool_location'
+  seq: number
+  timestamp: string
+  callId: string
+  location: { environment: string; cwd: string }
+}
+
 export type HistoryRecord =
   | CallRecord
   | ResultRecord
   | LegacyResultRecord
   | ResponseRecord
+  | LocationRecord
 type NewRecord<T> = T extends HistoryRecord
   ? Omit<T, 'version' | 'seq' | 'timestamp'>
   : never
@@ -160,6 +163,11 @@ export class ToolHistoryStore {
       if (!result) throw new Error('Tool response without a terminal result')
       result.modelOutput = record.output
     }
+    if (record.type === 'tool_location') {
+      const call = this.calls.get(record.callId)
+      if (!call) throw new Error('Tool location without a call record')
+      call.location ??= record.location
+    }
     if (record.type === 'legacy_result')
       this.legacy.add(JSON.stringify([record.toolCallId, record.outputPath]))
   }
@@ -213,6 +221,18 @@ export class ToolHistoryStore {
       toolName,
       input,
       ...recovery,
+    })
+  }
+
+  async locate(
+    callId: string,
+    location: NonNullable<CallRecord['location']>,
+  ): Promise<void> {
+    if (this.calls.get(callId)?.location) return
+    await this.append<LocationRecord>({
+      type: 'tool_location',
+      callId,
+      location,
     })
   }
 

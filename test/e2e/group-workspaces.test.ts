@@ -139,8 +139,8 @@ test('a group with only global notes gets its index once per request', async () 
   await t.vela.startChannels()
 
   await turn(run, 'oc_alpha', 'root', 'Read the guide twice', [
-    fauxToolCall('read_file', { path: 'a.txt' }),
-    fauxToolCall('read_file', { path: 'a.txt' }),
+    fauxToolCall('read', { path: 'a.txt' }),
+    fauxToolCall('read', { path: 'a.txt' }),
     fauxText('read'),
   ])
   const requests = t.model.calls.slice(2)
@@ -179,7 +179,7 @@ test('two groups keep same-name files and memory separate across topics, idle re
   ] as const) {
     await turn(run, chat!, 'root', 'Save this group note and file', [
       save(value!),
-      fauxToolCall('write_file', { path: 'same.txt', content: value }),
+      fauxToolCall('write', { path: 'same.txt', content: value }),
       fauxText('saved'),
     ])
     const folder = `channels/${channelSessionId('lark', chat!)}`
@@ -217,7 +217,7 @@ test('two groups keep same-name files and memory separate across topics, idle re
       (req) => {
         expect(req.toolResults.at(-1)?.output).toContain(value)
         expect(req.toolResults.at(-1)?.output).not.toContain(other)
-        return fauxToolCall('read_file', { path: 'same.txt' })
+        return fauxToolCall('read', { path: 'same.txt' })
       },
       (req) => {
         expect(req.toolResults.at(-1)?.output).toBe(value)
@@ -298,7 +298,7 @@ test('unknown group tools reject startup before transport connects, after asynch
 })
 
 test.each([
-  { chats: [{ id: 'oc_alpha', tools: 'read_file' }] },
+  { chats: [{ id: 'oc_alpha', tools: 'read' }] },
   { chats: ['oc_alpha', { id: 'oc_alpha' }] },
   { chats: [{ id: 'oc_alpha', readUntagged: 'yes' }] },
 ])('malformed group configuration fails loading: %j', async ({ chats }) => {
@@ -328,7 +328,7 @@ test('an empty tool list retains channel controls, hides memory and cannot invok
   for (const restart of [false, true]) {
     if (restart) await turn(run, 'oc_alpha', 'root', '!restart', [])
     await turn(run, 'oc_alpha', 'root', 'Try a removed tool', [
-      fauxToolCall('write_file', { path: 'forbidden.txt', content: 'NO' }),
+      fauxToolCall('write', { path: 'forbidden.txt', content: 'NO' }),
       fauxText('denied'),
     ])
     const events = run.t.eventsOf('tool_execution_end')

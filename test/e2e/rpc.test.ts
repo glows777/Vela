@@ -552,7 +552,7 @@ test('rpc: a failed project tool selection leaves the active session and can be 
     'config.json': JSON.stringify({ dataDir: join(home.path, 'data') }),
     'trust.json': JSON.stringify({ [a.path]: true, [b.path]: true }),
   }
-  writeFileSync(settings, JSON.stringify({ tools: ['read_file'] }))
+  writeFileSync(settings, JSON.stringify({ tools: ['read'] }))
   const model = `faux:${scenario('hello')}`
   const seed = startRpc(model, ['--session', 'saved-b'], files, {
     cwd: b,
@@ -581,7 +581,7 @@ test('rpc: a failed project tool selection leaves the active session and can be 
     expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
       sessionId: 'active-a',
     })
-    writeFileSync(settings, JSON.stringify({ tools: ['read_file'] }))
+    writeFileSync(settings, JSON.stringify({ tools: ['read'] }))
     expect(
       await rpc.call({ type: 'switch_session', sessionId: 'saved-b' }),
     ).toMatchObject({

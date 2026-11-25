@@ -184,19 +184,11 @@ export class AssistantMessage extends Container {
   }
 }
 
-interface NestedCall {
-  name: string
-  input: unknown
-  status: 'running' | 'ok' | 'error'
-  durationMs?: number
-}
-
 /**
  * Tool call (like pi's ToolExecutionComponent with its built-in renderers): name + key argument, then
  * the output. bash streams its output while it runs and shows the last lines with the elapsed time;
- * edit_file shows its diff; other tools show their output. A block lives inside its turn's fold, so
- * opening the fold is what reveals it, in full. Calls the tool made
- * through `ctx.executeTool()` are listed inside the block, one line each (like pi's codemode renderer).
+ * edit shows its diff; other tools show their output. A block lives inside its turn's fold, so
+ * opening the fold is what reveals it, in full.
  */
 export class ToolBlock implements Component {
   private status: 'pending' | 'success' | 'error' = 'pending'
@@ -205,7 +197,6 @@ export class ToolBlock implements Component {
   private startedAt?: number
   private durationMs?: number
   private timer?: ReturnType<typeof setInterval>
-  private readonly nested = new Map<string, NestedCall>()
 
   constructor(
     private readonly name: string,
@@ -257,18 +248,6 @@ export class ToolBlock implements Component {
     this.timer = undefined
   }
 
-  addNested(id: string, name: string, input: unknown): void {
-    if (!this.nested.has(id))
-      this.nested.set(id, { name, input, status: 'running' })
-  }
-
-  setNestedResult(id: string, isError: boolean, durationMs?: number): void {
-    const call = this.nested.get(id)
-    if (!call) return
-    call.status = isError ? 'error' : 'ok'
-    call.durationMs = durationMs
-  }
-
   invalidate(): void {}
 
   render(width: number): string[] {
@@ -280,7 +259,6 @@ export class ToolBlock implements Component {
           : 'toolErrorBg'
     const inner = Math.max(1, width - 2)
     const lines = [this.title()]
-    for (const call of this.nested.values()) lines.push(nestedLine(call))
     const body = this.body()
     if (body.length) lines.push('', ...body)
     const clock = this.clock()
@@ -441,27 +419,9 @@ export class BashExecution implements Component {
   }
 }
 
-function nestedLine(call: NestedCall): string {
-  const icon =
-    call.status === 'running'
-      ? theme.fg('yellow', '…')
-      : call.status === 'ok'
-        ? theme.fg('green', '✓')
-        : theme.fg('red', '✗')
-  const args = summarizeInput(call.name, call.input)
-  return [
-    `↳ ${icon} ${call.name}`,
-    args && theme.fg('muted', args),
-    call.durationMs !== undefined &&
-      theme.fg('dim', formatDuration(call.durationMs)),
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
-/** edit_file's display diff from its `details` (`EditFileDetails`) */
+/** edit's display diff from its `details` (`EditFileDetails`) */
 function editDiff(name: string, details: unknown): string | undefined {
-  if (name !== 'edit_file' || !details || typeof details !== 'object')
+  if (name !== 'edit' || !details || typeof details !== 'object')
     return undefined
   const diff = (details as { diff?: unknown }).diff
   return typeof diff === 'string' && diff ? diff : undefined
@@ -640,8 +600,6 @@ export function contextLine(
   event: Extract<VelaEvent, { type: 'context_prepare' }>,
 ): string {
   switch (event.action) {
-    case 'micro':
-      return `[context] Folded old tool results ${event.before} → ${event.after} tokens`
     case 'summary-required':
       return `[context] ${event.before} tokens, summarizing before the next request`
   }
@@ -686,8 +644,6 @@ export function agentEndNotice(
 ): { message: string; level: 'dim' | 'error' } | undefined {
   if (event.reason === 'aborted')
     return { message: 'Interrupted', level: 'dim' }
-  if (event.reason === 'loop')
-    return { message: 'Repeated tool calls detected, stopped', level: 'error' }
   if (event.reason !== 'error') return undefined
   const hint = failureHint(event.errorKind, event.error)
   return {

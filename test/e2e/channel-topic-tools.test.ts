@@ -149,7 +149,7 @@ test('a chat tool list narrows a session that already exists, and only a new one
     onMessage(handler) {
       receive = handler
     },
-    sessionOptions: () => ({ tools: ['read_file', 'tool_search'] }),
+    sessionOptions: () => ({ tools: ['read', 'tool_search'] }),
   }
   const t = createTestVela({
     responses: [
@@ -172,16 +172,16 @@ test('a chat tool list narrows a session that already exists, and only a new one
   }
   // The channel creates this session, so its list applies as written.
   await receive(message)
-  expect(t.model.calls[0]!.tools).toEqual(['read_file', 'tool_search'])
+  expect(t.model.calls[0]!.tools).toEqual(['read', 'tool_search'])
 
   // A host that opened the same chat first keeps its own, narrower allowlist.
   const sessionId = channelSessionId('fixture', 'other')
-  const early = t.vela.session(sessionId, { tools: ['read_file'] })
-  expect(early.getActiveTools()).toEqual(['read_file'])
+  const early = t.vela.session(sessionId, { tools: ['read'] })
+  expect(early.getActiveTools()).toEqual(['read'])
   await receive({ ...message, channelId: 'other', text: 'Hello again' })
   expect(t.vela.session(sessionId)).toBe(early)
-  expect(early.getActiveTools()).toEqual(['read_file'])
-  expect(t.model.calls[1]!.tools).toEqual(['read_file'])
+  expect(early.getActiveTools()).toEqual(['read'])
+  expect(t.model.calls[1]!.tools).toEqual(['read'])
 })
 
 test('a channel applies its tool split once, so a later message keeps what a session_start hook chose', async () => {
@@ -195,7 +195,7 @@ test('a channel applies its tool split once, so a later message keeps what a ses
     onMessage(handler) {
       receive = handler
     },
-    sessionOptions: () => ({ tools: ['read_file'] }),
+    sessionOptions: () => ({ tools: ['read'] }),
   }
   const t = createTestVela({
     responses: [fauxText('first'), fauxText('second')],
@@ -204,7 +204,7 @@ test('a channel applies its tool split once, so a later message keeps what a ses
         api.registerChannel(channel)
         // Documented order: the channel's rules apply first, then a session_start handler adjusts them.
         api.on('session_start', (_event, ctx) => {
-          ctx.session.setActiveTools(['read_file', 'tool_search'])
+          ctx.session.setActiveTools(['read', 'tool_search'])
         })
       },
     ],
@@ -218,7 +218,7 @@ test('a channel applies its tool split once, so a later message keeps what a ses
     replyToId: 'trigger',
   }
   await receive(message)
-  expect(t.model.calls[0]!.tools).toEqual(['read_file', 'tool_search'])
+  expect(t.model.calls[0]!.tools).toEqual(['read', 'tool_search'])
   await receive({ ...message, text: 'Again', replyToId: 'second' })
-  expect(t.model.calls[1]!.tools).toEqual(['read_file', 'tool_search'])
+  expect(t.model.calls[1]!.tools).toEqual(['read', 'tool_search'])
 })

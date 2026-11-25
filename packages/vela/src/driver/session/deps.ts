@@ -53,7 +53,11 @@ interface SessionExtensionHooks<Session> {
     entryId: string,
     position: 'before' | 'at',
   ): Promise<boolean>
-  hasHandlers(event: ExtensionEventName, toolName?: string): boolean
+  hasHandlers(
+    event: ExtensionEventName,
+    toolName?: string,
+    options?: { scopedOnly?: boolean },
+  ): boolean
   /** Text after the input handlers; undefined when a handler handled it */
   input(
     session: Session,

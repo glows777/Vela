@@ -55,19 +55,16 @@ import {
 import { exportBranch } from './session/export.ts'
 import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
-import { NestedCallLog, takeToolDetails } from './session/nested-calls.ts'
-import type {
-  InternalSessionOptions,
-  PromptOptions,
-  SendMessageOptions,
-  SessionHost,
-  SessionUsage,
-} from './session/options.ts'
 import {
   assertSessionId,
   type ForkOptions,
+  type InternalSessionOptions,
   type NavigateTreeOptions,
+  type PromptOptions,
   type QueueMode,
+  type SendMessageOptions,
+  type SessionHost,
+  type SessionUsage,
 } from './session/options.ts'
 import {
   assertInterruptedTurn,
@@ -188,9 +185,7 @@ export class VelaSession {
   }
 
   private readonly listeners = new Set<VelaEventListener>()
-  /** Calls tools made through ctx.executeTool(), recorded on their caller's tool result (like pi's nestedCalls) */
-  private readonly nestedCalls = new NestedCallLog()
-  /** Tools' display data from `tool_execution_end`, recorded on their tool message like nestedCalls */
+  /** Tools' display data from `tool_execution_end`, recorded on their tool message. */
   private readonly toolDetails = new Map<string, unknown>()
   private readonly userBash: UserBash
   private readonly builder: SystemPromptBuilder
@@ -268,7 +263,6 @@ export class VelaSession {
       { messages: this.messages, timestamps: new Map(), summary: '' },
       this.emit,
       this.limits,
-      this.execEnv,
     )
     this.timestamps = this.contextManager.state.timestamps
     this.userBash = new UserBash({
@@ -336,8 +330,8 @@ export class VelaSession {
 
   private requestModel(): ModelInput {
     this.defaults.hooked ??= withProviderHooks(this.model, {
-      has: (event, toolName) =>
-        this.deps.extensions.hasHandlers(event, toolName),
+      has: (event, toolName, opts) =>
+        this.deps.extensions.hasHandlers(event, toolName, opts),
       beforeRequest: (params) =>
         this.deps.extensions.beforeProviderRequest(this, params),
       afterResponse: (headers) =>
@@ -480,12 +474,7 @@ export class VelaSession {
       const custom = this.messageQueue.customMessages.get(event.message)
       if (custom) event = { ...event, custom }
     }
-    this.nestedCalls.observe(event)
-    if (
-      event.type === 'tool_execution_end' &&
-      !event.parentToolCallId &&
-      event.details !== undefined
-    )
+    if (event.type === 'tool_execution_end' && event.details !== undefined)
       this.toolDetails.set(event.toolCallId, event.details)
     for (const listener of this.listeners) listener(event)
     this.deps.forward(event, this.id)
@@ -537,12 +526,13 @@ export class VelaSession {
     return this.deps.extensions.beforeAgentStart(this, '')
   }
 
-  /** @internal Prepares the context before a request (microcompaction / summary). */
+  /** @internal Prepares the context before a request (threshold summary). */
   prepareContext(
     request: RequestSnapshot,
-    options?: { allowSummary?: boolean },
+    options?: { allowSummary?: boolean; maxOutputTokens?: number },
   ): Promise<void> {
-    request.maxOutputTokens = this.modelInfo.maxTokens
+    request.maxOutputTokens =
+      options?.maxOutputTokens ?? this.modelInfo.maxTokens
     return this.contextManager.prepare(request, options)
   }
 
@@ -605,7 +595,7 @@ export class VelaSession {
   }
 
   /**
-   * Whether the context is compacted automatically (like pi's autoCompactionEnabled). Off: no microcompaction,
+   * Whether the context is compacted automatically (like pi's autoCompactionEnabled). Off:
    * no threshold summary, no compact-and-retry on overflow; compact() still works.
    */
   get autoCompaction(): boolean {
@@ -732,7 +722,7 @@ export class VelaSession {
       if (id && ancestorIds.has(id)) start = index + 1
     })
     if (start >= this.messages.length) return
-    const request = await this.buildSnapshot(this.model, signal)
+    const request = await this.buildSnapshot(signal, { model: this.model })
     return this.contextManager.summarizeBranch(request, start, focus)
   }
 
@@ -869,7 +859,7 @@ export class VelaSession {
     this.emit({ type: 'message_end', message })
   }
 
-  /** Appends a message that entered the history to the session; a tool message carries its tools' nested calls and details. */
+  /** Appends a message that entered the history to the session; a tool message carries its tools' details. */
   private record(message: ModelMessage, producedBy?: string): void {
     this.timestamps.set(message, Date.now())
     const custom = this.messageQueue.customMessages.get(message)
@@ -877,8 +867,17 @@ export class VelaSession {
       this.store.appendCustomMessage(message, custom)
       return
     }
-    const audit = takeToolDetails(message, this.nestedCalls, this.toolDetails)
-    this.store.appendMessage(message, { ...audit, producedBy })
+    const details: Record<string, unknown> = {}
+    if (message.role === 'tool') {
+      for (const part of message.content) {
+        if (part.type !== 'tool_result') continue
+        if (this.toolDetails.has(part.toolCallId)) {
+          details[part.toolCallId] = this.toolDetails.get(part.toolCallId)
+          this.toolDetails.delete(part.toolCallId)
+        }
+      }
+    }
+    this.store.appendMessage(message, { details, producedBy })
   }
 
   /** Whether an `executeBash()` command is running */
@@ -1175,14 +1174,10 @@ export class VelaSession {
   }
 
   private trackRun(run: Promise<void>): Promise<void> {
-    const running = run.then(
-      () => {
-        if (this.running === running) this.running = undefined
-      },
-      () => {
-        if (this.running === running) this.running = undefined
-      },
-    )
+    const clear = () => {
+      if (this.running === running) this.running = undefined
+    }
+    const running = run.then(clear, clear)
     this.running = running
     return run
   }
@@ -1331,77 +1326,78 @@ export class VelaSession {
     // Recovery notices (including lost background jobs) are their own durable deduplication
     // evidence. Flush them before the resumed request, even when it calls no tools.
     if (!inputs.length) await this.save()
-    await agentLoop({
+    const { info: servingInfo } = this.resolveModel()
+    const serving = {
       model: this.requestModel(),
-      supportsImages: info.input?.includes('image') ?? true,
+      maxOutputTokens: servingInfo.maxTokens,
+    }
+    const takeQueue = (kind: 'steering' | 'followUp') =>
+      Promise.all(
+        this.dequeue(kind).map((m) => this.messageQueue.normalizeInput(m)),
+      )
+    await agentLoop({
+      model: serving.model,
+      sessionId: this.id,
+      maxOutputTokens: serving.maxOutputTokens,
+      supportsImages: servingInfo.input?.includes('image') ?? true,
       // Like pi, read per request: a level changed during the run applies to the next step. It is
-      // clamped to `info`, the model that serves this loop, like `setModel` waits for the next prompt.
+      // clamped to `servingInfo`, the model that serves this loop, like `setModel` waits for the next prompt.
       reasoning: () =>
-        reasoningOption(this.defaults.thinkingLevelFor(info), info),
+        reasoningOption(
+          this.defaults.thinkingLevelFor(servingInfo),
+          servingInfo,
+        ),
       systemPrompt: () => this.buildSystem(),
       toolRegistry: this.registry,
       messages: this.messages,
       tokenTracker: this.tracker,
-      prepareContext: (request) => this.prepareContext(request),
+      prepareContext: (request) => this.prepareContext(request, serving),
       transformContext: (messages, producer) =>
         this.deps.extensions.transformContext(this, messages, producer),
       // Like pi: with automatic compaction off, a context overflow is reported as is
       compactOnOverflow: this.autoCompaction
-        ? (overflowSignal) => this.compactForOverflow(overflowSignal)
+        ? (overflow) =>
+            this.runCompaction('overflow', undefined, overflow, serving)
         : undefined,
       newMessages,
       abortSignal: signal,
       onEvent: this.emit,
       limits: this.limits,
-      takeSteering: () =>
-        Promise.all(
-          this.dequeue('steering').map((message) =>
-            this.messageQueue.normalizeInput(message),
-          ),
-        ),
-      takeFollowUp: () =>
-        Promise.all(
-          this.dequeue('followUp').map((message) =>
-            this.messageQueue.normalizeInput(message),
-          ),
-        ),
+      takeSteering: () => takeQueue('steering'),
+      takeFollowUp: () => takeQueue('followUp'),
       onMessage: (message, producer) => this.record(message, producer),
       onCheckpoint: () => this.save(),
       isDraining: () => this.draining,
-      injectNotice: (content) =>
-        this.messageQueue.customMessage({
-          customType: 'loop',
-          content,
-          display: true,
-        }),
       // Like pi: kept in the session, never sent to the model again
       onInterrupted: (message, stopReason) =>
         this.store.appendMessage(message, { stopReason }),
     })
   }
 
-  private buildSnapshot(model: ModelInput, signal?: AbortSignal) {
+  private buildSnapshot(
+    signal?: AbortSignal,
+    opts?: { model?: ModelInput; maxOutputTokens?: number },
+  ) {
     return resolveRequestSnapshot(
-      model,
+      opts?.model ?? this.requestModel(),
       this.buildSystem(),
       this.registry.toProviderTools(),
       this.messages,
       signal,
-      this.modelInfo.maxTokens,
+      opts?.maxOutputTokens ?? this.modelInfo.maxTokens,
     )
   }
 
-  private async compactionRequest(signal?: AbortSignal) {
-    const request = await this.buildSnapshot(this.requestModel(), signal)
+  private async runCompaction(
+    reason: 'manual' | 'overflow',
+    focus?: string,
+    signal?: AbortSignal,
+    serving?: { model?: ModelInput; maxOutputTokens?: number },
+  ): Promise<void> {
+    const request = await this.buildSnapshot(signal, serving)
     if (!canSummarize(request.messages))
       throw new Error('Nothing to compact (session too small)')
-    return request
-  }
-
-  /** The provider rejected a request as too long: summarize like /compact (like pi's overflow recovery). */
-  private async compactForOverflow(signal?: AbortSignal): Promise<void> {
-    const request = await this.compactionRequest(signal)
-    await this.contextManager.compact(request, undefined, 'overflow')
+    await this.contextManager.compact(request, focus, reason)
   }
 
   /**
@@ -1412,8 +1408,7 @@ export class VelaSession {
   async compact(focus?: string): Promise<void> {
     await this.exclusive('compact', async (signal) => {
       await this.start(signal)
-      const request = await this.compactionRequest(signal)
-      await this.contextManager.compact(request, focus)
+      await this.runCompaction('manual', focus, signal)
       await this.saveOrReport()
     })
   }

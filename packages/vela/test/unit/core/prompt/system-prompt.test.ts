@@ -39,9 +39,9 @@ function builder(
 
 const tools: PromptContext['activeTools'] = [
   {
-    name: 'read_file',
+    name: 'read',
     promptSnippet: 'Read file contents',
-    promptGuidelines: ['Use read_file instead of cat.'],
+    promptGuidelines: ['Use read instead of cat.'],
   },
   { name: 'bash', promptSnippet: 'Run a shell command' },
   { name: 'tool_search', promptSnippet: 'Load tools on demand' },
@@ -79,11 +79,11 @@ test('a section that renders nothing is left out, and status reports it off', ()
 test('<tools> lists the active tools that have a snippet, and rules only carry their guidelines', () => {
   const prompt = builder().build(withTools)
   expect(prompt).toContain(
-    '<tools>\n- read_file: Read file contents\n- bash: Run a shell command\n- tool_search: Load tools on demand\n</tools>',
+    '<tools>\n- read: Read file contents\n- bash: Run a shell command\n- tool_search: Load tools on demand\n</tools>',
   )
-  expect(prompt).toContain('- Use read_file instead of cat.')
-  expect(prompt).not.toContain('edit_file')
-  expect(prompt).not.toContain('write_file')
+  expect(prompt).toContain('- Use read instead of cat.')
+  expect(prompt).not.toContain('edit')
+  expect(prompt).not.toContain('write')
 })
 
 test('a tool that is off contributes neither a line nor a rule', () => {
@@ -92,7 +92,7 @@ test('a tool that is off contributes neither a line nor a rule', () => {
     activeTools: [
       { name: 'bash', promptSnippet: 'Run a shell command' },
       {
-        name: 'edit_file',
+        name: 'edit',
         promptGuidelines: ['Read a file before you change it.'],
       },
     ],
@@ -187,7 +187,7 @@ test('an extension section that uses a built-in name adds to it instead of repla
   ]
   const prompt = new SystemPromptBuilder({ sections }).build({
     ...context,
-    activeTools: [{ name: 'edit_file', promptGuidelines: ['Read first.'] }],
+    activeTools: [{ name: 'edit', promptGuidelines: ['Read first.'] }],
     extensionSections: { rules: 'Use the project conventions.' },
   })
   // Both contributions are in the prompt: the built-in rules, then the extension's own section

@@ -2,7 +2,11 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { anthropic, createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI, openai } from '@ai-sdk/openai'
-import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
+import type {
+  LanguageModelV4CallOptions,
+  LanguageModelV4Middleware,
+  LanguageModelV4StreamPart,
+} from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
 import { assertNoLegacyConfigFiles, parseConfig } from '../config/index.ts'
 import { interpolate } from '../shared/interpolate.ts'
@@ -23,6 +27,23 @@ import {
 } from './models/index.ts'
 
 export type { ProviderConfig } from '../shared/provider-types.ts'
+
+const anthropicProtocolModels = new WeakSet<object>()
+
+/** Marks a resolved or wrapped LanguageModel as using the `anthropic-messages` protocol. */
+export function markAnthropicMessagesModel<T extends object>(model: T): T {
+  anthropicProtocolModels.add(model)
+  return model
+}
+
+/** Whether a resolved LanguageModel was created for an `anthropic-messages` provider regardless of provider name. */
+export function isAnthropicMessagesModel(model: unknown): boolean {
+  return (
+    typeof model === 'object' &&
+    model !== null &&
+    anthropicProtocolModels.has(model)
+  )
+}
 
 type Env = Record<string, string | undefined>
 
@@ -373,47 +394,97 @@ function createProvider(
           model = createAnthropic(settings)(id)
           break
       }
+      const registerProtocol = <T extends LanguageModel>(resolved: T): T => {
+        if (api === 'anthropic-messages' && typeof resolved !== 'string')
+          anthropicProtocolModels.add(resolved)
+        return resolved
+      }
       const transform = oauthRequests?.transformParams
       if (
-        (api !== 'openai-responses' && !transform) ||
+        (api !== 'openai-responses' &&
+          api !== 'openai-completions' &&
+          !transform) ||
         typeof model === 'string'
       ) {
-        return typeof model === 'string' ? model : declareHosted(model)
+        return typeof model === 'string'
+          ? model
+          : registerProtocol(declareHosted(model))
       }
+      const responsesOptionsKey = name.includes('azure') ? 'azure' : 'openai'
+      const stripStatelessWrapStream: LanguageModelV4Middleware['wrapStream'] =
+        api === 'openai-responses'
+          ? async (options) => {
+              const streamResult =
+                compat.deepseekReasoningStream && deepseekReasoningStream
+                  ? await deepseekReasoningStream(options)
+                  : await options.doStream()
+              if (
+                !isStatelessResponsesCall(options.params, responsesOptionsKey)
+              )
+                return streamResult
+              return {
+                ...streamResult,
+                stream: streamResult.stream.pipeThrough(
+                  new TransformStream<
+                    LanguageModelV4StreamPart,
+                    LanguageModelV4StreamPart
+                  >({
+                    transform(part, controller) {
+                      controller.enqueue(stripStatelessStreamPartItemId(part))
+                    },
+                  }),
+                ),
+              }
+            }
+          : undefined
       const wrapped = wrapLanguageModel({
         model,
         middleware: {
           specificationVersion: 'v4',
-          ...(api === 'openai-responses' && compat.deepseekReasoningStream
-            ? { wrapStream: deepseekReasoningStream }
+          ...(stripStatelessWrapStream
+            ? {
+                wrapGenerate: async ({ doGenerate, params }) => {
+                  const res = await doGenerate()
+                  if (!isStatelessResponsesCall(params, responsesOptionsKey))
+                    return res
+                  return {
+                    ...res,
+                    content: res.content.map(stripStatelessContentItemId),
+                  }
+                },
+                wrapStream: stripStatelessWrapStream,
+              }
             : {}),
           transformParams: async ({ params }) => {
-            if (api === 'openai-responses') {
+            if (api === 'openai-responses' || api === 'openai-completions') {
               const openai = { ...params.providerOptions?.openai }
-              if (compat.store !== undefined && openai.store === undefined)
-                openai.store = compat.store
-              if (
-                compat.includeWebSearchSources !== undefined &&
-                openai.includeWebSearchSources === undefined
-              )
-                openai.includeWebSearchSources = compat.includeWebSearchSources
-              // The SDK infers capability from IDs; positive metadata also enables custom IDs.
-              if (
-                openai.forceReasoning === undefined &&
-                spec?.reasoning === true
-              )
-                openai.forceReasoning = true
-              const level =
-                params.reasoning === 'none' ? 'off' : params.reasoning
-              const effort =
-                level && level !== 'provider-default'
-                  ? spec?.thinkingLevelMap?.[level]
-                  : undefined
-              if (
-                openai.reasoningEffort === undefined &&
-                typeof effort === 'string'
-              )
-                openai.reasoningEffort = effort
+              if (api === 'openai-responses') {
+                if (compat.store !== undefined && openai.store === undefined)
+                  openai.store = compat.store
+                if (
+                  compat.includeWebSearchSources !== undefined &&
+                  openai.includeWebSearchSources === undefined
+                )
+                  openai.includeWebSearchSources =
+                    compat.includeWebSearchSources
+                // The SDK infers capability from IDs; positive metadata also enables custom IDs.
+                if (
+                  openai.forceReasoning === undefined &&
+                  spec?.reasoning === true
+                )
+                  openai.forceReasoning = true
+                const level =
+                  params.reasoning === 'none' ? 'off' : params.reasoning
+                const effort =
+                  level && level !== 'provider-default'
+                    ? spec?.thinkingLevelMap?.[level]
+                    : undefined
+                if (
+                  openai.reasoningEffort === undefined &&
+                  typeof effort === 'string'
+                )
+                  openai.reasoningEffort = effort
+              }
               // pi's supportsDeveloperRole: false keeps the system instruction's role.
               if (
                 compat.supportsDeveloperRole === false &&
@@ -429,15 +500,279 @@ function createProvider(
             const blockedLocalOAuth = Boolean(
               oauthRequests?.localOnly && Boolean(ctx.channel()),
             )
-            return transform &&
+            let finalParams =
+              transform &&
               !blockedLocalOAuth &&
               (await ctx.credential())?.type === 'oauth'
-              ? transform(params)
-              : params
+                ? transform(params)
+                : params
+            if (api === 'openai-responses') {
+              const stateless = isStatelessResponsesCall(
+                finalParams,
+                responsesOptionsKey,
+              )
+              finalParams = prepareResponsesPrompt(finalParams, stateless)
+            }
+            return finalParams
           },
         },
       })
-      return declareHosted(wrapped)
+      return registerProtocol(declareHosted(wrapped))
     },
   }
+}
+
+const RESPONSES_OPTION_KEYS = ['openai', 'azure'] as const
+
+function isStatelessResponsesCall(
+  params: LanguageModelV4CallOptions,
+  responsesOptionsKey: 'openai' | 'azure',
+): boolean {
+  const opts = params.providerOptions as
+    | Record<string, Record<string, unknown> | undefined>
+    | undefined
+  return (
+    opts?.[responsesOptionsKey]?.store === false ||
+    opts?.openai?.store === false
+  )
+}
+
+function editResponsesProviderOptions<
+  T extends Record<string, unknown> | undefined,
+>(
+  opts: T,
+  shouldStripItemId: (nsOpts: Record<string, unknown>) => boolean,
+  stripVela = false,
+): T {
+  if (!opts) return opts
+  let changed = false
+  const out: Record<string, unknown> = { ...opts }
+  if (stripVela && 'vela' in out) {
+    delete out.vela
+    changed = true
+  }
+  for (const key of RESPONSES_OPTION_KEYS) {
+    const ns = out[key] as Record<string, unknown> | undefined
+    if (!ns || !shouldStripItemId(ns)) continue
+    changed = true
+    const { itemId: _, ...restNs } = ns
+    if (Object.keys(restNs).length > 0) out[key] = restNs
+    else delete out[key]
+  }
+  if (!changed) return opts
+  return (Object.keys(out).length > 0 ? out : undefined) as T
+}
+
+function withStatelessTag(
+  meta: Record<string, unknown> | undefined,
+  markStateless: boolean,
+): Record<string, unknown> | undefined {
+  const cleaned = editResponsesProviderOptions(
+    meta,
+    (ns) => typeof ns.itemId === 'string',
+  )
+  if (!markStateless) return cleaned
+  return { ...cleaned, vela: { stored: false } }
+}
+
+function isStatelessHostedPart(part: {
+  type: string
+  providerExecuted?: boolean
+}): boolean {
+  return (
+    ((part.type === 'tool-call' || part.type === 'tool-input-start') &&
+      part.providerExecuted === true) ||
+    part.type === 'tool-result'
+  )
+}
+
+function stripStatelessContentItemId<
+  T extends {
+    type: string
+    providerExecuted?: boolean
+    providerMetadata?: Record<string, unknown>
+  },
+>(part: T): T {
+  const markStateless = isStatelessHostedPart(part)
+  if (!part.providerMetadata && !markStateless) return part
+  const next = withStatelessTag(part.providerMetadata, markStateless)
+  if (next === part.providerMetadata) return part
+  if (next !== undefined) return { ...part, providerMetadata: next }
+  const { providerMetadata: _, ...plain } = part
+  return plain as T
+}
+
+function stripStatelessStreamPartItemId(
+  part: LanguageModelV4StreamPart,
+): LanguageModelV4StreamPart {
+  const providerExecuted =
+    'providerExecuted' in part ? part.providerExecuted : undefined
+  const markStateless = isStatelessHostedPart({
+    type: part.type,
+    providerExecuted,
+  })
+  const currentMeta =
+    'providerMetadata' in part
+      ? (part.providerMetadata as Record<string, unknown> | undefined)
+      : undefined
+  if (!currentMeta && !markStateless) return part
+  const next = withStatelessTag(currentMeta, markStateless)
+  if (next === currentMeta) return part
+  if (next !== undefined)
+    return {
+      ...part,
+      providerMetadata: next,
+    } as LanguageModelV4StreamPart
+  const { providerMetadata: _, ...plain } =
+    part as LanguageModelV4StreamPart & {
+      providerMetadata?: unknown
+    }
+  return plain as LanguageModelV4StreamPart
+}
+
+function isVelaStatelessPart(part: { providerOptions?: unknown }): boolean {
+  const vela = (
+    part.providerOptions as { vela?: { stored?: unknown } } | undefined
+  )?.vela
+  return vela?.stored === false
+}
+
+function formatHostedResult(output: unknown): string {
+  const value = JSON.stringify(output, (key, val) =>
+    key === 'encrypted_content' || key === 'encryptedContent' ? undefined : val,
+  )
+  return value ?? 'unavailable'
+}
+
+/**
+ * Prepares OpenAI Responses prompt history across store modes:
+ * - On `store: false`, strips unencrypted `rs_...` `itemId`s so OpenAI never emits broken `item_reference`s.
+ * - On `store !== false`, converts hosted parts recorded during `store: false` into plain text so the SDK
+ *   does not emit `item_reference` from `part.toolCallId`, and strips internal `vela` metadata.
+ */
+function prepareResponsesPrompt(
+  params: LanguageModelV4CallOptions,
+  statelessTarget: boolean,
+): LanguageModelV4CallOptions {
+  if (!Array.isArray(params.prompt)) return params
+  let changed = false
+  const statelessHostedIds = new Set<string>()
+  if (!statelessTarget) {
+    for (const message of params.prompt) {
+      if (message.role !== 'assistant' || !Array.isArray(message.content))
+        continue
+      for (const part of message.content) {
+        if (
+          (part.type === 'tool-call' || part.type === 'tool-result') &&
+          isVelaStatelessPart(part)
+        ) {
+          statelessHostedIds.add(part.toolCallId)
+        }
+      }
+    }
+  }
+  const prompt = params.prompt.flatMap((message) => {
+    if (message.role === 'tool' && Array.isArray(message.content)) {
+      let msgChanged = false
+      const nextParts = message.content.flatMap((part) => {
+        if (
+          part.type === 'tool-result' &&
+          (statelessHostedIds.has(part.toolCallId) || isVelaStatelessPart(part))
+        ) {
+          msgChanged = true
+          changed = true
+          return []
+        }
+        const cleaned = editResponsesProviderOptions(
+          part.providerOptions as Record<string, unknown> | undefined,
+          () => false,
+          true,
+        )
+        if (cleaned !== part.providerOptions) {
+          msgChanged = true
+          changed = true
+          if (cleaned !== undefined)
+            return [
+              {
+                ...part,
+                providerOptions:
+                  cleaned as LanguageModelV4CallOptions['providerOptions'],
+              },
+            ]
+          const { providerOptions: _, ...plain } = part
+          return [plain]
+        }
+        return [part]
+      })
+      if (!nextParts.length) return []
+      return msgChanged ? [{ ...message, content: nextParts }] : [message]
+    }
+    if (message.role !== 'assistant' || !Array.isArray(message.content))
+      return [message]
+    let partChanged = false
+    const resultById = new Map<string, unknown>()
+    if (!statelessTarget && statelessHostedIds.size > 0) {
+      for (const part of message.content) {
+        if (
+          part.type === 'tool-result' &&
+          statelessHostedIds.has(part.toolCallId)
+        )
+          resultById.set(part.toolCallId, part.output)
+      }
+    }
+    const content = message.content.flatMap((part) => {
+      if (!statelessTarget) {
+        if (
+          part.type === 'tool-call' &&
+          statelessHostedIds.has(part.toolCallId)
+        ) {
+          partChanged = true
+          changed = true
+          const resultText = resultById.has(part.toolCallId)
+            ? `\nProvider ${part.toolName} result: ${formatHostedResult(resultById.get(part.toolCallId))}`
+            : ''
+          return [
+            {
+              type: 'text' as const,
+              text: `Provider ${part.toolName}: ${JSON.stringify(part.input)}${resultText}`,
+            },
+          ]
+        }
+        if (
+          part.type === 'tool-result' &&
+          statelessHostedIds.has(part.toolCallId)
+        ) {
+          partChanged = true
+          changed = true
+          return []
+        }
+      }
+      const next = editResponsesProviderOptions(
+        part.providerOptions as Record<string, unknown> | undefined,
+        (ns) =>
+          statelessTarget &&
+          typeof ns.itemId === 'string' &&
+          ns.itemId.startsWith('rs_') &&
+          ns.reasoningEncryptedContent === undefined,
+        true,
+      )
+      if (next === part.providerOptions) return [part]
+      partChanged = true
+      changed = true
+      if (next !== undefined)
+        return [
+          {
+            ...part,
+            providerOptions:
+              next as LanguageModelV4CallOptions['providerOptions'],
+          },
+        ]
+      const { providerOptions: __, ...plain } = part
+      return [plain]
+    })
+    return [partChanged ? { ...message, content } : message]
+  })
+  return changed
+    ? ({ ...params, prompt } as LanguageModelV4CallOptions)
+    : params
 }

@@ -150,15 +150,13 @@ export function formatSkillsForPrompt(
   skills: readonly SkillDefinition[],
   activeTools: readonly string[],
 ): string | null {
-  const readTool = ['read_file', 'bash'].find((name) =>
-    activeTools.includes(name),
-  )
+  const readTool = ['read', 'bash'].find((name) => activeTools.includes(name))
   const visible = skills.filter((s) => !s.disableModelInvocation)
   if (!readTool || visible.length === 0) return null
   const lines = [
     'The following skills provide specialized instructions for specific tasks.',
-    readTool === 'read_file'
-      ? "Use the read_file tool to load a skill's file when the task matches its description."
+    readTool === 'read'
+      ? "Use the read tool to load a skill's file when the task matches its description."
       : "Use bash to load a skill's file when the task matches its description.",
     'When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.',
     '',

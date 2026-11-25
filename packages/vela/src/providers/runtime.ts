@@ -42,6 +42,13 @@ import {
   toAiToolOutput,
 } from './messages.ts'
 import type { HostedToolModel } from './models/index.ts'
+import { isAnthropicMessagesModel } from './models-config.ts'
+import {
+  applyStreamedMetadata,
+  deepMergeProviderOptions,
+  type StreamedPartMetadata,
+  type StreamedSlot,
+} from './stream-metadata.ts'
 
 export { aiParsePartialJson as parsePartialJson }
 
@@ -386,6 +393,8 @@ export interface StreamProviderStepOptions {
   tools: ResolvedProviderTools
   supportsImages?: boolean
   reasoning?: ReasoningOption
+  maxOutputTokens?: number
+  sessionId?: string
   abortSignal?: AbortSignal
   onModelCallEnd?: (info: {
     finishReason: FinishReason
@@ -393,6 +402,13 @@ export interface StreamProviderStepOptions {
     hasClientToolCalls: boolean
     buildCheckpoint: () => Promise<VelaAssistantMessage>
   }) => Promise<void>
+}
+
+function isAnthropicModel(model: LanguageModel): boolean {
+  if (typeof model === 'string') return model.startsWith('anthropic/')
+  return (
+    isAnthropicMessagesModel(model) || model.provider.startsWith('anthropic')
+  )
 }
 
 export function streamProviderStep(options: StreamProviderStepOptions): {
@@ -407,7 +423,45 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
     options.messages,
     options.supportsImages ?? true,
     toolImagesAsUser,
+    { normalizeToolCallIds: isAnthropicModel(aiModel) },
   )
+  const streamedMeta: StreamedPartMetadata = {
+    text: [],
+    reasoning: [],
+    tools: new Map(),
+  }
+  const textIndices = new Map<string, number>()
+  const reasoningIndices = new Map<string, number>()
+  const recordSlotMeta = (
+    indices: Map<string, number>,
+    list: StreamedSlot[],
+    id: string,
+    meta: unknown,
+    isStart: boolean,
+    hasDeltaText = false,
+  ) => {
+    let idx = indices.get(id)
+    if (idx === undefined && isStart) {
+      idx = list.length
+      indices.set(id, idx)
+      list.push({ hasContent: false, meta: {} })
+    }
+    if (idx === undefined) return
+    const slot = list[idx]!
+    if (hasDeltaText) slot.hasContent = true
+    if (meta)
+      slot.meta = deepMergeProviderOptions(slot.meta, meta as ProviderOptions)!
+  }
+  const recordToolMeta = (id: string, meta: unknown) => {
+    if (!meta) return
+    streamedMeta.tools.set(
+      id,
+      deepMergeProviderOptions(
+        streamedMeta.tools.get(id),
+        meta as ProviderOptions,
+      )!,
+    )
+  }
 
   const result = streamText({
     model: aiModel,
@@ -417,7 +471,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
       messages: modelMessages,
     }),
     maxRetries: 0,
+    ...(options.maxOutputTokens !== undefined
+      ? { maxOutputTokens: options.maxOutputTokens }
+      : {}),
     ...(options.reasoning ? { reasoning: options.reasoning } : {}),
+    ...(options.sessionId
+      ? { providerOptions: { openai: { promptCacheKey: options.sessionId } } }
+      : {}),
     abortSignal: options.abortSignal,
     onError: () => {},
     onLanguageModelCallEnd: options.onModelCallEnd
@@ -432,8 +492,11 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             finishReason: event.finishReason as FinishReason,
             toolCallIds,
             hasClientToolCalls,
-            buildCheckpoint: () =>
-              checkpointMessage(event, options.tools.sdkTools),
+            buildCheckpoint: async () =>
+              applyStreamedMetadata(
+                await checkpointMessage(event, options.tools.sdkTools),
+                streamedMeta,
+              ),
           })
         }
       : undefined,
@@ -444,6 +507,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
       for await (const part of result.stream) {
         switch (part.type) {
           case 'text-start':
+            recordSlotMeta(
+              textIndices,
+              streamedMeta.text,
+              part.id,
+              part.providerMetadata,
+              true,
+            )
             yield {
               type: 'text-start',
               id: part.id,
@@ -453,6 +523,14 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'text-delta':
+            recordSlotMeta(
+              textIndices,
+              streamedMeta.text,
+              part.id,
+              part.providerMetadata,
+              false,
+              part.text.length > 0,
+            )
             yield {
               type: 'text-delta',
               id: part.id,
@@ -463,6 +541,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'text-end':
+            recordSlotMeta(
+              textIndices,
+              streamedMeta.text,
+              part.id,
+              part.providerMetadata,
+              false,
+            )
             yield {
               type: 'text-end',
               id: part.id,
@@ -472,6 +557,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'reasoning-start':
+            recordSlotMeta(
+              reasoningIndices,
+              streamedMeta.reasoning,
+              part.id,
+              part.providerMetadata,
+              true,
+            )
             yield {
               type: 'reasoning-start',
               id: part.id,
@@ -481,6 +573,14 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'reasoning-delta':
+            recordSlotMeta(
+              reasoningIndices,
+              streamedMeta.reasoning,
+              part.id,
+              part.providerMetadata,
+              false,
+              part.text.length > 0,
+            )
             yield {
               type: 'reasoning-delta',
               id: part.id,
@@ -491,6 +591,13 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'reasoning-end':
+            recordSlotMeta(
+              reasoningIndices,
+              streamedMeta.reasoning,
+              part.id,
+              part.providerMetadata,
+              false,
+            )
             yield {
               type: 'reasoning-end',
               id: part.id,
@@ -510,6 +617,7 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'tool-input-start':
+            recordToolMeta(part.id, part.providerMetadata)
             yield {
               type: 'tool-input-start',
               id: part.id,
@@ -528,6 +636,7 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
             }
             break
           case 'tool-call':
+            recordToolMeta(part.toolCallId, part.providerMetadata)
             yield {
               type: 'tool-call',
               toolCallId: part.toolCallId,
@@ -576,9 +685,12 @@ export function streamProviderStep(options: StreamProviderStepOptions): {
       finishReason: step.finishReason as FinishReason,
       rawFinishReason: step.rawFinishReason,
       usage: step.usage as ProviderUsage,
-      messages: step.response.messages.map((message) =>
-        fromAiResponseMessage(message),
-      ),
+      messages: step.response.messages.map((message) => {
+        const converted = fromAiResponseMessage(message)
+        return converted.role === 'assistant'
+          ? applyStreamedMetadata(converted, streamedMeta)
+          : converted
+      }),
     }
   }
 
@@ -604,7 +716,9 @@ export async function generateProviderText(options: {
     ? await generateText({
         model: aiModel,
         instructions: options.instructions,
-        messages: toAiModelMessages(options.messages, false),
+        messages: toAiModelMessages(options.messages, false, false, {
+          normalizeToolCallIds: isAnthropicModel(aiModel),
+        }),
         abortSignal: options.abortSignal,
         maxOutputTokens: options.maxOutputTokens,
         maxRetries: 0,

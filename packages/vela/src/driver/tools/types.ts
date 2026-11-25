@@ -9,10 +9,13 @@ export interface InterceptionContext {
   /** @internal */ execution?: ExecutionEnv
   sessionId?: string
   toolCallId?: string
-  parentToolCallId?: string
 }
 
 export interface ToolInterception {
+  resolveEnv?: (
+    sessionId: string | undefined,
+    signal?: AbortSignal,
+  ) => Promise<ExecutionEnv>
   before?: (
     name: string,
     input: unknown,
@@ -25,6 +28,7 @@ export interface ToolInterception {
     input: unknown,
     output: string | ToolContent,
     context: InterceptionContext,
+    isError?: boolean,
   ) => string | ToolContent | Promise<string | ToolContent>
 }
 
@@ -42,34 +46,13 @@ export class ToolExecutionResult {
   }
 }
 
-/** What a tool call ended with (`ctx.executeTool()`, like pi's `AgentToolCallOutcome`). */
-export interface ToolCallOutcome {
-  toolCallId: string
-  toolName: string
-  /** The tool's output, or the error message when `isError` */
-  result: unknown
-  /** Unknown or uncallable tool, invalid arguments, rejected or blocked call, thrown error, or an error result */
-  isError: boolean
-  /** How long the tool ran; absent when it did not run */
-  durationMs?: number
-}
-
-/** Options for `ctx.executeTool()` (like pi's `ExecuteToolOptions`). */
-export interface ExecuteToolOptions {
-  /** Defaults to the calling tool's signal */
-  signal?: AbortSignal
-  /** Receives the nested tool's partial results, in addition to `tool_execution_update` events */
-  onUpdate?: (partialResult: unknown) => void
-}
-
 export type ToolExecutionMode = 'sequential' | 'parallel'
 
 /**
- * How the model reaches a tool (same values and meaning as pi). "Callable" means callable from
- * other tools through `ctx.executeTool()`.
- * - `direct`: declared to the model and callable.
- * - `model-only`: declared to the model, never callable (orchestrating or interactive tools).
- * - `deferred`: named in the system prompt; declared once `tool_search` loads it; always callable.
+ * How the model reaches a tool (same values and meaning as pi):
+ * - `direct`: declared to the model.
+ * - `model-only`: declared to the model.
+ * - `deferred`: named in the system prompt; declared once `tool_search` loads it.
  * - `hidden`: registered but unreachable.
  */
 export type ToolExposure = 'direct' | 'model-only' | 'deferred' | 'hidden'

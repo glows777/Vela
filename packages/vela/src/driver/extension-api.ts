@@ -34,9 +34,7 @@ export type { SessionScope } from './session/scope.ts'
 export { defineJsonSchemaTool } from './tools/json-schema.ts'
 export type { ToolContext, ToolDefinition } from './tools/registry.ts'
 export type {
-  ExecuteToolOptions,
   ToolAnnotations,
-  ToolCallOutcome,
   ToolExecutionMode,
   ToolExposure,
   ToolNamespace,

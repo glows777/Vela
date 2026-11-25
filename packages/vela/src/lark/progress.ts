@@ -123,7 +123,6 @@ export class LarkProgress {
       event.type === 'tool_execution_update' ||
       event.type === 'tool_execution_end'
     ) {
-      if (event.parentToolCallId) return
       const state =
         event.type === 'tool_execution_end'
           ? event.isError

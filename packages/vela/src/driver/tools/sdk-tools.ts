@@ -3,6 +3,7 @@ import {
   type ToolInputSchema,
   toJsonSchemaSync,
 } from '../../shared/tool-schema.ts'
+import { estimateTextTokens } from '../messages.ts'
 import { ToolRejection } from './recovery.ts'
 
 interface RegistryTool {
@@ -41,12 +42,12 @@ export function countToolTokens(tools: RegistryTool[], declared: Set<string>) {
     deferred = 0
   for (const tool of tools) {
     if (tool.exposure === 'hidden') continue
-    const tokens = Math.ceil(
+    const tokens = estimateTextTokens(
       JSON.stringify({
         name: tool.name,
         description: tool.description,
         inputSchema: toJsonSchemaSync(tool.inputSchema) ?? {},
-      }).length / 4,
+      }),
     )
     if (declared.has(tool.name)) active += tokens
     else deferred += tokens

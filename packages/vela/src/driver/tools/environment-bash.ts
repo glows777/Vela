@@ -7,11 +7,6 @@ import type {
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
 import type { BackgroundAdmission, BackgroundCommands } from './background.ts'
 import {
-  type ForegroundBudget,
-  seconds,
-  sleepsFirst,
-} from './foreground-budget.ts'
-import {
   OUTPUT_MAX_BYTES,
   OUTPUT_MAX_LINES,
   OutputTail,
@@ -36,65 +31,9 @@ function movedToBackground({
 }
 
 /**
- * The result of a call whose foreground budget expired: the command keeps running as a job, and the
- * notice comes before the tail, so the model cannot mistake it for one it declared itself.
- */
-function budgetExpired(
-  { id, output, truncated }: BackgroundAdmission,
-  timedOutAfterMs: number,
-  notice: string,
-): ToolExecutionResult {
-  const tail = output
-    ? `\n\n${output.trimEnd()}${truncated ? '\n\n[Showing the last output only]' : ''}`
-    : ''
-  return new ToolExecutionResult(
-    { id },
-    `${notice}${tail}\n\nYou will be notified when it completes; do not poll the file or start a second copy.`,
-    { backgroundTaskId: id, timedOutAfterMs },
-  )
-}
-
-/** The foreground deadline for this call. */
-interface Deadline {
-  /** Seconds the command may stay in the foreground before the budget is spent. */
-  seconds: number
-  /** Whether the expiry hands the command to the job table instead of killing it. */
-  move: boolean
-  /** The sentence that says a requested timeout was held to the ceiling. */
-  capped: string
-}
-
-/**
- * The deadline for this call: a requested `timeout` is the foreground budget, held to the ceiling,
- * and the session's own budget applies when the call names none. A command that starts with `sleep`
- * has no work to lose, so it keeps the kill at the same deadline.
- */
-function deadlineFor(
-  command: string,
-  timeout: number | undefined,
-  budget: ForegroundBudget,
-): Deadline {
-  // A budget of 0 means the session has no foreground budget: a `timeout` is a deadline that kills,
-  // as it was before, and nothing is clamped to a ceiling this session does not apply.
-  if (budget.seconds <= 0)
-    return { seconds: timeout ?? 0, move: false, capped: '' }
-  // Like Claude Code: the configured budget raises the ceiling, so a session whose budget is longer
-  // than the ceiling keeps its own budget instead of being cut to it.
-  const ceiling = Math.max(budget.seconds, budget.maxSeconds)
-  const allowed =
-    timeout === undefined ? budget.seconds : Math.min(timeout, ceiling)
-  const capped =
-    timeout !== undefined && timeout > ceiling
-      ? `The requested ${seconds(timeout)}s timeout is capped at ${seconds(ceiling)}s.`
-      : ''
-  return { seconds: allowed, move: !sleepsFirst(command), capped }
-}
-
-/**
  * Execute within the selected session environment, retaining a bounded output tail. In a session with
- * background commands the call is registered while it runs, so `session.backgroundTasks()` can move it
- * to the background, and its own budget moves it there when the deadline passes: it then returns the
- * notice and the tail so far, and the job table owns the exit.
+ * background commands the call is registered while it runs so the user (`Ctrl+B`) can move it to the
+ * background, returning the manual-move notice and handing its exit to the job table.
  */
 export async function environmentBash(
   command: string,
@@ -102,55 +41,86 @@ export async function environmentBash(
   cwd: string | undefined,
   shellPath: string | undefined,
   context: ToolContext | undefined,
-  /** The session's foreground budget; unset when it has no job table or no stop tool. */
-  budget?: ForegroundBudget,
 ) {
   const results = context?.results ?? new ToolResultStore()
   const env =
     context?.execution ??
-    createSessionLocalExecutionEnv({
-      cwd: cwd ?? process.cwd(),
-      shellPath,
-      tempRoot: results.dir,
-    })
+    (context?.requireEnv
+      ? await context.requireEnv(context?.signal)
+      : createSessionLocalExecutionEnv({
+          cwd: cwd ?? process.cwd(),
+          shellPath,
+          tempRoot: results.dir,
+        }))
   const tail = new OutputTail()
   let updateTimer: ReturnType<typeof setTimeout> | undefined
   const onUpdate = context?.onUpdate
-  const deadline = budget ? deadlineFor(command, timeout, budget) : undefined
-  // A move names the call by its tool-call id; a host that runs the tool without one keeps the
-  // deadline that kills, so nothing is left running without a job to report it.
-  const movable = deadline?.move === true && context?.toolCallId !== undefined
-  const start = (signal: AbortSignal | undefined) =>
-    env.exec(
-      command,
-      {
-        // A deadline that moves the command must not also kill it: the job table owns it from then.
-        // A budget of 0 leaves the command with no deadline at all, as it had before.
-        timeout: movable
-          ? undefined
-          : deadline && deadline.seconds > 0
-            ? deadline.seconds
-            : timeout,
-        spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
-        onOutput: (text) => {
-          tail.append(text)
-          if (onUpdate && !updateTimer) {
-            // Publish the latest tail even if the command goes quiet after a burst.
-            updateTimer = setTimeout(() => {
-              updateTimer = undefined
-              try {
-                onUpdate({
-                  content: [{ type: 'text', text: tail.read().text }],
-                })
-              } catch {
-                // A failed progress notification does not interrupt the command.
-              }
-            }, 100)
-          }
-        },
-      },
-      signal,
-    )
+  const effectiveTimeout = timeout ?? 120
+  const spill = { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES }
+  const onOutput = (text: string) => {
+    tail.append(text)
+    if (onUpdate && !updateTimer) {
+      // Publish the latest tail even if the command goes quiet after a burst.
+      updateTimer = setTimeout(() => {
+        updateTimer = undefined
+        try {
+          onUpdate({
+            content: [{ type: 'text', text: tail.read().text }],
+          })
+        } catch {
+          // A failed progress notification does not interrupt the command.
+        }
+      }, 100)
+    }
+  }
+  const fgController = context?.background ? new AbortController() : undefined
+  let fgTimedOut = false
+  let fgTimer: ReturnType<typeof setTimeout> | undefined
+  let fgDeadlineAt: number | undefined
+  let fgSettled = false
+  let fgDetached = false
+  const armFgTimer = (ms: number) => {
+    if (!fgController || fgSettled || fgDetached) return
+    clearTimeout(fgTimer)
+    fgDeadlineAt = Date.now() + ms
+    fgTimer = setTimeout(() => {
+      fgTimedOut = true
+      fgController.abort()
+    }, ms)
+  }
+  const suspendTimeout = fgController
+    ? () => {
+        if (!fgTimer || fgDeadlineAt === undefined) return undefined
+        clearTimeout(fgTimer)
+        fgTimer = undefined
+        const remaining = Math.max(0, fgDeadlineAt - Date.now())
+        fgDeadlineAt = undefined
+        return () => armFgTimer(remaining)
+      }
+    : undefined
+  const start = (signal: AbortSignal | undefined) => {
+    if (!fgController)
+      return env.exec(
+        command,
+        { timeout: effectiveTimeout, spill, onOutput },
+        signal,
+      )
+    const forward = () => fgController.abort(signal?.reason)
+    if (signal?.aborted) forward()
+    else signal?.addEventListener('abort', forward, { once: true })
+    armFgTimer(effectiveTimeout * 1000)
+    return env
+      .exec(
+        command,
+        { timeout: undefined, spill, onOutput },
+        fgController.signal,
+      )
+      .finally(() => {
+        fgSettled = true
+        clearTimeout(fgTimer)
+        signal?.removeEventListener('abort', forward)
+      })
+  }
   const foreground = context?.background?.watch({
     command,
     ...(context?.toolCallId === undefined
@@ -159,6 +129,7 @@ export async function environmentBash(
     signal: context?.signal,
     output: tail,
     start,
+    suspendTimeout,
     exit: (settled) =>
       settled.ok
         ? {
@@ -168,19 +139,6 @@ export async function environmentBash(
         : { spillPath: settled.error.spillPath, error: settled.error.message },
   })
   let result: Result<ShellExecResult, ExecutionError>
-  // At the deadline the command is handed to the job table, exactly as Ctrl+B hands it over; the
-  // environment is not asked to kill it. A move that loses the race (the user moved it, or the
-  // command settled) is not an error: the race below already has or will have the answer. A move the
-  // host refuses leaves the command with this call, which then waits as a session without a budget
-  // does: its work is not thrown away to keep a deadline nobody can report.
-  const expired =
-    movable && foreground && deadline
-      ? setTimeout(() => {
-          void context.background
-            ?.detach(context.toolCallId!, Math.round(deadline.seconds * 1000))
-            .catch(() => {})
-        }, deadline.seconds * 1000)
-      : undefined
   try {
     if (!foreground) result = await start(context?.signal)
     else {
@@ -192,25 +150,18 @@ export async function environmentBash(
         })),
       ])
       if (outcome.type === 'detached') {
-        const { admission } = outcome
-        // The move itself records why it happened, so the two ways a call can be handed over are
-        // never confused: the user's Ctrl+B leaves `timedOutAfterMs` unset.
-        if (admission.timedOutAfterMs === undefined || !deadline)
-          return movedToBackground(admission)
-        return budgetExpired(
-          admission,
-          admission.timedOutAfterMs,
-          `Command did not complete within its ${seconds(deadline.seconds)}s timeout and was moved to the background (ID: ${admission.id}).${deadline.capped ? ` ${deadline.capped}` : ''}`,
-        )
+        fgDetached = true
+        clearTimeout(fgTimer)
+        return movedToBackground(outcome.admission)
       }
       result = outcome.value
     }
   } finally {
     clearTimeout(updateTimer)
-    if (expired) clearTimeout(expired)
   }
   if (!result.ok) {
     const output = tail.read().text || '(no output)'
+    const stopCode = fgTimedOut ? 'timeout' : result.error.code
     const message =
       result.error.code === 'unknown' &&
       result.error.message.startsWith(
@@ -219,15 +170,14 @@ export async function environmentBash(
         ? 'The command started and was stopped because its full output could not be saved; it may have had partial effects. Do not automatically rerun it.'
         : result.error.code === 'shell_unavailable'
           ? 'Shell not found in the execution environment. The command did not run.'
-          : result.error.code === 'timeout'
-            ? `Command timed out after ${deadline?.seconds ?? timeout} seconds${deadline?.capped ? `. ${deadline.capped}` : ''}`
-            : result.error.code === 'aborted'
+          : stopCode === 'timeout'
+            ? `Command timed out after ${effectiveTimeout} seconds. Pass a larger timeout (up to 1800s) or run_in_background: true for long-running commands.`
+            : stopCode === 'aborted'
               ? 'Command aborted'
               : result.error.message
     const execution = {
       isError: true,
-      timedOut: result.error.code === 'timeout' || undefined,
-      toolUnavailable: result.error.code === 'shell_unavailable' || undefined,
+      timedOut: stopCode === 'timeout' || undefined,
       error: message,
     }
     if (result.error.spillPath && result.error.code !== 'unknown') {
@@ -281,11 +231,13 @@ export async function backgroundBash(
   const results = context?.results ?? new ToolResultStore()
   const env =
     context?.execution ??
-    createSessionLocalExecutionEnv({
-      cwd: cwd ?? process.cwd(),
-      shellPath,
-      tempRoot: results.dir,
-    })
+    (context?.requireEnv
+      ? await context.requireEnv(context?.signal)
+      : createSessionLocalExecutionEnv({
+          cwd: cwd ?? process.cwd(),
+          shellPath,
+          tempRoot: results.dir,
+        }))
   const { id, output, truncated } = await commands.adopt({
     command,
     timeout,
@@ -295,7 +247,7 @@ export async function backgroundBash(
       env.exec(
         // Only a local session has a host shell to honour; other environments run the command.
         shell !== undefined && env.id === 'node:local'
-          ? [shell, '-lc', command]
+          ? [shell, '-c', command]
           : command,
         {
           timeout,

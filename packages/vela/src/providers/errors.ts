@@ -9,6 +9,9 @@ export function inspectProviderApiError(
   return {
     statusCode: error.statusCode,
     responseBody: error.responseBody,
+    responseHeaders: error.responseHeaders as
+      | Record<string, string>
+      | undefined,
     isRetryable: error.isRetryable,
     message: error.message,
   }

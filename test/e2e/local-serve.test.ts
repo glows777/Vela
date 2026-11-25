@@ -72,7 +72,7 @@ test('real serve admits project chat, starts a file task and delivers HTTP/SSE w
           reasoning: 'HIDDEN_LOCAL_REASONING',
           toolCalls: [
             {
-              name: 'write_file',
+              name: 'write',
               input: {
                 path: 'local-result.txt',
                 content: 'PRIVATE_FILE_CONTENT',

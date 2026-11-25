@@ -16,11 +16,11 @@ const REVIEW = {
   body: 'Read the diff, then list risks.',
 }
 
-test('the model sees the skills index and loads a skill itself with read_file', async () => {
+test('the model sees the skills index and loads a skill itself with read', async () => {
   const t = createTestVela({
     skills: [REVIEW],
     responses: [
-      fauxToolCall('read_file', { path: '.skills/review/SKILL.md' }),
+      fauxToolCall('read', { path: '.skills/review/SKILL.md' }),
       fauxText('Following the review skill'),
     ],
   })

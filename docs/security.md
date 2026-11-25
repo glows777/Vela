@@ -21,7 +21,7 @@ Lark enforces a chat allowlist before invoking the model. Enabling a chat trusts
 
 ## Tools run as you
 
-The built-in tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `grep`, `find`, `bash`) run in the Vela process with your user's permissions. See [Tools](tools.md).
+The built-in tools (`read`, `write`, `edit`, `ls`, `grep`, `find`, `bash`) run in the Vela process with your user's permissions. See [Tools](tools.md).
 
 - The working directory is where relative paths resolve and where `bash` starts. It is not a jail: file tools accept absolute paths and `..`, and `bash` can reach anything your user can.
 - Vela does not filter `bash` commands: a command the model writes runs unless a user extension blocks the call. A pattern-based confirmation extension can catch mistakes, but is not a security control and is easy to get around.
@@ -64,13 +64,13 @@ Every sender in a chat gets the same session and the same tools. A custom channe
 `tools` is the only per-session tool availability control. Use an allowlist or `+name` / `-name` modifiers when opening a session:
 
 ```ts
-const session = vela.session('review', { tools: ['read_file', 'grep', 'find'] })
+const session = vela.session('review', { tools: ['read', 'grep', 'find'] })
 const noShell = vela.session('no-shell', { tools: ['-bash'] })
 ```
 
 `session.setActiveTools(names)` replaces the selection with an allowlist; `session.getActiveTools()` lists the tools currently exposed to the model. An unavailable tool is not offered to the model, and calls to it are rejected. See [Tools](tools.md#choosing-tools-per-session) and [SDK](sdk.md).
 
-This controls tool availability, not data access. For example, a session with `read_file` can still read any file accessible to the OS user, including other sessions and credentials. Removing `bash` does not isolate a session or make untrusted callers safe.
+This controls tool availability, not data access. For example, a session with `read` can still read any file accessible to the OS user, including other sessions and credentials. Removing `bash` does not isolate a session or make untrusted callers safe.
 
 ### Block dangerous calls
 

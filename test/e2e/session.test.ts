@@ -68,7 +68,7 @@ test('a resumed Vela continues the saved conversation', async () => {
 test('each message is written as it enters the history, so a killed process keeps the finished steps (like pi)', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'A' },
-    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxHang('…')],
+    responses: [fauxToolCall('read', { path: 'a.txt' }), fauxHang('…')],
   })
   const running = t.run('Read a.txt')
   // The second request is still running: the first step is already on disk
@@ -109,7 +109,7 @@ test('a session file caught mid-write is not parsed until its record is complete
     dataDir: 'data',
     sessionStorage: pausing,
     files: { 'a.txt': 'A' },
-    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxHang('…')],
+    responses: [fauxToolCall('read', { path: 'a.txt' }), fauxHang('…')],
   })
   const running = t.run('Read a.txt')
   running.catch(() => {})

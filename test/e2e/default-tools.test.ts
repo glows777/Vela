@@ -25,11 +25,11 @@ async function requestTools(session?: SessionOptions): Promise<string[]> {
   }
 }
 
-test('a session declares only read_file, bash, edit_file, write_file and tool_search by default', async () => {
+test('a session declares only read, bash, edit, write and tool_search by default', async () => {
   expect(await requestTools()).toEqual([
-    'read_file',
-    'write_file',
-    'edit_file',
+    'read',
+    'write',
+    'edit',
     'bash',
     'tool_search',
   ])
@@ -37,17 +37,17 @@ test('a session declares only read_file, bash, edit_file, write_file and tool_se
 
 test('`+name` turns a default-off tool back on and `-name` turns a default tool off', async () => {
   expect(await requestTools({ tools: ['+grep'] })).toEqual([
-    'read_file',
-    'write_file',
-    'edit_file',
+    'read',
+    'write',
+    'edit',
     'grep',
     'bash',
     'tool_search',
   ])
   expect(await requestTools({ tools: ['-bash'] })).toEqual([
-    'read_file',
-    'write_file',
-    'edit_file',
+    'read',
+    'write',
+    'edit',
     'tool_search',
   ])
 })
@@ -74,6 +74,6 @@ test('a model call to a default-off tool fails and names the tools it can call',
   const [end] = t.eventsOf('tool_execution_end')
   expect(end).toMatchObject({ toolName: 'grep', isError: true })
   expect(end?.result).toContain("unavailable tool 'grep'")
-  expect(end?.result).toContain('read_file')
-  expect(end?.result).not.toContain('list_directory')
+  expect(end?.result).toContain('read')
+  expect(end?.result).not.toMatch(/\bls\b/)
 })

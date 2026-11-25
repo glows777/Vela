@@ -11,26 +11,23 @@ import type {
   ToolResultPart as AIToolResultPart,
   UserContent as AIUserContent,
 } from 'ai'
-import {
-  type AssistantContentPart,
-  normalizeVelaMessage,
-  type ProviderOptions,
-  type ToolMessageContentPart,
-  type ToolResultOutput,
-  type VelaAssistantMessage,
-  type VelaMessage,
-  type VelaToolMessage,
+import type {
+  AssistantContentPart,
+  ProviderOptions,
+  ToolMessageContentPart,
+  ToolResultOutput,
+  VelaAssistantMessage,
+  VelaMessage,
+  VelaToolMessage,
 } from '../shared/messages.ts'
 
 const IMAGE_MEDIA_TYPE = /^image(?:\/|$)/i
 
-/** Canonical images plus legacy AI SDK image shapes accepted during transition. */
+/** Canonical images (or image file parts). */
 function isImagePart(part: { type: string; mediaType?: string }): boolean {
   return (
     part.type === 'image' ||
-    part.type.startsWith('image-') ||
-    ((part.type === 'file' || part.type === 'media') &&
-      IMAGE_MEDIA_TYPE.test(part.mediaType ?? ''))
+    (part.type === 'file' && IMAGE_MEDIA_TYPE.test(part.mediaType ?? ''))
   )
 }
 
@@ -94,30 +91,6 @@ export function fromAiToolOutput(
           ...opts,
         }
       }
-      if (rec.type === 'image-data') {
-        const mediaType =
-          typeof rec.mediaType === 'string' && rec.mediaType
-            ? rec.mediaType
-            : 'image/png'
-        return {
-          type: 'image' as const,
-          data: binaryDataToBase64(rec.data),
-          mimeType: mediaType,
-          ...opts,
-        }
-      }
-      if (
-        (rec.type === 'media' || rec.type === 'file-data') &&
-        typeof rec.mediaType === 'string' &&
-        IMAGE_MEDIA_TYPE.test(rec.mediaType)
-      ) {
-        return {
-          type: 'image' as const,
-          data: binaryDataToBase64(rec.data),
-          mimeType: rec.mediaType,
-          ...opts,
-        }
-      }
       return part
     }),
   } as ToolResultOutput
@@ -141,11 +114,68 @@ function omitImagesInToolOutput(
   }
 }
 
+const ANTHROPIC_TOOL_ID = /^[a-zA-Z0-9_-]{1,64}$/
+
+function createToolIdNormalizer() {
+  const mapped = new Map<string, string>()
+  const used = new Set<string>()
+  return (raw: string): string => {
+    const existing = mapped.get(raw)
+    if (existing !== undefined) return existing
+    let candidate = ANTHROPIC_TOOL_ID.test(raw)
+      ? raw
+      : raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'tool_call'
+    if (used.has(candidate)) {
+      let n = 1
+      let suffixed = `${candidate.slice(0, 56)}_${n}`
+      while (used.has(suffixed)) suffixed = `${candidate.slice(0, 56)}_${++n}`
+      candidate = suffixed
+    }
+    used.add(candidate)
+    mapped.set(raw, candidate)
+    return candidate
+  }
+}
+
+function mergeConsecutiveAssistants(
+  messages: AIModelMessage[],
+): AIModelMessage[] {
+  const merged: AIModelMessage[] = []
+  for (const msg of messages) {
+    const prev = merged.at(-1)
+    if (msg.role === 'assistant' && prev?.role === 'assistant') {
+      const toParts = (content: AIModelMessage['content']) =>
+        typeof content === 'string'
+          ? content
+            ? [{ type: 'text' as const, text: content }]
+            : []
+          : content
+      const parts = [...toParts(prev.content), ...toParts(msg.content)]
+      merged[merged.length - 1] = {
+        ...prev,
+        ...(msg.providerOptions
+          ? {
+              providerOptions: {
+                ...prev.providerOptions,
+                ...msg.providerOptions,
+              },
+            }
+          : {}),
+        content: parts,
+      } as AIModelMessage
+      continue
+    }
+    merged.push(msg)
+  }
+  return merged
+}
+
 /** Request-only conversion: fallback never removes images from saved history. */
 export function toAiModelMessages(
   messages: VelaMessage[],
   supportsImages = true,
   toolImagesAsUser = false,
+  options: { normalizeToolCallIds?: boolean } = {},
 ): AIModelMessage[] {
   const converted = messages.map((message): AIModelMessage => {
     if (message.role === 'system') {
@@ -190,22 +220,10 @@ export function toAiModelMessages(
             }
           }
           if (part.type === 'image') {
-            const legacy = part as unknown as {
-              data?: string | Uint8Array | URL | Record<string, string>
-              mimeType?: string
-              image?: string | Uint8Array | URL | Record<string, string>
-              mediaType?: string
-            }
-            const rawData = legacy.data ?? legacy.image
-            const data =
-              rawData instanceof Uint8Array
-                ? Buffer.from(rawData).toString('base64')
-                : (rawData ?? '')
-            const mediaType = legacy.mimeType ?? legacy.mediaType ?? 'image/png'
             return {
               type: 'file' as const,
-              data,
-              mediaType,
+              data: part.data,
+              mediaType: part.mimeType,
               ...(part.providerOptions
                 ? {
                     providerOptions:
@@ -219,7 +237,7 @@ export function toAiModelMessages(
       }
     }
     if (message.role === 'assistant') {
-      const normalized = normalizeVelaMessage(message) as VelaAssistantMessage
+      const normalized = message as VelaAssistantMessage
       if (typeof normalized.content === 'string') {
         return {
           role: 'assistant',
@@ -458,7 +476,29 @@ export function toAiModelMessages(
     } as AIModelMessage)
   }
   flush()
-  return result
+  const merged = mergeConsecutiveAssistants(result)
+  if (!options.normalizeToolCallIds) return merged
+  const normalizeId = createToolIdNormalizer()
+  return merged.map((message) => {
+    if (
+      (message.role !== 'assistant' && message.role !== 'tool') ||
+      typeof message.content === 'string'
+    )
+      return message
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (
+          part.type === 'tool-call' ||
+          part.type === 'tool-result' ||
+          part.type === 'tool-approval-request'
+        ) {
+          return { ...part, toolCallId: normalizeId(part.toolCallId) }
+        }
+        return part
+      }),
+    } as AIModelMessage
+  })
 }
 
 /** Convert an AI SDK `ResponseMessage` (assistant or tool) into a canonical `VelaMessage`. */

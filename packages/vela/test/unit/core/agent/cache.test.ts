@@ -4,7 +4,7 @@ import { jsonSchema, type ModelMessage, streamText, tool } from 'ai'
 import { withPromptCache } from '../../../../src/providers/cache.ts'
 
 const tools = {
-  read_file: tool({ inputSchema: jsonSchema({ type: 'object' }) }),
+  read: tool({ inputSchema: jsonSchema({ type: 'object' }) }),
   bash: tool({ inputSchema: jsonSchema({ type: 'object' }) }),
 }
 
@@ -43,7 +43,7 @@ test('the Anthropic request carries cache breakpoints on the system prompt, the 
   ])
   const sentTools = body?.tools as { name: string; cache_control?: unknown }[]
   expect(sentTools.map((t) => [t.name, t.cache_control])).toEqual([
-    ['read_file', undefined],
+    ['read', undefined],
     ['bash', ephemeral],
   ])
   const sent = body?.messages as {
@@ -65,7 +65,7 @@ test('the cache breakpoint keeps other Anthropic options already set on the tool
   }
   const { tools: sentTools, messages: sent } = withPromptCache({
     system: 'S',
-    tools: { read_file: tools.read_file, bash: deferred },
+    tools: { read: tools.read, bash: deferred },
     messages: [
       {
         role: 'user',

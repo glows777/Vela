@@ -49,7 +49,7 @@ const router = (request: FauxRequest) => {
         reasoning: 'PRIVATE_REASONING_SENTINEL',
         toolCalls: [
           {
-            name: 'write_file',
+            name: 'write',
             input: {
               path: 'result.txt',
               content: 'local verification succeeded\n',

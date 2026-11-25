@@ -186,14 +186,11 @@ test('a throwing user bash progress callback does not interrupt the command', as
   }
 })
 
-test('read_file uses the selected execution environment instead of reading the host', async () => {
+test('read uses the selected execution environment instead of reading the host', async () => {
   const dir = tempDir()
   writeFileSync(join(dir.path, 'marker.txt'), 'host-only marker')
   const model = createFauxModel({
-    responses: [
-      fauxToolCall('read_file', { path: 'marker.txt' }),
-      fauxText('done'),
-    ],
+    responses: [fauxToolCall('read', { path: 'marker.txt' }), fauxText('done')],
   })
   let reads = 0
   const vela = createVela({
@@ -225,11 +222,11 @@ test('read_file uses the selected execution environment instead of reading the h
   }
 })
 
-test('write_file does not write to the host when its environment denies the write', async () => {
+test('write does not write to the host when its environment denies the write', async () => {
   const dir = tempDir()
   const model = createFauxModel({
     responses: [
-      fauxToolCall('write_file', {
+      fauxToolCall('write', {
         path: 'forbidden.txt',
         content: 'host side effect',
       }),
@@ -265,16 +262,16 @@ test('write_file does not write to the host when its environment denies the writ
   }
 })
 
-test('write_file can update its own new file under a symlinked workspace directory', async () => {
+test('write can update its own new file under a symlinked workspace directory', async () => {
   const dir = tempDir()
   mkdirSync(join(dir.path, 'actual'))
   symlinkSync(join(dir.path, 'actual'), join(dir.path, 'linked'), 'dir')
   const path = 'linked/new/note.txt'
   const model = createFauxModel({
     responses: [
-      fauxToolCall('write_file', { path, content: 'first' }),
-      fauxToolCall('write_file', { path, content: 'second' }),
-      fauxToolCall('write_file', {
+      fauxToolCall('write', { path, content: 'first' }),
+      fauxToolCall('write', { path, content: 'second' }),
+      fauxToolCall('write', {
         path: 'actual/new/note.txt',
         content: 'third',
       }),
@@ -292,13 +289,13 @@ test('write_file can update its own new file under a symlinked workspace directo
   }
 })
 
-test('edit_file leaves the host untouched when its environment refuses edits', async () => {
+test('edit leaves the host untouched when its environment refuses edits', async () => {
   const dir = tempDir()
   const file = join(dir.path, 'edit.txt')
   writeFileSync(file, 'original')
   const model = createFauxModel({
     responses: [
-      fauxToolCall('edit_file', {
+      fauxToolCall('edit', {
         path: 'edit.txt',
         edits: [{ oldText: 'original', newText: 'changed' }],
       }),
@@ -334,14 +331,11 @@ test('edit_file leaves the host untouched when its environment refuses edits', a
   }
 })
 
-test('list_directory uses the selected environment instead of listing the host', async () => {
+test('ls uses the selected environment instead of listing the host', async () => {
   const dir = tempDir()
   writeFileSync(join(dir.path, 'private.txt'), 'host only')
   const model = createFauxModel({
-    responses: [
-      fauxToolCall('list_directory', { path: '.' }),
-      fauxText('done'),
-    ],
+    responses: [fauxToolCall('ls', { path: '.' }), fauxText('done')],
   })
   let listings = 0
   const vela = createVela({
@@ -362,9 +356,7 @@ test('list_directory uses the selected environment instead of listing the host',
     },
   })
   try {
-    await vela
-      .session('boundary-list', { tools: ['+list_directory'] })
-      .prompt('list files')
+    await vela.session('boundary-list', { tools: ['+ls'] }).prompt('list files')
     expect(listings).toBe(1)
     expect(model.calls[1]!.toolResults[0]!.output).not.toContain('private.txt')
   } finally {
@@ -472,7 +464,7 @@ test('user bash cannot execute on host when the selected environment rejects it'
   }
 })
 
-test('default session environment preserves login-shell invocation for model and user bash', async () => {
+test('default session environment uses non-login shell invocation (-c) for model and user bash', async () => {
   const { chmodSync } = await import('node:fs')
   const dir = tempDir()
   const shell = join(dir.path, 'shell')
@@ -483,10 +475,10 @@ test('default session environment preserves login-shell invocation for model and
   })
   const vela = createVela({ cwd: dir.path, shellPath: shell, model })
   try {
-    const session = vela.session('login-shell')
+    const session = vela.session('non-login-shell')
     await session.prompt('run')
-    expect(model.calls[1]!.toolResults[0]!.output).toBe('-lc')
-    expect((await session.executeBash('ignored')).output).toBe('-lc')
+    expect(model.calls[1]!.toolResults[0]!.output).toBe('-c')
+    expect((await session.executeBash('ignored')).output).toBe('-c')
   } finally {
     await vela.dispose()
     dir.cleanup()
@@ -733,7 +725,7 @@ test.skipIf(process.platform === 'win32')(
             code: process.platform === 'darwin' ? 'EPERM' : 'ESRCH',
           })
         }
-        if (signal === 'SIGKILL') {
+        if ((cleaning && signal === 'SIGTERM') || signal === 'SIGKILL') {
           attempts.push(pid)
           throw Object.assign(new Error('group kill denied'), { code: 'EPERM' })
         }
@@ -895,52 +887,6 @@ test.each([false, true])(
     }
   },
 )
-
-test('microcompaction stores recoverable tool output in the session environment', async () => {
-  const dir = tempDir()
-  for (let i = 0; i < 8; i++)
-    writeFileSync(
-      join(dir.path, `file-${i}.txt`),
-      `file ${i}\n` + 'content '.repeat(1400),
-    )
-  const model = createFauxModel({
-    responses: [
-      ...Array.from({ length: 8 }, (_, i) =>
-        fauxToolCall('read_file', { path: `file-${i}.txt` }),
-      ),
-      fauxText('done'),
-    ],
-  })
-  let allocations = 0
-  const vela = createVela({
-    cwd: dir.path,
-    model,
-    limits: {
-      microcompactThreshold: 1,
-      minMicroSavings: 1,
-      summaryThreshold: 1e9,
-    },
-    env: ({ location }) => {
-      const env = createLocalExecutionEnv({ cwd: location.cwd })
-      const create = env.createTempFile.bind(env)
-      env.createTempFile = async (...args) => {
-        allocations++
-        return create(...args)
-      }
-      return env
-    },
-  })
-  try {
-    await vela.session('micro-boundary').prompt('read all')
-    expect(JSON.stringify(model.calls.at(-1)!.prompt)).toContain(
-      'tool result preview omitted',
-    )
-    expect(allocations).toBeGreaterThan(0)
-  } finally {
-    await vela.dispose()
-    dir.cleanup()
-  }
-})
 
 test.each(['missing', 'directory'])(
   'an instruction override linked to a %s target allows the regular AGENTS.md to load',

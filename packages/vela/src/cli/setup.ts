@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { savedTrust, saveTrust, type VelaSettings } from '../config/index.ts'
@@ -159,7 +158,7 @@ anything else goes to the model.
 
 Command-line @file arguments attach images (detected by header) or inline text in <file name="…">…</file>
 on the first prompt. Missing files exit 1. In the TUI, Ctrl+V (Windows: Alt+V) pastes clipboard files
-as their paths, an image as a temporary file path for read_file, or clipboard text. Images in history
+as their paths, an image as a temporary file path for read, or clipboard text. Images in history
 show a short placeholder.
 
 Examples:
@@ -188,7 +187,7 @@ Examples:
   vela --model anthropic/<model-id> --thinking high "Plan the refactor"
 
   # Read-only tools only
-  vela --tools read_file,grep,find,list_directory -p "Review the code in src/"
+  vela --tools read,grep,find,ls -p "Review the code in src/"
 
   # Everything except bash
   vela --exclude-tools bash
@@ -720,38 +719,4 @@ function reportFailures(
       }
     },
   }[name] as VelaExtension
-}
-
-/**
- * Older versions wrote data into cwd (`.sessions` etc.); if found, explain how to move it to the new data dir (no automatic move).
- * The commands are safe to rerun: once the old data is gone cp / mv fail without deleting anything, and a failed copy keeps the old data.
- */
-export function legacyDataHint(
-  cwd: string,
-  dataDir: string,
-): string | undefined {
-  const moves = (
-    [
-      ['.sessions', 'sessions'],
-      ['.memory', 'memory'],
-      ['.usage', 'usage'],
-    ] as const
-  ).filter(([old]) => existsSync(join(cwd, old)))
-  if (!moves.length) return
-  const lines = moves.map(([old, next]) => {
-    const from = shellQuote(join(resolve(cwd), old))
-    const target = shellQuote(join(resolve(dataDir), next))
-    // The new dir may already hold files created by this launch (e.g. an empty MEMORY.md): merge, old data wins on name clashes
-    return `  mkdir -p ${target} && cp -R ${from}/. ${target}/ && rm -r ${from}`
-  })
-  return [
-    `[data] Found data in the old location (${moves.map(([old]) => old).join(', ')}); the data dir is now ${dataDir}.`,
-    'To keep using it, exit and run the commands below (old data wins on name clashes; best run before new sessions / memories are created in the new dir):',
-    ...lines,
-  ].join('\n')
-}
-
-/** Single-quote for sh (paths may contain spaces, $ or quotes). */
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
 }

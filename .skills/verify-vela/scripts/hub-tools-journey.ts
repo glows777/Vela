@@ -104,17 +104,10 @@ await until('hub bash reply', () => !!sent(fake, 'hub ran bash'))
 const hubTools = model.calls[0]!.tools
 check(
   'hub tools',
-  hubTools.filter((name) =>
-    /^(bash|write_file|edit_file|background_)/.test(name),
-  ),
-  [
-    'bash',
-    'write_file',
-    'edit_file',
-    'background_output',
-    'background_stop',
-  ].every((name) => hubTools.includes(name)) &&
-    !hubTools.includes('background_start'),
+  hubTools.filter((name) => /^(bash|write|edit|background_)/.test(name)),
+  ['bash', 'write', 'edit', 'background_output', 'background_stop'].every(
+    (name) => hubTools.includes(name),
+  ) && !hubTools.includes('background_start'),
 )
 const waitsInHub = hubTools.includes('channel_wait_for_input')
 check('no waiting tool in the hub', waitsInHub, !waitsInHub)
@@ -202,8 +195,8 @@ const dmTools = model.calls.at(-1)!.tools
 // A DM keeps its execution tools and gets no background tools, unchanged by this change.
 check(
   'dm execution tools',
-  dmTools.filter((name) => /^(bash|write_file|edit_file)$/.test(name)),
-  ['bash', 'write_file', 'edit_file'].every((name) => dmTools.includes(name)),
+  dmTools.filter((name) => /^(bash|write|edit)$/.test(name)),
+  ['bash', 'write', 'edit'].every((name) => dmTools.includes(name)),
 )
 const dmBackground = dmTools.filter((name) => name.startsWith('background_'))
 check('dm background tools', dmBackground, dmBackground.length === 0)

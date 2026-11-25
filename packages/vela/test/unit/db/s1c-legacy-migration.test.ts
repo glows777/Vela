@@ -989,7 +989,7 @@ test('failed migration rolls back DB, newly created config.json, and copied blob
   }
 })
 
-test('CLI startup automatically migrates legacy settings.json/models.json/mcp.json to config.json while keeping loadConfig pure read', () => {
+test('CLI startup fails fast on legacy settings.json/models.json/mcp.json without auto-migrating to config.json', () => {
   const root = tempDir('vela-s1c-cli-')
   dirs.push(root)
   const agentDir = join(root.path, 'agent')
@@ -1036,11 +1036,7 @@ test('CLI startup automatically migrates legacy settings.json/models.json/mcp.js
       encoding: 'utf8',
     },
   )
-  expect(run.status).toBe(0)
-  expect(run.stdout).toContain('demo-model')
-  expect(run.stderr).toContain('Migrated settings.json, models.json, mcp.json')
-  expect(existsSync(join(agentDir, 'config.json'))).toBe(true)
-  expect(existsSync(join(agentDir, 'settings.json'))).toBe(true)
-  expect(existsSync(join(agentDir, 'models.json'))).toBe(true)
-  expect(existsSync(join(agentDir, 'mcp.json'))).toBe(true)
+  expect(run.status).toBe(2)
+  expect(run.stderr).toContain('docs/upgrading.md')
+  expect(existsSync(join(agentDir, 'config.json'))).toBe(false)
 })

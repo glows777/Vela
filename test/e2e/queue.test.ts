@@ -18,7 +18,7 @@ test('steer is injected after the current step, before the next model request', 
     responses: [
       () => {
         void t.session.steer('Read b instead')
-        return fauxToolCall('read_file', { path: 'a.txt' })
+        return fauxToolCall('read', { path: 'a.txt' })
       },
       fauxText('OK'),
     ],
@@ -67,7 +67,7 @@ test('followUp waits until the model would stop, then continues in the same loop
     responses: [
       () => {
         void t.session.followUp('Then summarize')
-        return fauxToolCall('read_file', { path: 'a.txt' })
+        return fauxToolCall('read', { path: 'a.txt' })
       },
       fauxText('Done reading'),
       fauxText('Summary: A'),

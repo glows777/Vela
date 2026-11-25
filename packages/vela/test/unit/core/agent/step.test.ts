@@ -11,7 +11,7 @@ test('an interrupted message is kept as plain text and whole tool calls, without
   step.textDelta('t', 'Let me check')
   step.toolCallEnd({
     toolCallId: 'c1',
-    toolName: 'read_file',
+    toolName: 'read',
     input: { path: 'a' },
     providerMetadata: { openai: { itemId: 'fc_1' } },
   })
@@ -24,7 +24,7 @@ test('an interrupted message is kept as plain text and whole tool calls, without
     {
       type: 'tool_call',
       toolCallId: 'c1',
-      toolName: 'read_file',
+      toolName: 'read',
       input: { path: 'a' },
     },
   ])
