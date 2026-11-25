@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { openDatabase } from '../../db/index.ts'
 import type { ModelInput } from '../../shared/provider-types.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
@@ -98,6 +98,39 @@ export function exportBranch(options: {
   )
 }
 
+function canonicalPath(path: string): string {
+  const abs = resolve(path)
+  if (existsSync(abs)) return realpathSync(abs)
+  const suffix: string[] = []
+  let cur = abs
+  while (!existsSync(cur)) {
+    const parent = dirname(cur)
+    if (parent === cur) return abs
+    suffix.unshift(basename(cur))
+    cur = parent
+  }
+  return join(realpathSync(cur), ...suffix)
+}
+
+function assertSafeExportTarget(
+  dbPath: string,
+  baseCwd: string,
+  outputPath: string | undefined,
+): void {
+  if (!outputPath) return
+  const target = resolve(baseCwd, outputPath)
+  const canonicalTarget = canonicalPath(target)
+  const protectedPaths = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
+  for (const reserved of protectedPaths) {
+    if (
+      target === resolve(reserved) ||
+      canonicalTarget === canonicalPath(reserved)
+    ) {
+      throw new Error(`Refusing to overwrite database file: ${target}`)
+    }
+  }
+}
+
 /** Exports a saved session directly from `vela.db` in read-only mode without starting extensions or models. */
 export async function exportSavedSession(options: {
   dataDir: string
@@ -111,6 +144,7 @@ export async function exportSavedSession(options: {
       `Session ${options.sessionId} has no saved history in vela.db`,
     )
   }
+  assertSafeExportTarget(dbPath, options.baseCwd, options.outputPath)
   const db = openDatabase({ path: dbPath, readonly: true })
   try {
     const meta = loadSessionMeta(db, options.sessionId)

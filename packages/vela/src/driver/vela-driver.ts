@@ -34,6 +34,7 @@ import {
   finishRunInDb,
   isOwnerLive,
   PROCESS_OWNER_PREFIX,
+  pendingApprovalState,
   type RunTrigger,
 } from './run-store.ts'
 import type { SessionStore } from './session/index.ts'
@@ -50,7 +51,7 @@ export type { DriverCapabilities, DriverRunClaim }
 
 export interface VelaDriverRunOptions {
   model: ModelInput
-  producer?: string
+  producer?: string | (() => string)
   systemPrompt: string | (() => string)
   messages: ModelMessage[]
   newMessages?: ModelMessage[]
@@ -124,6 +125,7 @@ export class VelaDriver {
       | 'failed'
       | 'interrupted',
     error?: unknown,
+    sessionState?: 'idle' | 'waiting_human',
   ): void {
     finishRunInDb(
       this.deps.db,
@@ -132,6 +134,7 @@ export class VelaDriver {
       ownerToken,
       status,
       error,
+      sessionState,
     )
   }
 
@@ -282,7 +285,10 @@ export class VelaDriver {
   }> {
     const { db, store, registry, tracker, sessionId } = this.deps
     const limits = resolveLimits(options.limits)
-    const producer = options.producer ?? describeModel(options.model).ref
+    const resolveProducer = () =>
+      typeof options.producer === 'function'
+        ? options.producer()
+        : (options.producer ?? describeModel(options.model).ref)
     const claim =
       options.claim ??
       this.claim({
@@ -328,12 +334,12 @@ export class VelaDriver {
           signal: options.abortSignal,
         })
         if (rec.waitingHuman) {
-          this.finishRun(runId, ownerToken, 'waiting_human')
           if (!options.allowWaitingHuman) {
             throw new Error(
               `Session ${sessionId} is awaiting human approval on a pending tool call; resolve pending approvals and call continueInterrupted() first`,
             )
           }
+          this.finishRun(runId, ownerToken, 'waiting_human')
           this.emit({
             type: 'agent_end',
             messages: newMessages,
@@ -384,9 +390,10 @@ export class VelaDriver {
           resolvedTools.toolDefinitions,
         )
         tracker.syncToolTokens(requestToolTokens)
+        const stepProducer = resolveProducer()
         const refreshMessages = async () => {
           const transformed = options.transformContext
-            ? await options.transformContext(options.messages, producer)
+            ? await options.transformContext(options.messages, stepProducer)
             : options.messages
           if (options.transformContext) {
             tracker.setContextDelta(
@@ -546,7 +553,7 @@ export class VelaDriver {
             registry,
             sessionId,
             runId,
-            producer,
+            producer: stepProducer,
             assistant,
             responseMessages,
             clientCalls,
@@ -618,11 +625,29 @@ export class VelaDriver {
             })
             if (execResult.waitingHuman) {
               emitUsage()
+              const settledRows = loadStepToolCallRows(
+                db,
+                sessionId,
+                assistantEntry.id,
+              ).filter(
+                (row) =>
+                  row.result_json !== null &&
+                  (row.status === 'completed' ||
+                    row.status === 'failed' ||
+                    row.status === 'skipped'),
+              )
+              const completedResults =
+                settledRows.length > 0
+                  ? toolResultsOf([
+                      assistant,
+                      assembleCompletedToolMessage(settledRows).message,
+                    ])
+                  : []
               this.emit({
                 type: 'turn_end',
                 turn,
                 message: assistant,
-                toolResults: [],
+                toolResults: completedResults,
               })
               this.finishRun(runId, ownerToken, 'waiting_human')
               this.emit({
@@ -728,26 +753,12 @@ export class VelaDriver {
     } catch (error) {
       const draining = Boolean(options.isDraining?.())
       const aborted = Boolean(options.abortSignal?.aborted || draining)
-      const hasPendingApproval = Boolean(
-        db.get<{ id: string }>(
-          `SELECT id FROM vela_tool_calls
-           WHERE session_id = ? AND run_id = ? AND status = 'awaiting_approval'
-           LIMIT 1`,
-          sessionId,
-          runId,
-        ) ??
-          db.get<{ id: string }>(
-            `SELECT id FROM approvals
-             WHERE session_id = ? AND run_id = ? AND status = 'pending'
-             LIMIT 1`,
-            sessionId,
-            runId,
-          ),
-      )
+      const { hasRunPendingApproval, hasSessionPendingApproval } =
+        pendingApprovalState(db, sessionId, runId)
       this.finishRun(
         runId,
         ownerToken,
-        hasPendingApproval
+        hasRunPendingApproval
           ? 'waiting_human'
           : options.abortSignal?.aborted
             ? 'stopped'
@@ -755,6 +766,7 @@ export class VelaDriver {
               ? 'interrupted'
               : 'failed',
         error,
+        hasSessionPendingApproval ? 'waiting_human' : 'idle',
       )
       this.emit({
         type: 'agent_end',

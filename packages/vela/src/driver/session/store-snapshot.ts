@@ -10,6 +10,7 @@ export interface StoreSnapshotState {
   seq: number
   started: boolean
   checked: boolean
+  location?: ExecutionLocation
   discovered: string[]
   producers: Map<ModelMessage, string>
   ids: Map<ModelMessage, string>
@@ -28,6 +29,7 @@ export function captureStoreSnapshot(state: StoreSnapshotState) {
     seq: state.seq,
     started: state.started,
     checked: state.checked,
+    location: state.location,
     discovered: [...state.discovered],
     producers: new Map(state.producers),
     ids: new Map(state.ids),
@@ -49,6 +51,7 @@ export function restoreStoreSnapshot(
   state.seq = snap.seq
   state.started = snap.started
   state.checked = snap.checked
+  state.location = snap.location
   state.discovered = snap.discovered
   state.producers = snap.producers
   for (const [target, saved] of [

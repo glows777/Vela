@@ -147,11 +147,11 @@ With `run_in_background: true` the call starts a job and returns without waiting
 
 ### Concurrency
 
-The model can request several tool calls in one response. As in pi, they run in parallel by default:
+The model can request several tool calls in one response:
 
-- `write` and `edit` queue per file (resolved through symlinks): two writes to the same file run one after the other, writes to different files run at the same time. The queue is shared by every session in the process.
-- `bash` and the read-only tools take no lock.
-- A tool with `executionMode: 'sequential'` runs alone within its session: it waits for the session's calls that started before it, and calls that start after it wait for it. Other sessions are not affected. The built-in `memory` tool is sequential.
+- Read-only built-in tools (`read`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `background_stop`) and `write` / `edit` use `executionMode: 'parallel'`. `write` and `edit` queue per file (resolved through symlinks): two writes to the same file run one after the other, while writes to different files run at the same time. The queue is shared by every session in the process.
+- `bash`, `memory`, and extension tools that omit `executionMode` default to `'sequential'` and run alone within their session (waiting for prior calls in that session, while subsequent calls wait for them; other sessions are unaffected). MCP tools run `'parallel'` only when `readOnlyHint: true`.
+- To run a custom tool concurrently with other parallel calls, set `executionMode: 'parallel'` (and use `withFileMutationQueue(path, fn)` if it mutates files).
 
 Tool availability checks, hooks and extension confirmation prompts run before a call waits for anything, so a tool waiting for approval does not hold back other tools.
 

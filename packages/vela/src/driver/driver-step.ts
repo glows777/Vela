@@ -350,12 +350,18 @@ export async function streamSingleStepWithRetries(options: {
         try {
           await recoverOverflow()
         } catch (compactError) {
+          const message = `${errorMessage} (compacting the context to recover failed: ${errorMessageOf(compactError)})`
+          if (retried) {
+            emit({
+              type: 'auto_retry_end',
+              success: false,
+              attempt: retried,
+              finalError: message,
+            })
+          }
           emitEmptyTurnEnd()
           abortSignal?.throwIfAborted()
-          throw new Error(
-            `${errorMessage} (compacting the context to recover failed: ${errorMessageOf(compactError)})`,
-            { cause: error },
-          )
+          throw new Error(message, { cause: error })
         }
         continue
       }
@@ -422,17 +428,32 @@ export async function streamSingleStepWithRetries(options: {
         record: rec,
       })
       step.endInterrupted('error', 'model_context_window_exceeded')
-      if (!compactedForOverflow && compactOnOverflow) {
+      if (!stepHostedStarted && !compactedForOverflow && compactOnOverflow) {
         try {
           await recoverOverflow()
         } catch (compactError) {
+          const message = `model_context_window_exceeded (compacting the context to recover failed: ${errorMessageOf(compactError)})`
+          if (retried) {
+            emit({
+              type: 'auto_retry_end',
+              success: false,
+              attempt: retried,
+              finalError: message,
+            })
+          }
           emitEmptyTurnEnd()
           abortSignal?.throwIfAborted()
-          throw new Error(
-            `model_context_window_exceeded (compacting the context to recover failed: ${errorMessageOf(compactError)})`,
-          )
+          throw new Error(message)
         }
         continue
+      }
+      if (retried) {
+        emit({
+          type: 'auto_retry_end',
+          success: false,
+          attempt: retried,
+          finalError: 'Context overflow: model_context_window_exceeded',
+        })
       }
       emitEmptyTurnEnd()
       throw new Error('Context overflow: model_context_window_exceeded')

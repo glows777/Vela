@@ -239,8 +239,12 @@ export function entriesToMessages(
     if (firstKept >= 0 && firstKept <= compactionIndex) {
       effectiveEntries = [
         compaction,
-        ...entries.slice(firstKept, compactionIndex),
-        ...entries.slice(compactionIndex + 1),
+        ...entries
+          .slice(firstKept, compactionIndex)
+          .filter((entry) => entry.type !== 'compaction'),
+        ...entries
+          .slice(compactionIndex + 1)
+          .filter((entry) => entry.type !== 'compaction'),
       ]
     }
   }

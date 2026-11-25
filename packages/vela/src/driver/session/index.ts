@@ -245,10 +245,10 @@ export class SessionStore {
   }
 
   async persistLocation(location: ExecutionLocation): Promise<void> {
-    this.location = location
     if (!this.started) {
       await this.assertNew()
-      this.db.transaction(() => {
+      this.runInTransaction(() => {
+        this.location = location
         this.insertSessionAndBufferedEntries()
       })
     } else {
@@ -260,6 +260,7 @@ export class SessionStore {
           this.sessionId,
         )
       })
+      this.location = location
     }
     this.saved()
   }
@@ -547,8 +548,10 @@ export class SessionStore {
 
   ensureSessionRow(): void {
     if (this.started) return
-    this.checkNewSync()
-    this.db.transaction(() => this.insertSessionAndBufferedEntries())
+    this.runInTransaction(() => {
+      this.checkNewSync()
+      this.insertSessionAndBufferedEntries()
+    })
     this.saved()
   }
 

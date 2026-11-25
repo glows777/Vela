@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -22,13 +23,18 @@ import {
   isToolResultError,
   toolResultOutputToText,
 } from '../../src/driver/context/tool-result-output.ts'
+import { inspectSession } from '../../src/driver/diagnostics.ts'
 import { persistAssistantStepTx } from '../../src/driver/driver-step.ts'
 import { createLocalExecutionEnv } from '../../src/driver/execution/local.ts'
 import { memoryCredentialStore } from '../../src/driver/index.ts'
 import type { ModelMessage } from '../../src/driver/messages.ts'
 import { queryBranchRows } from '../../src/driver/session/db-store.ts'
-import { resolveRunProducer } from '../../src/driver/session/defaults.ts'
+import {
+  resolveRunProducer,
+  SessionDefaultState,
+} from '../../src/driver/session/defaults.ts'
 import { entriesToMessages } from '../../src/driver/session/entries.ts'
+import { exportSavedSession } from '../../src/driver/session/export.ts'
 import { SessionStore } from '../../src/driver/session/index.ts'
 import { loadStepToolCallRows } from '../../src/driver/step-recovery.ts'
 import { executeStepCalls } from '../../src/driver/tool-executor.ts'
@@ -738,19 +744,19 @@ test('driver-step: aborted partial stream excluded, overflow/retry work with att
 
     // Overflow with idle hosted tool recovers when compactOnOverflow succeeds
     let callsOk = 0
-    const modelOk: LanguageModelV4 = {
+    const modelOk = {
       specificationVersion: 'v4',
       provider: 'mock',
       modelId: 'm',
       supportedUrls: {},
-      tools: {
+      hostedTools: async () => ({
         web_search: {
           type: 'provider',
           id: 'openai.web_search',
           name: 'web_search',
           args: {},
         },
-      } as never,
+      }),
       doGenerate: async () => {
         throw new Error('unused')
       },
@@ -783,16 +789,24 @@ test('driver-step: aborted partial stream excluded, overflow/retry work with att
           }),
         } as never
       },
-    } as never
+    } as unknown as LanguageModelV4
     const storeOk = new SessionStore('drv-ovf-ok', db)
     const ovfMsgs: ModelMessage[] = [{ role: 'user', content: 'retry me' }]
     storeOk.appendMessage(ovfMsgs[0]!)
     let compacted = 0
+    const hostedReg = new ToolRegistry(join(workDir, 'ovf-ok-spill'))
+    hostedReg.register({
+      name: 'web_search',
+      description: 'hosted search',
+      hostedOnly: true,
+      inputSchema: z.object({ query: z.string() }),
+      execute: async () => 'unused',
+    })
     const driverOk = new VelaDriver({
       sessionId: 'drv-ovf-ok',
       db,
       store: storeOk,
-      registry: new ToolRegistry(join(workDir, 'ovf-ok-spill')),
+      registry: hostedReg,
       tracker: new TokenTracker(),
     })
     const okRes = await driverOk.run({
@@ -1132,4 +1146,648 @@ test('SessionStore, seedFrom, cycle CTE guard, and createVela cleanup on init fa
     (n) => n.startsWith('vela-') && !beforeTmp.has(n),
   )
   expect(afterTmp).toEqual([])
+})
+
+test('Round 1 Codex P1/P2 fixes: crash waiting_human preservation, flush rollback, hosted raw overflow, auto_retry_end, export guard', async () => {
+  // 1) Crash recovery: ordinary prompt() hitting an unresolved prior-run approval leaves sessions.state = waiting_human
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    const crashStore = new SessionStore('crash-wh', db)
+    crashStore.appendMessage({ role: 'user', content: 'run approved tool' })
+    const asstMsg: ModelMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'tool_call', toolCallId: 'c1', toolName: 'risky', input: {} },
+      ],
+    }
+    const asstEntry = crashStore.appendMessage(asstMsg)
+    const now = new Date().toISOString()
+    db.run(
+      "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('old-run', 'crash-wh', 'vela', 'user', 'running', ?, ?)",
+      now,
+      now,
+    )
+    db.run(
+      `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, created_at, updated_at)
+       VALUES ('row-wh', 'crash-wh', 'old-run', ?, 'c1', 0, 'risky', '{}', 'sequential', 'none', 'awaiting_approval', 0, ?, ?)`,
+      asstEntry.id,
+      now,
+      now,
+    )
+    db.run(
+      `INSERT INTO approvals (id, session_id, run_id, tool_call_row_id, tool_call_id, tool_name, summary, status, created_at)
+       VALUES ('appr-wh', 'crash-wh', 'old-run', 'row-wh', 'c1', 'risky', 'need ok', 'pending', ?)`,
+      now,
+    )
+    const reg = new ToolRegistry(join(workDir, 'crash-wh-spill'))
+    reg.register({
+      name: 'risky',
+      description: 'risky',
+      inputSchema: z.object({}),
+      execute: async () => 'ok',
+    })
+    const drv = new VelaDriver({
+      sessionId: 'crash-wh',
+      db,
+      store: crashStore,
+      registry: reg,
+      tracker: new TokenTracker(),
+    })
+    await expect(
+      drv.run({
+        model: createFauxModel({ responses: [fauxText('unused')] }),
+        systemPrompt: '',
+        messages: crashStore.buildContext().messages,
+        recoverPending: true,
+        allowWaitingHuman: false,
+      }),
+    ).rejects.toThrow('awaiting human approval')
+    const sess = db.get<{ state: string; waiting_reason: string | null }>(
+      'SELECT state, waiting_reason FROM sessions WHERE id = ?',
+      'crash-wh',
+    )
+    expect(sess).toEqual({ state: 'waiting_human', waiting_reason: 'approval' })
+    expect(
+      db.all<{ status: string }>(
+        "SELECT status FROM runs WHERE session_id = 'crash-wh' AND id != 'old-run'",
+      ),
+    ).toEqual([{ status: 'failed' }])
+
+    // 2) SessionStore.flush() rolls back in-memory started/checked on DB error so retry persists
+    const txFail = new SessionStore('flush-rb', db)
+    txFail.appendCustom('note', { a: 1 })
+    db.exec(`
+      CREATE TRIGGER fail_msg_once BEFORE INSERT ON vela_messages
+      WHEN NEW.session_id = 'flush-rb'
+      BEGIN
+        SELECT RAISE(ABORT, 'disk-io-fail');
+      END;
+    `)
+    await expect(txFail.flush()).rejects.toThrow('disk-io-fail')
+    expect(
+      db.get('SELECT id FROM sessions WHERE id = ?', 'flush-rb'),
+    ).toBeUndefined()
+    db.exec('DROP TRIGGER fail_msg_once')
+    await txFail.flush()
+    expect(
+      db.all<{ kind: string }>(
+        'SELECT kind FROM vela_messages WHERE session_id = ?',
+        'flush-rb',
+      ),
+    ).toEqual([{ kind: 'custom' }])
+
+    // 3) Raw model_context_window_exceeded after hosted tool started does NOT compact/retry;
+    //    transient retry ending in raw overflow emits auto_retry_end(false)
+    let hostedRawCalls = 0
+    const hostedRawModel = {
+      specificationVersion: 'v4',
+      provider: 'mock',
+      modelId: 'm-hosted-raw',
+      supportedUrls: {},
+      doGenerate: async () => {
+        throw new Error('unused')
+      },
+      doStream: async () => {
+        hostedRawCalls++
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({
+                type: 'tool-call',
+                toolCallId: 'ws-1',
+                toolName: 'web_search',
+                input: '{}',
+                providerExecuted: true,
+              })
+              controller.enqueue({
+                type: 'tool-result',
+                toolCallId: 'ws-1',
+                toolName: 'web_search',
+                result: { ok: true },
+              })
+              controller.enqueue({
+                type: 'finish',
+                finishReason: {
+                  unified: 'other',
+                  raw: 'model_context_window_exceeded',
+                },
+                usage: { inputTokens: 10, outputTokens: 5 },
+              })
+              controller.close()
+            },
+          }),
+        } as never
+      },
+    } as unknown as LanguageModelV4
+    let hostedCompactCount = 0
+    const hostedRawStore = new SessionStore('drv-hosted-raw', db)
+    const hostedRawMsgs: ModelMessage[] = [{ role: 'user', content: 'search' }]
+    hostedRawStore.appendMessage(hostedRawMsgs[0]!)
+    await expect(
+      new VelaDriver({
+        sessionId: 'drv-hosted-raw',
+        db,
+        store: hostedRawStore,
+        registry: new ToolRegistry(join(workDir, 'hosted-raw-spill')),
+        tracker: new TokenTracker(),
+      }).run({
+        model: hostedRawModel,
+        systemPrompt: '',
+        messages: hostedRawMsgs,
+        compactOnOverflow: async () => {
+          hostedCompactCount++
+        },
+      }),
+    ).rejects.toThrow('model_context_window_exceeded')
+    expect(hostedCompactCount).toBe(0)
+    expect(hostedRawCalls).toBe(1)
+
+    let retryThenRawCalls = 0
+    const retryRawEvents: string[] = []
+    const retryRawEnds: Array<{ success: boolean; attempt: number }> = []
+    const retryThenRawModel = {
+      specificationVersion: 'v4',
+      provider: 'mock',
+      modelId: 'm-retry-raw',
+      supportedUrls: {},
+      doGenerate: async () => {
+        throw new Error('unused')
+      },
+      doStream: async () => {
+        retryThenRawCalls++
+        if (retryThenRawCalls === 1) throw new Error('ECONNRESET')
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({
+                type: 'finish',
+                finishReason: {
+                  unified: 'other',
+                  raw: 'model_context_window_exceeded',
+                },
+                usage: { inputTokens: 10, outputTokens: 1 },
+              })
+              controller.close()
+            },
+          }),
+        } as never
+      },
+    } as unknown as LanguageModelV4
+    const retryRawStore = new SessionStore('drv-retry-raw', db)
+    const retryRawMsgs: ModelMessage[] = [{ role: 'user', content: 'hi' }]
+    retryRawStore.appendMessage(retryRawMsgs[0]!)
+    await expect(
+      new VelaDriver({
+        sessionId: 'drv-retry-raw',
+        db,
+        store: retryRawStore,
+        registry: new ToolRegistry(join(workDir, 'retry-raw-spill')),
+        tracker: new TokenTracker(),
+        onEvent: (e) => {
+          retryRawEvents.push(e.type)
+          if (e.type === 'auto_retry_end') {
+            retryRawEnds.push({ success: e.success, attempt: e.attempt })
+          }
+        },
+      }).run({
+        model: retryThenRawModel,
+        systemPrompt: '',
+        messages: retryRawMsgs,
+        limits: { maxRetries: 1, retryBaseMs: 0 },
+      }),
+    ).rejects.toThrow('model_context_window_exceeded')
+    expect(retryRawEnds).toEqual([{ success: false, attempt: 1 }])
+    expect(retryRawEvents).toContain('auto_retry_start')
+
+    // 4) Waiting human `turn_end` carries completed earlier sequential toolResults
+    const stepWhStore = new SessionStore('step-wh-res', db)
+    const whMsgs: ModelMessage[] = [{ role: 'user', content: 'two steps' }]
+    stepWhStore.appendMessage(whMsgs[0]!)
+    const whReg = new ToolRegistry(join(workDir, 'step-wh-spill'))
+    whReg.register({
+      name: 'fast_ok',
+      description: 'succeeds first',
+      executionMode: 'sequential',
+      inputSchema: z.object({}),
+      execute: async () => 'fast-output',
+    })
+    whReg.register({
+      name: 'need_ok',
+      description: 'waits approval',
+      executionMode: 'sequential',
+      inputSchema: z.object({}),
+      execute: async () => 'approved-output',
+    })
+    whReg.setInterception({
+      before: async (toolName, input) =>
+        toolName === 'need_ok'
+          ? { block: false, input, approval: { summary: 'confirm' } }
+          : { block: false, input },
+    })
+    let whTurnEnd: { toolResults: unknown[] } | undefined
+    const whRes = await new VelaDriver({
+      sessionId: 'step-wh-res',
+      db,
+      store: stepWhStore,
+      registry: whReg,
+      tracker: new TokenTracker(),
+      onEvent: (e) => {
+        if (e.type === 'turn_end') whTurnEnd = { toolResults: e.toolResults }
+      },
+    }).run({
+      model: createFauxModel({
+        responses: [
+          {
+            toolCalls: [
+              { name: 'fast_ok', input: {}, id: 'tc-fast' },
+              { name: 'need_ok', input: {}, id: 'tc-need' },
+            ],
+          },
+        ],
+      }),
+      systemPrompt: '',
+      messages: whMsgs,
+    })
+    expect(whRes.reason).toBe('waiting_human')
+    expect(whTurnEnd?.toolResults).toHaveLength(1)
+  } finally {
+    db.close()
+  }
+
+  // 5) exportSavedSession refuses overwriting vela.db, -wal, -shm, or a symlink alias
+  const exportDir = join(workDir, 'export-guard')
+  mkdirSync(exportDir, { recursive: true })
+  const guardDbPath = join(exportDir, 'vela.db')
+  const guardDb = openDatabase({ path: guardDbPath })
+  try {
+    const s = new SessionStore('exp-guard', guardDb)
+    s.appendMessage({ role: 'user', content: 'hello' })
+  } finally {
+    guardDb.close()
+  }
+  const dbAlias = join(exportDir, 'db-alias.html')
+  symlinkSync(guardDbPath, dbAlias)
+  for (const dangerous of [
+    guardDbPath,
+    `${guardDbPath}-wal`,
+    `${guardDbPath}-shm`,
+    dbAlias,
+  ]) {
+    await expect(
+      exportSavedSession({
+        dataDir: exportDir,
+        sessionId: 'exp-guard',
+        outputPath: dangerous,
+        baseCwd: exportDir,
+      }),
+    ).rejects.toThrow('Refusing to overwrite database file')
+  }
+})
+
+test('Round 1 Codex P2 fixes: steer after async before-hook, per-wave resolveEnv, entriesToMessages, branch-scoped compressor failures, default-model calibration reset, inspectSession hooks', async () => {
+  const db = openDatabase({ path: ':memory:' })
+  try {
+    // 1) Steer arriving during async interception.before skips call & avoids approval + resolveEnv runs per wave
+    const store = new SessionStore('steer-wave', db)
+    const msg: ModelMessage = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 's1',
+          toolName: 'wave_tool',
+          input: {},
+        },
+        {
+          type: 'tool_call',
+          toolCallId: 's2',
+          toolName: 'wave_tool',
+          input: {},
+        },
+      ],
+    }
+    const asstEntry = store.appendMessage(msg)
+    const now = new Date().toISOString()
+    db.run(
+      "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-sw', 'steer-wave', 'vela', 'user', 'running', ?, ?)",
+      now,
+      now,
+    )
+    const reg = new ToolRegistry(join(workDir, 'sw-spill'))
+    let envCalls = 0
+    reg.register({
+      name: 'wave_tool',
+      description: 'runs sequentially across waves',
+      executionMode: 'sequential',
+      inputSchema: z.object({}),
+      execute: async (_i, ctx) => {
+        await ctx?.requireEnv?.()
+        return 'ran'
+      },
+    })
+    const localEnv = createLocalExecutionEnv({ cwd: workDir })
+    reg.setInterception({
+      resolveEnv: async () => {
+        envCalls++
+        return localEnv
+      },
+    })
+    db.run(
+      `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, created_at, updated_at)
+       VALUES ('sw-1', 'steer-wave', 'r-sw', ?, 's1', 0, 'wave_tool', '{}', 'sequential', 'none', 'pending', 0, ?, ?),
+              ('sw-2', 'steer-wave', 'r-sw', ?, 's2', 1, 'wave_tool', '{}', 'sequential', 'none', 'pending', 0, ?, ?)`,
+      asstEntry.id,
+      now,
+      now,
+      asstEntry.id,
+      now,
+      now,
+    )
+    await executeStepCalls({
+      db,
+      store,
+      registry: reg,
+      sessionId: 'steer-wave',
+      rows: loadStepToolCallRows(db, 'steer-wave', asstEntry.id),
+      emit: () => {},
+    })
+    expect(envCalls).toBe(2)
+
+    const steerStore = new SessionStore('steer-async', db)
+    const asstSteer = steerStore.appendMessage({
+      role: 'assistant',
+      content: [
+        { type: 'tool_call', toolCallId: 'st1', toolName: 'gated', input: {} },
+      ],
+    })
+    db.run(
+      "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-st', 'steer-async', 'vela', 'user', 'running', ?, ?)",
+      now,
+      now,
+    )
+    db.run(
+      `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, created_at, updated_at)
+       VALUES ('st-1', 'steer-async', 'r-st', ?, 'st1', 0, 'gated', '{}', 'sequential', 'none', 'pending', 0, ?, ?)`,
+      asstSteer.id,
+      now,
+      now,
+    )
+    let steered = false
+    const stReg = new ToolRegistry(join(workDir, 'st-spill'))
+    stReg.register({
+      name: 'gated',
+      description: 'gated tool',
+      inputSchema: z.object({}),
+      execute: async () => 'should-not-run',
+    })
+    stReg.setInterception({
+      before: async (_name, input) => {
+        steered = true
+        return { block: false, input, approval: { summary: 'confirm' } }
+      },
+    })
+    const stRes = await executeStepCalls({
+      db,
+      store: steerStore,
+      registry: stReg,
+      sessionId: 'steer-async',
+      rows: loadStepToolCallRows(db, 'steer-async', asstSteer.id),
+      emit: () => {},
+      shouldSkipForSteer: () => steered,
+    })
+    expect(stRes.waitingHuman).toBe(false)
+    expect(
+      loadStepToolCallRows(db, 'steer-async', asstSteer.id)[0]?.status,
+    ).toBe('skipped')
+
+    // 2) entriesToMessages filters out superseded compaction entries inside kept slices
+    const compactedMsgs = entriesToMessages([
+      {
+        type: 'message',
+        id: 'e1',
+        parentId: null,
+        timestamp: now,
+        message: { role: 'user', content: 'kept before old compaction' },
+      },
+      {
+        type: 'compaction',
+        id: 'c-old',
+        parentId: 'e1',
+        timestamp: now,
+        summary: 'OLD SUPERSEDED SUMMARY',
+        firstKeptEntryId: 'e1',
+        tokensBefore: 100,
+      },
+      {
+        type: 'message',
+        id: 'e2',
+        parentId: 'c-old',
+        timestamp: now,
+        message: { role: 'user', content: 'after old compaction' },
+      },
+      {
+        type: 'compaction',
+        id: 'c-new',
+        parentId: 'e2',
+        timestamp: now,
+        summary: 'LATEST ACTIVE SUMMARY',
+        firstKeptEntryId: 'e1',
+        tokensBefore: 200,
+      },
+    ])
+    const serialized = JSON.stringify(compactedMsgs)
+    expect(serialized).toContain('LATEST ACTIVE SUMMARY')
+    expect(serialized).not.toContain('OLD SUPERSEDED SUMMARY')
+
+    // 3) Failed DB tool call on another branch with same tool_call_id does not suppress summarized branch write
+    const compStore = new SessionStore('comp-scoped', db)
+    const rootMsg: ModelMessage = { role: 'user', content: 'go' }
+    compStore.appendMessage(rootMsg)
+    const branchB = compStore.appendMessage({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 'shared-call-id',
+          toolName: 'write',
+          input: { path: 'failed-other.ts' },
+        },
+      ],
+    })
+    db.run(
+      "INSERT INTO runs (id, session_id, driver, trigger, status, started_at, updated_at) VALUES ('r-cs', 'comp-scoped', 'vela', 'user', 'completed', ?, ?)",
+      now,
+      now,
+    )
+    db.run(
+      `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, is_error, created_at, updated_at)
+       VALUES ('cs-fail', 'comp-scoped', 'r-cs', ?, 'shared-call-id', 0, 'write', '{}', 'parallel', 'none', 'failed', 1, 1, ?, ?)`,
+      branchB.id,
+      now,
+      now,
+    )
+    compStore.branch(compStore.getEntries()[0]!.id)
+    const okWriteMsg: ModelMessage = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 'shared-call-id',
+          toolName: 'write',
+          input: { path: 'good-branch.ts' },
+        },
+      ],
+    }
+    const okToolMsg: ModelMessage = {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool_result',
+          toolCallId: 'shared-call-id',
+          toolName: 'write',
+          output: { type: 'text', value: 'ok' },
+        },
+      ],
+    }
+    const okEntry = compStore.appendMessage(okWriteMsg)
+    compStore.appendMessage(okToolMsg)
+    db.run(
+      `INSERT INTO vela_tool_calls (id, session_id, run_id, assistant_message_id, tool_call_id, call_index, tool_name, input_json, execution_mode, replay, status, attempt, is_error, created_at, updated_at)
+       VALUES ('cs-ok', 'comp-scoped', 'r-cs', ?, 'shared-call-id', 0, 'write', '{}', 'parallel', 'none', 'completed', 1, 0, ?, ?)`,
+      okEntry.id,
+      now,
+      now,
+    )
+    const summaryReq = await createRequestSnapshot(
+      createFauxModel({ generate: [fauxText('Done summary')] }),
+      '',
+      { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
+      [rootMsg, okWriteMsg, okToolMsg],
+    )
+    const summaryOut = await summarize(
+      summaryReq,
+      compStore,
+      new TokenTracker(),
+      100_000,
+      undefined,
+      0,
+    )
+    expect(summaryOut.summary).toContain(
+      '<modified-files>\ngood-branch.ts\n</modified-files>',
+    )
+  } finally {
+    db.close()
+  }
+
+  // 4) SessionDefaultState remembers lastResolvedRef across defaults.apply() model switches
+  //    and inspectSession passes both the hooked model and the current reasoning level.
+  const state = new SessionDefaultState(
+    { model: 'm/a', thinkingLevel: 'medium', limitOverrides: {} },
+    {},
+  )
+  expect(state.lastResolvedRef).toBeUndefined()
+  const seenInspectReasonings: Array<string | undefined> = []
+  let hostedToolUnblocked = ''
+  let hostedToolBlocked = ''
+  const mkMockProviders = (getHostedName: () => string) => ({
+    mock: {
+      models: [
+        { id: 'a', name: 'a', contextWindow: 100_000, reasoning: true },
+        { id: 'b', name: 'b', contextWindow: 200_000 },
+      ],
+      createModel: (id: string) =>
+        Object.assign(createFauxModel({ modelId: id }), {
+          hostedTools: async (opts?: { reasoning?: string }) => {
+            seenInspectReasonings.push(opts?.reasoning)
+            const toolName = getHostedName()
+            return opts?.reasoning === 'high' && toolName
+              ? {
+                  [toolName]: {
+                    type: 'provider',
+                    id: 'p.h',
+                    name: toolName,
+                    args: {},
+                  },
+                }
+              : {}
+          },
+        }),
+    },
+  })
+  const v = createVela({
+    model: 'mock/a',
+    thinkingLevel: 'high',
+    providers: mkMockProviders(() => hostedToolUnblocked),
+    extensions: [
+      (api) => {
+        hostedToolUnblocked = api.registerTool({
+          name: 'hosted_sample',
+          description: 'A hosted tool gated by hook and reasoning',
+          hostedOnly: true,
+          inputSchema: z.object({}),
+          execute: async () => 'x',
+        })
+      },
+    ],
+  })
+  const vScoped = createVela({
+    model: 'mock/a',
+    thinkingLevel: 'high',
+    providers: mkMockProviders(() => hostedToolBlocked),
+    extensions: [
+      (api) => {
+        hostedToolBlocked = api.registerTool({
+          name: 'hosted_sample',
+          description: 'A hosted tool gated by scoped hook',
+          hostedOnly: true,
+          inputSchema: z.object({}),
+          execute: async () => 'x',
+        })
+        api.on('tool_call', hostedToolBlocked, () => ({
+          block: true,
+          reason: 'no',
+        }))
+      },
+    ],
+  })
+  try {
+    const s = v.session('inspect-s')
+    await s.resources()
+    s.setActiveTools([hostedToolUnblocked])
+    const unblocked = await inspectSession(v, s)
+    expect(unblocked.toolDescriptionChars).toBeGreaterThan(2)
+    expect(seenInspectReasonings.at(-1)).toBe('high')
+
+    s.setThinkingLevel('low')
+    const lowReasoning = await inspectSession(v, s)
+    expect(seenInspectReasonings.at(-1)).toBe('low')
+    expect(lowReasoning.toolDescriptionChars).toBe(2)
+
+    const sScoped = vScoped.session('inspect-scoped', { model: 'mock/a' })
+    await sScoped.resources()
+    sScoped.setActiveTools([hostedToolBlocked])
+    const blocked = await inspectSession(vScoped, sScoped)
+    expect(blocked.toolDescriptionChars).toBe(2) // '[]' (hosted_sample omitted by scoped tool_call hook)
+
+    // Simulate project default model change resetting `defaults.resolved`
+    const internal = s as unknown as {
+      tracker: TokenTracker
+      defaults: SessionDefaultState
+    }
+    internal.tracker.setContextDelta(2500)
+    internal.tracker.updateFromAPI(40_000, 500, 0)
+    expect(internal.tracker.reportedContextTokens).toBe(40_500)
+    internal.defaults.apply(
+      { model: 'mock/b', limits: {} },
+      (s as unknown as { store: SessionStore }).store,
+      { ...s.contextManager.limits },
+      s.contextManager,
+    )
+    expect(s.modelInfo.ref).toBe('mock/b')
+    expect(internal.tracker.reportedContextTokens).toBeUndefined()
+    expect(internal.tracker.contextDelta).toBe(0)
+  } finally {
+    await v.dispose()
+    await vScoped.dispose()
+  }
 })

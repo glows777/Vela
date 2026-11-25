@@ -402,29 +402,39 @@ export async function summarize(
   // Shared entries are visited once, including after resume.
   const read = new Set<string>()
   const modified = new Set<string>()
-  const calls: { toolCallId: string; toolName: string; input: unknown }[] = []
-  const failedCallIds = new Set<string>()
+  const calls: {
+    assistantMessageId?: string
+    toolCallId: string
+    toolName: string
+    input: unknown
+  }[] = []
+  const failedDbCalls = new Set<string>()
+  const failedBranchCallIds = new Set<string>()
   if (store.db.open) {
     const dbRows = store.db.all<{
+      assistant_message_id: string
       tool_call_id: string
       status: string
       is_error: number
     }>(
-      'SELECT tool_call_id, status, is_error FROM vela_tool_calls WHERE session_id = ?',
+      'SELECT assistant_message_id, tool_call_id, status, is_error FROM vela_tool_calls WHERE session_id = ?',
       store.id,
     )
     for (const row of dbRows) {
       if (row.status !== 'completed' || row.is_error === 1) {
-        failedCallIds.add(row.tool_call_id)
+        failedDbCalls.add(`${row.assistant_message_id}:${row.tool_call_id}`)
       }
     }
   }
-  const fileMessages: ModelMessage[] = []
+  const fileMessages: Array<{
+    entryId?: string
+    message: ModelMessage
+  }> = []
   const entries = removed.flatMap((message) => {
     const id = store.idOf(message)
     const entry = id ? store.getEntry(id) : undefined
     if (entry) return [entry]
-    fileMessages.push(message)
+    fileMessages.push({ entryId: id, message })
     return []
   })
   const extractFileTags = (summary: string) => {
@@ -456,10 +466,10 @@ export async function summarize(
     } else if (entry.type === 'branch_summary') {
       extractFileTags(entry.summary)
     } else if (entry.type === 'message' && !entry.stopReason) {
-      fileMessages.push(entry.message)
+      fileMessages.push({ entryId: entry.id, message: entry.message })
     }
   }
-  for (const message of fileMessages) {
+  for (const { entryId, message } of fileMessages) {
     if (
       message.role === 'user' &&
       typeof message.content === 'string' &&
@@ -479,18 +489,25 @@ export async function summarize(
           out.type === 'execution-denied' ||
           (out.type === 'content' && out.isError === true)
         ) {
-          failedCallIds.add(part.toolCallId)
+          failedBranchCallIds.add(part.toolCallId)
         }
       }
       continue
     }
     if (message.role !== 'assistant' || !Array.isArray(message.content))
       continue
+    const assistantMessageId = entryId ?? store.idOf(message)
     for (const part of message.content)
-      if (part.type === 'tool_call') calls.push(part)
+      if (part.type === 'tool_call') calls.push({ ...part, assistantMessageId })
   }
   for (const call of calls) {
-    if (failedCallIds.has(call.toolCallId)) continue
+    if (
+      failedBranchCallIds.has(call.toolCallId) ||
+      (call.assistantMessageId &&
+        failedDbCalls.has(`${call.assistantMessageId}:${call.toolCallId}`))
+    ) {
+      continue
+    }
     const input = call.input as { path?: unknown } | undefined
     if (typeof input?.path !== 'string' || !input.path) continue
     if (call.toolName === 'read') read.add(input.path)

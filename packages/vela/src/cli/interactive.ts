@@ -44,7 +44,6 @@ import { commandCompletions, HOTKEYS } from './tui/commands.ts'
 import {
   agentEndNotice,
   compactionLine,
-  contextLine,
   errorMessage,
   isDeadTerminalError,
   lastAnswer,
@@ -486,11 +485,6 @@ export class InteractiveMode {
         break
       case 'queue_update':
         this.updatePending()
-        break
-      case 'context_prepare':
-        this.addNotice(contextLine(event), 'dim')
-        if (event.action === 'summary-required')
-          this.statusLine.set('Compacting context…')
         break
       case 'compaction_start':
         this.statusLine.set('Compacting context…')

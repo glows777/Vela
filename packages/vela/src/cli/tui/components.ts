@@ -596,15 +596,6 @@ export function compactionLine(
   }
 }
 
-export function contextLine(
-  event: Extract<VelaEvent, { type: 'context_prepare' }>,
-): string {
-  switch (event.action) {
-    case 'summary-required':
-      return `[context] ${event.before} tokens, summarizing before the next request`
-  }
-}
-
 /** Text of the last assistant message that has any (tool-call-only steps are skipped). */
 export function lastAnswer(messages: readonly ModelMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {

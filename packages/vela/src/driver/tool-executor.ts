@@ -380,20 +380,6 @@ export async function executeStepCalls(
   const { db, registry, sessionId, rows, emit, signal, isDraining } = options
   const interception = registry.getInterception()
 
-  // Share one single-flight env resolution across parallel calls in this step.
-  let stepEnvPromise: Promise<ExecutionEnv> | undefined
-  const sharedResolveEnv = interception?.resolveEnv
-    ? (envSignal?: AbortSignal): Promise<ExecutionEnv> => {
-        stepEnvPromise ??= interception.resolveEnv!(sessionId, signal).catch(
-          (error) => {
-            stepEnvPromise = undefined
-            throw error
-          },
-        )
-        return abortable(stepEnvPromise, envSignal)
-      }
-    : undefined
-
   // Partition into ordered execution waves: contiguous parallel rows run together, sequential rows isolate.
   const waves: VelaToolCallRow[][] = []
   for (const row of rows) {
@@ -409,31 +395,50 @@ export async function executeStepCalls(
     }
   }
 
+  const skipRemainingWaves = (startWave: number) => {
+    const reason = 'Skipped due to queued user message.'
+    const skipOut: ToolResultOutput = { type: 'error-text', value: reason }
+    for (const remainingWave of waves.slice(startWave)) {
+      for (const pendingRow of remainingWave) {
+        if (pendingRow.status !== 'pending') continue
+        const pendingInput = parseJsonSafe(pendingRow.input_json)
+        persistTerminalRow(db, pendingRow, 'skipped', skipOut, true, {
+          preview: reason,
+          durationMs: 0,
+        })
+        pendingRow.status = 'skipped'
+        pendingRow.is_error = 1
+        pendingRow.preview = reason
+        pendingRow.result_json = JSON.stringify(skipOut)
+        emitImmediateError(emit, pendingRow, pendingInput, reason)
+      }
+    }
+  }
+
   let blockedByApproval = false
+  let steered = false
 
   for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
-    if (blockedByApproval) break
+    if (blockedByApproval || steered) break
     const wave = waves[waveIndex]!
     if (options.shouldSkipForSteer?.()) {
-      const reason = 'Skipped due to queued user message.'
-      const skipOut: ToolResultOutput = { type: 'error-text', value: reason }
-      for (const remainingWave of waves.slice(waveIndex)) {
-        for (const pendingRow of remainingWave) {
-          if (pendingRow.status !== 'pending') continue
-          const pendingInput = parseJsonSafe(pendingRow.input_json)
-          persistTerminalRow(db, pendingRow, 'skipped', skipOut, true, {
-            preview: reason,
-            durationMs: 0,
-          })
-          pendingRow.status = 'skipped'
-          pendingRow.is_error = 1
-          pendingRow.preview = reason
-          pendingRow.result_json = JSON.stringify(skipOut)
-          emitImmediateError(emit, pendingRow, pendingInput, reason)
-        }
-      }
+      skipRemainingWaves(waveIndex)
       break
     }
+
+    // Share one single-flight env resolution across parallel calls within this wave only.
+    let waveEnvPromise: Promise<ExecutionEnv> | undefined
+    const sharedResolveEnv = interception?.resolveEnv
+      ? (envSignal?: AbortSignal): Promise<ExecutionEnv> => {
+          waveEnvPromise ??= interception.resolveEnv!(sessionId, signal).catch(
+            (error) => {
+              waveEnvPromise = undefined
+              throw error
+            },
+          )
+          return abortable(waveEnvPromise, envSignal)
+        }
+      : undefined
 
     const runnable: Array<{
       row: VelaToolCallRow
@@ -554,6 +559,12 @@ export async function executeStepCalls(
             sessionId,
             toolCallId: row.tool_call_id,
           })
+          if (options.shouldSkipForSteer?.()) {
+            runnable.length = 0
+            skipRemainingWaves(waveIndex)
+            steered = true
+            break
+          }
           if (pre.block && pre.approval) {
             await failPrecheck(
               db,

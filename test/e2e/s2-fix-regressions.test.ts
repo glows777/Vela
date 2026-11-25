@@ -1,14 +1,16 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import {
+  createVela,
+  memoryCredentialStore,
+  ToolExecutionResult,
+} from '@glows777/vela'
+import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
 import { z } from 'zod'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { SessionStore } from '../../packages/vela/src/driver/session/index.ts'
-import {
-  fauxText,
-  fauxToolCall,
-} from '../../packages/vela/src/testing/core/index.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
@@ -27,23 +29,28 @@ test('oauth producer suffix flows to context hooks and CLI --export reads vela.d
   const outHtml = join(project.path, 'out.html')
   const outJsonl = join(project.path, 'out.jsonl')
 
+  const PNG_1X1 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+
   let contextCalls = 0
+  let imgToolName = ''
   const t = createTestVela({
     cwd: project.path,
     responses: [
-      fauxToolCall('tc-img', 'img_tool', {}),
+      () => fauxToolCall(imgToolName, {}, { id: 'tc-img' }),
       fauxText('Done inspecting image'),
     ],
     extensions: [
       (api) => {
-        api.registerTool({
+        imgToolName = api.registerTool({
           name: 'img_tool',
           description: 'returns inline image',
           inputSchema: z.object({}),
-          execute: async () => [
-            { type: 'text', text: 'image ready' },
-            { type: 'image', data: 'QUJD', mimeType: 'image/png' },
-          ],
+          execute: async () =>
+            new ToolExecutionResult({ ok: true }, [
+              { type: 'text', text: 'image ready' },
+              { type: 'image', data: PNG_1X1, mimeType: 'image/png' },
+            ]),
         })
         api.on('context', () => {
           contextCalls++
@@ -118,4 +125,87 @@ test('oauth producer suffix flows to context hooks and CLI --export reads vela.d
 
   await t.run('call img_tool')
   expect(contextCalls).toBe(2)
+  const toolEnds = t.eventsOf('tool_execution_end')
+  expect(toolEnds).toHaveLength(1)
+  expect(toolEnds[0]?.toolName).toBe(imgToolName)
+  expect(toolEnds[0]?.isError).toBe(false)
+  expect(JSON.stringify(toolEnds[0]?.result)).toContain('image/png')
+
+  // 4) Real OAuth credential adds `:oauth` producer suffix and reflects mid-run logout on the next step
+  const creds = memoryCredentialStore({
+    openai: {
+      type: 'oauth',
+      access: 'oauth-tok-1',
+      refresh: 'oauth-ref-1',
+      expires: Date.now() + 60_000,
+    },
+  })
+  let switchToolName = ''
+  const oauthFaux = createFauxModel({
+    responses: [
+      () =>
+        fauxToolCall(
+          switchToolName,
+          {},
+          { id: 'tc-oauth-1', reasoning: 'step-1-thinking' },
+        ),
+      fauxText('switched away from oauth'),
+    ],
+  })
+  const seenSnapshots: string[] = []
+  const dataDirOAuth = tempDir('vela-s2fix-oauth-')
+  cleanups.push(dataDirOAuth.cleanup)
+  const velaOAuth = createVela({
+    cwd: project.path,
+    dataDir: dataDirOAuth.path,
+    credentials: creds,
+    model: 'openai/gpt-4o',
+    providers: {
+      openai: {
+        models: [{ id: 'gpt-4o', name: 'gpt-4o', reasoning: true }],
+        authSource: (c) => (c ? 'stored' : undefined),
+        createModel: () => oauthFaux,
+      },
+    },
+    extensions: [
+      (api) => {
+        switchToolName = api.registerTool({
+          name: 'switch_creds',
+          description: 'logs out oauth mid-run',
+          inputSchema: z.object({}),
+          execute: async () => {
+            await creds.delete('openai')
+            return 'logged out'
+          },
+        })
+        api.on('context', (event) => {
+          seenSnapshots.push(JSON.stringify(event.messages))
+        })
+      },
+    ],
+  })
+  try {
+    const s = velaOAuth.session('oauth-dyn')
+    await s.prompt('run switch_creds')
+    expect(seenSnapshots).toHaveLength(2)
+    // After OAuth was deleted mid-run, step 2 recomputes producer without `:oauth`
+    // and strips step 1's reasoning part that came from `openai/gpt-4o:oauth`.
+    expect(seenSnapshots[1]).not.toContain('step-1-thinking')
+    const verifyDb = openDatabase({
+      path: join(dataDirOAuth.path, 'vela.db'),
+      readonly: true,
+    })
+    try {
+      const assistantProducers = verifyDb
+        .all<{ produced_by: string | null }>(
+          "SELECT produced_by FROM vela_messages WHERE session_id = 'oauth-dyn' AND role = 'assistant' ORDER BY seq ASC",
+        )
+        .map((r) => r.produced_by)
+      expect(assistantProducers).toEqual(['faux/faux:oauth', 'faux/faux'])
+    } finally {
+      verifyDb.close()
+    }
+  } finally {
+    await velaOAuth.dispose()
+  }
 })

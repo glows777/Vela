@@ -62,6 +62,46 @@ function setSessionStateInDb(
   )
 }
 
+export function pendingApprovalState(
+  db: VelaDatabase,
+  sessionId: string,
+  runId: string,
+): { hasRunPendingApproval: boolean; hasSessionPendingApproval: boolean } {
+  const hasRunPendingApproval = Boolean(
+    db.get<{ id: string }>(
+      `SELECT id FROM vela_tool_calls
+       WHERE session_id = ? AND run_id = ? AND status = 'awaiting_approval'
+       LIMIT 1`,
+      sessionId,
+      runId,
+    ) ??
+      db.get<{ id: string }>(
+        `SELECT id FROM approvals
+         WHERE session_id = ? AND run_id = ? AND status = 'pending'
+         LIMIT 1`,
+        sessionId,
+        runId,
+      ),
+  )
+  const hasSessionPendingApproval =
+    hasRunPendingApproval ||
+    Boolean(
+      db.get<{ id: string }>(
+        `SELECT id FROM vela_tool_calls
+         WHERE session_id = ? AND status = 'awaiting_approval'
+         LIMIT 1`,
+        sessionId,
+      ) ??
+        db.get<{ id: string }>(
+          `SELECT id FROM approvals
+           WHERE session_id = ? AND status = 'pending'
+           LIMIT 1`,
+          sessionId,
+        ),
+    )
+  return { hasRunPendingApproval, hasSessionPendingApproval }
+}
+
 export function finishRunInDb(
   db: VelaDatabase,
   sessionId: string,
@@ -69,6 +109,9 @@ export function finishRunInDb(
   ownerToken: string,
   status: 'completed' | 'waiting_human' | 'stopped' | 'failed' | 'interrupted',
   error?: unknown,
+  sessionState: 'idle' | 'waiting_human' = status === 'waiting_human'
+    ? 'waiting_human'
+    : 'idle',
 ): void {
   const now = new Date().toISOString()
   db.transaction(() => {
@@ -85,8 +128,8 @@ export function finishRunInDb(
       setSessionStateInDb(
         db,
         sessionId,
-        status === 'waiting_human' ? 'waiting_human' : 'idle',
-        status === 'waiting_human' ? 'approval' : null,
+        sessionState,
+        sessionState === 'waiting_human' ? 'approval' : null,
       )
     }
   })

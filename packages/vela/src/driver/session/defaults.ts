@@ -34,6 +34,8 @@ import type { SessionDefaults } from './resources.ts'
 export class SessionDefaultState {
   modelChoice: ModelInput | undefined
   resolved?: ResolvedModel
+  /** Last resolved model ref (retained when defaults clear `resolved` so switching models resets calibration). */
+  lastResolvedRef?: string
   /** The selected model wrapped with extension provider hooks. */
   hooked?: ModelInput
   thinking: ThinkingLevel
@@ -251,6 +253,23 @@ export async function runLoopCompaction(
   await contextManager.compact(request, focus, reason)
 }
 
+export async function runPostTurnCompaction(params: {
+  enabled: boolean
+  signal: AbortSignal
+  isDraining: () => boolean
+  buildSnapshot: () => Promise<RequestSnapshot>
+  compactIfNeeded: (request: RequestSnapshot) => Promise<unknown>
+  warn: (msg: string) => void
+}): Promise<void> {
+  if (!params.enabled || params.signal.aborted || params.isDraining()) return
+  try {
+    await params.compactIfNeeded(await params.buildSnapshot())
+  } catch (error) {
+    if (params.signal.aborted || params.isDraining()) throw error
+    params.warn(error instanceof Error ? error.message : String(error))
+  }
+}
+
 export async function restoreBranchState(params: {
   context: SessionContext
   contextManager: ContextManager
@@ -323,6 +342,21 @@ export async function prepareAgentTurn(params: {
 
 export const defaultAbortError = () =>
   new DOMException('User cancelled the current operation', 'AbortError')
+
+export function userPromptMessage(
+  input: string,
+  images?: readonly ImageContent[],
+): ModelMessage {
+  return {
+    role: 'user',
+    content: images?.length
+      ? [
+          { type: 'text' as const, text: input },
+          ...images.map((img) => ({ ...img })),
+        ]
+      : input,
+  }
+}
 
 export function splitUserMessageContent(
   content: string | (TextContent | ImageContent)[],

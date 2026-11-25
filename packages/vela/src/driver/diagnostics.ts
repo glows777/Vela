@@ -80,12 +80,14 @@ export async function inspectSession(
   const systemPrompt = session.buildSystem(sections, override)
   const active = session.registry.getActiveTools()
   let modelForTools: ModelInput = ''
+  let reasoning: ReturnType<VelaSession['inspectToolOptions']>['reasoning']
   try {
-    modelForTools = session.model
+    ;({ model: modelForTools, reasoning } = session.inspectToolOptions())
   } catch {}
   const resolvedTools = await resolveProviderTools(
     modelForTools,
     session.registry.toProviderTools(),
+    { reasoning },
   )
   const skills =
     formatSkillsForPrompt(

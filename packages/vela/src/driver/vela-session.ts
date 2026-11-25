@@ -9,7 +9,7 @@ import {
   type ThinkingLevel,
 } from '../providers/models/index.ts'
 import type { VelaLimits } from '../shared/limits.ts'
-import type { ModelInput } from '../shared/provider-types.ts'
+import type { ModelInput, ReasoningOption } from '../shared/provider-types.ts'
 import type {
   CustomMessage,
   CustomMessageInfo,
@@ -43,9 +43,11 @@ import {
   resolveRunProducer,
   restoreBranchState,
   runLoopCompaction,
+  runPostTurnCompaction,
   SessionDefaultState,
   splitUserMessageContent,
   summarizeEntriesForTree,
+  userPromptMessage,
 } from './session/defaults.ts'
 import type {
   SessionDeps as SessionDependencies,
@@ -320,8 +322,9 @@ export class VelaSession {
   }
 
   private applyModel(resolved: ResolvedModel): void {
-    const previousRef = this.defaults.resolved?.info.ref
+    const previousRef = this.defaults.lastResolvedRef
     this.defaults.resolved = resolved
+    this.defaults.lastResolvedRef = resolved.info.ref
     this.defaults.hooked = undefined
     const limits = limitsForModel(
       resolved.info,
@@ -356,6 +359,15 @@ export class VelaSession {
         }),
     })
     return this.defaults.hooked
+  }
+
+  /** @internal Hook-wrapped model and reasoning level as sent in requests. */
+  inspectToolOptions(): { model: ModelInput; reasoning?: ReasoningOption } {
+    const { info } = this.resolveModel()
+    return {
+      model: this.requestModel(),
+      reasoning: reasoningOption(this.defaults.thinkingLevelFor(info), info),
+    }
   }
 
   /** Current model handle. Throws if the name cannot be resolved. */
@@ -1096,13 +1108,7 @@ export class VelaSession {
 
   /** `/xxx` that is not an extension command, or plain input: runs when idle, queued by streamingBehavior while running. */
   private promptModel(input: string, options: PromptOptions): Promise<void> {
-    const content = options.images?.length
-      ? [
-          { type: 'text' as const, text: input },
-          ...options.images.map((image) => ({ ...image })),
-        ]
-      : input
-    return this.promptMessage({ role: 'user', content }, options)
+    return this.promptMessage(userPromptMessage(input, options.images), options)
   }
 
   private promptMessage(
@@ -1186,27 +1192,21 @@ export class VelaSession {
             input === undefined,
           )
           stopForHuman = outcome.reason === 'waiting_human'
-          if (
-            !stopForHuman &&
-            !controller.signal.aborted &&
-            !this.draining &&
-            this.autoCompaction
-          ) {
-            try {
-              const { info } = this.resolveModel()
-              await this.contextManager.compactIfNeeded(
-                await this.buildSnapshot(controller.signal, {
-                  model: this.requestModel(),
-                  maxOutputTokens: info.maxTokens,
-                }),
-              )
-            } catch (error) {
-              if (controller.signal.aborted || this.draining) throw error
+          await runPostTurnCompaction({
+            enabled: !stopForHuman && this.autoCompaction,
+            signal: controller.signal,
+            isDraining: () => this.draining,
+            buildSnapshot: () =>
+              this.buildSnapshot(controller.signal, {
+                model: this.requestModel(),
+                maxOutputTokens: this.resolveModel().info.maxTokens,
+              }),
+            compactIfNeeded: (req) => this.contextManager.compactIfNeeded(req),
+            warn: (msg) =>
               this.deps.logger.warn(
-                `[session:${this.id}] Post-turn compaction failed: ${error instanceof Error ? error.message : String(error)}`,
-              )
-            }
-          }
+                `[session:${this.id}] Post-turn compaction failed: ${msg}`,
+              ),
+          })
         } catch (error) {
           failure ??= { error }
         }
@@ -1285,18 +1285,18 @@ export class VelaSession {
       const { info: servingInfo } = this.resolveModel()
       serving.model = this.requestModel()
       serving.maxOutputTokens = servingInfo.maxTokens
-      const producer = resolveRunProducer(
-        serving.model,
-        this.defaults.modelChoice,
-        servingInfo.provider,
-        this.channel,
-        this.deps.authMode,
-      )
       handedOff = true
       return await this.driver.run({
         claim,
         model: serving.model,
-        producer,
+        producer: () =>
+          resolveRunProducer(
+            serving.model,
+            this.defaults.modelChoice,
+            servingInfo.provider,
+            this.channel,
+            this.deps.authMode,
+          ),
         trigger,
         maxOutputTokens: serving.maxOutputTokens,
         supportsImages: servingInfo.input?.includes('image') ?? true,
