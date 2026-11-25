@@ -20,7 +20,6 @@ import {
   type ElectronApplication,
   type Page,
 } from 'playwright'
-import { projectDataDir } from '../../../packages/vela/src/driver/config/paths.ts'
 import tokens from '../design/tokens.json'
 import type { DesktopBridge } from '../src/shared/bridge.ts'
 import { verifyControls } from './verify-controls.ts'
@@ -432,15 +431,11 @@ const bridgeJourney = async (page: Page) => {
   await waitForText(page, created.id, created.sessionId, 'Image processed')
   const deadline = Date.now() + 5000
   let savedImage = false
-  const dbPaths = [
-    resolve(projectDataDir(data, project), 'vela.db'),
-    resolve(data, 'vela.db'),
-  ]
   while (!savedImage && Date.now() < deadline) {
-    for (const dbPath of dbPaths) {
+    for await (const file of new Bun.Glob('**/vela.db').scan(data)) {
       let db: DatabaseSync | undefined
       try {
-        db = new DatabaseSync(dbPath, { readOnly: true })
+        db = new DatabaseSync(resolve(data, file), { readOnly: true })
         const hit = db
           .prepare(
             `SELECT 1 AS ok FROM vela_messages
@@ -3677,6 +3672,10 @@ try {
   console.log(checks.join('\n'))
   console.log(`Evidence: ${evidence}`)
 } catch (error) {
+  const forgeLog = await readFile(resolve(evidence, 'forge.log'), 'utf8').catch(
+    () => '',
+  )
+  if (forgeLog.trim()) console.error('--- forge.log ---\n' + forgeLog.trim())
   await Bun.write(
     resolve(evidence, 'result.json'),
     JSON.stringify(
