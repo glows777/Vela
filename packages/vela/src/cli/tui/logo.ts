@@ -6,6 +6,7 @@ import {
   getTerminalColorMode,
   isAppleTerminalSession,
   rgbColor,
+  type TerminalColors,
   Text,
   visibleWidth,
   wrapTextWithAnsi,
@@ -19,17 +20,50 @@ import {
 const MODE = getTerminalColorMode()
 const RESET = '\x1b[0m'
 
+/** Which background the portrait is drawn for. */
+export type LogoScheme = 'dark' | 'light'
+
 /**
  * The brand colors from `apps/desktop/design/tokens.json`, so the terminal mark matches the desktop
- * and Lark surfaces: `vela-teal` (dark) hair, `vela-mint` highlight, `vela-ink` (dark) face,
- * `vela-accent` (dark) cheeks and a near-black for the eyes.
+ * and Lark surfaces: `vela-teal` hair, `vela-mint` highlight, a cream face, `vela-accent` cheeks and a
+ * near-black for the eyes. Each scheme takes that theme's teal and accent: the dark theme's pale teal
+ * has too little contrast on a light background, where the cream face would also blend in without
+ * darker hair around it.
  */
-const PALETTE: Record<string, Color> = {
-  t: rgbColor(159, 211, 207),
-  m: rgbColor(194, 239, 207),
-  f: rgbColor(242, 238, 223),
-  a: rgbColor(244, 124, 91),
-  k: rgbColor(20, 24, 28),
+const PALETTES: Record<LogoScheme, Record<string, Color>> = {
+  dark: {
+    t: rgbColor(159, 211, 207),
+    m: rgbColor(194, 239, 207),
+    f: rgbColor(242, 238, 223),
+    a: rgbColor(244, 124, 91),
+    k: rgbColor(20, 24, 28),
+  },
+  light: {
+    t: rgbColor(55, 103, 112),
+    m: rgbColor(194, 239, 207),
+    f: rgbColor(242, 238, 223),
+    a: rgbColor(226, 96, 68),
+    k: rgbColor(20, 24, 28),
+  },
+}
+
+/**
+ * The scheme for a terminal's default background (its OSC 11 reply): light when the background's
+ * relative luminance is above one half. Without a reply the portrait keeps the dark scheme.
+ */
+export function schemeForBackground(
+  background: { r: number; g: number; b: number } | undefined,
+): LogoScheme {
+  if (!background) return 'dark'
+  const channel = (value: number) => {
+    const c = value / 255
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  const luminance =
+    0.2126 * channel(background.r) +
+    0.7152 * channel(background.g) +
+    0.0722 * channel(background.b)
+  return luminance > 0.5 ? 'light' : 'dark'
 }
 
 /**
@@ -63,23 +97,28 @@ const MIN_TEXT_COLUMNS = 32
 const HEADER_PADDING = 2
 
 /** The mark's lines, ANSI-colored and padded to `LOGO_COLUMNS` so text lines up to their right. */
-export function logoLines(): string[] {
+export function logoLines(scheme: LogoScheme = 'dark'): string[] {
+  const palette = PALETTES[scheme]
   const lines: string[] = []
   for (let row = 0; row < GRID.length; row += 2) {
     const top = GRID[row] ?? []
     const bottom = GRID[row + 1] ?? []
     let line = ''
     for (let column = 0; column < LOGO_COLUMNS; column++)
-      line += pixel(top[column], bottom[column])
+      line += pixel(palette, top[column], bottom[column])
     lines.push(line)
   }
   return lines
 }
 
 /** One terminal cell: the top and bottom pixels of a grid column. */
-function pixel(top: string | undefined, bottom: string | undefined): string {
-  const up = top ? PALETTE[top] : undefined
-  const down = bottom ? PALETTE[bottom] : undefined
+function pixel(
+  palette: Record<string, Color>,
+  top: string | undefined,
+  bottom: string | undefined,
+): string {
+  const up = top ? palette[top] : undefined
+  const down = bottom ? palette[bottom] : undefined
   if (up && down)
     return top === bottom
       ? `${foregroundAnsi(up, MODE)}█${RESET}`
@@ -104,7 +143,11 @@ export function supportsLogo(
 }
 
 /** The header text: the mark left of `info`, or the bare lines when the terminal cannot show it. */
-export function headerText(info: string[], columns: number): string {
+export function headerText(
+  info: string[],
+  columns: number,
+  scheme: LogoScheme = 'dark',
+): string {
   if (!supportsLogo(columns)) return info.join('\n')
   const textColumns = Math.max(
     1,
@@ -112,7 +155,7 @@ export function headerText(info: string[], columns: number): string {
   )
   // Wrap here rather than in `Text`: a wrapped hint has to stay in the text column beside the mark
   const wrapped = info.flatMap((line) => wrapTextWithAnsi(line, textColumns))
-  const art = logoLines()
+  const art = logoLines(scheme)
   const gutter = ' '.repeat(LOGO_GAP)
   const rows = Math.max(art.length, wrapped.length)
   const lines: string[] = []
@@ -133,15 +176,51 @@ function padding(columns: number): number {
   return Math.min(1, Math.max(0, Math.floor((columns - 1) / 2)))
 }
 
+/** What the header needs from the TUI to learn the terminal's background and redraw. */
+export interface BackgroundSource {
+  queryTerminalColors(options: {
+    timeoutMs: number
+    onLateReply?: (colors: TerminalColors) => void
+  }): Promise<TerminalColors>
+  requestRender(): void
+}
+
+/** Each TUI's detected scheme; a TUI is asked once however often the header is rebuilt. */
+const schemes = new WeakMap<BackgroundSource, LogoScheme>()
+
+/**
+ * Ask the terminal for its background (OSC 11) and redraw when it is light. Until the reply, and for a
+ * terminal that never answers, the portrait stays in the dark palette, so startup never waits on it.
+ */
+function detectScheme(tui: BackgroundSource): void {
+  if (schemes.has(tui)) return
+  schemes.set(tui, 'dark')
+  const apply = (colors: TerminalColors) => {
+    const scheme = schemeForBackground(colors.background)
+    if (scheme === schemes.get(tui)) return
+    schemes.set(tui, scheme)
+    tui.requestRender()
+  }
+  void tui
+    .queryTerminalColors({ timeoutMs: 500, onLateReply: apply })
+    .then(apply)
+}
+
 /**
  * The startup header: the mark beside the session line, key hints and warnings. It renders through
  * `Text` so wrapping, padding and the narrow-terminal fallback stay the same as the text-only header.
+ * Given the TUI, it asks the terminal for its background once and picks the portrait's palette from it.
  */
 export class StartupHeader implements Component {
   private readonly text = new Text('', 1, 0)
-  private rendered?: { info: string[]; columns: number }
+  private rendered?: { info: string[]; columns: number; scheme: LogoScheme }
 
-  constructor(private readonly info: () => string[]) {}
+  constructor(
+    private readonly info: () => string[],
+    private readonly tui?: BackgroundSource,
+  ) {
+    if (tui) detectScheme(tui)
+  }
 
   invalidate(): void {
     this.rendered = undefined
@@ -150,12 +229,14 @@ export class StartupHeader implements Component {
 
   render(columns: number): string[] {
     const info = this.info()
+    const scheme = (this.tui && schemes.get(this.tui)) ?? 'dark'
     if (
       this.rendered?.columns !== columns ||
+      this.rendered.scheme !== scheme ||
       !sameLines(this.rendered.info, info)
     ) {
-      this.text.setText(headerText(info, columns))
-      this.rendered = { info, columns }
+      this.text.setText(headerText(info, columns, scheme))
+      this.rendered = { info, columns, scheme }
     }
     return this.text.render(columns)
   }

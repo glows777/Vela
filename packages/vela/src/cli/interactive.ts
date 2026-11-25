@@ -346,7 +346,7 @@ export class InteractiveMode {
         ),
       )
     this.header.addChild(new Spacer(1))
-    this.header.addChild(new StartupHeader(() => lines))
+    this.header.addChild(new StartupHeader(() => lines, this.tui))
   }
 
   /**
