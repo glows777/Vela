@@ -465,6 +465,13 @@ export class BlobStore {
           env ??= await options.resolveEnv()
           let bytes: Uint8Array | undefined
           if (
+            channelMeta.environment === 'node:local' &&
+            env.id === 'node:local'
+          ) {
+            if (existsSync(savedPath)) {
+              bytes = await readCanonicalHostBytes(savedPath, options.signal)
+            }
+          } else if (
             env.id === channelMeta.environment &&
             channelMeta.environment !== 'node:local'
           ) {

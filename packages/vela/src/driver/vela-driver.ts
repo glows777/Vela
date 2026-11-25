@@ -320,6 +320,7 @@ export class VelaDriver {
           runId,
           store,
           hostedCalls,
+          onMessageCommittedInTx: options.onMessageCommittedInTx,
         })
 
         for (const sdkErr of sdkToolErrors) {

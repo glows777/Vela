@@ -12,7 +12,6 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../providers/models/index.ts'
-import { BackgroundJobManager } from '../runtime/background-jobs.ts'
 import {
   type AgentDriver,
   assertSafePathSegment,
@@ -31,7 +30,10 @@ import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import { createBackgroundTools } from './extensions/background/tool.ts'
 import type { AssistantModelMessage, ModelMessage } from './messages.ts'
 import { localDateString } from './prompt/environment.ts'
-import { createRuntimeBackgroundController } from './runtime-background.ts'
+import {
+  createRuntimeBackgroundController,
+  type RuntimeBackgroundController,
+} from './runtime-background.ts'
 import { SessionStore } from './session/index.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
 import { repairStoppedPendingToolStepInTx } from './step-recovery.ts'
@@ -108,6 +110,7 @@ export function createVelaAgentDriver(
   const models = new ModelRegistry(options.providers, options.credentials)
   const activeAbort = new Map<string, AbortController>()
   const activeSteering = new Map<string, ModelMessage[]>()
+  const sessionBackgrounds = new Map<string, RuntimeBackgroundController>()
 
   return {
     name: 'vela',
@@ -210,36 +213,45 @@ export function createVelaAgentDriver(
           request.projectId,
         )
         if (proj?.default_tools_json) {
-          try {
-            const list = JSON.parse(proj.default_tools_json) as unknown
-            if (Array.isArray(list)) {
-              const tools = list.filter(
-                (item): item is string => typeof item === 'string',
-              )
-              if (
-                tools.length > 0 &&
-                tools.every(
-                  (name) => name.startsWith('+') || name.startsWith('-'),
-                )
-              ) {
-                registry.setDefaultToolModifiers(tools)
-              } else {
-                registry.setSelection(tools)
-              }
-            }
-          } catch {}
+          const list = JSON.parse(proj.default_tools_json) as unknown
+          if (
+            !Array.isArray(list) ||
+            !list.every((i) => typeof i === 'string')
+          ) {
+            throw new Error(
+              `Invalid default_tools_json for project ${request.projectId}: expected a JSON array of tool names`,
+            )
+          }
+          if (
+            list.length > 0 &&
+            list.every((name) => name.startsWith('+') || name.startsWith('-'))
+          ) {
+            registry.setDefaultToolModifiers(list)
+          } else {
+            registry.setSelection(list)
+          }
         }
       }
       if (saved?.discoveredTools.length) {
         registry.discoveredTools = new Set(saved.discoveredTools)
       }
-      registry.background = createRuntimeBackgroundController({
-        db: options.db,
-        manager: new BackgroundJobManager(options.db, request.wakeSession),
-        sessionId: request.sessionId,
-        runId: request.runId,
-        location,
-      })
+      let bgController = sessionBackgrounds.get(request.sessionId)
+      if (!bgController) {
+        bgController = createRuntimeBackgroundController({
+          db: options.db,
+          sessionId: request.sessionId,
+          runId: request.runId,
+          wakeSession: request.wakeSession,
+          location,
+        })
+        sessionBackgrounds.set(request.sessionId, bgController)
+      } else {
+        bgController.setRunContext({
+          runId: request.runId,
+          wakeSession: request.wakeSession,
+        })
+      }
+      registry.background = bgController
       registry.setInterception({
         resolveEnv: () => resolveEnv(),
         before: async (toolName, input, ctx) => {
@@ -284,7 +296,7 @@ export function createVelaAgentDriver(
 
       const alreadyHasRunMessages = Boolean(
         options.db.get<{ ok: number }>(
-          `SELECT 1 AS ok FROM vela_messages WHERE session_id = ? AND run_id = ? LIMIT 1`,
+          `SELECT 1 AS ok FROM vela_messages WHERE session_id = ? AND run_id = ? AND role = 'user' LIMIT 1`,
           request.sessionId,
           request.runId,
         ),

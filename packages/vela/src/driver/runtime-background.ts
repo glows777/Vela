@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { VelaDatabase } from '../db/index.ts'
-import type { BackgroundJobManager } from '../runtime/background-jobs.ts'
+import { BackgroundJobManager, jobStopKey } from '../runtime/background-jobs.ts'
 import { errorMessage } from '../shared/logger.ts'
 import type {
   ExecutionError,
@@ -40,18 +40,28 @@ interface LiveRuntimeJob {
   finished: Promise<void>
 }
 
+export interface RuntimeBackgroundController extends BackgroundCommands {
+  setRunContext(ctx: {
+    runId: string
+    wakeSession?: (sessionId: string) => void
+  }): void
+}
+
 /**
  * Connects `ToolRegistry.background` inside `createVelaAgentDriver` to Runtime's
  * durable `BackgroundJobManager` (`background_jobs` + `inbox_events` wake).
  */
 export function createRuntimeBackgroundController(params: {
   db: VelaDatabase
-  manager: BackgroundJobManager
   sessionId: string
   runId: string
+  wakeSession?: (sessionId: string) => void
   location: ExecutionLocation
-}): BackgroundCommands {
-  const { db, manager, sessionId, runId, location } = params
+}): RuntimeBackgroundController {
+  const { db, sessionId, location } = params
+  let currentRunId = params.runId
+  let currentWake = params.wakeSession
+  const manager = new BackgroundJobManager(db, (sid) => currentWake?.(sid))
   const jobs = new Map<string, LiveRuntimeJob>()
   let seq = 0
 
@@ -70,6 +80,14 @@ export function createRuntimeBackgroundController(params: {
   }
 
   return {
+    setRunContext(ctx: {
+      runId: string
+      wakeSession?: (sessionId: string) => void
+    }) {
+      currentRunId = ctx.runId
+      currentWake = ctx.wakeSession
+    },
+
     async adopt({ command, start, signal }): Promise<BackgroundAdmission> {
       const id = `bg-${++seq}`
       const token = randomUUID()
@@ -101,12 +119,14 @@ export function createRuntimeBackgroundController(params: {
           manager.recordStart({
             id: token,
             sessionId,
-            runId,
+            runId: currentRunId,
             command,
             commandHead: headOf(command),
             location,
-            abort: () =>
-              controller.abort(new DOMException('Stopped', 'AbortError')),
+            abort: () => {
+              job.stopped = true
+              controller.abort(new DOMException('Stopped', 'AbortError'))
+            },
           })
         }
       } catch (error) {
@@ -117,12 +137,33 @@ export function createRuntimeBackgroundController(params: {
 
       signal?.removeEventListener('abort', onSignalAbort)
 
+      let stopPoll: ReturnType<typeof setInterval> | undefined
+      stopPoll = setInterval(() => {
+        if (!db.open || job.state !== 'running') return
+        try {
+          const row = db.get<{ key: string }>(
+            'SELECT key FROM kv_meta WHERE key = ?',
+            jobStopKey(token),
+          )
+          if (row) {
+            db.run('DELETE FROM kv_meta WHERE key = ?', jobStopKey(token))
+            job.stopped = true
+            controller.abort(new DOMException('Stopped', 'AbortError'))
+          }
+        } catch {}
+      }, 50)
+      stopPoll.unref?.()
+
       const settleJob = (
         status: 'completed' | 'failed' | 'stopped',
         exitCode: number | undefined,
         outputPath: string | undefined,
         errText?: string,
       ) => {
+        if (stopPoll) {
+          clearInterval(stopPoll)
+          stopPoll = undefined
+        }
         job.state = 'exited'
         job.endedAt = Date.now()
         job.exitCode = exitCode
@@ -141,14 +182,17 @@ export function createRuntimeBackgroundController(params: {
           outputPath ? `\nFull output: ${outputPath}` : ''
         }`
         if (db.open) {
-          manager.recordFinish({
-            id: token,
-            status,
-            exitCode: exitCode ?? null,
-            outputPath: outputPath ?? null,
-            summaryText,
-            silent: Boolean(job.stopped),
-          })
+          try {
+            db.run('DELETE FROM kv_meta WHERE key = ?', jobStopKey(token))
+            manager.recordFinish({
+              id: token,
+              status,
+              exitCode: exitCode ?? null,
+              outputPath: outputPath ?? null,
+              summaryText,
+              silent: Boolean(job.stopped),
+            })
+          } catch {}
         }
       }
 

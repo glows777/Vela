@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -26,6 +27,7 @@ import {
   type DriverTurnResult,
   isOwnerLive,
   LostRunOwnershipError,
+  PROCESS_OWNER_PREFIX,
   registerLiveOwner,
   unregisterLiveOwner,
 } from './driver.ts'
@@ -165,7 +167,12 @@ export class VelaRuntimeEngine {
           scheduleSession: (sid) => this.scheduleSession(sid),
         }),
     })
-    this.syncWakeTimer()
+    void this.outbox
+      .flushOnce()
+      .catch((error) =>
+        this.logger.error(`[runtime] outbox flush failed: ${error}`),
+      )
+      .finally(() => this.syncWakeTimer())
   }
 
   async unregisterChannel(name: string): Promise<void> {
@@ -274,7 +281,7 @@ export class VelaRuntimeEngine {
        WHERE session_id = ? AND status IN ('queued', 'running')`,
       sessionId,
     )
-    let hasLiveExternalOwner = false
+    const externalRunIds: string[] = []
     for (const run of otherLiveRuns) {
       if (
         !run.owner_token ||
@@ -286,7 +293,7 @@ export class VelaRuntimeEngine {
       if (abortedLocal) {
         cancelledRun = true
       } else {
-        hasLiveExternalOwner = true
+        externalRunIds.push(run.id)
         this.db.run(
           `INSERT INTO kv_meta (key, value_json, updated_at)
            VALUES (?, ?, ?)
@@ -295,8 +302,34 @@ export class VelaRuntimeEngine {
           JSON.stringify({ reason }),
           new Date().toISOString(),
         )
-        cancelledRun = true
       }
+    }
+    if (externalRunIds.length > 0) {
+      const deadline = Date.now() + 2000
+      while (Date.now() < deadline && this.db.open && !this.disposed) {
+        const placeholders = externalRunIds.map(() => '?').join(', ')
+        const stillLive = this.db.get<{ id: string }>(
+          `SELECT id FROM runs WHERE id IN (${placeholders}) AND status IN ('queued', 'running') LIMIT 1`,
+          ...externalRunIds,
+        )
+        if (!stillLive) break
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      const placeholders = externalRunIds.map(() => '?').join(', ')
+      const remaining = this.db.all<{
+        id: string
+        owner_token: string | null
+      }>(
+        `SELECT id, owner_token FROM runs WHERE id IN (${placeholders}) AND status IN ('queued', 'running')`,
+        ...externalRunIds,
+      )
+      const stillOwnedRemotely = remaining.some((r) =>
+        isOwnerLive(r.owner_token, this.activeOwners),
+      )
+      if (stillOwnedRemotely) {
+        return false
+      }
+      cancelledRun = true
     }
 
     const cancelledApprovals = cancelPendingApprovalsForSession(
@@ -307,41 +340,48 @@ export class VelaRuntimeEngine {
     )
     const stoppedJobs = this.backgroundJobs.stopSessionJobs(sessionId)
     const now = new Date().toISOString()
-    if (!hasLiveExternalOwner) {
-      this.db.transaction(() => {
-        const rows = this.db.all<{ id: string }>(
-          `SELECT id FROM runs
-           WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
-          sessionId,
-        )
-        const updated = this.db.run(
-          `UPDATE runs SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
-           WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
-          now,
-          now,
-          sessionId,
-        )
-        for (const r of rows) {
-          this.db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${r.id}`)
-          this.db.run(
-            'DELETE FROM kv_meta WHERE key = ?',
-            `stop_requested:${r.id}`,
-          )
-        }
-        if (updated.changes > 0) cancelledRun = true
+    this.db.transaction(() => {
+      const rows = this.db.all<{ id: string }>(
+        `SELECT id FROM runs
+         WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+        sessionId,
+      )
+      const updated = this.db.run(
+        `UPDATE runs SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
+         WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+        now,
+        now,
+        sessionId,
+      )
+      for (const r of rows) {
+        this.db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${r.id}`)
         this.db.run(
-          `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
-           WHERE id = ? AND state IN ('running', 'waiting_human')`,
-          now,
-          sessionId,
+          'DELETE FROM kv_meta WHERE key = ?',
+          `stop_requested:${r.id}`,
         )
-      })
-    }
+      }
+      if (updated.changes > 0) cancelledRun = true
+      this.db.run(
+        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+         WHERE id = ? AND state IN ('running', 'waiting_human')`,
+        now,
+        sessionId,
+      )
+    })
     return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
   }
 
   async restartSession(sessionId: string): Promise<SessionRecord> {
     await this.stopSession(sessionId, 'Session restarted')
+    const remaining = this.db.all<{ id: string; owner_token: string | null }>(
+      `SELECT id, owner_token FROM runs WHERE session_id = ? AND status IN ('queued', 'running')`,
+      sessionId,
+    )
+    if (remaining.some((r) => isOwnerLive(r.owner_token, this.activeOwners))) {
+      throw new Error(
+        `Cannot restart session ${sessionId} while another live worker owns an active run`,
+      )
+    }
     return this.sessions.reset(sessionId)
   }
 
@@ -434,11 +474,7 @@ export class VelaRuntimeEngine {
       if (this.activeWorkers.get(sessionId) === worker) {
         this.activeWorkers.delete(sessionId)
       }
-      if (
-        !this.disposed &&
-        !worker.controller.signal.aborted &&
-        this.canWakeSessionNow(sessionId)
-      ) {
+      if (!this.disposed && this.canWakeSessionNow(sessionId)) {
         this.scheduleSession(sessionId)
       }
     })
@@ -474,10 +510,16 @@ export class VelaRuntimeEngine {
     const timerDue = this.db.get<{ next_at: string | null }>(
       `SELECT min(next_fire_at) AS next_at FROM timers WHERE enabled = 1 AND next_fire_at IS NOT NULL`,
     )?.next_at
+    const registeredChannels = [...this.channels.keys()]
     const outboxDue =
-      this.channels.size > 0
+      registeredChannels.length > 0
         ? this.db.get<{ next_at: string | null }>(
-            `SELECT min(next_retry_at) AS next_at FROM outbox WHERE status = 'pending' AND next_retry_at IS NOT NULL`,
+            `SELECT min(next_retry_at) AS next_at
+             FROM outbox
+             WHERE status = 'pending'
+               AND next_retry_at IS NOT NULL
+               AND channel IN (${registeredChannels.map(() => '?').join(', ')})`,
+            ...registeredChannels,
           )?.next_at
         : null
     let earliestMs = Number.POSITIVE_INFINITY
@@ -563,23 +605,13 @@ export class VelaRuntimeEngine {
     worker: ActiveWorker,
   ): Promise<void> {
     while (!this.disposed && !worker.controller.signal.aborted) {
-      const claimed = claimNextTurnInDb({
-        db: this.db,
-        sessions: this.sessions,
-        eventBus: this.eventBus,
-        activeOwners: this.activeOwners,
-        sessionId,
-      })
-      if (!claimed) break
-
-      worker.runId = claimed.runId
-      worker.ownerToken = claimed.ownerToken
-      this.activeOwners.add(claimed.ownerToken)
+      const preOwnerToken = `${PROCESS_OWNER_PREFIX}:${process.pid}:${randomUUID()}`
       let stopWaitResolve: (() => void) | undefined
       const stoppedDone = new Promise<void>((resolve) => {
         stopWaitResolve = resolve
       })
-      registerLiveOwner(claimed.ownerToken, {
+      this.activeOwners.add(preOwnerToken)
+      registerLiveOwner(preOwnerToken, {
         abort: async (abortReason) => {
           worker.controller.abort(new DOMException(abortReason, 'AbortError'))
           const session = this.sessions.get(sessionId)
@@ -589,6 +621,33 @@ export class VelaRuntimeEngine {
         },
       })
 
+      let claimed: ReturnType<typeof claimNextTurnInDb>
+      try {
+        claimed = claimNextTurnInDb({
+          db: this.db,
+          sessions: this.sessions,
+          eventBus: this.eventBus,
+          activeOwners: this.activeOwners,
+          sessionId,
+          ownerToken: preOwnerToken,
+        })
+      } catch (error) {
+        unregisterLiveOwner(preOwnerToken)
+        this.activeOwners.delete(preOwnerToken)
+        stopWaitResolve?.()
+        throw error
+      }
+      if (!claimed) {
+        unregisterLiveOwner(preOwnerToken)
+        this.activeOwners.delete(preOwnerToken)
+        stopWaitResolve?.()
+        break
+      }
+
+      worker.runId = claimed.runId
+      worker.ownerToken = claimed.ownerToken
+      let stopPollTimer: ReturnType<typeof setInterval> | undefined
+
       let result: DriverTurnResult | undefined
       try {
         const driver = this.drivers.get(claimed.session.driver)
@@ -597,6 +656,28 @@ export class VelaRuntimeEngine {
             `No AgentDriver registered for "${claimed.session.driver}"`,
           )
         }
+        stopPollTimer = setInterval(() => {
+          if (
+            this.disposed ||
+            !this.db.open ||
+            worker.controller.signal.aborted
+          )
+            return
+          try {
+            if (
+              this.db.get(
+                'SELECT 1 FROM kv_meta WHERE key = ?',
+                `stop_requested:${claimed.runId}`,
+              )
+            ) {
+              worker.controller.abort(
+                new DOMException('Stopped by control request', 'AbortError'),
+              )
+              void driver.abort?.(sessionId)
+            }
+          } catch {}
+        }, 50)
+        stopPollTimer.unref?.()
         const outboxTarget = resolveOutboxTargetInDb(
           this.db,
           claimed.session,
@@ -672,6 +753,7 @@ export class VelaRuntimeEngine {
           if (!(finError instanceof LostRunOwnershipError)) throw finError
         }
       } finally {
+        if (stopPollTimer) clearInterval(stopPollTimer)
         unregisterLiveOwner(claimed.ownerToken)
         this.activeOwners.delete(claimed.ownerToken)
         this.eventBus.clearDeltas(sessionId)

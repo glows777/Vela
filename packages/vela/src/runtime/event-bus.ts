@@ -74,7 +74,13 @@ export class RuntimeEventBus {
     this.db.afterCommit(() => {
       for (const listener of this.eventListeners) {
         try {
-          listener(event)
+          const maybePromise = listener(event) as unknown
+          if (
+            maybePromise &&
+            typeof (maybePromise as PromiseLike<unknown>).then === 'function'
+          ) {
+            Promise.resolve(maybePromise).catch(() => {})
+          }
         } catch {}
       }
     })
@@ -124,7 +130,13 @@ export class RuntimeEventBus {
     buffer.push(delta)
     for (const listener of this.deltaListeners) {
       try {
-        listener(delta)
+        const maybePromise = listener(delta) as unknown
+        if (
+          maybePromise &&
+          typeof (maybePromise as PromiseLike<unknown>).then === 'function'
+        ) {
+          Promise.resolve(maybePromise).catch(() => {})
+        }
       } catch {}
     }
   }

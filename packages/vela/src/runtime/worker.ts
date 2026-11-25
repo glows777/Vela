@@ -140,6 +140,8 @@ export function recoverRuntimeState(params: {
           run.session_id,
         )
         requeueProcessingForRunInTx(db, run.id)
+        db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${run.id}`)
+        db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${run.id}`)
         requeuedInboxRuns.push(run.id)
         sessionsToWake.add(run.session_id)
       }
@@ -190,6 +192,28 @@ export function recoverRuntimeState(params: {
       ) {
         continue
       }
+      if (liveRun && liveRun.status === 'waiting_human' && row.session_id) {
+        const hasProgress = Boolean(
+          db.get<{ ok: number }>(
+            `SELECT 1 AS ok FROM vela_messages WHERE session_id = ? AND run_id = ? LIMIT 1`,
+            row.session_id,
+            row.run_id,
+          ) ??
+            db.get<{ ok: number }>(
+              `SELECT 1 AS ok FROM vela_tool_calls WHERE session_id = ? AND run_id = ? LIMIT 1`,
+              row.session_id,
+              row.run_id,
+            ),
+        )
+        if (hasProgress) {
+          db.run(
+            `UPDATE inbox_events SET status = 'done', processed_at = COALESCE(processed_at, ?) WHERE id = ?`,
+            nowIso,
+            row.id,
+          )
+          continue
+        }
+      }
       db.run(
         `UPDATE inbox_events SET status = 'pending', run_id = NULL WHERE id = ?`,
         row.id,
@@ -211,10 +235,13 @@ export function claimNextTurnInDb(params: {
   eventBus: RuntimeEventBus
   activeOwners: ReadonlySet<string>
   sessionId: string
+  ownerToken?: string
 }): ClaimedTurn | undefined {
   const { db, sessions, eventBus, activeOwners, sessionId } = params
   const now = new Date().toISOString()
-  const ownerToken = `${PROCESS_OWNER_PREFIX}:${process.pid}:${randomUUID()}`
+  const ownerToken =
+    params.ownerToken ??
+    `${PROCESS_OWNER_PREFIX}:${process.pid}:${randomUUID()}`
 
   return db.transaction(() => {
     const session = sessions.get(sessionId)
@@ -394,10 +421,18 @@ export function commitCompletedTurnInTx(params: {
 }): void {
   const { db, eventBus, claimed, outcome, outboxTarget } = params
   const now = new Date().toISOString()
+  const stopRequested = Boolean(
+    db.get<{ key: string }>(
+      'SELECT key FROM kv_meta WHERE key = ?',
+      `stop_requested:${claimed.runId}`,
+    ),
+  )
+  const finalStatus: RunEndStatus = stopRequested ? 'stopped' : 'completed'
   const updatedRun = db.run(
     `UPDATE runs
-     SET status = 'completed', error = NULL, finished_at = ?, updated_at = ?
+     SET status = ?, error = NULL, finished_at = ?, updated_at = ?
      WHERE id = ? AND owner_token = ?`,
+    finalStatus,
     now,
     now,
     claimed.runId,
@@ -423,10 +458,15 @@ export function commitCompletedTurnInTx(params: {
     payload: {
       type: 'run_finished',
       runId: claimed.runId,
-      status: 'completed',
+      status: finalStatus,
     },
   })
-  if (!outcome.silent && outcome.replyText && outboxTarget) {
+  if (
+    finalStatus === 'completed' &&
+    !outcome.silent &&
+    outcome.replyText &&
+    outboxTarget
+  ) {
     enqueueOutboxInTx(db, {
       sessionId: claimed.session.id,
       runId: claimed.runId,
@@ -530,22 +570,26 @@ export function finalizeTurnInDb(params: {
 function outboxTargetFromInputs(
   inputs: readonly DriverInboxItem[],
 ): OutboxTarget | undefined {
-  for (let i = inputs.length - 1; i >= 0; i--) {
-    const payload = inputs[i]!.payload
-    if (
-      inputs[i]!.source === 'channel' &&
-      typeof payload.channel === 'string' &&
-      typeof payload.externalChatId === 'string'
-    ) {
-      return {
-        channel: payload.channel,
-        externalChatId: payload.externalChatId,
-        ...(typeof payload.threadId === 'string'
-          ? { threadId: payload.threadId }
-          : {}),
-        ...(typeof payload.messageId === 'string'
-          ? { replyToMessageId: payload.messageId }
-          : {}),
+  for (const requireWake of [true, false]) {
+    for (let i = inputs.length - 1; i >= 0; i--) {
+      const item = inputs[i]!
+      if (item.source !== 'channel' || item.passive) continue
+      if (requireWake && !item.wake) continue
+      const payload = item.payload
+      if (
+        typeof payload.channel === 'string' &&
+        typeof payload.externalChatId === 'string'
+      ) {
+        return {
+          channel: payload.channel,
+          externalChatId: payload.externalChatId,
+          ...(typeof payload.threadId === 'string'
+            ? { threadId: payload.threadId }
+            : {}),
+          ...(typeof payload.messageId === 'string'
+            ? { replyToMessageId: payload.messageId }
+            : {}),
+        }
       }
     }
   }

@@ -37,6 +37,7 @@ function recordMidStreamAbort(options: {
   errorMessage: string
   turn: number
   runId: string
+  onMessageCommittedInTx?: (entryId: string, message: ModelMessage) => void
 }): void {
   const {
     store,
@@ -49,6 +50,7 @@ function recordMidStreamAbort(options: {
     errorMessage,
     turn,
     runId,
+    onMessageCommittedInTx,
   } = options
   step.endInterrupted(stopReason, errorMessage)
   let assistant = step.snapshot({ complete: step.complete })
@@ -76,17 +78,28 @@ function recordMidStreamAbort(options: {
   const toolMessage = step.toolMessage(true)
   if (!step.complete && !step.toolsStarted) {
     if (assistant.content.length) {
-      store.appendMessage(assistant, { stopReason, runId })
+      store.runInTransaction(() => {
+        const entry = store.appendMessage(assistant, { stopReason, runId })
+        onMessageCommittedInTx?.(entry.id, assistant)
+      })
     }
   } else {
+    store.runInTransaction(() => {
+      if (assistant.content.length) {
+        const entry = store.appendMessage(assistant, { runId })
+        onMessageCommittedInTx?.(entry.id, assistant)
+      }
+      if (toolMessage) {
+        const entry = store.appendMessage(toolMessage, { runId })
+        onMessageCommittedInTx?.(entry.id, toolMessage)
+      }
+    })
     if (assistant.content.length) {
-      store.appendMessage(assistant, { runId })
       messages?.push(assistant)
       newMessages?.push(assistant)
       tracker.addMessage(assistant)
     }
     if (toolMessage) {
-      store.appendMessage(toolMessage, { runId })
       messages?.push(toolMessage)
       newMessages?.push(toolMessage)
       tracker.addMessage(toolMessage)
@@ -130,6 +143,7 @@ export async function streamSingleStepWithRetries(options: {
   runId: string
   store: SessionStore
   hostedCalls: Set<string>
+  onMessageCommittedInTx?: (entryId: string, message: ModelMessage) => void
 }): Promise<{
   finalStep: ProviderStepFinal
   sources: Map<string, string>
@@ -326,6 +340,7 @@ export async function streamSingleStepWithRetries(options: {
           errorMessage: ABORTED_RESULT,
           turn,
           runId,
+          onMessageCommittedInTx: options.onMessageCommittedInTx,
         })
         throw abortSignal.reason ?? error
       }
@@ -341,6 +356,7 @@ export async function streamSingleStepWithRetries(options: {
           errorMessage: 'Run interrupted by graceful shutdown',
           turn,
           runId,
+          onMessageCommittedInTx: options.onMessageCommittedInTx,
         })
         throw shutdownError()
       }
@@ -423,6 +439,7 @@ export async function streamSingleStepWithRetries(options: {
         errorMessage,
         turn,
         runId,
+        onMessageCommittedInTx: options.onMessageCommittedInTx,
       })
       throw error
     }

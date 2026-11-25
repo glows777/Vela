@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { VelaDatabase } from '../db/index.ts'
 import type { ChannelAdapter, ChannelOutboundMessage } from './channels.ts'
+import { isOwnerLive, PROCESS_OWNER_PREFIX } from './driver.ts'
 
 type OutboxKind = 'reply' | 'topic_start' | 'forward' | 'file'
 type OutboxStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'cancelled'
@@ -152,19 +153,24 @@ export class OutboxDispatcher {
       const sendingRows = this.db.all<{ id: string }>(
         `SELECT id FROM outbox WHERE status = 'sending'`,
       )
+      const liveTokens = new Set(LIVE_OUTBOX_LEASES.values())
       let recovered = 0
       for (const row of sendingRows) {
         const leaseRow = this.db.get<{ value_json: string }>(
           'SELECT value_json FROM kv_meta WHERE key = ?',
           leaseKey(row.id),
         )
-        let activeLease: string | undefined
+        let activeLease: string | null = null
         if (leaseRow) {
           try {
             activeLease = JSON.parse(leaseRow.value_json) as string
           } catch {}
         }
-        if (activeLease && LIVE_OUTBOX_LEASES.get(row.id) === activeLease) {
+        if (
+          activeLease &&
+          (LIVE_OUTBOX_LEASES.get(row.id) === activeLease ||
+            isOwnerLive(activeLease, liveTokens))
+        ) {
           continue
         }
         const res = this.db.run(
@@ -229,7 +235,7 @@ export class OutboxDispatcher {
         for (const row of rows) {
           const adapter = this.getAdapter(row.channel)
           if (!adapter) continue
-          const leaseToken = randomUUID()
+          const leaseToken = `${PROCESS_OWNER_PREFIX}:${process.pid}:${randomUUID()}`
           const claimed = this.db.run(
             `UPDATE outbox SET status = 'sending', updated_at = ? WHERE id = ? AND status = 'pending'`,
             nowIso,

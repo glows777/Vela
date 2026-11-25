@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
 import type { ExecutionLocation } from '../shared/execution.ts'
 import { isOwnerLive, PROCESS_OWNER_PREFIX } from './driver.ts'
@@ -6,11 +7,59 @@ import { enqueueInboxEvent } from './inbox.ts'
 
 const LIVE_JOB_HANDLES = new Map<
   string,
-  { db: VelaDatabase; ownerToken: string; sessionId: string; abort: () => void }
+  {
+    db: VelaDatabase
+    dbKey: string | VelaDatabase
+    ownerToken: string
+    sessionId: string
+    abort: () => void
+  }
 >()
+
+function resolveDbKey(db: VelaDatabase): string | VelaDatabase {
+  return db.path === ':memory:' ? db : resolve(db.path)
+}
 
 function jobOwnerKey(jobId: string): string {
   return `bg_owner:${jobId}`
+}
+
+export function jobStopKey(jobId: string): string {
+  return `bg_stop_requested:${jobId}`
+}
+
+export function hasLiveSessionJobs(
+  db: VelaDatabase,
+  sessionId: string,
+): boolean {
+  const dbKey = resolveDbKey(db)
+  const liveTokens = new Set<string>()
+  for (const [jobId, handle] of LIVE_JOB_HANDLES) {
+    if (!handle.db.open) {
+      LIVE_JOB_HANDLES.delete(jobId)
+      continue
+    }
+    if (handle.dbKey === dbKey) {
+      if (handle.sessionId === sessionId) return true
+      liveTokens.add(handle.ownerToken)
+    }
+  }
+  const rows = db.all<{ id: string }>(
+    `SELECT id FROM background_jobs WHERE session_id = ? AND status = 'running'`,
+    sessionId,
+  )
+  for (const row of rows) {
+    const ownerRow = db.get<{ value_json: string }>(
+      'SELECT value_json FROM kv_meta WHERE key = ?',
+      jobOwnerKey(row.id),
+    )
+    if (!ownerRow) continue
+    try {
+      const token = JSON.parse(ownerRow.value_json) as string
+      if (isOwnerLive(token, liveTokens)) return true
+    } catch {}
+  }
+  return false
 }
 
 export type BackgroundJobStatus =
@@ -120,6 +169,7 @@ export class BackgroundJobManager {
     })
     LIVE_JOB_HANDLES.set(id, {
       db: this.db,
+      dbKey: resolveDbKey(this.db),
       ownerToken,
       sessionId: input.sessionId,
       abort: input.abort ?? (() => {}),
@@ -143,6 +193,7 @@ export class BackgroundJobManager {
 
     this.db.transaction(() => {
       this.db.run('DELETE FROM kv_meta WHERE key = ?', jobOwnerKey(input.id))
+      this.db.run('DELETE FROM kv_meta WHERE key = ?', jobStopKey(input.id))
       const res = this.db.run(
         `UPDATE background_jobs
          SET status = ?, exit_code = ?, output_path = COALESCE(?, output_path),
@@ -195,9 +246,11 @@ export class BackgroundJobManager {
   }
 
   stopSessionJobs(sessionId: string): number {
+    const dbKey = resolveDbKey(this.db)
+    const now = new Date().toISOString()
     let stopped = 0
     for (const [jobId, handle] of LIVE_JOB_HANDLES) {
-      if (handle.sessionId !== sessionId) continue
+      if (handle.dbKey !== dbKey || handle.sessionId !== sessionId) continue
       LIVE_JOB_HANDLES.delete(jobId)
       try {
         handle.abort()
@@ -205,27 +258,56 @@ export class BackgroundJobManager {
       this.recordFinish({ id: jobId, status: 'stopped', silent: true })
       stopped++
     }
-    const now = new Date().toISOString()
+    const liveTokens = new Set(
+      [...LIVE_JOB_HANDLES.values()]
+        .filter((h) => h.dbKey === dbKey && h.db.open)
+        .map((h) => h.ownerToken),
+    )
     const rows = this.db.all<{ id: string }>(
       `SELECT id FROM background_jobs WHERE session_id = ? AND status = 'running'`,
       sessionId,
     )
-    const res = this.db.run(
-      `UPDATE background_jobs
-       SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
-       WHERE session_id = ? AND status = 'running'`,
-      now,
-      now,
-      sessionId,
-    )
     for (const row of rows) {
+      const ownerRow = this.db.get<{ value_json: string }>(
+        'SELECT value_json FROM kv_meta WHERE key = ?',
+        jobOwnerKey(row.id),
+      )
+      let ownerToken: string | null = null
+      if (ownerRow) {
+        try {
+          ownerToken = JSON.parse(ownerRow.value_json) as string
+        } catch {}
+      }
+      if (ownerToken && isOwnerLive(ownerToken, liveTokens)) {
+        this.db.run(
+          `INSERT INTO kv_meta (key, value_json, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+          jobStopKey(row.id),
+          JSON.stringify({ sessionId }),
+          now,
+        )
+        stopped++
+        continue
+      }
+      const res = this.db.run(
+        `UPDATE background_jobs
+         SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
+         WHERE id = ? AND status = 'running'`,
+        now,
+        now,
+        row.id,
+      )
       this.db.run('DELETE FROM kv_meta WHERE key = ?', jobOwnerKey(row.id))
+      this.db.run('DELETE FROM kv_meta WHERE key = ?', jobStopKey(row.id))
+      stopped += res.changes
     }
-    return Math.max(stopped, res.changes)
+    return stopped
   }
 
   /** On startup, reconciles orphaned `running` jobs as `interrupted` and notifies via `inbox_events`. */
   recoverInterrupted(nowIso = new Date().toISOString()): string[] {
+    const dbKey = resolveDbKey(this.db)
     const interrupted: string[] = []
     const wakeSessions = new Set<string>()
     for (const [jobId, handle] of LIVE_JOB_HANDLES) {
@@ -234,7 +316,9 @@ export class BackgroundJobManager {
       }
     }
     const liveTokens = new Set(
-      [...LIVE_JOB_HANDLES.values()].map((entry) => entry.ownerToken),
+      [...LIVE_JOB_HANDLES.values()]
+        .filter((entry) => entry.dbKey === dbKey)
+        .map((entry) => entry.ownerToken),
     )
 
     this.db.transaction(() => {
@@ -242,7 +326,8 @@ export class BackgroundJobManager {
         `SELECT * FROM background_jobs WHERE status = 'running' ORDER BY started_at ASC`,
       ) as unknown as BackgroundJobRow[]
       for (const raw of rows) {
-        if (LIVE_JOB_HANDLES.has(raw.id)) continue
+        const localHandle = LIVE_JOB_HANDLES.get(raw.id)
+        if (localHandle && localHandle.dbKey === dbKey) continue
         const ownerRow = this.db.get<{ value_json: string }>(
           'SELECT value_json FROM kv_meta WHERE key = ?',
           jobOwnerKey(raw.id),
@@ -265,6 +350,7 @@ export class BackgroundJobManager {
           job.id,
         )
         this.db.run('DELETE FROM kv_meta WHERE key = ?', jobOwnerKey(job.id))
+        this.db.run('DELETE FROM kv_meta WHERE key = ?', jobStopKey(job.id))
         const session = this.db.get<{ project_id: string | null }>(
           'SELECT project_id FROM sessions WHERE id = ?',
           job.sessionId,

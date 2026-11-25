@@ -441,6 +441,13 @@ export function repairStoppedPendingToolStepInTx(options: {
     options
   const step = findUnresolvedAssistantStep(store, messages)
   if (!step) return false
+  const stepRow = db.get<{ run_id: string | null }>(
+    'SELECT run_id FROM vela_messages WHERE session_id = ? AND id = ?',
+    sessionId,
+    step.entryId,
+  )
+  const repairRunId = stepRow?.run_id ?? undefined
+  void runId
   const now = new Date().toISOString()
 
   const appended = store.runInTransaction(() => {
@@ -456,7 +463,7 @@ export function repairStoppedPendingToolStepInTx(options: {
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sequential', 'none', 'skipped', 0, 1, ?, ?, ?, ?, ?)`,
           crypto.randomUUID(),
           sessionId,
-          runId,
+          repairRunId ?? null,
           step.entryId,
           call.toolCallId,
           idx,
@@ -489,7 +496,7 @@ export function repairStoppedPendingToolStepInTx(options: {
       rows = loadStepToolCallRows(db, sessionId, step.entryId)
     }
     const { message, details } = assembleCompletedToolMessage(rows)
-    const entry = store.appendMessage(message, { runId, details })
+    const entry = store.appendMessage(message, { runId: repairRunId, details })
     onMessageCommittedInTx?.(entry.id, message)
     return message
   })

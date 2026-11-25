@@ -350,7 +350,25 @@ export class TimerScheduler {
       for (const raw of dueRows) {
         const timer = rowToTimer(raw)
         const targetSessionId = this.resolveTargetSessionId(timer)
-        if (!targetSessionId) continue
+        if (!targetSessionId) {
+          if (timer.kind === 'followup') {
+            this.db.run(
+              `UPDATE timers SET enabled = 0, next_fire_at = NULL, updated_at = ? WHERE id = ?`,
+              nowIso,
+              timer.id,
+            )
+          } else {
+            const nextMs = nextOccurrence(timer.schedule, nowMs, timer.timezone)
+            this.db.run(
+              `UPDATE timers SET next_fire_at = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+              nextMs === undefined ? null : new Date(nextMs).toISOString(),
+              nextMs === undefined ? 0 : 1,
+              nowIso,
+              timer.id,
+            )
+          }
+          continue
+        }
 
         if (timer.kind === 'followup') {
           const session = this.db.get<{ followup_streak: number }>(

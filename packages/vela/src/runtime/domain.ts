@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { VelaDatabase } from '../db/index.ts'
 import type { ExecutionLocation } from '../shared/execution.ts'
+import { hasLiveSessionJobs } from './background-jobs.ts'
 import type { ChannelBinding, ChannelBindingKind } from './channels.ts'
 import { assertSafePathSegment, isOwnerLive } from './driver.ts'
 
@@ -371,35 +372,19 @@ export class ProjectStore {
         `SELECT id, owner_token FROM runs WHERE session_id = ? AND status IN ('queued', 'running')`,
         sid,
       )
-      if (activeRuns.some((r) => isOwnerLive(r.owner_token))) {
+      if (
+        activeRuns.some((r) => isOwnerLive(r.owner_token)) ||
+        hasLiveSessionJobs(this.db, sid)
+      ) {
         throw new Error(
-          `Cannot delete session ${sid} while a run is actively executing; stop it first`,
+          `Cannot delete session ${sid} while a run or background job is actively executing; stop it first`,
         )
       }
     }
   }
 
   private cleanupSessionRowsInTx(sessionId: string): void {
-    const runIds = this.db
-      .all<{ id: string }>(
-        'SELECT id FROM runs WHERE session_id = ?',
-        sessionId,
-      )
-      .map((r) => r.id)
-    this.db.run('DELETE FROM channel_bindings WHERE session_id = ?', sessionId)
-    this.db.run(
-      `DELETE FROM kv_meta WHERE key = ? OR key LIKE ? OR key LIKE ?`,
-      `legacy_session_channel:${sessionId}`,
-      `channel_upload:${sessionId}:%`,
-      `run_target:${sessionId}:%`,
-    )
-    for (const runId of runIds) {
-      this.db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${runId}`)
-      this.db.run(
-        'DELETE FROM kv_meta WHERE key = ?',
-        `stop_requested:${runId}`,
-      )
-    }
+    cleanupSessionMetadataInTx(this.db, sessionId)
   }
 
   /**
@@ -531,27 +516,15 @@ export class SessionStoreControl {
         `SELECT id, owner_token FROM runs WHERE session_id = ? AND status IN ('queued', 'running')`,
         id,
       )
-      if (activeRuns.some((r) => isOwnerLive(r.owner_token))) {
+      if (
+        activeRuns.some((r) => isOwnerLive(r.owner_token)) ||
+        hasLiveSessionJobs(this.db, id)
+      ) {
         throw new Error(
-          `Cannot delete session ${id} while a run is actively executing; stop it first`,
+          `Cannot delete session ${id} while a run or background job is actively executing; stop it first`,
         )
       }
-      const runIds = this.db
-        .all<{ id: string }>('SELECT id FROM runs WHERE session_id = ?', id)
-        .map((r) => r.id)
-      this.db.run('DELETE FROM channel_bindings WHERE session_id = ?', id)
-      this.db.run(
-        `DELETE FROM kv_meta WHERE key = ? OR key LIKE ?`,
-        `legacy_session_channel:${id}`,
-        `channel_upload:${id}:%`,
-      )
-      for (const runId of runIds) {
-        this.db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${runId}`)
-        this.db.run(
-          'DELETE FROM kv_meta WHERE key = ?',
-          `stop_requested:${runId}`,
-        )
-      }
+      cleanupSessionMetadataInTx(this.db, id)
       const res = this.db.run('DELETE FROM sessions WHERE id = ?', id)
       return res.changes > 0
     })
@@ -759,5 +732,38 @@ export class ChannelBindingStore {
   remove(id: string): boolean {
     const res = this.db.run('DELETE FROM channel_bindings WHERE id = ?', id)
     return res.changes > 0
+  }
+}
+
+function cleanupSessionMetadataInTx(db: VelaDatabase, sessionId: string): void {
+  const runIds = db
+    .all<{ id: string }>('SELECT id FROM runs WHERE session_id = ?', sessionId)
+    .map((r) => r.id)
+  db.run('DELETE FROM channel_bindings WHERE session_id = ?', sessionId)
+  const uploadPrefix = `channel_upload:${sessionId}:`
+  const runTargetPrefix = `run_target:${sessionId}:`
+  const shortcutPrefix = 'channel_shortcut:'
+  db.run(
+    `DELETE FROM kv_meta
+      WHERE key = ?
+         OR substr(key, 1, length(?)) = ?
+         OR substr(key, 1, length(?)) = ?
+         OR (
+           substr(key, 1, length(?)) = ?
+           AND json_valid(value_json)
+           AND json_extract(value_json, '$.sessionId') = ?
+         )`,
+    `legacy_session_channel:${sessionId}`,
+    uploadPrefix,
+    uploadPrefix,
+    runTargetPrefix,
+    runTargetPrefix,
+    shortcutPrefix,
+    shortcutPrefix,
+    sessionId,
+  )
+  for (const runId of runIds) {
+    db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${runId}`)
+    db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${runId}`)
   }
 }
