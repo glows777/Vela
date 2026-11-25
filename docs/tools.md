@@ -149,8 +149,8 @@ With `run_in_background: true` the call starts a job and returns without waiting
 
 The model can request several tool calls in one response:
 
-- Read-only tools (`read`, `grep`, `find`, `ls`, `tool_search`, `web_search`, `web_fetch`, `background_output`) use `executionMode: 'parallel'` and run concurrently with other parallel calls.
-- `write`, `edit`, `bash`, `memory`, `todo`, `background_stop`, and extension tools that omit `executionMode` default to `'sequential'` and run alone within their session (waiting for prior calls in that session, while subsequent calls wait for them; other sessions are unaffected). `write` and `edit` also queue per file (resolved through symlinks) across all sessions in the process. MCP tools run `'parallel'` only when `readOnlyHint: true`.
+- Read-only tools (`read`, `grep`, `find`, `ls`, `tool_search`, `web_search`, `web_fetch`, `background_output`) and `bash` use `executionMode: 'parallel'` and run concurrently with other parallel calls.
+- `write`, `edit`, `memory`, `todo`, `background_stop`, and extension tools that omit `executionMode` default to `'sequential'` and run alone within their session (waiting for prior calls in that session, while subsequent calls wait for them; other sessions are unaffected). `write` and `edit` also queue per file (resolved through symlinks) across all sessions in the process. MCP tools run `'parallel'` only when `readOnlyHint: true`.
 - To run a custom tool concurrently with other parallel calls, set `executionMode: 'parallel'` (and use `withFileMutationQueue(path, fn)` if it mutates files).
 
 Tool availability checks, hooks and extension confirmation prompts run before a call waits for anything, so a tool waiting for approval does not hold back other tools.

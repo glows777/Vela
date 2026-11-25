@@ -73,8 +73,8 @@ function recordMidStreamAbort(options: {
       }),
     }
   }
-  const toolMessage = step.complete ? step.toolMessage(true) : undefined
-  if (!step.complete) {
+  const toolMessage = step.toolMessage(true)
+  if (!step.complete && !step.toolsStarted) {
     if (assistant.content.length) {
       store.appendMessage(assistant, { stopReason, runId })
     }
@@ -345,11 +345,13 @@ export async function streamSingleStepWithRetries(options: {
         throw shutdownError()
       }
       const errorMessage = errorMessageOf(error)
+      const canResend = !tools.hasHostedTools && !stepHostedStarted
       const apiError = inspectProviderApiError(error)
       const canRecoverOverflow =
-        !stepHostedStarted ||
-        (apiError !== undefined &&
-          (apiError.statusCode === 400 || apiError.statusCode === 413))
+        (canResend ||
+          (apiError !== undefined &&
+            (apiError.statusCode === 400 || apiError.statusCode === 413))) &&
+        !stepHostedStarted
       if (
         canRecoverOverflow &&
         !compactedForOverflow &&
@@ -375,10 +377,7 @@ export async function streamSingleStepWithRetries(options: {
         }
         continue
       }
-      const canRetry =
-        !stepHostedStarted &&
-        (!tools.hasHostedTools || !step.hasContent || apiError !== undefined)
-      if (canRetry && retried < limits.maxRetries && isRetryable(error)) {
+      if (canResend && retried < limits.maxRetries && isRetryable(error)) {
         step.endInterrupted('error', errorMessage)
         retried++
         const delay = retryDelayMs(

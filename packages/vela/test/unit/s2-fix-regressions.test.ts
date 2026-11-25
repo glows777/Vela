@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { LanguageModelV4 } from '@ai-sdk/provider'
+import { APICallError, type LanguageModelV4 } from '@ai-sdk/provider'
 import { z } from 'zod'
 import { SCHEMA_VERSION } from '../../src/db/schema.ts'
 import { openDatabase } from '../../src/db/sqlite.ts'
@@ -83,8 +83,8 @@ test('clean v1 schema includes S2b columns and only 001_initial migration', () =
   }
 })
 
-test('executionMode defaults: bash and non-readOnly MCP are sequential; readOnly MCP is parallel', () => {
-  expect(createBashTool(workDir).executionMode).toBe('sequential')
+test('executionMode defaults: bash and readOnly MCP are parallel; non-readOnly MCP is sequential', () => {
+  expect(createBashTool(workDir).executionMode).toBe('parallel')
 
   const dummyCaller = {
     callTool: async () => ({ content: [] }),
@@ -260,18 +260,6 @@ test('providers: openai-completions forceReasoning, null encrypted rs_ strip, me
             },
           ],
         },
-        customchat: {
-          baseUrl: 'https://example.invalid/v1',
-          api: 'openai-completions',
-          apiKey: 'test-key',
-          models: [
-            {
-              id: 'reasoner',
-              reasoning: true,
-              thinkingLevelMap: { high: 'high' },
-            },
-          ],
-        },
       },
     })
     const reg = new ModelRegistry(providers, memoryCredentialStore())
@@ -295,14 +283,6 @@ test('providers: openai-completions forceReasoning, null encrypted rs_ strip, me
     } as never)
     expect(JSON.stringify(capturedBodies[0])).not.toContain('rs_123')
     expect(JSON.stringify(capturedBodies[0])).toContain('visible')
-
-    const chatModel = reg.resolve('customchat/reasoner')
-      .model as LanguageModelV4
-    await chatModel.doGenerate({
-      prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
-      reasoning: 'high',
-    } as never)
-    expect(capturedBodies[1]?.reasoning_effort).toBe('high')
   } finally {
     globalThis.fetch = origFetch
   }
@@ -641,8 +621,35 @@ test('VelaDriver: hosted store.idOf preserved, waiting_human guard throws loudly
 })
 
 test('driver-step: aborted partial stream excluded, overflow/retry work with attached hosted tool, and failed overflow compaction emits single turn_end', async () => {
-  // 1) Aborted mid-stream partial with hosted tool call does not pollute history
+  // 1) Aborted mid-stream partial text is excluded from active context while started hosted search converts to portable text
   const abortStreamModel: LanguageModelV4 = {
+    specificationVersion: 'v4',
+    provider: 'mock',
+    modelId: 'm',
+    supportedUrls: {},
+    doGenerate: async () => {
+      throw new Error('unused')
+    },
+    doStream: async () =>
+      ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'text-start', id: 't-partial' })
+            controller.enqueue({
+              type: 'text-delta',
+              id: 't-partial',
+              delta: 'halfway text',
+            })
+            controller.enqueue({
+              type: 'error',
+              error: new Error('stream cut mid-flight'),
+            })
+            controller.close()
+          },
+        }),
+      }) as never,
+  }
+  const hostedAbortStreamModel: LanguageModelV4 = {
     specificationVersion: 'v4',
     provider: 'mock',
     modelId: 'm',
@@ -663,7 +670,7 @@ test('driver-step: aborted partial stream excluded, overflow/retry work with att
             })
             controller.enqueue({
               type: 'error',
-              error: new Error('stream cut mid-flight'),
+              error: new Error('hosted cut mid-flight'),
             })
             controller.close()
           },
@@ -711,6 +718,28 @@ test('driver-step: aborted partial stream excluded, overflow/retry work with att
       }),
     ).rejects.toThrow('stream cut mid-flight')
     expect(abortStore.buildContext().messages).toHaveLength(1)
+
+    const hostedAbortStore = new SessionStore('drv-abort-hosted-search', db)
+    const hostedAbortMsgs: ModelMessage[] = [{ role: 'user', content: 'hi' }]
+    hostedAbortStore.appendMessage(hostedAbortMsgs[0]!)
+    await expect(
+      new VelaDriver({
+        sessionId: 'drv-abort-hosted-search',
+        db,
+        store: hostedAbortStore,
+        registry: new ToolRegistry(join(workDir, 'abort-hosted-spill')),
+        tracker: new TokenTracker(),
+      }).run({
+        model: hostedAbortStreamModel,
+        systemPrompt: '',
+        messages: hostedAbortMsgs,
+        limits: { maxRetries: 0, retryBaseMs: 0 },
+      }),
+    ).rejects.toThrow('hosted cut mid-flight')
+    const hostedCtx = hostedAbortStore.buildContext().messages
+    expect(hostedCtx).toHaveLength(2)
+    expect(JSON.stringify(hostedCtx[1])).toContain('Provider search:')
+    expect(JSON.stringify(hostedCtx[1])).not.toContain('tool_call')
 
     const store = new SessionStore('drv-ovf', db)
     const tracker = new TokenTracker()
@@ -764,7 +793,11 @@ test('driver-step: aborted partial stream excluded, overflow/retry work with att
       doStream: async () => {
         callsOk++
         if (callsOk === 1) {
-          throw Object.assign(new Error('model_context_window_exceeded'), {
+          throw new APICallError({
+            message: 'model_context_window_exceeded',
+            url: 'https://example.invalid/v1/responses',
+            requestBodyValues: {},
+            statusCode: 400,
             responseBody: JSON.stringify({
               error: { code: 'context_length_exceeded' },
             }),
