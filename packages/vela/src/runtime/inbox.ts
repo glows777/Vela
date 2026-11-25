@@ -62,8 +62,8 @@ function rowToInbox(row: InboxRow): InboxEventRecord {
 }
 
 function isHumanWakeInput(input: EnqueueInboxInput): boolean {
-  const wake = input.wake !== false
   const passive = input.passive === true
+  const wake = input.wake ?? !passive
   return (
     wake && !passive && (input.source === 'user' || input.source === 'channel')
   )
@@ -80,8 +80,8 @@ export function enqueueInboxEvent(
 ): { event: InboxEventRecord; inserted: boolean } {
   const id = input.id ?? randomUUID()
   const now = new Date().toISOString()
-  const wake = input.wake !== false ? 1 : 0
   const passive = input.passive === true ? 1 : 0
+  const wake = (input.wake ?? input.passive !== true) ? 1 : 0
   const dedupeKey = input.dedupeKey ?? null
 
   return db.transaction(() => {
@@ -157,6 +157,46 @@ export function claimInboxBatchInTx(
   )
   return rows.map((row) =>
     rowToInbox({ ...row, status: 'processing', run_id: runId }),
+  )
+}
+
+/**
+ * Claims only pending `'approval'` wake events when resuming a `waiting_human` run,
+ * leaving ordinary queued prompts/notes in `'pending'` for the next fresh run.
+ */
+export function claimApprovalInboxBatchInTx(
+  db: VelaDatabase,
+  sessionId: string,
+  runId: string,
+): InboxEventRecord[] {
+  const rows = db.all<Record<string, unknown>>(
+    `SELECT * FROM inbox_events
+     WHERE session_id = ? AND status = 'pending' AND source = 'approval'
+     ORDER BY created_at ASC, rowid ASC`,
+    sessionId,
+  ) as unknown as InboxRow[]
+  if (!rows.length) return []
+  db.run(
+    `UPDATE inbox_events
+     SET status = 'processing', run_id = ?
+     WHERE session_id = ? AND status = 'pending' AND source = 'approval'`,
+    runId,
+    sessionId,
+  )
+  return rows.map((row) =>
+    rowToInbox({ ...row, status: 'processing', run_id: runId }),
+  )
+}
+
+export function hasSessionPendingWake(
+  db: VelaDatabase,
+  sessionId: string,
+): boolean {
+  return Boolean(
+    db.get<{ id: string }>(
+      `SELECT id FROM inbox_events WHERE session_id = ? AND status = 'pending' AND wake = 1 LIMIT 1`,
+      sessionId,
+    ),
   )
 }
 

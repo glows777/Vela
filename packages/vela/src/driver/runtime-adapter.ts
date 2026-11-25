@@ -12,11 +12,13 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../providers/models/index.ts'
-import type {
-  AgentDriver,
-  DriverInboxItem,
-  DriverTurnRequest,
-  DriverTurnResult,
+import { BackgroundJobManager } from '../runtime/background-jobs.ts'
+import {
+  type AgentDriver,
+  assertSafePathSegment,
+  type DriverInboxItem,
+  type DriverTurnRequest,
+  type DriverTurnResult,
 } from '../runtime/driver.ts'
 import type { BlobStore, EnvironmentRegistry } from '../runtime/index.ts'
 import type { VelaLimits } from '../shared/limits.ts'
@@ -26,9 +28,13 @@ import type { VelaEvent } from './agent/events.ts'
 import { ContextManager, createRequestSnapshot } from './context/manager.ts'
 import { createSessionLocalExecutionEnv } from './execution/local.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
+import { createBackgroundTools } from './extensions/background/tool.ts'
 import type { AssistantModelMessage, ModelMessage } from './messages.ts'
+import { localDateString } from './prompt/environment.ts'
+import { createRuntimeBackgroundController } from './runtime-background.ts'
 import { SessionStore } from './session/index.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
+import { repairStoppedPendingToolStepInTx } from './step-recovery.ts'
 import { createCoreTools } from './tools/index.ts'
 import { type ToolDefinition, ToolRegistry } from './tools/registry.ts'
 import { TokenTracker } from './usage/tracker.ts'
@@ -122,6 +128,7 @@ export function createVelaAgentDriver(
         ?.abort(new DOMException('Stopped', 'AbortError'))
     },
     async runTurn(request: DriverTurnRequest): Promise<DriverTurnResult> {
+      assertSafePathSegment(request.sessionId, 'sessionId')
       const controller = new AbortController()
       const forwardAbort = () => controller.abort(request.abortSignal.reason)
       if (request.abortSignal.aborted) {
@@ -185,10 +192,54 @@ export function createVelaAgentDriver(
 
       const registry = new ToolRegistry(spillDir)
       registry.setLogger(logger)
-      registry.register(...createCoreTools({ cwd: location.cwd }))
+      registry.register(
+        ...createCoreTools({ cwd: location.cwd }),
+        ...createBackgroundTools((ctx) => {
+          if (!ctx?.background) {
+            throw new Error('Background commands require an open session')
+          }
+          return ctx.background
+        }).map((tool) => ({ ...tool, name: `background_${tool.name}` })),
+      )
       if (options.tools?.length) {
         registry.register(...options.tools)
       }
+      if (request.projectId) {
+        const proj = options.db.get<{ default_tools_json: string | null }>(
+          'SELECT default_tools_json FROM projects WHERE id = ?',
+          request.projectId,
+        )
+        if (proj?.default_tools_json) {
+          try {
+            const list = JSON.parse(proj.default_tools_json) as unknown
+            if (Array.isArray(list)) {
+              const tools = list.filter(
+                (item): item is string => typeof item === 'string',
+              )
+              if (
+                tools.length > 0 &&
+                tools.every(
+                  (name) => name.startsWith('+') || name.startsWith('-'),
+                )
+              ) {
+                registry.setDefaultToolModifiers(tools)
+              } else {
+                registry.setSelection(tools)
+              }
+            }
+          } catch {}
+        }
+      }
+      if (saved?.discoveredTools.length) {
+        registry.discoveredTools = new Set(saved.discoveredTools)
+      }
+      registry.background = createRuntimeBackgroundController({
+        db: options.db,
+        manager: new BackgroundJobManager(options.db, request.wakeSession),
+        sessionId: request.sessionId,
+        runId: request.runId,
+        location,
+      })
       registry.setInterception({
         resolveEnv: () => resolveEnv(),
         before: async (toolName, input, ctx) => {
@@ -239,6 +290,23 @@ export function createVelaAgentDriver(
         ),
       )
 
+      if (!request.recoverPending) {
+        repairStoppedPendingToolStepInTx({
+          db: options.db,
+          store,
+          sessionId: request.sessionId,
+          messages,
+          runId: request.runId,
+          onMessageCommittedInTx: (messageId, message) =>
+            request.onEvent({
+              type: 'message_committed',
+              runId: request.runId,
+              messageId,
+              message,
+            }),
+        })
+      }
+
       if (!alreadyHasRunMessages) {
         const usableInputs = request.inputs.filter(
           (item) => item.source !== 'approval',
@@ -273,19 +341,30 @@ export function createVelaAgentDriver(
               role: 'user',
               content: lines.join('\n\n'),
             }
-            const entry = store.appendMessage(userMsg, { runId: request.runId })
+            store.runInTransaction(() => {
+              const entry = store.appendMessage(userMsg, {
+                runId: request.runId,
+              })
+              request.onEvent({
+                type: 'message_committed',
+                runId: request.runId,
+                messageId: entry.id,
+                message: userMsg,
+              })
+            })
             messages.push(userMsg)
             tracker.addMessage(userMsg)
-            request.onEvent({
-              type: 'message_committed',
-              runId: request.runId,
-              messageId: entry.id,
-              message: userMsg,
-            })
           }
         }
       }
 
+      const sessionRow = options.db.get<{ created_at: string }>(
+        'SELECT created_at FROM sessions WHERE id = ?',
+        request.sessionId,
+      )
+      const pinnedDate = localDateString(
+        new Date(sessionRow?.created_at ?? Date.now()),
+      )
       const builder = createSessionPrompt(
         () => ({
           contextFiles: [],
@@ -297,7 +376,7 @@ export function createVelaAgentDriver(
         false,
         () => location.environment === 'local',
         () => options.environments.osFor(location.environment),
-        () => new Date().toISOString().slice(0, 10),
+        () => pinnedDate,
       )
 
       let lastAssistant: AssistantModelMessage | undefined
@@ -374,14 +453,6 @@ export function createVelaAgentDriver(
           case 'message_end': {
             if (event.message.role === 'assistant') {
               lastAssistant = event.message
-            }
-            if (!committedInTx) {
-              request.onEvent({
-                type: 'message_committed',
-                runId: request.runId,
-                messageId: store.idOf(event.message) ?? request.runId,
-                message: event.message,
-              })
             }
             break
           }
@@ -464,16 +535,18 @@ export function createVelaAgentDriver(
             activeSteering.set(request.sessionId, [])
             return list
           },
+          onMessageCommittedInTx: (messageId, message) => {
+            request.onEvent({
+              type: 'message_committed',
+              runId: request.runId,
+              messageId,
+              message,
+            })
+          },
           onTerminalCommitInTx: request.onTerminalCommitInTx
-            ? ({ assistantEntryId, assistant }) => {
+            ? ({ assistant }) => {
                 lastAssistant = assistant
                 committedInTx = true
-                request.onEvent({
-                  type: 'message_committed',
-                  runId: request.runId,
-                  messageId: assistantEntryId,
-                  message: assistant,
-                })
                 request.onTerminalCommitInTx?.({
                   status: 'completed',
                   replyText: assistantText(assistant),
@@ -499,6 +572,7 @@ export function createVelaAgentDriver(
           error: error instanceof Error ? error.message : String(error),
         }
       } finally {
+        store.setDiscoveredTools(registry.discoveredTools)
         if (!releasedClaim) claim.release()
         request.abortSignal.removeEventListener('abort', forwardAbort)
         activeAbort.delete(request.sessionId)

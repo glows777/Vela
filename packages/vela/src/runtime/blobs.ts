@@ -1,9 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, constants, existsSync, mkdirSync } from 'node:fs'
-import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { chmodSync, constants, existsSync, lstatSync, mkdirSync } from 'node:fs'
+import { link, lstat, mkdir, open, rm } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
 import type { ExecutionEnv, FileError, Result } from '../shared/execution.ts'
+import {
+  getChannelUploadMeta,
+  saveChannelUploadMeta,
+  writeRemoteChannelUploadFile,
+} from './blob-channel-uploads.ts'
+import { assertSafePathSegment } from './driver.ts'
 
 const MAX_BLOB_BYTES = 20 * 1024 * 1024
 
@@ -77,17 +83,28 @@ function sanitizeBlobFilename(name: string, maxBytes = 200): string {
 }
 
 function ensurePrivateDirSync(dir: string): void {
+  const resolved = resolve(dir)
+  if (existsSync(resolved)) {
+    if (lstatSync(resolved).isSymbolicLink()) {
+      throw new Error(`Blob root directory must not be a symlink: ${resolved}`)
+    }
+    return
+  }
   const missing: string[] = []
-  let cur = resolve(dir)
+  let cur = resolved
   while (!existsSync(cur)) {
     missing.push(cur)
     const parent = dirname(cur)
     if (parent === cur) break
     cur = parent
   }
-  if (missing.length === 0) return
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  mkdirSync(resolved, { recursive: true, mode: 0o700 })
   for (const created of missing) {
+    if (lstatSync(created).isSymbolicLink()) {
+      throw new Error(
+        `Blob directory path must not traverse a symlink: ${created}`,
+      )
+    }
     chmodSync(created, 0o700)
   }
 }
@@ -217,10 +234,21 @@ export class BlobStore {
     env: ExecutionEnv,
     sessionId: string,
     signal?: AbortSignal,
+    allowUnbound = false,
   ): Promise<string> {
+    assertSafePathSegment(sessionId, 'sessionId')
     const blob = typeof blobOrId === 'string' ? this.get(blobOrId) : blobOrId
     if (!blob) {
       throw new Error(`Blob ${String(blobOrId)} not found`)
+    }
+    assertSafePathSegment(blob.id, 'blobId')
+    if (blob.sessionId !== null && blob.sessionId !== sessionId) {
+      throw new Error(
+        `Blob ${blob.id} belongs to session ${blob.sessionId}, not ${sessionId}`,
+      )
+    }
+    if (blob.sessionId === null && !allowUnbound) {
+      throw new Error(`Blob ${blob.id} is not bound to session ${sessionId}`)
     }
     if (env.id === 'node:local') {
       return blob.storagePath
@@ -267,18 +295,24 @@ export class BlobStore {
     },
     signal?: AbortSignal,
   ): Promise<{ blob: BlobRecord; path: string }> {
+    assertSafePathSegment(options.sessionId, 'sessionId')
     const bytes = await readCanonicalHostBytes(options.hostPath, signal)
+    const leaf = sanitizeBlobFilename(
+      basename(options.hostPath.replaceAll('\\', '/')),
+      255,
+    )
     const dest =
       env.id === 'node:local'
         ? options.hostPath
-        : await this.writeRemoteUploadFile(
+        : await writeRemoteChannelUploadFile(
             env,
             options.sessionId,
-            basename(options.hostPath.replaceAll('\\', '/')),
+            leaf,
             bytes,
             signal,
           )
-    const existingMeta = this.getChannelUploadMeta(
+    const existingMeta = getChannelUploadMeta(
+      this.db,
       options.sessionId,
       options.name,
       dest,
@@ -297,7 +331,7 @@ export class BlobStore {
       bytes,
       signal,
     })
-    this.saveChannelUploadMeta({
+    saveChannelUploadMeta(this.db, {
       sessionId: options.sessionId,
       blobId: blob.id,
       name: options.name,
@@ -305,113 +339,6 @@ export class BlobStore {
       environment: env.id,
     })
     return { blob, path: dest }
-  }
-
-  private async writeRemoteUploadFile(
-    env: ExecutionEnv,
-    sessionId: string,
-    leafName: string,
-    bytes: Uint8Array,
-    signal?: AbortSignal,
-  ): Promise<string> {
-    const safeName = sanitizeBlobFilename(leafName, 255)
-    const root = unwrap(
-      await env.absolutePath(`~/.vela/uploads/${sessionId}`, signal),
-    )
-    const dest = unwrap(await env.joinPath([root, safeName], signal))
-    const existing = await env.fileInfo(dest, signal)
-    if (existing.ok) {
-      if (existing.value.kind !== 'file') {
-        throw new Error('Upload destination is not a regular file')
-      }
-      return dest
-    }
-    if (existing.error.code !== 'not_found') throw existing.error
-    unwrap(await env.createDir(root, { recursive: true }, signal))
-    const tmp = unwrap(
-      await env.joinPath([root, `${randomUUID()}.part`], signal),
-    )
-    try {
-      unwrap(await env.writeFile(tmp, bytes, signal))
-      unwrap(await env.renameFile(tmp, dest, signal))
-    } catch (error) {
-      await env.remove(tmp, { force: true }).catch(() => {})
-      throw error
-    }
-    return dest
-  }
-
-  private channelUploadKey(
-    sessionId: string,
-    name: string,
-    path: string,
-  ): string {
-    const hash = createHash('sha256')
-      .update(JSON.stringify([name, path]))
-      .digest('hex')
-    return `channel_upload:${sessionId}:${hash}`
-  }
-
-  private saveChannelUploadMeta(meta: {
-    sessionId: string
-    blobId: string
-    name: string
-    path: string
-    environment: string
-  }): void {
-    this.db.run(
-      `INSERT INTO kv_meta (key, value_json, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET
-         value_json = excluded.value_json,
-         updated_at = excluded.updated_at`,
-      this.channelUploadKey(meta.sessionId, meta.name, meta.path),
-      JSON.stringify({
-        blobId: meta.blobId,
-        name: meta.name,
-        path: meta.path,
-        environment: meta.environment,
-      }),
-      new Date().toISOString(),
-    )
-  }
-
-  private getChannelUploadMeta(
-    sessionId: string,
-    name: string,
-    path: string,
-  ):
-    | { blobId: string; name: string; path: string; environment: string }
-    | undefined {
-    const row = this.db.get<{ value_json: string }>(
-      'SELECT value_json FROM kv_meta WHERE key = ?',
-      this.channelUploadKey(sessionId, name, path),
-    )
-    if (!row) return undefined
-    try {
-      const parsed = JSON.parse(row.value_json) as {
-        blobId?: unknown
-        name?: unknown
-        path?: unknown
-        environment?: unknown
-      }
-      if (
-        typeof parsed.blobId === 'string' &&
-        typeof parsed.name === 'string' &&
-        typeof parsed.path === 'string' &&
-        typeof parsed.environment === 'string'
-      ) {
-        return {
-          blobId: parsed.blobId,
-          name: parsed.name,
-          path: parsed.path,
-          environment: parsed.environment,
-        }
-      }
-    } catch {
-      return undefined
-    }
-    return undefined
   }
 
   async materializeHostUpload(
@@ -425,6 +352,7 @@ export class BlobStore {
     },
     signal?: AbortSignal,
   ): Promise<{ blob: BlobRecord; path: string }> {
+    assertSafePathSegment(options.sessionId, 'sessionId')
     const blob = await this.storeInbound({
       sessionId: options.sessionId,
       projectId: options.projectId,
@@ -439,12 +367,21 @@ export class BlobStore {
         env,
         options.sessionId,
         signal,
+        true,
       )
       return { blob, path }
     } catch (error) {
       this.deleteRecordIfExists(blob.id)
       await rm(blob.storagePath, { force: true }).catch(() => {})
       throw error
+    }
+  }
+
+  async deleteBlob(id: string): Promise<void> {
+    const existing = this.get(id)
+    this.deleteRecordIfExists(id)
+    if (existing) {
+      await rm(existing.storagePath, { force: true }).catch(() => {})
     }
   }
 
@@ -494,6 +431,8 @@ export class BlobStore {
     resolveEnv: () => Promise<ExecutionEnv>
     signal?: AbortSignal
   }): Promise<{ rewrites: [string, string][]; blobIds: string[] }> {
+    assertSafePathSegment(options.parentSessionId, 'parentSessionId')
+    assertSafePathSegment(options.targetSessionId, 'targetSessionId')
     const rewrites: [string, string][] = []
     const blobIds: string[] = []
     if (!options.branchTexts.some((t) => t.includes(', saved at '))) {
@@ -513,13 +452,14 @@ export class BlobStore {
         const name = match[1]!
         const savedPath = match[2]!
         if (seenPaths.has(savedPath)) continue
-        const channelMeta = this.getChannelUploadMeta(
+        const channelMeta = getChannelUploadMeta(
+          this.db,
           options.parentSessionId,
           name,
           savedPath,
         )
         if (channelMeta) {
-          const sourceBlob = this.get(channelMeta.blobId)
+          const sourceBlob = byId.get(channelMeta.blobId)
           if (!sourceBlob || !existsSync(sourceBlob.storagePath)) continue
           seenPaths.add(savedPath)
           env ??= await options.resolveEnv()
@@ -564,13 +504,17 @@ export class BlobStore {
           })
           let dest: string
           try {
+            const safeRemoteLeaf = sanitizeBlobFilename(
+              basename(savedPath.replaceAll('\\', '/')),
+              255,
+            )
             dest =
               env.id === 'node:local'
                 ? clonedBlob.storagePath
-                : await this.writeRemoteUploadFile(
+                : await writeRemoteChannelUploadFile(
                     env,
                     options.targetSessionId,
-                    basename(savedPath.replaceAll('\\', '/')),
+                    safeRemoteLeaf,
                     bytes,
                     options.signal,
                   )
@@ -579,7 +523,7 @@ export class BlobStore {
             await rm(clonedBlob.storagePath, { force: true }).catch(() => {})
             throw error
           }
-          this.saveChannelUploadMeta({
+          saveChannelUploadMeta(this.db, {
             sessionId: options.targetSessionId,
             blobId: clonedBlob.id,
             name,
@@ -614,12 +558,20 @@ export class BlobStore {
           bytes,
           signal: options.signal,
         })
-        const dest = await this.materializeIntoEnv(
-          clonedBlob,
-          env,
-          options.targetSessionId,
-          options.signal,
-        )
+        let dest: string
+        try {
+          dest = await this.materializeIntoEnv(
+            clonedBlob,
+            env,
+            options.targetSessionId,
+            options.signal,
+            true,
+          )
+        } catch (error) {
+          this.deleteRecordIfExists(clonedBlob.id)
+          await rm(clonedBlob.storagePath, { force: true }).catch(() => {})
+          throw error
+        }
         blobIds.push(clonedBlob.id)
         if (dest !== savedPath) {
           rewrites.push([savedPath, dest])
@@ -642,14 +594,9 @@ export class BlobStore {
     const dash = leaf.indexOf('-', 35)
     if (dash === 36) {
       const candidateId = leaf.slice(0, 36)
-      const hit = byId.get(candidateId) ?? this.get(candidateId)
+      const hit = byId.get(candidateId)
       if (hit) return hit
     }
-    const row = this.db.get<Record<string, unknown>>(
-      'SELECT * FROM blobs WHERE storage_path = ? LIMIT 1',
-      savedPath,
-    ) as BlobRow | undefined
-    if (row) return rowToRecord(row)
     return parentBlobs.find(
       (b) =>
         b.filename === filename ||
@@ -677,15 +624,32 @@ export class BlobStore {
       throw new Error('Attachment exceeds the 20 MiB limit')
     }
     const id = options.id ?? randomUUID()
+    assertSafePathSegment(id, 'blobId')
+    if (options.sessionId !== null) {
+      assertSafePathSegment(options.sessionId, 'sessionId')
+    }
+    if (this.get(id)) {
+      throw new Error(`Blob ${id} already exists`)
+    }
     const sha256 = createHash('sha256').update(options.bytes).digest('hex')
     const safeName = sanitizeBlobFilename(options.filename)
     const shardDir = join(resolve(this.rootDir), sha256.slice(0, 2))
     const storagePath = join(shardDir, `${id}-${safeName}`)
     ensurePrivateDirSync(this.rootDir)
     await mkdir(shardDir, { recursive: true, mode: 0o700 })
+    const shardStat = await lstat(shardDir)
+    if (shardStat.isSymbolicLink() || !shardStat.isDirectory()) {
+      throw new Error(`Blob shard path must be a real directory: ${shardDir}`)
+    }
     chmodSync(shardDir, 0o700)
 
+    const existingDest = await lstat(storagePath).catch(() => undefined)
+    if (existingDest) {
+      throw new Error(`Blob file already exists at ${storagePath}`)
+    }
+
     const tempPath = join(shardDir, `.${id}.${randomUUID()}.part`)
+    let createdStorageFile = false
     try {
       const handle = await open(tempPath, 'wx', 0o600)
       try {
@@ -693,7 +657,9 @@ export class BlobStore {
       } finally {
         await handle.close()
       }
-      await rename(tempPath, storagePath)
+      await link(tempPath, storagePath)
+      createdStorageFile = true
+      await rm(tempPath, { force: true }).catch(() => {})
       chmodSync(storagePath, 0o600)
     } catch (error) {
       await rm(tempPath, { force: true }).catch(() => {})
@@ -737,7 +703,9 @@ export class BlobStore {
         createdAt,
       )
     } catch (error) {
-      await rm(storagePath, { force: true }).catch(() => {})
+      if (createdStorageFile) {
+        await rm(storagePath, { force: true }).catch(() => {})
+      }
       throw error
     }
 

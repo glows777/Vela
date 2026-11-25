@@ -13,6 +13,52 @@ export type RunTrigger =
 
 export const PROCESS_OWNER_PREFIX = randomUUID()
 
+const LIVE_PROCESS_OWNERS = new Map<
+  string,
+  { abort?: (reason: string) => Promise<void> | void }
+>()
+
+export class LostRunOwnershipError extends Error {
+  constructor(runId: string) {
+    super(`Lost ownership of run ${runId} before finalization`)
+    this.name = 'LostRunOwnershipError'
+  }
+}
+
+export function registerLiveOwner(
+  ownerToken: string,
+  hooks: { abort?: (reason: string) => Promise<void> | void } = {},
+): void {
+  LIVE_PROCESS_OWNERS.set(ownerToken, hooks)
+}
+
+export function unregisterLiveOwner(ownerToken: string): void {
+  LIVE_PROCESS_OWNERS.delete(ownerToken)
+}
+
+export async function abortLiveProcessOwner(
+  ownerToken: string,
+  reason: string,
+): Promise<boolean> {
+  const entry = LIVE_PROCESS_OWNERS.get(ownerToken)
+  if (!entry?.abort) return false
+  await entry.abort(reason)
+  return true
+}
+
+export function assertSafePathSegment(value: string, label: string): void {
+  if (
+    !value ||
+    value === '.' ||
+    value === '..' ||
+    value.includes('/') ||
+    value.includes('\\') ||
+    value.includes('\0')
+  ) {
+    throw new Error(`Invalid ${label}: "${value}"`)
+  }
+}
+
 function isPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
   try {
@@ -25,11 +71,13 @@ function isPidAlive(pid: number): boolean {
 
 export function isOwnerLive(
   ownerToken: string | null,
-  activeOwners: ReadonlySet<string>,
+  activeOwners: ReadonlySet<string> = new Set(),
 ): boolean {
   if (!ownerToken) return false
   const [prefix, pidText] = ownerToken.split(':')
-  if (prefix === PROCESS_OWNER_PREFIX) return activeOwners.has(ownerToken)
+  if (prefix === PROCESS_OWNER_PREFIX) {
+    return LIVE_PROCESS_OWNERS.has(ownerToken) || activeOwners.has(ownerToken)
+  }
   return isPidAlive(Number(pidText))
 }
 
@@ -67,6 +115,7 @@ export interface DriverTurnRequest {
   abortSignal: AbortSignal
   onDelta: (delta: StreamDeltaEvent) => void
   onEvent: (payload: RuntimeEventPayload) => void
+  wakeSession?: (sessionId: string) => void
   /**
    * Optional hook invoked inside TX1 when the driver commits a final no-tool
    * assistant response, allowing Runtime to close `runs`, `sessions`,

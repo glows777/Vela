@@ -7,6 +7,11 @@ type OutboxStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'cancelled'
 
 export const MAX_OUTBOX_ATTEMPTS = 5
 const BASE_RETRY_MS = 1_000
+const LIVE_OUTBOX_LEASES = new Map<string, string>()
+
+function leaseKey(outboxId: string): string {
+  return `outbox_lease:${outboxId}`
+}
 
 export interface OutboxRecord {
   id: string
@@ -138,16 +143,40 @@ export class OutboxDispatcher {
     private readonly getAdapter: (
       channel: string,
     ) => ChannelAdapter | undefined,
+    private readonly onScheduleChanged?: () => void,
   ) {}
 
   recoverStaleSending(): number {
-    const res = this.db.run(
-      `UPDATE outbox
-       SET status = 'pending', updated_at = ?
-       WHERE status = 'sending'`,
-      new Date().toISOString(),
-    )
-    return res.changes
+    const now = new Date().toISOString()
+    return this.db.transaction(() => {
+      const sendingRows = this.db.all<{ id: string }>(
+        `SELECT id FROM outbox WHERE status = 'sending'`,
+      )
+      let recovered = 0
+      for (const row of sendingRows) {
+        const leaseRow = this.db.get<{ value_json: string }>(
+          'SELECT value_json FROM kv_meta WHERE key = ?',
+          leaseKey(row.id),
+        )
+        let activeLease: string | undefined
+        if (leaseRow) {
+          try {
+            activeLease = JSON.parse(leaseRow.value_json) as string
+          } catch {}
+        }
+        if (activeLease && LIVE_OUTBOX_LEASES.get(row.id) === activeLease) {
+          continue
+        }
+        const res = this.db.run(
+          `UPDATE outbox SET status = 'pending', updated_at = ? WHERE id = ? AND status = 'sending'`,
+          now,
+          row.id,
+        )
+        this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
+        recovered += res.changes
+      }
+      return recovered
+    })
   }
 
   listPending(channel?: string): OutboxRecord[] {
@@ -187,6 +216,7 @@ export class OutboxDispatcher {
     let delivered = 0
     let failed = 0
 
+    let retryScheduled = false
     for (;;) {
       const candidate = this.db.transaction(() => {
         const rows = this.db.all<Record<string, unknown>>(
@@ -199,19 +229,30 @@ export class OutboxDispatcher {
         for (const row of rows) {
           const adapter = this.getAdapter(row.channel)
           if (!adapter) continue
-          this.db.run(
+          const leaseToken = randomUUID()
+          const claimed = this.db.run(
             `UPDATE outbox SET status = 'sending', updated_at = ? WHERE id = ? AND status = 'pending'`,
             nowIso,
             row.id,
           )
-          return { row: rowToOutbox(row), adapter }
+          if (claimed.changes !== 1) continue
+          this.db.run(
+            `INSERT INTO kv_meta (key, value_json, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+            leaseKey(row.id),
+            JSON.stringify(leaseToken),
+            nowIso,
+          )
+          LIVE_OUTBOX_LEASES.set(row.id, leaseToken)
+          return { row: rowToOutbox(row), adapter, leaseToken }
         }
         return undefined
       })
 
       if (!candidate) break
 
-      const { row, adapter } = candidate
+      const { row, adapter, leaseToken } = candidate
       const message: ChannelOutboundMessage = {
         outboxId: row.id,
         kind: row.kind,
@@ -232,53 +273,95 @@ export class OutboxDispatcher {
       try {
         const result = await adapter.deliver(message)
         const sentAt = new Date().toISOString()
-        this.db.run(
-          `UPDATE outbox
-           SET status = 'sent',
-               external_message_id = ?,
-               sent_at = ?,
-               last_error = NULL,
-               next_retry_at = NULL,
-               updated_at = ?
-           WHERE id = ?`,
-          result.externalMessageId ?? null,
-          sentAt,
-          sentAt,
-          row.id,
-        )
-        delivered++
+        const applied = this.db.transaction(() => {
+          const leaseRow = this.db.get<{ value_json: string }>(
+            'SELECT value_json FROM kv_meta WHERE key = ?',
+            leaseKey(row.id),
+          )
+          if (!leaseRow) return false
+          try {
+            if (JSON.parse(leaseRow.value_json) !== leaseToken) return false
+          } catch {
+            return false
+          }
+          const updated = this.db.run(
+            `UPDATE outbox
+             SET status = 'sent',
+                 external_message_id = ?,
+                 sent_at = ?,
+                 last_error = NULL,
+                 next_retry_at = NULL,
+                 updated_at = ?
+             WHERE id = ? AND status = 'sending' AND attempt = ?`,
+            result.externalMessageId ?? null,
+            sentAt,
+            sentAt,
+            row.id,
+            row.attempt,
+          )
+          this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
+          return updated.changes === 1
+        })
+        if (applied) delivered++
       } catch (error) {
         const attempt = row.attempt + 1
         const errorText = error instanceof Error ? error.message : String(error)
         const updatedAt = new Date().toISOString()
-        if (attempt >= MAX_OUTBOX_ATTEMPTS) {
-          this.db.run(
-            `UPDATE outbox
-             SET status = 'failed', attempt = ?, last_error = ?, next_retry_at = NULL, updated_at = ?
-             WHERE id = ?`,
-            attempt,
-            errorText,
-            updatedAt,
-            row.id,
+        const applied = this.db.transaction(() => {
+          const leaseRow = this.db.get<{ value_json: string }>(
+            'SELECT value_json FROM kv_meta WHERE key = ?',
+            leaseKey(row.id),
           )
-        } else {
-          const delayMs = BASE_RETRY_MS * 2 ** (attempt - 1)
-          const nextRetryAt = new Date(nowMs + delayMs).toISOString()
-          this.db.run(
-            `UPDATE outbox
-             SET status = 'pending', attempt = ?, last_error = ?, next_retry_at = ?, updated_at = ?
-             WHERE id = ?`,
-            attempt,
-            errorText,
-            nextRetryAt,
-            updatedAt,
-            row.id,
-          )
+          if (!leaseRow) return false
+          try {
+            if (JSON.parse(leaseRow.value_json) !== leaseToken) return false
+          } catch {
+            return false
+          }
+          let ok = false
+          if (attempt >= MAX_OUTBOX_ATTEMPTS) {
+            ok =
+              this.db.run(
+                `UPDATE outbox
+                 SET status = 'failed', attempt = ?, last_error = ?, next_retry_at = NULL, updated_at = ?
+                 WHERE id = ? AND status = 'sending' AND attempt = ?`,
+                attempt,
+                errorText,
+                updatedAt,
+                row.id,
+                row.attempt,
+              ).changes === 1
+          } else {
+            const delayMs = BASE_RETRY_MS * 2 ** (attempt - 1)
+            const nextRetryAt = new Date(nowMs + delayMs).toISOString()
+            ok =
+              this.db.run(
+                `UPDATE outbox
+                 SET status = 'pending', attempt = ?, last_error = ?, next_retry_at = ?, updated_at = ?
+                 WHERE id = ? AND status = 'sending' AND attempt = ?`,
+                attempt,
+                errorText,
+                nextRetryAt,
+                updatedAt,
+                row.id,
+                row.attempt,
+              ).changes === 1
+            if (ok) retryScheduled = true
+          }
+          this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
+          return ok
+        })
+        if (applied) failed++
+      } finally {
+        if (LIVE_OUTBOX_LEASES.get(row.id) === leaseToken) {
+          LIVE_OUTBOX_LEASES.delete(row.id)
         }
-        failed++
       }
     }
 
+    if (retryScheduled) {
+      this.onScheduleChanged?.()
+    }
     return { delivered, failed }
   }
 }

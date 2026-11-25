@@ -74,6 +74,11 @@ export interface VelaDriverRunOptions {
   onRecoveryComplete?: () => Promise<void> | void
   appendInput?: (message: ModelMessage) => void
   /**
+   * Optional Runtime callback executed inside the SQLite transaction committing each
+   * user/assistant/hosted/tool message so `message_committed` carries the exact DB entry ID atomically.
+   */
+  onMessageCommittedInTx?: (entryId: string, message: ModelMessage) => void
+  /**
    * Optional Runtime callback executed inside TX1 when the final no-tool assistant
    * message is committed, sealing `runs`, `sessions`, `inbox_events`, and `outbox` atomically.
    */
@@ -183,7 +188,10 @@ export class VelaDriver {
       announce: boolean,
       extra: { details?: Record<string, unknown> } = {},
     ) => {
-      store.appendMessage(message, { ...extra, runId })
+      store.runInTransaction(() => {
+        const entry = store.appendMessage(message, { ...extra, runId })
+        options.onMessageCommittedInTx?.(entry.id, message)
+      })
       options.messages.push(message)
       newMessages.push(message)
       tracker.addMessage(message)
@@ -450,16 +458,29 @@ export class VelaDriver {
             rawUsage: finalStep.usage,
             sdkToolErrors: sdkErrorMap,
             terminalError,
-            onCommittedInTx: canCompleteInTx
-              ? (assistantEntryId) => {
-                  committedTerminalInTx = true
-                  options.onTerminalCommitInTx?.({
-                    assistantEntryId,
-                    assistant,
-                    runId,
-                  })
-                }
-              : undefined,
+            onCommittedInTx:
+              options.onMessageCommittedInTx || canCompleteInTx
+                ? (assistantEntryId, hostedEntries) => {
+                    options.onMessageCommittedInTx?.(
+                      assistantEntryId,
+                      assistant,
+                    )
+                    for (const hosted of hostedEntries) {
+                      options.onMessageCommittedInTx?.(
+                        hosted.entryId,
+                        hosted.message,
+                      )
+                    }
+                    if (canCompleteInTx) {
+                      committedTerminalInTx = true
+                      options.onTerminalCommitInTx?.({
+                        assistantEntryId,
+                        assistant,
+                        runId,
+                      })
+                    }
+                  }
+                : undefined,
           })
 
         options.messages.push(assistant)

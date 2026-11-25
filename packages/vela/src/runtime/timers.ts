@@ -93,6 +93,7 @@ export class TimerScheduler {
   constructor(
     private readonly db: VelaDatabase,
     private readonly onWakeSession?: (sessionId: string) => void,
+    private readonly onScheduleChanged?: () => void,
   ) {}
 
   createRoutine(input: {
@@ -117,16 +118,34 @@ export class TimerScheduler {
     }
 
     const id = input.id ?? randomUUID()
-    return this.db.transaction(() => {
-      if (input.projectId) {
+    const created = this.db.transaction(() => {
+      let resolvedProjectId = input.projectId ?? null
+      if (input.sessionId) {
+        const session = this.db.get<{ project_id: string | null }>(
+          'SELECT project_id FROM sessions WHERE id = ?',
+          input.sessionId,
+        )
+        if (!session) throw new Error(`Session ${input.sessionId} not found`)
+        if (
+          input.projectId &&
+          session.project_id &&
+          input.projectId !== session.project_id
+        ) {
+          throw new Error(
+            `Session ${input.sessionId} belongs to project ${session.project_id}, not ${input.projectId}`,
+          )
+        }
+        resolvedProjectId ??= session.project_id
+      }
+      if (resolvedProjectId) {
         const count =
           this.db.get<{ n: number }>(
             `SELECT count(*) AS n FROM timers WHERE project_id = ? AND kind = 'routine'`,
-            input.projectId,
+            resolvedProjectId,
           )?.n ?? 0
         if (count >= MAX_ROUTINES_PER_PROJECT) {
           throw new Error(
-            `Project ${input.projectId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
+            `Project ${resolvedProjectId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
           )
         }
       }
@@ -137,7 +156,7 @@ export class TimerScheduler {
            schedule_updated_at, created_at, updated_at
          ) VALUES (?, 'routine', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
         id,
-        input.projectId ?? null,
+        resolvedProjectId,
         input.sessionId ?? null,
         input.channel ?? null,
         input.creatorId ?? null,
@@ -152,6 +171,8 @@ export class TimerScheduler {
       )
       return this.get(id)!
     })
+    this.onScheduleChanged?.()
+    return created
   }
 
   createFollowup(input: {
@@ -172,7 +193,7 @@ export class TimerScheduler {
     const nowIso = new Date().toISOString()
     const zone = routineTimezone()
 
-    return this.db.transaction(() => {
+    const created = this.db.transaction(() => {
       const session = this.db.get<{
         project_id: string | null
         followup_streak: number
@@ -208,6 +229,8 @@ export class TimerScheduler {
       )
       return this.get(id)!
     })
+    this.onScheduleChanged?.()
+    return created
   }
 
   get(id: string): TimerRecord | undefined {
@@ -273,7 +296,19 @@ export class TimerScheduler {
     const enabled = patch.enabled ?? existing.enabled
     const scheduleChanged =
       patch.schedule !== undefined || patch.timezone !== undefined
-    const nextMs = enabled ? nextOccurrence(schedule, nowMs, zone) : undefined
+    const preserveExistingDeadline =
+      !scheduleChanged &&
+      existing.enabled &&
+      enabled &&
+      existing.nextFireAt !== null
+    const nextFireAt = !enabled
+      ? null
+      : preserveExistingDeadline
+        ? existing.nextFireAt
+        : (() => {
+            const ms = nextOccurrence(schedule, nowMs, zone)
+            return ms === undefined ? null : new Date(ms).toISOString()
+          })()
     this.db.run(
       `UPDATE timers
        SET message = ?, schedule_json = ?, timezone = ?, enabled = ?,
@@ -283,16 +318,18 @@ export class TimerScheduler {
       JSON.stringify(schedule),
       zone,
       enabled ? 1 : 0,
-      nextMs === undefined ? null : new Date(nextMs).toISOString(),
+      nextFireAt,
       scheduleChanged ? nowIso : existing.scheduleUpdatedAt,
       nowIso,
       id,
     )
+    this.onScheduleChanged?.()
     return this.get(id)
   }
 
   delete(id: string): boolean {
     const res = this.db.run('DELETE FROM timers WHERE id = ?', id)
+    if (res.changes > 0) this.onScheduleChanged?.()
     return res.changes > 0
   }
 
@@ -416,6 +453,7 @@ export class TimerScheduler {
     for (const sessionId of wakeSessions) {
       this.onWakeSession?.(sessionId)
     }
+    this.onScheduleChanged?.()
     return { fired, guardrailBlocked }
   }
 

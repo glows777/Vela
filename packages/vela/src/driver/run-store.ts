@@ -4,6 +4,8 @@ import {
   isOwnerLive,
   PROCESS_OWNER_PREFIX,
   type RunTrigger,
+  registerLiveOwner,
+  unregisterLiveOwner,
 } from '../runtime/driver.ts'
 import { errorMessageOf } from './agent/step.ts'
 
@@ -146,6 +148,7 @@ export function claimRunInDb(options: {
   }
   active.add(sessionId)
   activeOwners.add(ownerToken)
+  registerLiveOwner(ownerToken)
 
   try {
     options.ensureSessionRow()
@@ -234,6 +237,7 @@ export function claimRunInDb(options: {
     }, 'IMMEDIATE')
   } catch (error) {
     activeOwners.delete(ownerToken)
+    unregisterLiveOwner(ownerToken)
     active.delete(sessionId)
     if (active.size === 0) activeSessionsByDb.delete(key)
     throw error
@@ -253,6 +257,7 @@ export function claimRunInDb(options: {
         }
       } finally {
         activeOwners.delete(ownerToken)
+        unregisterLiveOwner(ownerToken)
         active.delete(sessionId)
         if (active.size === 0) activeSessionsByDb.delete(key)
       }

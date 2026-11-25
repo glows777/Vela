@@ -7,12 +7,14 @@ import {
   type DriverTerminalOutcome,
   type DriverTurnResult,
   isOwnerLive,
+  LostRunOwnershipError,
   PROCESS_OWNER_PREFIX,
   type RunTrigger,
 } from './driver.ts'
 import type { RuntimeEventBus } from './event-bus.ts'
 import type { RunEndStatus } from './events.ts'
 import {
+  claimApprovalInboxBatchInTx,
   claimInboxBatchInTx,
   completeInboxBatchInTx,
   enqueueInboxEvent,
@@ -278,7 +280,7 @@ export function claimNextTurnInDb(params: {
         sessionId,
       )
       if (!waitingRun) return undefined
-      const batch = claimInboxBatchInTx(db, sessionId, waitingRun.id)
+      const batch = claimApprovalInboxBatchInTx(db, sessionId, waitingRun.id)
       if (!batch.length) return undefined
 
       db.run(
@@ -341,6 +343,25 @@ export function claimNextTurnInDb(params: {
       now,
       now,
     )
+    const inputs = batch.map((item) => ({
+      id: item.id,
+      source: item.source,
+      wake: item.wake,
+      passive: item.passive,
+      payload: item.payload,
+      createdAt: item.createdAt,
+    }))
+    const initialTarget = outboxTargetFromInputs(inputs)
+    if (initialTarget) {
+      db.run(
+        `INSERT INTO kv_meta (key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+        `run_target:${runId}`,
+        JSON.stringify(initialTarget),
+        now,
+      )
+    }
     db.run(
       `UPDATE sessions SET state = 'running', waiting_reason = NULL, updated_at = ? WHERE id = ?`,
       now,
@@ -357,14 +378,7 @@ export function claimNextTurnInDb(params: {
       ownerToken,
       session: { ...session, state: 'running', waitingReason: null },
       trigger,
-      inputs: batch.map((item) => ({
-        id: item.id,
-        source: item.source,
-        wake: item.wake,
-        passive: item.passive,
-        payload: item.payload,
-        createdAt: item.createdAt,
-      })),
+      inputs,
       recoverPending: false,
       allowWaitingHuman: false,
     }
@@ -380,7 +394,7 @@ export function commitCompletedTurnInTx(params: {
 }): void {
   const { db, eventBus, claimed, outcome, outboxTarget } = params
   const now = new Date().toISOString()
-  db.run(
+  const updatedRun = db.run(
     `UPDATE runs
      SET status = 'completed', error = NULL, finished_at = ?, updated_at = ?
      WHERE id = ? AND owner_token = ?`,
@@ -389,6 +403,11 @@ export function commitCompletedTurnInTx(params: {
     claimed.runId,
     claimed.ownerToken,
   )
+  if (updatedRun.changes !== 1) {
+    throw new LostRunOwnershipError(claimed.runId)
+  }
+  db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${claimed.runId}`)
+  db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${claimed.runId}`)
   db.run(
     `UPDATE sessions
      SET state = 'idle', waiting_reason = NULL, updated_at = ?
@@ -444,7 +463,7 @@ export function finalizeTurnInDb(params: {
     const nextSessionState =
       status === 'waiting_human' ? 'waiting_human' : 'idle'
 
-    db.run(
+    const updatedRun = db.run(
       `UPDATE runs
        SET status = ?, error = ?, finished_at = ?, updated_at = ?
        WHERE id = ? AND owner_token = ?`,
@@ -455,6 +474,16 @@ export function finalizeTurnInDb(params: {
       claimed.runId,
       claimed.ownerToken,
     )
+    if (updatedRun.changes !== 1) {
+      throw new LostRunOwnershipError(claimed.runId)
+    }
+    if (status !== 'waiting_human') {
+      db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${claimed.runId}`)
+      db.run(
+        'DELETE FROM kv_meta WHERE key = ?',
+        `stop_requested:${claimed.runId}`,
+      )
+    }
     db.run(
       `UPDATE sessions
        SET state = ?, waiting_reason = ?, updated_at = ?
@@ -498,9 +527,7 @@ export function finalizeTurnInDb(params: {
   })
 }
 
-export function resolveOutboxTargetInDb(
-  db: VelaDatabase,
-  session: SessionRecord,
+function outboxTargetFromInputs(
   inputs: readonly DriverInboxItem[],
 ): OutboxTarget | undefined {
   for (let i = inputs.length - 1; i >= 0; i--) {
@@ -522,6 +549,37 @@ export function resolveOutboxTargetInDb(
       }
     }
   }
+  return undefined
+}
+
+export function resolveOutboxTargetInDb(
+  db: VelaDatabase,
+  session: SessionRecord,
+  inputs: readonly DriverInboxItem[],
+  runId?: string,
+): OutboxTarget | undefined {
+  const directInput = outboxTargetFromInputs(inputs)
+  if (directInput) return directInput
+
+  if (runId) {
+    const stored = db.get<{ value_json: string }>(
+      'SELECT value_json FROM kv_meta WHERE key = ?',
+      `run_target:${runId}`,
+    )
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored.value_json) as OutboxTarget
+        if (
+          parsed &&
+          typeof parsed.channel === 'string' &&
+          typeof parsed.externalChatId === 'string'
+        ) {
+          return parsed
+        }
+      } catch {}
+    }
+  }
+
   const direct = db.get<{
     channel: string
     external_id: string

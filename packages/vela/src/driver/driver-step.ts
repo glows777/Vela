@@ -508,7 +508,10 @@ export function persistAssistantStepTx(options: {
   rawUsage: ProviderUsage
   sdkToolErrors?: ReadonlyMap<string, string>
   terminalError?: (toolName: string) => string
-  onCommittedInTx?: (assistantEntryId: string) => void
+  onCommittedInTx?: (
+    assistantEntryId: string,
+    hostedEntries: Array<{ entryId: string; message: ModelMessage }>,
+  ) => void
 }): { entry: SessionMessageEntry; hostedMessages: ModelMessage[] } {
   const {
     db,
@@ -619,10 +622,12 @@ export function persistAssistantStepTx(options: {
       responseMessages,
       clientCalls,
     )
+    const hostedEntries: Array<{ entryId: string; message: ModelMessage }> = []
     for (const hostedMsg of hostedMessages) {
-      store.appendMessage(hostedMsg, { runId })
+      const hostedEntry = store.appendMessage(hostedMsg, { runId })
+      hostedEntries.push({ entryId: hostedEntry.id, message: hostedMsg })
     }
-    onCommittedInTx?.(entry.id)
+    onCommittedInTx?.(entry.id, hostedEntries)
     return { entry, hostedMessages }
   })
 }

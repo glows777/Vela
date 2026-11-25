@@ -667,3 +667,52 @@ test('fresh v1 database includes s2b columns (owner_token, tool_call_row_id, cho
     ),
   ).toEqual({ tool_call_row_id: 'tc-v1' })
 })
+
+test('openDatabase repairs legacy v1 channel_bindings UNIQUE(channel, external_id) to partial indexes', () => {
+  const dir = tempDir('vela-v1-repair-')
+  const dbPath = join(dir.path, 'legacy-v1.db')
+  const raw = new DatabaseSync(dbPath)
+  const now = '2026-11-24T00:00:00Z'
+  raw.exec(`
+    PRAGMA user_version = 1;
+    CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, '001_initial', '${now}');
+    CREATE TABLE projects (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE channel_bindings (
+      id TEXT PRIMARY KEY NOT NULL,
+      channel TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      thread_id TEXT,
+      kind TEXT NOT NULL CHECK (kind IN ('group', 'direct')),
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      config_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (channel, external_id)
+    );
+    INSERT INTO channel_bindings (id, channel, external_id, thread_id, kind, enabled, created_at, updated_at)
+    VALUES ('root-1', 'lark', 'oc_chat', NULL, 'group', 1, '${now}', '${now}');
+  `)
+  raw.close()
+
+  const db = openDatabase({ path: dbPath })
+  cleanup.push({ dir, db })
+  expect(db.schemaVersion).toBe(1)
+  expect(() =>
+    db.run(
+      "INSERT INTO channel_bindings (id, channel, external_id, thread_id, kind, enabled, created_at, updated_at) VALUES ('topic-1', 'lark', 'oc_chat', 'omt_1', 'group', 1, ?, ?)",
+      now,
+      now,
+    ),
+  ).not.toThrow()
+  expect(() =>
+    db.run(
+      "INSERT INTO channel_bindings (id, channel, external_id, thread_id, kind, enabled, created_at, updated_at) VALUES ('topic-dup', 'lark', 'oc_chat', 'omt_1', 'group', 1, ?, ?)",
+      now,
+      now,
+    ),
+  ).toThrow()
+})

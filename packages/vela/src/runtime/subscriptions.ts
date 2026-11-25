@@ -138,12 +138,15 @@ export class SubscriptionManager {
     let enqueuedCount = 0
 
     this.db.transaction(() => {
+      const seenSessions = new Set<string>()
       for (const sub of subs) {
+        if (seenSessions.has(sub.sessionId)) continue
+        seenSessions.add(sub.sessionId)
         const { inserted } = enqueueInboxEvent(this.db, {
           sessionId: sub.sessionId,
           projectId: sub.projectId,
           source: 'webhook',
-          dedupeKey: `${input.source}:${input.dedupeKey}:${sub.id}`,
+          dedupeKey: `${input.source}:${input.dedupeKey}:${sub.sessionId}`,
           wake: true,
           payload: {
             type: 'webhook',

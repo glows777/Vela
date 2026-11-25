@@ -65,12 +65,14 @@ export function listSessionSummariesFromDb(
       ? (JSON.parse(session.location_json) as { cwd?: string })
       : undefined
     if (targetCwd && !filter?.projectId) {
-      const matchesProject =
-        session.project_id !== null &&
-        matchingProjectIds.has(session.project_id)
-      const matchesCwd =
-        location?.cwd !== undefined && resolve(location.cwd) === targetCwd
-      if (!matchesProject && !matchesCwd) continue
+      if (session.project_id !== null) {
+        if (!matchingProjectIds.has(session.project_id)) continue
+      } else if (
+        location?.cwd === undefined ||
+        resolve(location.cwd) !== targetCwd
+      ) {
+        continue
+      }
     }
     const countRow = db.get<{ n: number }>(
       "SELECT count(*) AS n FROM vela_messages WHERE session_id = ? AND kind IN ('message', 'bash_execution')",

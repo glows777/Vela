@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { VelaDatabase } from '../db/index.ts'
 import type { ExecutionLocation } from '../shared/execution.ts'
 import type { ChannelBinding, ChannelBindingKind } from './channels.ts'
+import { assertSafePathSegment, isOwnerLive } from './driver.ts'
 
 type SessionKind = 'chat' | 'hub' | 'topic' | 'work'
 type SessionState = 'idle' | 'running' | 'waiting_human' | 'stopped'
@@ -361,6 +362,46 @@ export class ProjectStore {
     return this.get(id)!
   }
 
+  private assertDeletableSessions(sessionIds: readonly string[]): void {
+    for (const sid of sessionIds) {
+      const activeRuns = this.db.all<{
+        id: string
+        owner_token: string | null
+      }>(
+        `SELECT id, owner_token FROM runs WHERE session_id = ? AND status IN ('queued', 'running')`,
+        sid,
+      )
+      if (activeRuns.some((r) => isOwnerLive(r.owner_token))) {
+        throw new Error(
+          `Cannot delete session ${sid} while a run is actively executing; stop it first`,
+        )
+      }
+    }
+  }
+
+  private cleanupSessionRowsInTx(sessionId: string): void {
+    const runIds = this.db
+      .all<{ id: string }>(
+        'SELECT id FROM runs WHERE session_id = ?',
+        sessionId,
+      )
+      .map((r) => r.id)
+    this.db.run('DELETE FROM channel_bindings WHERE session_id = ?', sessionId)
+    this.db.run(
+      `DELETE FROM kv_meta WHERE key = ? OR key LIKE ? OR key LIKE ?`,
+      `legacy_session_channel:${sessionId}`,
+      `channel_upload:${sessionId}:%`,
+      `run_target:${sessionId}:%`,
+    )
+    for (const runId of runIds) {
+      this.db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${runId}`)
+      this.db.run(
+        'DELETE FROM kv_meta WHERE key = ?',
+        `stop_requested:${runId}`,
+      )
+    }
+  }
+
   /**
    * Unlinks project metadata from `vela.db` (`channel_bindings`, `timers`, `subscriptions`
    * cascade; `sessions.project_id` becomes `NULL` unless deleted separately).
@@ -371,6 +412,16 @@ export class ProjectStore {
       const exists = this.get(id)
       if (!exists) return false
       if (options.deleteSessions) {
+        const sessionIds = this.db
+          .all<{ id: string }>(
+            'SELECT id FROM sessions WHERE project_id = ?',
+            id,
+          )
+          .map((row) => row.id)
+        this.assertDeletableSessions(sessionIds)
+        for (const sid of sessionIds) {
+          this.cleanupSessionRowsInTx(sid)
+        }
         this.db.run('DELETE FROM sessions WHERE project_id = ?', id)
       }
       const res = this.db.run('DELETE FROM projects WHERE id = ?', id)
@@ -385,6 +436,7 @@ export class SessionStoreControl {
 
   create(input: CreateSessionInput = {}): SessionRecord {
     const id = input.id ?? randomUUID()
+    assertSafePathSegment(id, 'sessionId')
     const now = new Date().toISOString()
     let inheritedLocation = input.location ?? null
     let inheritedModel = input.model ?? null
@@ -470,6 +522,36 @@ export class SessionStoreControl {
 
   delete(id: string): boolean {
     return this.db.transaction(() => {
+      const existing = this.get(id)
+      if (!existing) return false
+      const activeRuns = this.db.all<{
+        id: string
+        owner_token: string | null
+      }>(
+        `SELECT id, owner_token FROM runs WHERE session_id = ? AND status IN ('queued', 'running')`,
+        id,
+      )
+      if (activeRuns.some((r) => isOwnerLive(r.owner_token))) {
+        throw new Error(
+          `Cannot delete session ${id} while a run is actively executing; stop it first`,
+        )
+      }
+      const runIds = this.db
+        .all<{ id: string }>('SELECT id FROM runs WHERE session_id = ?', id)
+        .map((r) => r.id)
+      this.db.run('DELETE FROM channel_bindings WHERE session_id = ?', id)
+      this.db.run(
+        `DELETE FROM kv_meta WHERE key = ? OR key LIKE ?`,
+        `legacy_session_channel:${id}`,
+        `channel_upload:${id}:%`,
+      )
+      for (const runId of runIds) {
+        this.db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${runId}`)
+        this.db.run(
+          'DELETE FROM kv_meta WHERE key = ?',
+          `stop_requested:${runId}`,
+        )
+      }
       const res = this.db.run('DELETE FROM sessions WHERE id = ?', id)
       return res.changes > 0
     })

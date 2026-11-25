@@ -276,10 +276,7 @@ export function resolveRuntimeApproval(
       `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1`,
       row.run_id,
     )
-    const shouldWake =
-      !remaining &&
-      input.decision !== 'cancelled' &&
-      input.enqueueWake !== false
+    const shouldWake = !remaining && input.enqueueWake !== false
     if (shouldWake) {
       enqueueInboxEvent(db, {
         sessionId: row.session_id,

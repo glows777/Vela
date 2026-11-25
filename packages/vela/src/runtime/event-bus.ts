@@ -73,7 +73,9 @@ export class RuntimeEventBus {
     }
     this.db.afterCommit(() => {
       for (const listener of this.eventListeners) {
-        listener(event)
+        try {
+          listener(event)
+        } catch {}
       }
     })
     return event
@@ -121,7 +123,9 @@ export class RuntimeEventBus {
     }
     buffer.push(delta)
     for (const listener of this.deltaListeners) {
-      listener(delta)
+      try {
+        listener(delta)
+      } catch {}
     }
   }
 
