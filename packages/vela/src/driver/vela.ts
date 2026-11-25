@@ -599,9 +599,10 @@ function initVelaInstance(
           resolveExecution(session, target, signal),
           signal,
         )
-        const resolvedLocation = local
-          ? location
-          : await canonicalEnvironmentPath(env, location, signal)
+        const resolvedLocation =
+          local || !resourceSplit
+            ? location
+            : await canonicalEnvironmentPath(env, location, signal)
         const workspaceMode = projectConfig.mode(
           resolvedLocation,
           target.environment,

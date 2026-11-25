@@ -33,7 +33,7 @@ export function cliProjectExtensions(
   config: VelaConfig,
   args: CliArgs,
   onDiagnostic: (message: string) => void = () => {},
-  mcpPool: McpPool = new McpPool(),
+  mcpPool: McpPool = new McpPool({ idleTtlMs: 0 }),
 ) {
   const explicit = explicitNames(args)
   const split = config.sessionResources!
