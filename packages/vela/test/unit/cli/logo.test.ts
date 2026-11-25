@@ -1,11 +1,19 @@
 import { expect, test } from 'bun:test'
-import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
+import {
+  foregroundAnsi,
+  getTerminalColorMode,
+  rgbColor,
+  stripTerminalSequences,
+  type TerminalColors,
+  visibleWidth,
+} from '@earendil-works/pi-tui'
 import {
   headerText,
   LOGO_COLUMNS,
   LOGO_LINES,
   logoLines,
   StartupHeader,
+  schemeForBackground,
   supportsLogo,
 } from '../../../src/cli/tui/logo.ts'
 
@@ -13,6 +21,15 @@ const GAP = 2
 const TEXT_COLUMN = LOGO_COLUMNS + GAP
 const MIN_TEXT = 32
 const PADDING = 2
+/** The hair color's escape in this terminal's color mode (truecolor or the nearest 256-color index). */
+const DARK_HAIR = foregroundAnsi(
+  rgbColor(159, 211, 207),
+  getTerminalColorMode(),
+)
+const LIGHT_HAIR = foregroundAnsi(
+  rgbColor(55, 103, 112),
+  getTerminalColorMode(),
+)
 
 /** The text of each rendered line, without colors or trailing padding. */
 function plain(lines: string[]): string[] {
@@ -76,4 +93,68 @@ test('the header component renders the mark, and the text alone on a narrow term
   const narrow = plain(header.render(30))
   expect(narrow.join('\n')).not.toContain('█')
   expect(narrow[0]?.trim()).toBe('TITLE')
+})
+
+test('a light terminal background picks the light palette, anything else the dark one', () => {
+  expect(schemeForBackground({ r: 255, g: 255, b: 255 })).toBe('light')
+  expect(schemeForBackground({ r: 253, g: 246, b: 227 })).toBe('light')
+  expect(schemeForBackground({ r: 26, g: 28, b: 32 })).toBe('dark')
+  expect(schemeForBackground({ r: 0, g: 43, b: 54 })).toBe('dark')
+  // No OSC 11 reply: keep the palette the portrait always had
+  expect(schemeForBackground(undefined)).toBe('dark')
+})
+
+test('the light palette darkens the hair and keeps the shape', () => {
+  const dark = logoLines('dark')
+  const light = logoLines('light')
+  expect(plain(light)).toEqual(plain(dark))
+  expect(dark.join('')).toContain(DARK_HAIR)
+  expect(light.join('')).toContain(LIGHT_HAIR)
+  expect(light.join('')).not.toContain(DARK_HAIR)
+})
+
+/** A TUI stand-in that answers the color query with `background` once `reply` is called. */
+function fakeTui() {
+  let answer: (colors: TerminalColors) => void = () => {}
+  const tui = {
+    queries: 0,
+    renders: 0,
+    queryTerminalColors() {
+      tui.queries++
+      return new Promise<TerminalColors>((resolve) => {
+        answer = resolve
+      })
+    },
+    requestRender() {
+      tui.renders++
+    },
+    reply: (colors: TerminalColors) => answer(colors),
+  }
+  return tui
+}
+
+test('the header starts dark and redraws in the light palette once a light background is reported', async () => {
+  const tui = fakeTui()
+  const header = new StartupHeader(() => ['TITLE'], tui)
+  expect(header.render(100).join('')).toContain(DARK_HAIR)
+  tui.reply({ background: { r: 255, g: 255, b: 255 } })
+  await Promise.resolve()
+  expect(tui.renders).toBe(1)
+  expect(header.render(100).join('')).toContain(LIGHT_HAIR)
+  // A rebuilt header keeps the detected scheme without asking the terminal again
+  expect(
+    new StartupHeader(() => ['TITLE'], tui).render(100).join(''),
+  ).toContain(LIGHT_HAIR)
+  expect(tui.queries).toBe(1)
+})
+
+test('a dark or missing background reply keeps the dark palette without a redraw', async () => {
+  for (const colors of [{ background: { r: 26, g: 28, b: 32 } }, {}]) {
+    const tui = fakeTui()
+    const header = new StartupHeader(() => ['TITLE'], tui)
+    tui.reply(colors)
+    await Promise.resolve()
+    expect(tui.renders).toBe(0)
+    expect(header.render(100).join('')).toContain(DARK_HAIR)
+  }
 })
