@@ -1,8 +1,32 @@
+import { posix } from 'node:path'
 import { mergeConfig, type VelaSettings } from '../../config/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
 import { loadProjectSettings } from '../config/project-settings.ts'
 import type { ConfigResourceSplit } from '../config/runtime-resources.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
+
+/** Resolve a POSIX environment path through its adapter, canonicalizing deepest existing ancestor. */
+export async function canonicalEnvironmentPath(
+  env: ExecutionEnv,
+  targetPath: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  let cur = posix.resolve('/', targetPath)
+  const missing: string[] = []
+  for (;;) {
+    const res = await env.canonicalPath(cur, signal)
+    if (res.ok) {
+      return missing.length
+        ? posix.join(res.value, ...missing.reverse())
+        : res.value
+    }
+    if (res.error.code !== 'not_found') throw res.error
+    const parent = posix.dirname(cur)
+    if (parent === cur) return posix.resolve('/', targetPath)
+    missing.push(posix.basename(cur))
+    cur = parent
+  }
+}
 
 /** Pinned per-session settings; distinct sessions may observe newer project files. */
 export class ProjectConfig {
@@ -51,12 +75,18 @@ export class ProjectConfig {
     if (!pending) {
       const split = this.split
       pending = split
-        ? loadProjectSettings(env, {
-            cwd: env.cwd,
-            trusted: this.mode(env.cwd, environment) === 'all',
-            agentDir: split.agentDir,
-            env: env.id === 'node:local' ? split.env : {},
-          }).then(async ({ settings }) => {
+        ? (async () => {
+            const canonicalCwd =
+              env.id === 'node:local'
+                ? env.cwd
+                : await canonicalEnvironmentPath(env, env.cwd)
+            const trusted = this.mode(canonicalCwd, environment) === 'all'
+            const { settings } = await loadProjectSettings(env, {
+              cwd: canonicalCwd,
+              trusted,
+              agentDir: split.agentDir,
+              env: env.id === 'node:local' ? split.env : {},
+            })
             if (
               settings.dataDir &&
               env.id === 'node:local' &&
@@ -76,7 +106,7 @@ export class ProjectConfig {
               merged.prompts = settings.prompts
             }
             return { settings: merged, project: settings }
-          })
+          })()
         : Promise.resolve({ settings: {}, project: {} })
       this.snapshots.set(id, pending)
       void pending.catch(() => {

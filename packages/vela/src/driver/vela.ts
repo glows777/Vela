@@ -45,7 +45,10 @@ import {
 import type { SessionSummary } from './session/entries.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
-import { ProjectConfig } from './session/project-config.ts'
+import {
+  canonicalEnvironmentPath,
+  ProjectConfig,
+} from './session/project-config.ts'
 import { ProjectExtensions } from './session/project-extensions.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
 import { WorkspaceResources } from './session/resources.ts'
@@ -432,12 +435,8 @@ function initVelaInstance(
           id,
         )
       : undefined
-    sessionDates.set(
-      id,
-      savedRow?.created_at
-        ? localDateString(new Date(savedRow.created_at))
-        : localDateString(),
-    )
+    const sessionCreatedAt = savedRow?.created_at ?? new Date().toISOString()
+    sessionDates.set(id, localDateString(new Date(sessionCreatedAt)))
     const created: VelaSession = new VelaSession(
       id,
       {
@@ -465,6 +464,7 @@ function initVelaInstance(
           join(dataDir, 'sessions', sessionId, 'tool-results'),
         cwd,
         shellPath: options.shellPath,
+        createdAt: sessionCreatedAt,
         registry,
         builder,
         // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)
@@ -599,7 +599,13 @@ function initVelaInstance(
           resolveExecution(session, target, signal),
           signal,
         )
-        const workspaceMode = projectConfig.mode(location, target.environment)
+        const resolvedLocation = local
+          ? location
+          : await canonicalEnvironmentPath(env, location, signal)
+        const workspaceMode = projectConfig.mode(
+          resolvedLocation,
+          target.environment,
+        )
         const settings = await projectConfig.get(key, env, target.environment)
         signal.throwIfAborted()
         await projects.prepare(key, env, target.environment)

@@ -5,17 +5,28 @@ import { openDatabase, type VelaDatabase } from './sqlite.ts'
 
 const ENV_KEY_PREFIX = 'env:'
 
-function canonicalDir(dir: string): string {
+function canonicalLocalPath(dir: string): string {
   const resolved = resolve(dir)
-  try {
-    return realpathSync(resolved)
-  } catch {
-    return resolved
+  const missing: string[] = []
+  let cur = resolved
+  for (;;) {
+    try {
+      const real = realpathSync(cur)
+      return missing.length ? join(real, ...missing.reverse()) : real
+    } catch {
+      const parent = dirname(cur)
+      if (parent === cur) return resolved
+      missing.push(cur.slice(parent.length).replace(/^[\\/]+/, ''))
+      cur = parent
+    }
   }
 }
 
-function nonLocalTrustPrefix(environment: string): string {
-  return `${ENV_KEY_PREFIX}${encodeURIComponent(environment)}:`
+function nonLocalTrustPrefix(environment: string, ownerScope?: string): string {
+  const scope = ownerScope
+    ? `${encodeURIComponent(canonicalLocalPath(ownerScope))}:`
+    : ''
+  return `${ENV_KEY_PREFIX}${scope}${encodeURIComponent(environment)}:`
 }
 
 function isReadonlyWalOpenError(error: unknown): boolean {
@@ -27,13 +38,24 @@ function isReadonlyWalOpenError(error: unknown): boolean {
   )
 }
 
-/** Canonical `trusted_paths.path` key for local directories or `env:<encodedName>:<posixCwd>` non-local locations. */
-export function trustLocationKey(target: string | ExecutionLocation): string {
+function isMissingFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === 'ENOENT'
+}
+
+/**
+ * Canonical `trusted_paths.path` key for local directories or non-local locations
+ * (`env:<encodedName>:<posixCwd>`, optionally scoped to canonical owner `dataDir`).
+ */
+export function trustLocationKey(
+  target: string | ExecutionLocation,
+  ownerScope?: string,
+): string {
   if (typeof target !== 'string' && target.environment !== 'local') {
-    return `${nonLocalTrustPrefix(target.environment)}${posix.resolve('/', target.cwd)}`
+    return `${nonLocalTrustPrefix(target.environment, ownerScope)}${posix.resolve('/', target.cwd)}`
   }
   const cwd = typeof target === 'string' ? target : target.cwd
-  return canonicalDir(cwd)
+  return canonicalLocalPath(cwd)
 }
 
 function withTrustDb<T>(
@@ -54,7 +76,19 @@ function withTrustDb<T>(
       }
     } catch (error) {
       if (!isReadonlyWalOpenError(error)) throw error
+      if (!existsSync(dbPath)) return undefined
       // WAL-mode SQLite databases fail SQLITE_OPEN_READONLY when -wal/-shm were removed after close.
+    }
+    try {
+      const existingDb = openDatabase({ path: dbPath, mustExist: true })
+      try {
+        return fn(existingDb)
+      } finally {
+        existingDb.close()
+      }
+    } catch (error) {
+      if (isMissingFileError(error)) return undefined
+      throw error
     }
   }
   const db = openDatabase({ path: dbPath })
@@ -80,13 +114,14 @@ function readTrustRows(db: VelaDatabase): Map<string, boolean> {
 export function savedTrust(
   source: string | VelaDatabase,
   target: string | ExecutionLocation,
+  ownerScope?: string,
 ): boolean | undefined {
   return withTrustDb(source, true, (db) => {
     const entries = readTrustRows(db)
     if (entries.size === 0) return undefined
 
     if (typeof target !== 'string' && target.environment !== 'local') {
-      const prefix = nonLocalTrustPrefix(target.environment)
+      const prefix = nonLocalTrustPrefix(target.environment, ownerScope)
       let cur = posix.resolve('/', target.cwd)
       for (;;) {
         const match = entries.get(`${prefix}${cur}`)
@@ -98,41 +133,14 @@ export function savedTrust(
     }
 
     const cwd = typeof target === 'string' ? target : target.cwd
-    const decisions: Record<string, boolean> = {}
-    const byCanonical = new Map<string, boolean>()
-    for (const [key, val] of entries) {
-      if (key.startsWith(ENV_KEY_PREFIX)) continue
-      decisions[key] = val
-      const canon = canonicalDir(key)
-      const prev = byCanonical.get(canon)
-      byCanonical.set(canon, prev !== false && val !== false)
+    let cur = canonicalLocalPath(cwd)
+    for (;;) {
+      const match = entries.get(cur)
+      if (match !== undefined) return match
+      const parent = dirname(cur)
+      if (parent === cur) return undefined
+      cur = parent
     }
-
-    let curCanon = canonicalDir(cwd)
-    let curRaw = resolve(cwd)
-    let canonDone = false
-    let rawDone = false
-    while (!canonDone || !rawDone) {
-      const matches: boolean[] = []
-      if (!rawDone && typeof decisions[curRaw] === 'boolean') {
-        matches.push(decisions[curRaw]!)
-      }
-      if (!canonDone) {
-        const canonMatch = byCanonical.get(curCanon)
-        if (typeof canonMatch === 'boolean') matches.push(canonMatch)
-        if (typeof decisions[curCanon] === 'boolean') {
-          matches.push(decisions[curCanon]!)
-        }
-      }
-      if (matches.length > 0) return !matches.includes(false)
-      const nextCanon = dirname(curCanon)
-      const nextRaw = dirname(curRaw)
-      if (nextCanon === curCanon) canonDone = true
-      else curCanon = nextCanon
-      if (nextRaw === curRaw) rawDone = true
-      else curRaw = nextRaw
-    }
-    return undefined
   })
 }
 
@@ -141,8 +149,9 @@ export function saveTrust(
   source: string | VelaDatabase,
   target: string | ExecutionLocation,
   trusted: boolean,
+  ownerScope?: string,
 ): void {
-  const key = trustLocationKey(target)
+  const key = trustLocationKey(target, ownerScope)
   const now = new Date().toISOString()
   withTrustDb(source, false, (db) => {
     db.run(

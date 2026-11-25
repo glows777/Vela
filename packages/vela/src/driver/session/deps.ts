@@ -113,6 +113,8 @@ export interface SessionDeps<Session> {
   cwd?: string
   /** Shell for `executeBash()` (settings `shellPath`); default bash on PATH, or bash.exe on Windows */
   shellPath?: string
+  /** Session creation instant frozen at handle creation. */
+  createdAt?: string
   /** Shared Vela SQLite database */
   db: VelaDatabase
   /** When true, sessions run against an in-memory DB without disk persistence */

@@ -83,6 +83,7 @@ export class SessionStore {
   private modelName?: string
   private thinking?: ThinkingLevel
   private parentSessionId?: string
+  private createdAt?: string
   private archivedFlag = false
   private discovered: string[] = []
 
@@ -118,6 +119,7 @@ export class SessionStore {
     this.logger = opts.logger ?? silentLogger
     this.cwd = opts.cwd
     this.location = opts.location
+    this.createdAt = opts.createdAt
     this.onSaved = opts.onSaved
 
     if (dbOrDir instanceof VelaDatabase) {
@@ -574,6 +576,7 @@ export class SessionStore {
       discoveredTools: this.discovered,
       parentSessionId: this.parentSessionId,
       channel: this.channel,
+      createdAt: this.createdAt,
     })
     for (const entry of this.entries) {
       const extra =
@@ -761,6 +764,7 @@ export class SessionStore {
     this.thinking = meta.thinkingLevel
     this.archivedFlag = meta.row.archived === 1
     this.parentSessionId = meta.row.parent_session_id ?? undefined
+    this.createdAt = meta.row.created_at
     this.discovered = meta.discoveredTools
     this.channel = meta.channel ?? getSessionChannel(this.db, this.sessionId)
     this.replaceEntries(entries)

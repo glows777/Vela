@@ -73,6 +73,8 @@ export class EnvironmentRegistry {
   private readonly opened = new Map<string, Promise<ExecutionEnv>>()
   private readonly locks = new Map<string, Promise<unknown>>()
   private readonly cleanups = new Set<Promise<void>>()
+  private readonly cleanupErrors: unknown[] = []
+  private disposing: Promise<void> | undefined
   private disposed = false
 
   constructor(options: EnvironmentRegistryOptions) {
@@ -135,35 +137,42 @@ export class EnvironmentRegistry {
     if (name === 'local' || !Object.hasOwn(this.definitions, name)) return
     const key = JSON.stringify([name, cwd])
     return this.serialized(key, async () => {
-      if (this.disposed) throw Error('EnvironmentRegistry has been disposed')
-      const cached = this.opened.get(key)
-      if (cached) {
-        let env: ExecutionEnv | undefined
+      for (;;) {
+        if (this.disposed) throw Error('EnvironmentRegistry has been disposed')
+        const cached = this.opened.get(key)
+        if (cached) {
+          let env: ExecutionEnv | undefined
+          try {
+            env = await cached
+          } catch {
+            if (this.opened.get(key) === cached) this.opened.delete(key)
+          }
+          if (env) {
+            const alive = await this.isContainerAlive(env)
+            if (this.disposed)
+              throw Error('EnvironmentRegistry has been disposed')
+            // If invalidated or replaced while the probe was in flight, re-resolve.
+            if (this.opened.get(key) !== cached) continue
+            if (alive) return env
+            this.opened.delete(key)
+            await this.trackCleanup(env.cleanup(), false)
+          }
+        }
+        const options = {
+          ...parseDockerDefinition(name, this.definitions[name], this.hostEnv),
+          dataDir: this.dataDir,
+          hostEnv: this.hostEnv,
+          ...(this.guestPath ? { guestPath: this.guestPath } : {}),
+          ...(this.dockerHost ? { dockerHost: this.dockerHost } : {}),
+        }
+        const pending = this.openDocker(options, cwd)
+        this.opened.set(key, pending)
         try {
-          env = await cached
-        } catch {
-          if (this.opened.get(key) === cached) this.opened.delete(key)
+          return await pending
+        } catch (error) {
+          if (this.opened.get(key) === pending) this.opened.delete(key)
+          throw error
         }
-        if (env) {
-          if (await this.isContainerAlive(env)) return env
-          if (this.opened.get(key) === cached) this.opened.delete(key)
-          await this.trackCleanup(env.cleanup()).catch(() => {})
-        }
-      }
-      const options = {
-        ...parseDockerDefinition(name, this.definitions[name], this.hostEnv),
-        dataDir: this.dataDir,
-        hostEnv: this.hostEnv,
-        ...(this.guestPath ? { guestPath: this.guestPath } : {}),
-        ...(this.dockerHost ? { dockerHost: this.dockerHost } : {}),
-      }
-      const pending = this.openDocker(options, cwd)
-      this.opened.set(key, pending)
-      try {
-        return await pending
-      } catch (error) {
-        if (this.opened.get(key) === pending) this.opened.delete(key)
-        throw error
       }
     })
   }
@@ -177,38 +186,45 @@ export class EnvironmentRegistry {
       (env) => env.cleanup(),
       () => {},
     )
-    this.trackCleanup(cleanup)
+    this.trackCleanup(cleanup, true)
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
     this.disposed = true
-    await Promise.allSettled([...this.locks.values()])
-    const pending = [...this.opened.values()]
-    this.opened.clear()
-    const results = await Promise.allSettled(pending)
-    const cleanupPromises: Promise<void>[] = [
-      ...this.cleanups,
-      ...results.flatMap((result) =>
-        result.status === 'fulfilled'
-          ? [this.trackCleanup(result.value.cleanup())]
-          : [],
-      ),
-    ]
-    await Promise.all(cleanupPromises)
-    if (this.cleanups.size > 0) {
-      await Promise.all([...this.cleanups])
-    }
+    this.disposing ??= (async () => {
+      await Promise.allSettled([...this.locks.values()])
+      const pending = [...this.opened.values()]
+      this.opened.clear()
+      const results = await Promise.allSettled(pending)
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          this.trackCleanup(result.value.cleanup(), true)
+        }
+      }
+      while (this.cleanups.size > 0) {
+        await Promise.allSettled([...this.cleanups])
+      }
+      const errors = this.cleanupErrors.splice(0)
+      if (errors.length === 1) throw errors[0]
+      if (errors.length > 1)
+        throw new AggregateError(errors, 'EnvironmentRegistry disposal failed')
+    })()
+    return this.disposing
   }
 
-  private trackCleanup(promise: Promise<void>): Promise<void> {
-    // Attach a no-op rejection handler so invalidated cleanups do not trigger unhandledrejection before dispose().
-    promise.catch(() => {})
-    this.cleanups.add(promise)
-    void promise.then(
-      () => this.cleanups.delete(promise),
-      () => this.cleanups.delete(promise),
-    )
-    return promise
+  private trackCleanup(
+    promise: Promise<void>,
+    collectError: boolean,
+  ): Promise<void> {
+    const tracked = promise
+      .catch((error) => {
+        if (collectError) this.cleanupErrors.push(error)
+      })
+      .finally(() => {
+        this.cleanups.delete(tracked)
+      })
+    this.cleanups.add(tracked)
+    return tracked
   }
 
   private async isContainerAlive(env: ExecutionEnv): Promise<boolean> {

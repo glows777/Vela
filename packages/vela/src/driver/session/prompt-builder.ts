@@ -69,7 +69,7 @@ export function createSessionPrompt(
         render: (ctx) =>
           environment({
             os: osFor(ctx.sessionId),
-            shell: shellFor(ctx.sessionId),
+            shell: isLocalFor(ctx.sessionId) ? shellFor(ctx.sessionId) : false,
             date: dateFor(ctx.sessionId),
           })(ctx),
       },

@@ -62,6 +62,7 @@ export function orderActiveTools<T extends RegistryTool>(
   discovered: ReadonlySet<string>,
 ): T[] {
   const active: T[] = []
+  const mcpDirect: T[] = []
   const byName = new Map<string, T>()
   for (const tool of all) {
     if (!isAvailable(tool.name)) continue
@@ -69,9 +70,15 @@ export function orderActiveTools<T extends RegistryTool>(
     if (exposure === 'deferred') {
       if (discovered.has(tool.name)) byName.set(tool.name, tool)
     } else if (exposure === 'direct' || exposure === 'model-only') {
-      active.push(tool)
+      if (tool.namespace?.name.startsWith('mcp__')) {
+        mcpDirect.push(tool)
+      } else {
+        active.push(tool)
+      }
     }
   }
+  mcpDirect.sort((a, b) => a.name.localeCompare(b.name))
+  active.push(...mcpDirect)
   for (const name of discovered) {
     const tool = byName.get(name)
     if (tool) active.push(tool)

@@ -141,5 +141,6 @@ export interface SessionStoreOptions {
   ephemeral?: boolean
   cwd?: string
   location?: ExecutionLocation
+  createdAt?: string
   onSaved?: () => void
 }

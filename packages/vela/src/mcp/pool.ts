@@ -106,6 +106,7 @@ interface PoolBucket {
   readonly connections: Map<string, McpConnection>
   readonly leases: Set<LeaseCallbacks>
   started?: Promise<string[]>
+  connectAttempts?: Map<string, Promise<string | undefined>>
   directReady: Promise<void>
   idleTimer?: ReturnType<typeof setTimeout>
   closed: boolean
@@ -130,7 +131,10 @@ export interface McpPoolLease {
   readonly key: string
   readonly hasWork: boolean
   start(): void
-  waitForDirect(timeoutMs: number): Promise<void>
+  waitForDirect(
+    timeoutMs: number,
+    extraServers?: ReadonlySet<string>,
+  ): Promise<void>
   waitForAll(): Promise<void>
   reconnect(
     server: string | undefined,
@@ -150,6 +154,8 @@ export interface McpPoolLease {
 export class McpPool {
   private readonly idleTtlMs: number
   private readonly buckets = new Map<string, PoolBucket>()
+  private readonly closing = new Set<Promise<void>>()
+  private disposing: Promise<void> | undefined
   private disposed = false
 
   constructor(options: McpPoolOptions = {}) {
@@ -181,7 +187,9 @@ export class McpPool {
         directReady: Promise.resolve(),
         closed: false,
       }
-      for (const entry of leaseEntries) {
+      for (const entry of [...leaseEntries].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      )) {
         if (entry.config.enabled === false) continue
         connections.set(
           entry.name,
@@ -235,16 +243,19 @@ export class McpPool {
         leaseState.onError([...leaseErrors])
       }
       if (!activeBucket.started) {
+        const attemptsByServer = new Map<string, Promise<string | undefined>>()
         const attempts = [...activeBucket.connections.values()].map(
-          (connection) => ({
-            connection,
-            done: connection.connect().then(
+          (connection) => {
+            const done = connection.connect().then(
               () => undefined,
               (error: unknown) =>
                 error instanceof Error ? error.message : String(error),
-            ),
-          }),
+            )
+            attemptsByServer.set(connection.name, done)
+            return { connection, done }
+          },
         )
+        activeBucket.connectAttempts = attemptsByServer
         activeBucket.directReady = Promise.all(
           attempts
             .filter(({ connection }) => hasDirectTools(connection.entry))
@@ -265,16 +276,19 @@ export class McpPool {
           return problems
         })
       } else {
-        void activeBucket.started.then((problems) => {
+        void activeBucket.started.then(() => {
+          const liveProblems = [...activeBucket.connections.values()]
+            .filter((c) => c.state === 'failed' && c.error)
+            .map((c) => c.error!)
           if (
             !released &&
             !this.disposed &&
             !activeBucket.closed &&
             !leaseState.reportedConnect &&
-            problems.length > 0
+            liveProblems.length > 0
           ) {
             leaseState.reportedConnect = true
-            leaseState.onError(problems)
+            leaseState.onError(liveProblems)
           }
         })
       }
@@ -284,11 +298,28 @@ export class McpPool {
       key,
       hasWork: activeBucket.connections.size > 0 || leaseErrors.length > 0,
       start,
-      waitForDirect: async (timeoutMs) => {
+      waitForDirect: async (timeoutMs, extraServers) => {
         if (!activeBucket.started) return
+        const extraPromises: Promise<unknown>[] = []
+        if (
+          extraServers &&
+          extraServers.size > 0 &&
+          activeBucket.connectAttempts
+        ) {
+          for (const server of extraServers) {
+            const pending = activeBucket.connectAttempts.get(server)
+            if (pending) extraPromises.push(pending)
+          }
+        }
+        const readiness =
+          extraPromises.length > 0
+            ? Promise.all([activeBucket.directReady, ...extraPromises]).then(
+                () => {},
+              )
+            : activeBucket.directReady
         let timer: ReturnType<typeof setTimeout> | undefined
         await Promise.race([
-          activeBucket.directReady,
+          readiness,
           new Promise<void>((resolve) => {
             timer = setTimeout(resolve, timeoutMs)
           }),
@@ -348,12 +379,20 @@ export class McpPool {
     }
   }
 
-  async dispose(): Promise<void> {
-    if (this.disposed) return
+  dispose(): Promise<void> {
     this.disposed = true
-    const current = [...this.buckets.values()]
-    this.buckets.clear()
-    await Promise.all(current.map((bucket) => this.closeBucket(bucket)))
+    this.disposing ??= (async () => {
+      const current = [...this.buckets.values()]
+      this.buckets.clear()
+      await Promise.all([
+        ...current.map((bucket) => this.closeBucket(bucket)),
+        ...this.closing,
+      ])
+      while (this.closing.size > 0) {
+        await Promise.all([...this.closing])
+      }
+    })()
+    return this.disposing
   }
 
   private async evict(bucket: PoolBucket): Promise<void> {
@@ -370,9 +409,19 @@ export class McpPool {
       clearTimeout(bucket.idleTimer)
       bucket.idleTimer = undefined
     }
-    bucket.closing ??= Promise.all(
-      [...bucket.connections.values()].map((connection) => connection.close()),
-    ).then(() => undefined)
+    if (!bucket.closing) {
+      const pending = Promise.all(
+        [...bucket.connections.values()].map((connection) =>
+          connection.close(),
+        ),
+      )
+        .then(() => undefined)
+        .finally(() => {
+          this.closing.delete(pending)
+        })
+      bucket.closing = pending
+      this.closing.add(pending)
+    }
     return bucket.closing
   }
 }

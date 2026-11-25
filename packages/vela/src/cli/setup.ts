@@ -592,12 +592,13 @@ function notTrusted(cwd: string, agentDir: string, reason: string): string {
 /** Scope `--approve` to the CLI startup directory while consulting saved trust elsewhere. */
 export function cliWorkspaceModeAt(options: {
   agentDir: string
+  dataDir?: string
   startupCwd: string
   approve?: boolean
   location: string
   environment?: string
 }): 'home' | 'all' | 'none' {
-  const { agentDir, startupCwd, approve, location } = options
+  const { agentDir, dataDir, startupCwd, approve, location } = options
   const environment = options.environment ?? 'local'
   if (environment === 'local') {
     if (join(location, '.vela') === agentDir) return 'home'
@@ -612,7 +613,7 @@ export function cliWorkspaceModeAt(options: {
       : 'none'
   }
   return approve !== false &&
-    savedTrust(agentDir, { environment, cwd: location }) === true
+    savedTrust(agentDir, { environment, cwd: location }, dataDir) === true
     ? 'all'
     : 'none'
 }

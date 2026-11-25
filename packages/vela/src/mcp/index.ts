@@ -158,11 +158,29 @@ export function mcp(options: McpOptions = {}): VelaExtension {
       reporters.delete(ctx.session.id)
     })
 
-    // The first prompt waits (up to 10s) only for servers with direct tools, which must be
-    // declared in its request; deferred tools are waited for by tool_search without injecting
-    // transient `<mcp_servers>` sections that would invalidate turn-1 prompt caching.
-    vela.on('before_agent_start', async () => {
-      await lease.waitForDirect(DIRECT_WAIT_MS)
+    // The first prompt waits (up to 10s) for servers with direct tools and any server owning
+    // previously restored discoveredTools, while deferred namespaces stay static in <deferred_tools>.
+    const namespacePrefixes = new Map<string, string[]>()
+    for (const entry of entries) {
+      if (entry.config.enabled === false) continue
+      const prefix = `${namespaceName(entry.name)}__`
+      const list = namespacePrefixes.get(prefix) ?? []
+      list.push(entry.name)
+      namespacePrefixes.set(prefix, list)
+    }
+    vela.on('before_agent_start', async (event) => {
+      const extraServers = new Set<string>()
+      for (const toolName of event.discoveredTools ?? []) {
+        for (const [prefix, serverNames] of namespacePrefixes) {
+          if (toolName.startsWith(prefix)) {
+            for (const name of serverNames) extraServers.add(name)
+          }
+        }
+      }
+      await lease.waitForDirect(
+        DIRECT_WAIT_MS,
+        extraServers.size > 0 ? extraServers : undefined,
+      )
     })
 
     vela.on('tool_call', 'tool_search', async () => {

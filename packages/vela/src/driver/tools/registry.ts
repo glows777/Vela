@@ -322,11 +322,43 @@ export class ToolRegistry {
     this.shared.deferredNamespaces.set(namespace, summaryLine)
   }
 
+  private isNamespaceReachable(namespace: string): boolean {
+    const prefix = `${namespace}__`
+    if (this.selection) {
+      let allowedBySelection = false
+      for (const name of this.selection) {
+        if (name.startsWith(prefix)) {
+          allowedBySelection = true
+          break
+        }
+      }
+      if (!allowedBySelection) return false
+    }
+    let sawNamespaceTool = false
+    for (const tool of this.tools.values()) {
+      if (tool.namespace?.name !== namespace) continue
+      sawNamespaceTool = true
+      if (
+        (tool.exposure ?? 'direct') === 'deferred' &&
+        this.isAvailable(tool.name)
+      ) {
+        return true
+      }
+    }
+    return !sawNamespaceTool
+  }
+
   /** The `<deferred_tools>` lines. Like pi, a namespace (an MCP server) gets one line, not its tools. */
   getDeferredToolSummary(): string {
+    const visibleNamespaces = new Map<string, string>()
+    for (const [ns, summary] of this.deferredNamespaces) {
+      if (this.isNamespaceReachable(ns)) {
+        visibleNamespaces.set(ns, summary)
+      }
+    }
     return formatDeferredToolSummary(
       this.searchableTools(true),
-      this.deferredNamespaces,
+      visibleNamespaces,
     )
   }
 

@@ -43,13 +43,18 @@ describe.skipIf(!image)('prepared Docker image', () => {
       `label=org.vela.environment=${key}`,
     ])
   }
-  function config(name: string) {
+  function lifecycleConfig(name: string) {
     owners.add(owner(name))
     return {
       dataDir: dir.path,
       name,
       image: image!,
       network: 'off' as const,
+    }
+  }
+  function config(name: string) {
+    return {
+      ...lifecycleConfig(name),
       guestPath: join(dir.path, 'guest.cjs'),
       ...(dockerHost ? { dockerHost } : {}),
       hostEnv: process.env,
@@ -391,7 +396,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
     const file = join(dir.path, 'home-conflict')
     await Bun.write(file, 'fixture')
     await expect(
-      prepareDocker(config(name), async (args) => {
+      prepareDocker(lifecycleConfig(name), async (args) => {
         const result = await docker(args)
         // Seed the fresh container's filesystem before first start, keeping the same offline image.
         if (args[0] === 'create')
@@ -407,6 +412,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
     async () => {
       const name = 'extra-volume'
       const options = { ...config(name), image: volumeImage! }
+      const lifecycleOptions = { ...lifecycleConfig(name), image: volumeImage! }
       const rejection = {
         name: 'Error',
         message:
@@ -416,7 +422,7 @@ describe.skipIf(!image)('prepared Docker image', () => {
       const findVolume = () =>
         docker(['volume', 'ls', '-q', '--filter', `name=^${volume}$`])
       await expect(
-        prepareDocker(options, async (args) => {
+        prepareDocker(lifecycleOptions, async (args) => {
           const result = await docker(args)
           if (args[0] === 'inspect') {
             const [container] = JSON.parse(result)

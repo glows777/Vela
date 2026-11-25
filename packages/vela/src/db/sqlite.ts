@@ -11,6 +11,8 @@ export interface OpenDatabaseOptions {
   path: string
   /** Open an existing database read-only (disables WAL setup and schema upgrades). */
   readonly?: boolean
+  /** Require an existing database file on disk without creating one if absent. */
+  mustExist?: boolean
 }
 
 export interface RunResult {
@@ -198,17 +200,23 @@ export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
   const readonly = options.readonly === true
 
   if (!isMemory && !readonly) {
-    ensurePrivateDir(dirname(options.path))
-    if (!existsSync(options.path)) {
-      try {
-        const fd = openSync(options.path, 'wx', 0o600)
-        closeSync(fd)
-        chmodSync(options.path, 0o600)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
-      }
-    } else {
+    if (options.mustExist) {
+      const fd = openSync(options.path, 'r+')
+      closeSync(fd)
       chmodSync(options.path, 0o600)
+    } else {
+      ensurePrivateDir(dirname(options.path))
+      if (!existsSync(options.path)) {
+        try {
+          const fd = openSync(options.path, 'wx', 0o600)
+          closeSync(fd)
+          chmodSync(options.path, 0o600)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
+        }
+      } else {
+        chmodSync(options.path, 0o600)
+      }
     }
   }
 

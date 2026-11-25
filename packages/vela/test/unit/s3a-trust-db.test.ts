@@ -170,6 +170,7 @@ test('untrusted container workspace skips workspace config/AGENTS/skills/prompts
     expect(untrustedSystem).not.toContain('<docs>')
     expect(untrustedSystem).not.toContain('CONTAINER_AGENTS_BODY')
     expect(untrustedSystem).toContain('\nos: linux\n')
+    expect(untrustedSystem).not.toContain('\nshell: ')
     expect(untrustedSystem).toMatch(/\nCurrent date: \d{4}-\d{2}-\d{2}\n/)
 
     // 2. Trusted container session

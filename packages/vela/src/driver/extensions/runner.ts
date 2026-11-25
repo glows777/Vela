@@ -465,6 +465,7 @@ export class ExtensionRunner {
       prompt,
       sections: {} as Record<string, string>,
       systemPrompt: '',
+      discoveredTools: [...session.registry.discoveredTools],
     }
     const messages: CustomMessage[] = []
     const ctx = this.context(session)

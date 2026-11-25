@@ -347,6 +347,7 @@ const vela = createVela({
     workspaceModeAt: (location, environment = 'local') =>
       cliWorkspaceModeAt({
         agentDir: config.agentDir,
+        dataDir: config.dataDir,
         startupCwd: cwd,
         approve: args.approve,
         location,

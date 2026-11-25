@@ -209,12 +209,12 @@ A project's `.vela/config.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/S
 
 | Situation | Result |
 |---|---|
-| `--approve` / `--no-approve` | Trusted / not trusted for this run. Nothing is saved. |
-| A decision is saved in `~/.vela/vela.db` (`trusted_paths`) | That decision is used. A decision for a directory also applies to the directories under it; the closest one wins. Non-local workspaces use `env:<name>:<posixCwd>` keys. |
+| `--approve` / `--no-approve` | Trusted / not trusted for this run (`--approve` applies only to the startup local directory; nothing is saved). |
+| A decision is saved in `~/.vela/vela.db` (`trusted_paths`) | That decision is used. A decision for a directory also applies to the directories under it; the closest one wins. Non-local workspaces scope keys by owner `dataDir` and percent-encoded environment name (`env:<encodedOwnerDataDir>:<encodedName>:<posixCwd>` or SDK `env:<encodedName>:<posixCwd>`, e.g. `env:team%2Fdev:/workspace`). |
 | Interactive mode, no saved decision | Vela asks `Trust this project and load it? (y/N)` and saves the answer. |
 | Print, JSON or RPC mode, no saved decision | Not trusted. A notice on stderr says to pass `--approve`. |
 
-When a project is not trusted, Vela prints a `[trust]` notice and runs with the user configuration only. Saved decisions live in the `trusted_paths` table of `~/.vela/vela.db` (or `$VELA_DIR/vela.db`), mapping canonical local paths (or `env:<name>:<posixCwd>` for container workspaces) to `1` (`true`) or `0` (`false`).
+When a project is not trusted, Vela prints a `[trust]` notice and runs with the user configuration only. Saved decisions live in the `trusted_paths` table of `~/.vela/vela.db` (or `$VELA_DIR/vela.db`), mapping canonical local paths (or owner-scoped `env:<encodedOwnerDataDir>:<encodedName>:<posixCwd>` container keys, such as `env:team%2Fdev:/workspace` for an environment named `team/dev`) to `1` (`true`) or `0` (`false`).
 
 Trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read; see [Security](security.md#project-trust).
 

@@ -54,7 +54,7 @@ Rules, the same as pi's:
 
 ## Connections
 
-Configuration-driven CLI MCP connections belong to the selected session project's location and configuration snapshot. Sessions sharing that snapshot share connections; A and B can use the same server name with different definitions without changing each other's tools. A denied project uses only the user server definitions. Editing `config.json` affects a newly prepared session, not an existing one. Connections start when the instance first handles a session and close after its last session closes. Closing a stdio server closes its stdin, then sends SIGTERM, then SIGKILL.
+Configuration-driven CLI MCP connections belong to the selected session project's location and configuration snapshot. Sessions sharing that snapshot share connections; A and B can use the same server name with different definitions without changing each other's tools. A denied project uses only the user server definitions. Editing `config.json` affects a newly prepared session, not an existing one. Connections start when the instance first handles a session, remain warm for up to 5 minutes after the last session releases that bucket (so newly opened sessions reuse them), and close immediately when the host disposes. Closing a stdio server closes its stdin, then sends SIGTERM, then SIGKILL.
 
 An explicit SDK `mcp()` factory or CLI `-e builtin:mcp` remains host-owned and shared by that host's sessions; it is not recreated as configuration-driven project MCP. Non-local project MCP is unsupported: neither its stdio command nor its HTTP endpoint is silently executed from the host. This slice does not add E3 or remote MCP transport support.
 
