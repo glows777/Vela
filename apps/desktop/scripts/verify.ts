@@ -3675,7 +3675,7 @@ try {
   const forgeLog = await readFile(resolve(evidence, 'forge.log'), 'utf8').catch(
     () => '',
   )
-  if (forgeLog.trim()) console.error('--- forge.log ---\n' + forgeLog.trim())
+  if (forgeLog.trim()) console.error(`--- forge.log ---\n${forgeLog.trim()}`)
   await Bun.write(
     resolve(evidence, 'result.json'),
     JSON.stringify(
