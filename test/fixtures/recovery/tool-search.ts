@@ -9,6 +9,15 @@ import {
 
 const [cwd, mode] = process.argv.slice(2)
 if (!cwd) throw new Error('Expected workspace')
+let searchSaved = false
+let holdStarted = false
+let announced = false
+const announce = () => {
+  if (!announced && searchSaved && holdStarted) {
+    announced = true
+    console.log('SEARCH_SAVED')
+  }
+}
 const t = createTestVela({
   cwd,
   sessionId: 'search-recovery',
@@ -42,14 +51,20 @@ const t = createTestVela({
         name: 'hold',
         description: 'Hold the step open',
         inputSchema: z.object({}),
-        execute: async () => new Promise(() => {}),
+        execute: async () => {
+          holdStarted = true
+          announce()
+          return new Promise(() => {})
+        },
       })
     },
   ],
 })
 t.session.subscribe((event) => {
-  if (event.type === 'tool_execution_end' && event.toolName === 'tool_search')
-    console.log('SEARCH_SAVED')
+  if (event.type === 'tool_execution_end' && event.toolName === 'tool_search') {
+    searchSaved = true
+    announce()
+  }
 })
 const keepAlive = setInterval(() => {}, 1000)
 try {
