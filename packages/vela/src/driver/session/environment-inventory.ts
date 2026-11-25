@@ -9,6 +9,8 @@ export async function readEnvironmentInventory(
   env: ExecutionEnv,
   contextEnabled: boolean,
   signal: AbortSignal,
+  declaredSkills: readonly string[] = [],
+  declaredPrompts: readonly string[] = [],
 ) {
   const contextFiles = contextEnabled
     ? await loadEnvironmentContextFiles(env, env.cwd, signal)
@@ -22,8 +24,13 @@ export async function readEnvironmentInventory(
     signal,
     false,
     (problem) => diagnostics.push(problem),
-    [home.value],
+    [...declaredSkills, home.value],
   )
-  const promptTemplates = await loadEnvironmentTemplates(env, env.cwd, signal)
+  const promptTemplates = await loadEnvironmentTemplates(
+    env,
+    env.cwd,
+    signal,
+    declaredPrompts,
+  )
   return { contextFiles, skills, promptTemplates, diagnostics }
 }

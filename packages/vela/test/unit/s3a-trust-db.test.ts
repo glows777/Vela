@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
@@ -42,6 +42,35 @@ test('trusted_paths supports container env:<name>:<posixCwd> hierarchy without c
   expect(savedTrust(agentDir, { environment: 'dev', cwd: '/workspace' })).toBe(
     true,
   )
+
+  // Environment names containing `:` or `/` never collide across environments
+  expect(trustLocationKey({ environment: 'a:/x', cwd: '/y' })).not.toBe(
+    trustLocationKey({ environment: 'a', cwd: '/x:/y' }),
+  )
+  saveTrust(agentDir, { environment: 'a:/x', cwd: '/y' }, true)
+  expect(
+    savedTrust(agentDir, { environment: 'a', cwd: '/x:/y' }),
+  ).toBeUndefined()
+})
+
+test('savedTrust reads existing vela.db without requiring write permissions when WAL sidecars exist', () => {
+  const dir = tempDir('vela-trust-ro-')
+  dirs.push(dir)
+  const agentDir = join(dir.path, 'agent')
+  mkdirSync(agentDir, { recursive: true })
+  saveTrust(agentDir, { environment: 'dev', cwd: '/workspace' }, true)
+
+  const dbPath = join(agentDir, 'vela.db')
+  chmodSync(dbPath, 0o444)
+  chmodSync(agentDir, 0o555)
+  try {
+    expect(
+      savedTrust(agentDir, { environment: 'dev', cwd: '/workspace/sub' }),
+    ).toBe(true)
+  } finally {
+    chmodSync(agentDir, 0o700)
+    chmodSync(dbPath, 0o600)
+  }
 })
 
 test('untrusted container workspace skips workspace config/AGENTS/skills/prompts and omits <docs>; trusted loads them with real os', async () => {

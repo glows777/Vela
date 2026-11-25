@@ -473,6 +473,18 @@ test('a date rollover leaves the assembled system prompt byte-identical', async 
       expect(history).not.toContain('\ndate:')
       expect(history).not.toContain('\ntimezone:')
     }
+    await t.cleanup({ keepDir: true })
+
+    // Closing and reopening across midnight must still restore the original session's frozen date
+    const reopened = createTestVela({
+      cwd: t.cwd,
+      dataDir: t.dataDir,
+      responses: [fauxText('resumed')],
+    })
+    const rs = reopened.vela.session()
+    expect(await rs.resume()).toBe(true)
+    await rs.prompt('resumed')
+    expect(reopened.model.calls[0]!.system).toBe(first!.system)
   } finally {
     globalThis.Date = real
   }

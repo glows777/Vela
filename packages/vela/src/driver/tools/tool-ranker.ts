@@ -165,8 +165,13 @@ export function formatDeferredToolSummary(
     searchHint?: string
     namespace?: ToolNamespace
   }>,
+  namespaceOverrides?: ReadonlyMap<string, string>,
 ): string {
-  if (deferred.length === 0) return ''
+  if (
+    deferred.length === 0 &&
+    (!namespaceOverrides || namespaceOverrides.size === 0)
+  )
+    return ''
 
   const lines: string[] = []
   const namespaces = new Map<string, (typeof deferred)[number][]>()
@@ -178,7 +183,13 @@ export function formatDeferredToolSummary(
       continue
     }
     const key = tool.namespace.name
+    if (namespaceOverrides?.has(key)) continue
     namespaces.set(key, [...(namespaces.get(key) ?? []), tool])
+  }
+  if (namespaceOverrides) {
+    for (const summaryLine of namespaceOverrides.values()) {
+      lines.push(summaryLine)
+    }
   }
   for (const [key, tools] of namespaces) {
     const description = tools.find((t) => t.namespace?.description)?.namespace

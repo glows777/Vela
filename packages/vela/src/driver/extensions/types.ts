@@ -91,6 +91,11 @@ export interface ExtensionAPI {
   /** Removes a tool this extension registered, by its registered name; returns whether it existed. */
   unregisterTool(name: string): boolean
   /**
+   * @internal Declares a static namespace line for `<deferred_tools>` so async server connects do not
+   * mutate the cached system prompt between turns.
+   */
+  registerDeferredNamespace?(namespace: string, summaryLine: string): void
+  /**
    * Runs once when the owning instance is disposed: host instances after all sessions close,
    * project instances after their last session releases them. Errors are logged and collected.
    */

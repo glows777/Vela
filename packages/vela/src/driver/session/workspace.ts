@@ -74,9 +74,17 @@ export async function loadWorkspaceInventory(
       }
     }
     const batch = (env as InventoryEnv)[workspaceDiscovery]
+    const declaredSkills = settings.skills ?? []
+    const declaredPrompts = settings.prompts ?? []
     const result = batch
-      ? await batch(contextEnabled, signal)
-      : await readEnvironmentInventory(env, contextEnabled, signal)
+      ? await batch(contextEnabled, signal, declaredSkills, declaredPrompts)
+      : await readEnvironmentInventory(
+          env,
+          contextEnabled,
+          signal,
+          declaredSkills,
+          declaredPrompts,
+        )
     for (const { path, message } of result.diagnostics)
       logger.warn(`[resources] ${path}: ${message}`)
     return {

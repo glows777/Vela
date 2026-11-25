@@ -923,4 +923,23 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
       await vela.dispose()
     }
   }, 60000)
+
+  test('exec returns unavailable if the guest process exits non-zero during teardown', async () => {
+    const faultyGuest = `
+      const lines = require('node:readline').createInterface({ input: process.stdin, terminal: false });
+      lines.once('line', () => {
+        process.stdout.write(JSON.stringify({ ok: true, value: { exitCode: 0 } }) + '\\n');
+      });
+      lines.on('close', () => process.exit(9));
+    `
+    const faultyEnv = dockerOperations(
+      'faulty-teardown',
+      dir.path,
+      (_op, cwd) => spawn('node', ['-e', faultyGuest], { cwd, stdio: 'pipe' }),
+    )
+    const result = await faultyEnv.exec('echo hi', {})
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected failure')
+    expect(result.error.code).toBe('unavailable')
+  })
 })

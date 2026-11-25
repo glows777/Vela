@@ -426,7 +426,18 @@ function initVelaInstance(
         ? defaultThinkingLevel
         : options.thinkingLevel,
     })
-    sessionDates.set(id, localDateString())
+    const savedRow = !ephemeralSessions
+      ? db.get<{ created_at: string }>(
+          'SELECT created_at FROM sessions WHERE id = ?',
+          id,
+        )
+      : undefined
+    sessionDates.set(
+      id,
+      savedRow?.created_at
+        ? localDateString(new Date(savedRow.created_at))
+        : localDateString(),
+    )
     const created: VelaSession = new VelaSession(
       id,
       {

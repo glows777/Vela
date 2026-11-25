@@ -14,10 +14,23 @@ function canonicalDir(dir: string): string {
   }
 }
 
-/** Canonical `trusted_paths.path` key for local directories or `env:<name>:<posixCwd>` non-local locations. */
+function nonLocalTrustPrefix(environment: string): string {
+  return `${ENV_KEY_PREFIX}${encodeURIComponent(environment)}:`
+}
+
+function isReadonlyWalOpenError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code
+  if (code === 'SQLITE_CANTOPEN' || code === 'SQLITE_READONLY') return true
+  const message = error instanceof Error ? error.message : String(error)
+  return /unable to open|readonly|SQLITE_CANTOPEN|SQLITE_READONLY/i.test(
+    message,
+  )
+}
+
+/** Canonical `trusted_paths.path` key for local directories or `env:<encodedName>:<posixCwd>` non-local locations. */
 export function trustLocationKey(target: string | ExecutionLocation): string {
   if (typeof target !== 'string' && target.environment !== 'local') {
-    return `${ENV_KEY_PREFIX}${target.environment}:${posix.resolve('/', target.cwd)}`
+    return `${nonLocalTrustPrefix(target.environment)}${posix.resolve('/', target.cwd)}`
   }
   const cwd = typeof target === 'string' ? target : target.cwd
   return canonicalDir(cwd)
@@ -31,7 +44,19 @@ function withTrustDb<T>(
   if (typeof source !== 'string') return fn(source)
   const dbPath = join(source, 'vela.db')
   if (readonly && !existsSync(dbPath)) return undefined
-  // WAL-mode SQLite databases fail SQLITE_OPEN_READONLY when -wal/-shm were removed after close.
+  if (readonly) {
+    try {
+      const roDb = openDatabase({ path: dbPath, readonly: true })
+      try {
+        return fn(roDb)
+      } finally {
+        roDb.close()
+      }
+    } catch (error) {
+      if (!isReadonlyWalOpenError(error)) throw error
+      // WAL-mode SQLite databases fail SQLITE_OPEN_READONLY when -wal/-shm were removed after close.
+    }
+  }
   const db = openDatabase({ path: dbPath })
   try {
     return fn(db)
@@ -61,7 +86,7 @@ export function savedTrust(
     if (entries.size === 0) return undefined
 
     if (typeof target !== 'string' && target.environment !== 'local') {
-      const prefix = `${ENV_KEY_PREFIX}${target.environment}:`
+      const prefix = nonLocalTrustPrefix(target.environment)
       let cur = posix.resolve('/', target.cwd)
       for (;;) {
         const match = entries.get(`${prefix}${cur}`)

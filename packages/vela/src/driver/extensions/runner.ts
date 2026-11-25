@@ -189,6 +189,9 @@ export class ExtensionRunner {
           if (canonical === toolName) localTools.delete(local)
         return deps.registry.unregister(toolName)
       },
+      registerDeferredNamespace: (namespace, summaryLine) => {
+        deps.registry.registerDeferredNamespace(namespace, summaryLine)
+      },
       onShutdown: (handler) => {
         this.shutdownHandlers.push({ extension: name, fn: handler })
       },

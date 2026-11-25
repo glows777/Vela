@@ -58,7 +58,7 @@ Configuration-driven CLI MCP connections belong to the selected session project'
 
 An explicit SDK `mcp()` factory or CLI `-e builtin:mcp` remains host-owned and shared by that host's sessions; it is not recreated as configuration-driven project MCP. Non-local project MCP is unsupported: neither its stdio command nor its HTTP endpoint is silently executed from the host. This slice does not add E3 or remote MCP transport support.
 
-- The first prompt waits up to 10 seconds only for servers with `direct` tools, which must be in its request. A server still connecting is named in the system prompt, and `tool_search` waits for every server before it searches.
+- The first prompt waits up to 10 seconds only for servers with `direct` tools, which must be in its request. Configured deferred servers declare their `mcp__<server>` namespace statically in `<deferred_tools>` (without transient `<mcp_servers>` sections or post-connect prompt mutations), and `tool_search` waits for connecting servers before searching live tools.
 - Connecting to an HTTP server is retried twice after a network error or a 408, 429 or 5xx status. Tool calls are never retried, because the server may already have acted.
 - When a connection drops (for example the stdio process exits), the next call to one of its tools connects again.
 - When a server announces that its tool list changed, new tools are registered and removed tools are unregistered.
@@ -72,7 +72,7 @@ Each tool is registered as `mcp__<server>__<tool>`, with every character other t
 
 | `exposure` | What the model gets |
 |---|---|
-| `deferred` (default) | The system prompt names the server with its tool count and description. The model loads tools with `tool_search`, which returns the server instructions with them |
+| `deferred` (default) | `<deferred_tools>` lists the configured `mcp__<server>` namespace (plus static `description` if configured) without waiting for async connects. The model loads live tools with `tool_search`, which returns the server instructions with them |
 | `direct` | The tools are declared to the model like built-in tools. Use it for small, often-used servers |
 | `hidden` | Registered but unreachable |
 

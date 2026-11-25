@@ -16,16 +16,34 @@ function canonicalDir(dir: string): string {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 function stableJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableJson)
-  if (value !== null && typeof value === 'object') {
+  if (isRecord(value)) {
     const out: Record<string, unknown> = {}
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      out[key] = stableJson((value as Record<string, unknown>)[key])
+    for (const key of Object.keys(value).sort()) {
+      out[key] = stableJson(value[key])
     }
     return out
   }
   return value
+}
+
+function stableEntryConfig(config: McpServerEntry['config']): unknown {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(config).sort()) {
+    const raw = (config as unknown as Record<string, unknown>)[key]
+    if (key === 'toolExposure' && isRecord(raw)) {
+      // Preserve key order because overlapping wildcard rules match first-wins.
+      out[key] = Object.entries(raw)
+    } else {
+      out[key] = stableJson(raw)
+    }
+  }
+  return out
 }
 
 function mcpPoolKey(cwd: string, entries: readonly McpServerEntry[]): string {
@@ -34,7 +52,7 @@ function mcpPoolKey(cwd: string, entries: readonly McpServerEntry[]): string {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((entry) => ({
       name: entry.name,
-      config: stableJson(entry.config),
+      config: stableEntryConfig(entry.config),
     }))
   const hash = createHash('sha256')
     .update(JSON.stringify(normalized))
@@ -77,6 +95,7 @@ function statusReport(
 interface LeaseCallbacks {
   onTools: (connection: McpConnection) => void
   onError: (problems: string[]) => void
+  released: boolean
   reportedConfig: boolean
   reportedConnect: boolean
 }
@@ -84,13 +103,12 @@ interface LeaseCallbacks {
 interface PoolBucket {
   readonly key: string
   readonly cwd: string
-  readonly entries: readonly McpServerEntry[]
-  readonly errors: readonly string[]
   readonly connections: Map<string, McpConnection>
   readonly leases: Set<LeaseCallbacks>
   started?: Promise<string[]>
   directReady: Promise<void>
   idleTimer?: ReturnType<typeof setTimeout>
+  closed: boolean
   closing?: Promise<void>
 }
 
@@ -148,7 +166,9 @@ export class McpPool {
 
   acquire(options: McpPoolAcquireOptions): McpPoolLease {
     if (this.disposed) throw new Error('McpPool has been disposed')
-    const key = mcpPoolKey(options.cwd, options.entries)
+    const leaseEntries = [...options.entries]
+    const leaseErrors = [...options.errors]
+    const key = mcpPoolKey(options.cwd, leaseEntries)
     let bucket = this.buckets.get(key)
     if (!bucket) {
       const connections = new Map<string, McpConnection>()
@@ -156,13 +176,12 @@ export class McpPool {
       const created: PoolBucket = {
         key,
         cwd: canonicalDir(options.cwd),
-        entries: [...options.entries],
-        errors: [...options.errors],
         connections,
         leases,
         directReady: Promise.resolve(),
+        closed: false,
       }
-      for (const entry of options.entries) {
+      for (const entry of leaseEntries) {
         if (entry.config.enabled === false) continue
         connections.set(
           entry.name,
@@ -170,7 +189,10 @@ export class McpPool {
             entry,
             cwd: options.cwd,
             onTools: (connection) => {
-              for (const cb of created.leases) cb.onTools(connection)
+              if (this.disposed || created.closed) return
+              for (const cb of [...created.leases]) {
+                if (!cb.released) cb.onTools(connection)
+              }
             },
             ...(options.createTransport
               ? { createTransport: options.createTransport }
@@ -190,6 +212,7 @@ export class McpPool {
     const leaseState: LeaseCallbacks = {
       onTools: options.onTools,
       onError: options.onError,
+      released: false,
       reportedConfig: false,
       reportedConnect: false,
     }
@@ -206,10 +229,10 @@ export class McpPool {
     let released = false
 
     const start = () => {
-      if (released || this.disposed) return
-      if (!leaseState.reportedConfig && activeBucket.errors.length > 0) {
+      if (released || this.disposed || activeBucket.closed) return
+      if (!leaseState.reportedConfig && leaseErrors.length > 0) {
         leaseState.reportedConfig = true
-        leaseState.onError([...activeBucket.errors])
+        leaseState.onError([...leaseErrors])
       }
       if (!activeBucket.started) {
         const attempts = [...activeBucket.connections.values()].map(
@@ -231,9 +254,9 @@ export class McpPool {
           attempts.map(({ done }) => done),
         ).then((failures) => {
           const problems = failures.filter((f): f is string => f !== undefined)
-          if (problems.length > 0) {
-            for (const cb of activeBucket.leases) {
-              if (!cb.reportedConnect) {
+          if (problems.length > 0 && !this.disposed && !activeBucket.closed) {
+            for (const cb of [...activeBucket.leases]) {
+              if (!cb.released && !cb.reportedConnect) {
                 cb.reportedConnect = true
                 cb.onError(problems)
               }
@@ -243,7 +266,13 @@ export class McpPool {
         })
       } else {
         void activeBucket.started.then((problems) => {
-          if (!released && !leaseState.reportedConnect && problems.length > 0) {
+          if (
+            !released &&
+            !this.disposed &&
+            !activeBucket.closed &&
+            !leaseState.reportedConnect &&
+            problems.length > 0
+          ) {
             leaseState.reportedConnect = true
             leaseState.onError(problems)
           }
@@ -253,8 +282,7 @@ export class McpPool {
 
     return {
       key,
-      hasWork:
-        activeBucket.connections.size > 0 || activeBucket.errors.length > 0,
+      hasWork: activeBucket.connections.size > 0 || leaseErrors.length > 0,
       start,
       waitForDirect: async (timeoutMs) => {
         if (!activeBucket.started) return
@@ -294,14 +322,15 @@ export class McpPool {
       },
       status: (registered) =>
         statusReport(
-          activeBucket.entries,
+          leaseEntries,
           activeBucket.connections,
           registered,
-          activeBucket.errors,
+          leaseErrors,
         ),
       release: async () => {
         if (released) return
         released = true
+        leaseState.released = true
         activeBucket.leases.delete(leaseState)
         if (activeBucket.leases.size > 0 || this.disposed) return
         if (this.idleTtlMs <= 0) {
@@ -335,6 +364,8 @@ export class McpPool {
   }
 
   private closeBucket(bucket: PoolBucket): Promise<void> {
+    bucket.closed = true
+    bucket.leases.clear()
     if (bucket.idleTimer) {
       clearTimeout(bucket.idleTimer)
       bucket.idleTimer = undefined

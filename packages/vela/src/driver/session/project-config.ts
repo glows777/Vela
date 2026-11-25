@@ -55,7 +55,7 @@ export class ProjectConfig {
             cwd: env.cwd,
             trusted: this.mode(env.cwd, environment) === 'all',
             agentDir: split.agentDir,
-            env: split.env,
+            env: env.id === 'node:local' ? split.env : {},
           }).then(async ({ settings }) => {
             if (
               settings.dataDir &&

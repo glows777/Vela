@@ -11,5 +11,7 @@ export type InventoryEnv = ExecutionEnv & {
   [workspaceDiscovery]?: (
     contextEnabled: boolean,
     signal: AbortSignal,
+    declaredSkills?: readonly string[],
+    declaredPrompts?: readonly string[],
   ) => ReturnType<typeof readEnvironmentInventory>
 }

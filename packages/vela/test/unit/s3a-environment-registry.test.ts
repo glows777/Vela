@@ -142,3 +142,76 @@ test('EnvironmentRegistry validates definitions, reports OS metadata, and re-pro
     }),
   ).rejects.toThrow('EnvironmentRegistry has been disposed')
 })
+
+test('EnvironmentRegistry preserves healthy adapters on inconclusive probe error and awaits invalidated cleanups in dispose', async () => {
+  const dir = tempDir('vela-env-probe-')
+  dirs.push(dir)
+
+  let probeMode: 'alive' | 'throw' | 'dead' = 'alive'
+  let cleanupCalls = 0
+  let releaseInvalidate!: () => void
+  let blockInvalidateCleanup = false
+  let failCleanup = false
+
+  const registry = new EnvironmentRegistry({
+    dataDir: dir.path,
+    environments: { dev: { image: 'vela-base:local' } },
+    openDocker: async (options, cwd = '/workspace') => {
+      const base = createLocalExecutionEnv({ cwd: dir.path })
+      return {
+        ...base,
+        id: `docker:${options.name}`,
+        cwd,
+        [dockerContainerId]: 'c-1',
+        async cleanup() {
+          cleanupCalls++
+          if (blockInvalidateCleanup) {
+            await new Promise<void>((resolve) => {
+              releaseInvalidate = resolve
+            })
+          }
+          await base.cleanup()
+          if (failCleanup) throw new Error('cleanup boom')
+        },
+      }
+    },
+    probeAlive: async () => {
+      if (probeMode === 'throw')
+        throw new Error('transient daemon socket error')
+      return probeMode === 'alive'
+    },
+  })
+
+  const first = await registry.resolve({
+    sessionId: 's1',
+    location: { environment: 'dev', cwd: '/workspace' },
+  })
+  probeMode = 'throw'
+  await expect(
+    registry.resolve({
+      sessionId: 's2',
+      location: { environment: 'dev', cwd: '/workspace' },
+    }),
+  ).rejects.toThrow('transient daemon socket error')
+  // Healthy cached adapter was NOT torn down or replaced
+  expect(cleanupCalls).toBe(0)
+  probeMode = 'alive'
+  const stillSame = await registry.resolve({
+    sessionId: 's2',
+    location: { environment: 'dev', cwd: '/workspace' },
+  })
+  expect(stillSame).toBe(first)
+
+  // invalidate() cleanup must be awaited and errors propagated by dispose()
+  blockInvalidateCleanup = true
+  failCleanup = true
+  registry.invalidate({ environment: 'dev', cwd: '/workspace' })
+  let disposeSettled = false
+  const disposing = registry.dispose().finally(() => {
+    disposeSettled = true
+  })
+  await Bun.sleep(20)
+  expect(disposeSettled).toBe(false)
+  releaseInvalidate()
+  await expect(disposing).rejects.toThrow('cleanup boom')
+})

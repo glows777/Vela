@@ -23,6 +23,7 @@ export type {
   McpServersFile,
   McpStdioServerConfig,
 } from './config.ts'
+export { McpPool } from './pool.ts'
 
 /** The first prompt waits this long for servers with direct tools (like pi). */
 const DIRECT_WAIT_MS = 10_000
@@ -61,6 +62,21 @@ export function mcp(options: McpOptions = {}): VelaExtension {
     // Errors found while reading config.json mcpServers (bad JSON, unset variables)
     if (!options.servers && Array.isArray(vela.config.errors))
       errors.unshift(...vela.config.errors.map(String))
+
+    // Declare static namespace lines synchronously so <deferred_tools> stays cache-invariant
+    // whether deferred servers connect before or after turn 1.
+    for (const entry of entries) {
+      if (entry.config.enabled === false) continue
+      const mayDefer =
+        (entry.config.exposure ?? 'deferred') === 'deferred' ||
+        Object.values(entry.config.toolExposure ?? {}).includes('deferred')
+      if (!mayDefer) continue
+      const ns = namespaceName(entry.name)
+      vela.registerDeferredNamespace?.(
+        ns,
+        `- ${ns}${entry.config.description ? ` — ${entry.config.description}` : ''}`,
+      )
+    }
 
     /** Server → its registered tool names */
     const registered = new Map<string, string[]>()

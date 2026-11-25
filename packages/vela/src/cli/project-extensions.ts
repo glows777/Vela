@@ -6,7 +6,7 @@ import {
   importExtension,
   type VelaConfig,
 } from '../load-config.ts'
-import { mcpConfig } from '../mcp/index.ts'
+import { McpPool, mcpConfig } from '../mcp/index.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
@@ -33,6 +33,7 @@ export function cliProjectExtensions(
   config: VelaConfig,
   args: CliArgs,
   onDiagnostic: (message: string) => void = () => {},
+  mcpPool: McpPool = new McpPool(),
 ) {
   const explicit = explicitNames(args)
   const split = config.sessionResources!
@@ -132,7 +133,7 @@ export function cliProjectExtensions(
       extensionConfig,
       load: async () => {
         const loaded: ChannelExtension[] = names.map((name) =>
-          BUILTIN_EXTENSIONS[name]!(settings),
+          BUILTIN_EXTENSIONS[name]!(settings, { mcpPool }),
         )
         for (const entry of selected) {
           if ('builtin' in entry) continue

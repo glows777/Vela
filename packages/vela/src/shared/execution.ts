@@ -207,5 +207,7 @@ export type InternalExecutionEnv = ExecutionEnv & {
   [workspaceDiscovery]?: (
     contextEnabled: boolean,
     signal: AbortSignal,
+    declaredSkills?: readonly string[],
+    declaredPrompts?: readonly string[],
   ) => Promise<WorkspaceInventorySnapshot>
 }

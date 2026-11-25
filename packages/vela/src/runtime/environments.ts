@@ -72,6 +72,7 @@ export class EnvironmentRegistry {
   ) => Promise<boolean>
   private readonly opened = new Map<string, Promise<ExecutionEnv>>()
   private readonly locks = new Map<string, Promise<unknown>>()
+  private readonly cleanups = new Set<Promise<void>>()
   private disposed = false
 
   constructor(options: EnvironmentRegistryOptions) {
@@ -94,8 +95,10 @@ export class EnvironmentRegistry {
             containerId,
           ])
           return state.trim() === 'true'
-        } catch {
-          return false
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          if (/no such (?:container|object)/i.test(detail)) return false
+          throw error
         }
       })
     if (options.environments === undefined) {
@@ -135,13 +138,16 @@ export class EnvironmentRegistry {
       if (this.disposed) throw Error('EnvironmentRegistry has been disposed')
       const cached = this.opened.get(key)
       if (cached) {
+        let env: ExecutionEnv | undefined
         try {
-          const env = await cached
-          if (await this.isContainerAlive(env)) return env
-          this.opened.delete(key)
-          await env.cleanup().catch(() => {})
+          env = await cached
         } catch {
           if (this.opened.get(key) === cached) this.opened.delete(key)
+        }
+        if (env) {
+          if (await this.isContainerAlive(env)) return env
+          if (this.opened.get(key) === cached) this.opened.delete(key)
+          await this.trackCleanup(env.cleanup()).catch(() => {})
         }
       }
       const options = {
@@ -167,10 +173,11 @@ export class EnvironmentRegistry {
     const pending = this.opened.get(key)
     if (!pending) return
     this.opened.delete(key)
-    void pending.then(
-      (env) => env.cleanup().catch(() => {}),
+    const cleanup = pending.then(
+      (env) => env.cleanup(),
       () => {},
     )
+    this.trackCleanup(cleanup)
   }
 
   async dispose(): Promise<void> {
@@ -179,21 +186,35 @@ export class EnvironmentRegistry {
     const pending = [...this.opened.values()]
     this.opened.clear()
     const results = await Promise.allSettled(pending)
-    await Promise.all(
-      results.flatMap((result) =>
-        result.status === 'fulfilled' ? [result.value.cleanup()] : [],
+    const cleanupPromises: Promise<void>[] = [
+      ...this.cleanups,
+      ...results.flatMap((result) =>
+        result.status === 'fulfilled'
+          ? [this.trackCleanup(result.value.cleanup())]
+          : [],
       ),
+    ]
+    await Promise.all(cleanupPromises)
+    if (this.cleanups.size > 0) {
+      await Promise.all([...this.cleanups])
+    }
+  }
+
+  private trackCleanup(promise: Promise<void>): Promise<void> {
+    // Attach a no-op rejection handler so invalidated cleanups do not trigger unhandledrejection before dispose().
+    promise.catch(() => {})
+    this.cleanups.add(promise)
+    void promise.then(
+      () => this.cleanups.delete(promise),
+      () => this.cleanups.delete(promise),
     )
+    return promise
   }
 
   private async isContainerAlive(env: ExecutionEnv): Promise<boolean> {
     const id = (env as DockerContainerEnv)[dockerContainerId]
     if (!id) return true
-    try {
-      return await this.probeAlive(id, env)
-    } catch {
-      return false
-    }
+    return await this.probeAlive(id, env)
   }
 
   private serialized<T>(key: string, task: () => Promise<T>): Promise<T> {

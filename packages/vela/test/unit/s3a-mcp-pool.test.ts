@@ -173,3 +173,89 @@ test('mcp() with shared McpPool keeps system prompt free of transient <mcp_serve
   await t.vela.dispose()
   await pool.dispose()
 })
+
+test('McpPool preserves toolExposure rule order, detaches callbacks on dispose(), and isolates per-lease errors', async () => {
+  const fake = fakeMcpFactory()
+  const pool = new McpPool({ idleTtlMs: 1000 })
+
+  // 1. Different wildcard ordering yields distinct pool keys
+  const { entries: orderA } = parseServers({
+    docs: {
+      command: 'unused',
+      toolExposure: { 'read_*': 'direct', '*': 'hidden' },
+    },
+  })
+  const { entries: orderB } = parseServers({
+    docs: {
+      command: 'unused',
+      toolExposure: { '*': 'hidden', 'read_*': 'direct' },
+    },
+  })
+  const lA = pool.acquire({
+    cwd: '/tmp/order-check',
+    entries: orderA,
+    errors: [],
+    createTransport: fake.createTransport,
+    onTools: () => {},
+    onError: () => {},
+  })
+  const lB = pool.acquire({
+    cwd: '/tmp/order-check',
+    entries: orderB,
+    errors: [],
+    createTransport: fake.createTransport,
+    onTools: () => {},
+    onError: () => {},
+  })
+  expect(lA.key).not.toBe(lB.key)
+
+  // 2. Acquiring empty valid config followed by invalid-only config preserves per-lease errors and hasWork
+  const validEmpty = pool.acquire({
+    cwd: '/tmp/diag-check',
+    entries: [],
+    errors: [],
+    onTools: () => {},
+    onError: () => {},
+  })
+  const invalidErrors: string[][] = []
+  const invalidOnly = pool.acquire({
+    cwd: '/tmp/diag-check',
+    entries: [],
+    errors: ['bad config entry'],
+    onTools: () => {},
+    onError: (errs) => invalidErrors.push(errs),
+  })
+  expect(validEmpty.hasWork).toBe(false)
+  expect(invalidOnly.hasWork).toBe(true)
+  expect(invalidOnly.status(new Map())).toContain('bad config entry')
+  invalidOnly.start()
+  expect(invalidErrors).toEqual([['bad config entry']])
+
+  // 3. dispose() detaches pending connect failure callbacks
+  let releaseConnect!: () => void
+  let markEntered!: () => void
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve
+  })
+  const delayedErrors: string[][] = []
+  const delayed = pool.acquire({
+    cwd: '/tmp/dispose-callback-check',
+    entries: orderA,
+    errors: [],
+    createTransport: async () => {
+      markEntered()
+      await new Promise<void>((resolve) => {
+        releaseConnect = resolve
+      })
+      throw new Error('late failure after dispose')
+    },
+    onTools: () => {},
+    onError: (errs) => delayedErrors.push(errs),
+  })
+  delayed.start()
+  await entered
+  await pool.dispose()
+  releaseConnect()
+  await Bun.sleep(20)
+  expect(delayedErrors).toEqual([])
+})

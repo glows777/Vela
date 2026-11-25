@@ -104,7 +104,13 @@ async function main() {
           try {
             reply({
               ok: true,
-              value: await readEnvironmentInventory(env, args[0], signal),
+              value: await readEnvironmentInventory(
+                env,
+                args[0],
+                signal,
+                Array.isArray(args[1]) ? args[1] : [],
+                Array.isArray(args[2]) ? args[2] : [],
+              ),
             })
           } catch (cause) {
             reply({
