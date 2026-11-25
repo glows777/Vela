@@ -22,6 +22,8 @@ import {
   setSessionChannel,
   startsConversationEntry,
   updateArchivedInDb,
+  updateSessionColumn,
+  updateSessionLeaf,
   upsertSessionRecord,
 } from './db-store.ts'
 import {
@@ -218,12 +220,7 @@ export class SessionStore {
   ): void {
     if (!this.started) return
     this.db.transaction(() =>
-      this.db.run(
-        `UPDATE sessions SET ${column} = ?, updated_at = ? WHERE id = ?`,
-        value,
-        new Date().toISOString(),
-        this.sessionId,
-      ),
+      updateSessionColumn(this.db, this.sessionId, column, value),
     )
     this.saved()
   }
@@ -303,13 +300,18 @@ export class SessionStore {
     if (id !== null && !this.byId.has(id))
       throw new Error(`Entry ${id} is not in the session`)
     this.leafId = id
+    const branchModel = this.modelAt(id)
+    const branchThinking = this.thinkingAt(id)
+    if (branchModel !== undefined) this.modelName = branchModel
+    if (branchThinking !== undefined) this.thinking = branchThinking
     if (!this.started) return
     this.db.transaction(() =>
-      this.db.run(
-        'UPDATE sessions SET leaf_message_id = ?, updated_at = ? WHERE id = ?',
-        id,
-        new Date().toISOString(),
+      updateSessionLeaf(
+        this.db,
         this.sessionId,
+        id,
+        branchModel,
+        branchThinking,
       ),
     )
     this.saved()

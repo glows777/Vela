@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import {
   type Component,
   Container,
-  Loader,
   ProcessTerminal,
   type SelectItem,
   Spacer,
@@ -63,6 +62,7 @@ import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
 import { prepareInteractiveSession } from './tui/session-open.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
 import { setupWizard } from './tui/setup-wizard.ts'
+import { StatusLine } from './tui/status-line.ts'
 import { editorTheme, theme } from './tui/theme.ts'
 import type { InteractiveOptions, LogLevel } from './tui/types.ts'
 
@@ -116,7 +116,7 @@ export class InteractiveMode {
   private readonly footer: Footer
   private readonly editor: VelaEditor
   private readonly dispatch: ReturnType<typeof createCliDispatcher>
-  private loader?: Loader
+  private readonly statusLine: StatusLine
 
   private lastCtrlC = 0
   private shownError?: unknown
@@ -144,6 +144,7 @@ export class InteractiveMode {
     )
     this.editor = new VelaEditor(this.tui, editorTheme, { paddingX: 1 })
     this.dispatch = createCliDispatcher(this.vela)
+    this.statusLine = new StatusLine(this.tui, this.status)
     for (const child of [
       this.log.container,
       this.pendingBash,
@@ -325,7 +326,7 @@ export class InteractiveMode {
   private resetChat(): void {
     this.log.clear()
     this.pendingBash.clear()
-    this.stopLoader()
+    this.statusLine.stop()
   }
 
   private renderHeader(modelOk: boolean): void {
@@ -412,7 +413,7 @@ export class InteractiveMode {
       case 'agent_start':
         this.log.endTurn()
         this.shownError = undefined
-        this.startLoader('Thinking…')
+        this.statusLine.start('Thinking…')
         break
       case 'message_start':
         if (event.message.role === 'user')
@@ -420,7 +421,7 @@ export class InteractiveMode {
         break
       case 'turn_start':
         this.log.nextMessage()
-        this.startLoader('Thinking…')
+        this.statusLine.start('Thinking…')
         break
       case 'message_update': {
         const update = event.assistantMessageEvent
@@ -428,7 +429,7 @@ export class InteractiveMode {
           this.log.appendThinking(update.delta)
         } else if (update.type === 'text_delta') {
           this.log.appendText(update.delta)
-          this.setLoader('Answering…')
+          this.statusLine.set('Answering…')
         } else if (update.type === 'toolcall_end') {
           // Like pi: the tool block appears once the call is written; its result arrives with tool_execution_end
           this.log.addTool(
@@ -449,7 +450,7 @@ export class InteractiveMode {
         if (!this.log.hasTool(event.toolCallId))
           this.log.addTool(event.toolCallId, event.toolName, event.args)
         this.log.startTool(event.toolCallId)
-        this.setLoader(`Running ${event.toolName}…`)
+        this.statusLine.set(`Running ${event.toolName}…`)
         break
       case 'tool_execution_update':
         this.log.updateTool(event.toolCallId, event.partialResult)
@@ -464,9 +465,10 @@ export class InteractiveMode {
         )
         break
       case 'auto_retry_start':
-        this.addNotice(
-          `Request failed, retrying in ${Math.round(event.delayMs / 1000)}s (${event.attempt}/${event.maxAttempts}): ${event.errorMessage}`,
-          'warning',
+        // Like pi: a retry is a status line, and it ends with its backoff, not in the transcript (#566)
+        this.statusLine.retry(
+          `Request failed, retrying in ${Math.round(event.delayMs / 1000)}s (${event.attempt}/${event.maxAttempts}): ${sanitize(oneLine(event.errorMessage))}`,
+          event.delayMs,
         )
         break
       case 'agent_end': {
@@ -478,7 +480,7 @@ export class InteractiveMode {
         break
       }
       case 'agent_settled':
-        this.stopLoader()
+        this.statusLine.stop()
         this.movePendingBash()
         break
       case 'queue_update':
@@ -487,12 +489,14 @@ export class InteractiveMode {
       case 'context_prepare':
         this.addNotice(contextLine(event), 'dim')
         if (event.action === 'summary-required')
-          this.setLoader('Compacting context…')
+          this.statusLine.set('Compacting context…')
         break
       case 'compaction_start':
-        this.setLoader('Compacting context…')
+        this.statusLine.set('Compacting context…')
         break
       case 'compaction_end':
+        // The request that waited on this summary is starting now (#570)
+        this.statusLine.set('Thinking…')
         if (event.result) this.addNotice(compactionLine(event), 'dim')
         else if (event.errorMessage)
           this.addNotice(
@@ -559,34 +563,6 @@ export class InteractiveMode {
     raw = false,
   ): void {
     this.log.addNotice(text, level, raw)
-  }
-
-  private startLoader(message: string): void {
-    if (!this.loader) {
-      this.loader = new Loader(
-        this.tui,
-        (t) => theme.fg('accent', t),
-        (t) => theme.fg('muted', t),
-        message,
-      )
-      this.status.clear()
-      // The loader's own render opens with a blank line; a spacer here would leave two
-      this.status.addChild(this.loader)
-      this.loader.start()
-    }
-    this.setLoader(message)
-  }
-
-  private setLoader(message: string): void {
-    this.loader?.setMessage(
-      `${message} ${theme.fg('dim', '(Esc to interrupt)')}`,
-    )
-  }
-
-  private stopLoader(): void {
-    this.loader?.stop()
-    this.loader = undefined
-    this.status.clear()
   }
 
   private updatePending(): void {
@@ -860,13 +836,13 @@ export class InteractiveMode {
           this.addNotice(BUSY, 'warning')
           return
         }
-        this.startLoader('Compacting context…')
+        this.statusLine.start('Compacting context…')
         try {
           await this.session.compact(args || undefined)
         } catch (error) {
           this.addNotice(`Compaction failed: ${errorMessage(error)}`, 'error')
         } finally {
-          this.stopLoader()
+          this.statusLine.stop()
           this.tui.requestRender()
         }
         return
@@ -921,8 +897,8 @@ export class InteractiveMode {
       input: this.input.bind(this),
       addNotice: this.addNotice.bind(this),
       busyNotice: this.busyNotice.bind(this),
-      startLoader: this.startLoader.bind(this),
-      stopLoader: this.stopLoader.bind(this),
+      startLoader: (message: string) => this.statusLine.start(message),
+      stopLoader: () => this.statusLine.stop(),
       resetChat: this.resetChat.bind(this),
       renderHistory: this.renderHistory.bind(this),
       updateBorder: this.updateBorder.bind(this),
@@ -1134,7 +1110,7 @@ export class InteractiveMode {
     if (this.shuttingDown) return
     this.shuttingDown = true
     this.setupAbort.abort()
-    this.stopLoader()
+    this.statusLine.stop()
     const restore = () => {
       try {
         this.tui.stop()

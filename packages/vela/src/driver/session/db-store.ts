@@ -713,6 +713,42 @@ export function startsConversationEntry(entry: SessionEntry): boolean {
   )
 }
 
+export function updateSessionColumn(
+  db: VelaDatabase,
+  sessionId: string,
+  column: 'model' | 'thinking_level' | 'name' | 'discovered_tools_json',
+  value: string | null,
+): void {
+  db.run(
+    `UPDATE sessions SET ${column} = ?, updated_at = ? WHERE id = ?`,
+    value,
+    new Date().toISOString(),
+    sessionId,
+  )
+}
+
+export function updateSessionLeaf(
+  db: VelaDatabase,
+  sessionId: string,
+  leafId: string | null,
+  model?: string,
+  thinkingLevel?: ThinkingLevel,
+): void {
+  db.run(
+    `UPDATE sessions
+     SET leaf_message_id = ?,
+         model = COALESCE(?, model),
+         thinking_level = COALESCE(?, thinking_level),
+         updated_at = ?
+     WHERE id = ?`,
+    leafId,
+    model ?? null,
+    thinkingLevel ?? null,
+    new Date().toISOString(),
+    sessionId,
+  )
+}
+
 export function collectRowMetadata(
   rows: readonly MessageRow[],
   entryModel: Map<string, string>,

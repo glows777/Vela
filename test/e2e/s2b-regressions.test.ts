@@ -404,7 +404,7 @@ test('R2 #9/#10/#12/#13: cross-env spill clone after relocate, ephemeral+db guar
     rmSync(tmpFile, { recursive: true, force: true })
   }
 
-  // #12 & #13: open model/thinking override persisted + navigateTree restores historical model/thinking + custom_message reserved keys
+  // #12 & #13: open model/thinking override persisted + navigateTree restores & syncs store model/thinking + custom_message reserved keys
   const m1 = createFauxModel({
     modelId: 'm1',
     responses: [fauxText('r1'), fauxText('r3')],
@@ -412,6 +412,7 @@ test('R2 #9/#10/#12/#13: cross-env spill clone after relocate, ephemeral+db guar
   const m2 = createFauxModel({
     modelId: 'm2',
     responses: [fauxText('r2')],
+    generate: [fauxText('Left m2 branch summary')],
   })
   const providers = {
     switch: {
@@ -438,9 +439,32 @@ test('R2 #9/#10/#12/#13: cross-env spill clone after relocate, ephemeral+db guar
   expect(t.session.modelInfo.ref).toBe('switch/m2')
   expect(t.session.thinkingLevel).toBe('low')
 
-  await t.session.navigateTree(firstAssistantId)
+  await t.session.navigateTree(firstAssistantId, { summarize: true })
   expect(t.session.modelInfo.ref).toBe('switch/m1')
   expect(t.session.thinkingLevel).toBe('medium')
+
+  // Verify branch_summary entry, subsequent turn, and resume all reflect target branch's historical choice
+  const dbCheck = openDatabase({
+    path: join(t.dataDir, 'vela.db'),
+    readonly: true,
+  })
+  try {
+    const sumRow = dbCheck.get<{ choice_json: string | null }>(
+      "SELECT choice_json FROM vela_messages WHERE session_id = 'default' AND kind = 'branch_summary' LIMIT 1",
+    )
+    expect(JSON.parse(sumRow?.choice_json ?? '{}')).toEqual({
+      model: 'switch/m1',
+      thinkingLevel: 'medium',
+    })
+  } finally {
+    dbCheck.close()
+  }
+  await t.run('third turn after summarize')
+
+  const resumeTree = createTestVela({ cwd: t.cwd, providers })
+  expect(await resumeTree.session.resume()).toBe(true)
+  expect(resumeTree.session.modelInfo.ref).toBe('switch/m1')
+  expect(resumeTree.session.thinkingLevel).toBe('medium')
 
   const reopen = createTestVela({
     cwd: t.cwd,

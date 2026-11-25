@@ -50,6 +50,9 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - Desktop: In the New routine dialog, Escape closes the Where menu first without discarding the draft. A second Escape closes the dialog ([#541](https://github.com/glows777/Vela/issues/541)).
 - The TUI no longer prints a `[audit]` line for every file write or edit. The tool block shows the path before the call and the turn's fold line counts the edit, and the `audit` event that extensions and SDK subscribers receive is unchanged ([#553](https://github.com/glows777/Vela/issues/553)).
 - The running spinner sits one blank row under the turn's fold line instead of two: the status line added a spacer the loader already draws itself, so `Thinking… (Esc to interrupt)` was pushed down by an empty row.
+- A retried request no longer leaves `Request failed, retrying in 1s (1/3): …` in the transcript for the rest of the session. The retry is the transient status line above the editor while the backoff runs, and it returns to `Thinking…` when the attempt resumes; only a run whose attempts are exhausted ends with an error ([#566](https://github.com/glows777/Vela/issues/566)).
+- After the TUI compacts the context, the status line goes back to `Thinking…` for the request that follows instead of staying on `Compacting context…` for the whole answer ([#570](https://github.com/glows777/Vela/issues/570)).
+- Desktop: the session panel shows a stage only while it lasts. A finished tool's name leaves the state word as soon as the call ends, and `Retrying` ends with its backoff — when the retried request starts, not when it answers — so a slow or hanging retried request no longer reads `Retrying`. The Local `progress` event reports a retry's `started` and `finished` states as it already did for tools and compaction, and the channel publishes the end of the backoff itself ([#571](https://github.com/glows777/Vela/issues/571)).
 
 ## [0.8.1] - 2026-11-23
 
