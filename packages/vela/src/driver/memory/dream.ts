@@ -57,6 +57,7 @@ export interface DreamRunnerContext {
   sessionId: string
   model: ModelInput
   pricing?: ModelPricing
+  checkPath?: (candidate: string) => Promise<boolean>
   recordUsage: (
     modelId: string,
     usage: StepUsage,
@@ -505,6 +506,9 @@ export class MemoryDream {
       )
       const notes = this.selectNotes(entries, turns)
       const editable = new Set(notes.map((n) => basename(n.filePath)))
+      const lintReports = ctx.checkPath
+        ? await this.store.lintAsync(ctx.checkPath)
+        : this.store.lint()
       const input = {
         triggeringSessionId: ctx.sessionId,
         index: this.store.loadIndex(8000),
@@ -519,7 +523,7 @@ export class MemoryDream {
         dropped: snapshotPending.dropped,
         findings: {
           index: this.store.indexWarnings(),
-          notes: this.store.lint().map(({ entry, issues }) => ({
+          notes: lintReports.map(({ entry, issues }) => ({
             filename: basename(entry.filePath),
             issues,
           })),

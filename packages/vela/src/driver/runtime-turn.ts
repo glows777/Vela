@@ -109,8 +109,7 @@ async function formatInboxItemText(
       options.resolveEnv,
       options.signal,
     )
-    const formatted = `${sender}: ${body}`
-    return { text: formatted, humanText: formatted }
+    return { text: `${sender}: ${body}`, humanText: `${sender}: ${rawBody}` }
   }
   if (item.source === 'user') {
     const rawBody = String(p.text ?? '')
@@ -121,7 +120,7 @@ async function formatInboxItemText(
       options.resolveEnv,
       options.signal,
     )
-    return { text: expanded, humanText: expanded || undefined }
+    return { text: expanded, humanText: rawBody || undefined }
   }
   if (!item.wake) {
     return { text: `[Background note] ${String(p.text ?? '')}` }
@@ -129,12 +128,51 @@ async function formatInboxItemText(
   return { text: String(p.text ?? '') }
 }
 
-export function extractInputMeta(inputs: readonly DriverInboxItem[]): {
+interface ExtractedInputMeta {
   replyToMessageId?: string
   handoffDepth?: number
+  channelTarget?: { channel: string; externalChatId: string; threadId?: string }
   humanProvenance?: { inboxEventId: string; senderName?: string }
   attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
-} {
+}
+
+function resolvePrimaryChannelRoute(inputs: readonly DriverInboxItem[]):
+  | {
+      channel: string
+      externalChatId: string
+      threadId?: string
+    }
+  | undefined {
+  for (const requireWake of [true, false]) {
+    for (let i = inputs.length - 1; i >= 0; i--) {
+      const item = inputs[i]!
+      if (
+        (item.source !== 'channel' && item.source !== 'timer') ||
+        item.passive
+      ) {
+        continue
+      }
+      if (requireWake && !item.wake) continue
+      const p = item.payload
+      if (
+        typeof p.channel === 'string' &&
+        typeof p.externalChatId === 'string'
+      ) {
+        return {
+          channel: p.channel,
+          externalChatId: p.externalChatId,
+          ...(typeof p.threadId === 'string' ? { threadId: p.threadId } : {}),
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+function extractInputMeta(
+  inputs: readonly DriverInboxItem[],
+): ExtractedInputMeta {
+  const channelTarget = resolvePrimaryChannelRoute(inputs)
   let replyToMessageId: string | undefined
   let handoffDepth = 0
   let humanProvenance: { inboxEventId: string; senderName?: string } | undefined
@@ -144,7 +182,18 @@ export function extractInputMeta(inputs: readonly DriverInboxItem[]): {
     mimeType?: string
   }> = []
   for (const item of inputs) {
+    if (item.passive) continue
     const p = item.payload
+    if (item.source === 'channel' && channelTarget) {
+      if (
+        p.channel !== channelTarget.channel ||
+        p.externalChatId !== channelTarget.externalChatId ||
+        (typeof p.threadId === 'string' ? p.threadId : undefined) !==
+          channelTarget.threadId
+      ) {
+        continue
+      }
+    }
     if (typeof p.replyToMessageId === 'string') {
       replyToMessageId = p.replyToMessageId
     } else if (typeof p.messageId === 'string') {
@@ -152,9 +201,7 @@ export function extractInputMeta(inputs: readonly DriverInboxItem[]): {
     }
     if (
       item.source === 'user' ||
-      (item.source === 'channel' &&
-        !item.passive &&
-        p.type !== 'session_forward')
+      (item.source === 'channel' && p.type !== 'session_forward')
     ) {
       humanProvenance = {
         inboxEventId: item.id,
@@ -185,8 +232,150 @@ export function extractInputMeta(inputs: readonly DriverInboxItem[]): {
   return {
     replyToMessageId,
     handoffDepth,
+    channelTarget,
     humanProvenance,
     attachments: attachments.length > 0 ? attachments : undefined,
+  }
+}
+
+/** Resolves and persists originating turn metadata so approval/crash resumptions keep provenance, target, and attachments. */
+export function resolveRunInputMeta(
+  db: VelaDatabase,
+  request: DriverTurnRequest,
+): ExtractedInputMeta {
+  const kvKey = `run_input_meta:${request.runId}`
+  const savedRow = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    kvKey,
+  )
+  let savedMeta: ExtractedInputMeta | undefined
+  if (savedRow) {
+    try {
+      savedMeta = JSON.parse(savedRow.value_json) as ExtractedInputMeta
+    } catch {
+      savedMeta = undefined
+    }
+  }
+
+  let baseMeta = extractInputMeta(request.inputs)
+  const hasOnlyApprovalInputs =
+    request.inputs.length > 0 &&
+    request.inputs.every((item) => item.source === 'approval')
+  if (!savedMeta && hasOnlyApprovalInputs) {
+    const dbRows = db.all<{
+      id: string
+      source: string
+      wake: number
+      passive: number
+      payload_json: string
+      created_at: string
+    }>(
+      `SELECT id, source, wake, passive, payload_json, created_at FROM inbox_events
+       WHERE session_id = ? AND run_id = ? AND source != 'approval'
+       ORDER BY created_at ASC, rowid ASC`,
+      request.sessionId,
+      request.runId,
+    )
+    if (dbRows.length > 0) {
+      const reconstructed: DriverInboxItem[] = dbRows.map((r) => ({
+        id: r.id,
+        source: r.source,
+        wake: r.wake === 1,
+        passive: r.passive === 1,
+        payload: JSON.parse(r.payload_json) as Record<string, unknown>,
+        createdAt: r.created_at,
+      }))
+      baseMeta = extractInputMeta(reconstructed)
+    }
+  }
+
+  const merged: ExtractedInputMeta = {
+    replyToMessageId: baseMeta.replyToMessageId ?? savedMeta?.replyToMessageId,
+    handoffDepth: Math.max(
+      baseMeta.handoffDepth ?? 0,
+      savedMeta?.handoffDepth ?? 0,
+    ),
+    channelTarget: baseMeta.channelTarget ?? savedMeta?.channelTarget,
+    humanProvenance: baseMeta.humanProvenance ?? savedMeta?.humanProvenance,
+    attachments: baseMeta.attachments?.length
+      ? baseMeta.attachments
+      : savedMeta?.attachments,
+  }
+  if (
+    !savedRow &&
+    (merged.replyToMessageId ||
+      merged.handoffDepth ||
+      merged.channelTarget ||
+      merged.humanProvenance ||
+      merged.attachments?.length)
+  ) {
+    db.run(
+      'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
+      kvKey,
+      JSON.stringify(merged),
+      new Date().toISOString(),
+    )
+  }
+  return merged
+}
+
+/** Loads persisted silent disposition and handoff depth for a run (preserving them across approvals). */
+export function resolveRunSilenceAndDepth(
+  db: VelaDatabase,
+  runId: string,
+  initialHandoffDepth: number,
+): {
+  isSilent: boolean
+  handoffDepth: number
+  markSilent: () => void
+} {
+  const silentKvKey = `run_silent:${runId}`
+  const depthKvKey = `run_handoff_depth:${runId}`
+  const savedSilent = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    silentKvKey,
+  )
+  let isSilent = false
+  if (savedSilent) {
+    try {
+      isSilent = JSON.parse(savedSilent.value_json) === true
+    } catch {
+      isSilent = false
+    }
+  }
+  let handoffDepth = initialHandoffDepth
+  const savedDepth = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    depthKvKey,
+  )
+  if (savedDepth) {
+    try {
+      const parsedDepth = Number(JSON.parse(savedDepth.value_json))
+      if (Number.isFinite(parsedDepth) && parsedDepth > handoffDepth) {
+        handoffDepth = parsedDepth
+      }
+    } catch {
+      /* ignore malformed depth */
+    }
+  } else if (handoffDepth > 0) {
+    db.run(
+      'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
+      depthKvKey,
+      JSON.stringify(handoffDepth),
+      new Date().toISOString(),
+    )
+  }
+  return {
+    isSilent,
+    handoffDepth,
+    markSilent: () => {
+      db.run(
+        'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
+        silentKvKey,
+        'true',
+        new Date().toISOString(),
+      )
+    },
   }
 }
 
@@ -412,19 +601,12 @@ export function createRuntimeEventForwarder(
   }
 }
 
-export function scheduleRuntimeAutoDream(options: {
+function resolveRuntimeDream(options: {
   db: VelaDatabase
   activeDreams: Map<string, MemoryDream>
   localStore: MemoryStore
   projectId: string | null
-  sessionId: string
-  userEntryId?: string
-  hasHumanText?: boolean
-  dreamEnabled?: boolean
-  resolved: ResolvedModel
-  tracker: TokenTracker
-  logger: VelaLogger
-}): void {
+}): MemoryDream {
   const dreamScope: DreamScope = options.projectId
     ? { kind: 'project', projectId: options.projectId }
     : { kind: 'global' }
@@ -434,17 +616,51 @@ export function scheduleRuntimeAutoDream(options: {
     dream = new MemoryDream(options.localStore, options.db, dreamScope)
     options.activeDreams.set(key, dream)
   }
-  if (options.hasHumanText && options.userEntryId) {
-    dream.recordMessages(options.sessionId, [
-      { messageId: options.userEntryId, time: Date.now() },
-    ])
-  }
+  return dream
+}
+
+export function recordRuntimeDreamTurn(options: {
+  db: VelaDatabase
+  activeDreams: Map<string, MemoryDream>
+  localStore: MemoryStore
+  projectId: string | null
+  sessionId: string
+  userEntryId?: string
+  hasHumanText?: boolean
+}): void {
+  if (!options.hasHumanText || !options.userEntryId) return
+  resolveRuntimeDream(options).recordMessages(options.sessionId, [
+    { messageId: options.userEntryId, time: Date.now() },
+  ])
+}
+
+export function scheduleRuntimeAutoDream(options: {
+  db: VelaDatabase
+  activeDreams: Map<string, MemoryDream>
+  localStore: MemoryStore
+  projectId: string | null
+  sessionId: string
+  dreamEnabled?: boolean
+  resolved: ResolvedModel
+  tracker: TokenTracker
+  resolveEnv: () => Promise<ExecutionEnv>
+  signal: AbortSignal
+  logger: VelaLogger
+}): void {
+  const dream = resolveRuntimeDream(options)
   if (options.dreamEnabled === false || !dream.due()) return
   void dream
     .run({
       sessionId: options.sessionId,
       model: options.resolved.model,
       pricing: options.resolved.info.cost,
+      checkPath: async (candidate) => {
+        const env = await options.resolveEnv()
+        const abs = await env.absolutePath(candidate, options.signal)
+        if (!abs.ok) return false
+        const exists = await env.exists(abs.value, options.signal)
+        return exists.ok && exists.value
+      },
       recordUsage: (modelId, usage, meta, pricing) =>
         options.tracker.record(modelId, usage, meta, pricing),
     })

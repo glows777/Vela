@@ -46,11 +46,17 @@ export function createRuntimeMcpAdapter(
       waitMs = DIRECT_WAIT_MS,
       discoveredTools = [],
     }): Promise<RuntimeMcpLease> {
+      if (environment !== 'local') {
+        return {
+          waitForAll: async () => {},
+          release: async () => {},
+        }
+      }
       const mergedEnv = { ...(options.hostEnv ?? {}), ...(env ?? {}) }
       const loaded = loadMcpServers({
         agentDir,
         projectDir: join(cwd, '.vela'),
-        trusted: trusted && environment === 'local',
+        trusted,
         env: mergedEnv,
       })
       const { entries, errors } = parseServers(loaded.servers, loaded.sources)

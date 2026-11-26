@@ -30,6 +30,11 @@ export interface RuntimeToolDeps {
         projectId: string | null
         replyToMessageId?: string
         handoffDepth?: number
+        channelTarget?: {
+          channel: string
+          externalChatId: string
+          threadId?: string
+        }
         humanProvenance?: { inboxEventId: string; senderName?: string }
         attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
         markSilent: () => void
@@ -326,6 +331,7 @@ export function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
           return deps.timers.createFollowup({
             sessionId: run.sessionId,
             projectId: run.projectId,
+            target: run.channelTarget,
             message: input.message,
             fireAt,
           })
@@ -342,6 +348,7 @@ export function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
         return deps.timers.createRoutine({
           projectId: run.projectId,
           sessionId: run.sessionId,
+          target: run.channelTarget,
           message: input.message,
           schedule,
           timezone: zone,

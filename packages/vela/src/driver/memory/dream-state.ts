@@ -151,7 +151,8 @@ function parseLegacyLogs(raw: string): DreamLogEntry[] {
     const trimmed = section.trim()
     if (!trimmed || trimmed.startsWith('#')) continue
     const nl = trimmed.indexOf('\n')
-    const header = nl === -1 ? trimmed : trimmed.slice(0, nl).trim()
+    const rawHeader = nl === -1 ? trimmed : trimmed.slice(0, nl).trim()
+    const header = rawHeader.replace(/^Dream\s+/i, '')
     const body = nl === -1 ? '' : trimmed.slice(nl + 1).trim()
     const time = Date.parse(header)
     if (Number.isFinite(time) && body) {

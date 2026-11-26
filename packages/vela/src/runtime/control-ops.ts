@@ -122,7 +122,24 @@ function resolveRootBindingForCaller(
 export function getActiveChannelForSession(
   db: VelaDatabase,
   sessionId: string,
+  callerRunId?: string,
 ): string | undefined {
+  if (callerRunId) {
+    const stored = db.get<{ value_json: string }>(
+      'SELECT value_json FROM kv_meta WHERE key = ?',
+      `run_target:${callerRunId}`,
+    )
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored.value_json) as { channel?: unknown }
+        if (typeof parsed.channel === 'string' && parsed.channel) {
+          return parsed.channel
+        }
+      } catch {
+        /* fall back to persisted bindings */
+      }
+    }
+  }
   const sessions = new SessionStoreControl(db)
   const session = sessions.get(sessionId)
   if (!session) return undefined
@@ -188,24 +205,24 @@ export async function startProjectSession(
     name: string
     mimeType?: string
   }> = []
-  if (input.attachments?.length) {
-    for (const att of input.attachments) {
-      const cloned = await ctx.blobs.cloneForSession(
-        att.blobId,
-        null,
-        project.id,
-        caller.id,
-      )
-      clonedAttachments.push({
-        blobId: cloned.id,
-        name: att.name,
-        ...(att.mimeType ? { mimeType: att.mimeType } : {}),
-      })
-    }
-  }
-
   let child: SessionRecord
   try {
+    if (input.attachments?.length) {
+      for (const att of input.attachments) {
+        const cloned = await ctx.blobs.cloneForSession(
+          att.blobId,
+          null,
+          project.id,
+          caller.id,
+        )
+        clonedAttachments.push({
+          blobId: cloned.id,
+          name: att.name,
+          ...(att.mimeType ? { mimeType: att.mimeType } : {}),
+        })
+      }
+    }
+
     child = ctx.db.transaction(() => {
       const created = sessions.create({
         projectId: project.id,
@@ -696,11 +713,12 @@ export function stopSessionRunsInDb(
         r.id,
       )
       db.run(
-        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?)',
+        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
         `run_target:${r.id}`,
         `stop_requested:${r.id}`,
         `run_silent:${r.id}`,
         `run_handoff_depth:${r.id}`,
+        `run_input_meta:${r.id}`,
       )
     }
     db.run(

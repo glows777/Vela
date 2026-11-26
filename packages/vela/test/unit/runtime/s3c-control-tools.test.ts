@@ -9,6 +9,7 @@ import { createVelaAgentDriver } from '../../../src/driver/runtime-adapter.ts'
 import { buildRuntimePromptSections } from '../../../src/driver/runtime-prompt.ts'
 import { ToolRegistry } from '../../../src/driver/tools/registry.ts'
 import { createRuntimeMcpAdapter } from '../../../src/mcp/index.ts'
+import { createApprovalRequest } from '../../../src/runtime/approvals.ts'
 import {
   forwardToProjectSession,
   readProjectSessionMessages,
@@ -16,11 +17,16 @@ import {
   startProjectSession,
 } from '../../../src/runtime/control-ops.ts'
 import {
+  isTopicAwaitingBindingInDb,
+  listSessionsWithPendingWake,
+} from '../../../src/runtime/inbox.ts'
+import {
   type ChannelAdapter,
   type ChannelOutboundMessage,
   EnvironmentRegistry,
   VelaRuntimeEngine,
 } from '../../../src/runtime/index.ts'
+import { claimNextTurnInDb } from '../../../src/runtime/worker.ts'
 import {
   createFauxModel,
   type FauxStep,
@@ -1038,19 +1044,19 @@ test('restricted network overrides +web_fetch and explicit selection, prompt sec
       }) as unknown as ExecutionEnv,
   })
   const runtime = new VelaRuntimeEngine({ db, agentDir: root, environments })
+  writeFileSync(
+    join(root, 'config.json'),
+    JSON.stringify({
+      mcpServers: {
+        hostOnlyServer: { command: 'false' },
+      },
+    }),
+  )
   saveTrust(db, { environment: 'dev', cwd: '/trusted/link' }, true, root)
   saveTrust(db, { environment: 'dev', cwd: '/denied/real' }, false, root)
 
   const model = createFauxModel({
-    responses: [
-      (req) => {
-        expect(req.system).not.toContain(
-          'SHOULD_NEVER_LOAD_FROM_SYMLINKED_UNTRUSTED_DIR',
-        )
-        expect(req.tools).not.toContain('tool_search')
-        return fauxText('Isolated safely')
-      },
-    ],
+    responses: [fauxText('Isolated safely')],
   })
   runtime.registerDriver(
     createVelaAgentDriver({
@@ -1070,7 +1076,299 @@ test('restricted network overrides +web_fetch and explicit selection, prompt sec
     })
     runtime.submitPrompt({ sessionId: s.id, text: 'hello' })
     await runtime.waitForIdle(s.id)
+    const runRow = db.get<{ status: string }>(
+      'SELECT status FROM runs WHERE session_id = ? ORDER BY started_at DESC LIMIT 1',
+      s.id,
+    )
+    expect(runRow?.status).toBe('completed')
     expect(model.calls).toHaveLength(1)
+    expect(model.calls[0]!.system).not.toContain(
+      'SHOULD_NEVER_LOAD_FROM_SYMLINKED_UNTRUSTED_DIR',
+    )
+    expect(model.calls[0]!.system).not.toContain('hostOnlyServer')
+    expect(model.calls[0]!.tools.some((name) => name.startsWith('mcp__'))).toBe(
+      false,
+    )
+  } finally {
+    await runtime.dispose()
+    db.close()
+  }
+})
+
+test('R2: topic readiness matches claim predicate, failed topic notifies hub without running, partial attachment rollback cleans up, room batching & timers stay isolated, and approval resume keeps metadata', async () => {
+  const root = tempRoot('vela-r2-ctrl-')
+  const db = openDatabase({ path: join(root, 'vela.db') })
+  const delivered: ChannelOutboundMessage[] = []
+  let deliverCalls = 0
+  let ingest!: Parameters<ChannelAdapter['start']>[0]['ingest']
+  const runtime = new VelaRuntimeEngine({ db, agentDir: root })
+  await runtime.registerChannel({
+    name: 'lark',
+    async start(ctx) {
+      ingest = ctx.ingest
+    },
+    async stop() {},
+    async fetchAttachment(ref) {
+      return new TextEncoder().encode(`file:${ref}`)
+    },
+    async deliver(msg) {
+      deliverCalls++
+      if (msg.kind === 'topic_start' && msg.text === 'Fail permanently') {
+        throw new Error('Topic creation API rejected')
+      }
+      delivered.push(msg)
+      return { externalMessageId: `out-${deliverCalls}` }
+    },
+  })
+
+  try {
+    const project = runtime.projects.create({ name: 'p2', cwd: root })
+    const hub = runtime.sessions.create({
+      projectId: project.id,
+      kind: 'hub',
+      location: { environment: 'local', cwd: root },
+    })
+    runtime.projects.update(project.id, { hubSessionId: hub.id })
+    runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'chat-A',
+      kind: 'group',
+      projectId: project.id,
+      sessionId: hub.id,
+      enabled: true,
+    })
+    runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'chat-B',
+      kind: 'group',
+      projectId: project.id,
+      sessionId: hub.id,
+      enabled: true,
+    })
+
+    // 1. Topic readiness + 5-failure settlement
+    const failing = await startProjectSession(
+      {
+        db,
+        blobs: runtime.blobs,
+        eventBus: runtime.eventBus,
+        scheduleSession: () => {},
+      },
+      {
+        callerSessionId: hub.id,
+        title: 'Fail permanently',
+        brief: 'Never runs without topic binding',
+      },
+    )
+    expect(isTopicAwaitingBindingInDb(db, failing.sessionId)).toBe(true)
+    expect(listSessionsWithPendingWake(db)).not.toContain(failing.sessionId)
+    expect(
+      claimNextTurnInDb({
+        db,
+        sessions: runtime.sessions,
+        eventBus: runtime.eventBus,
+        activeOwners: new Set(),
+        sessionId: failing.sessionId,
+      }),
+    ).toBeUndefined()
+
+    for (let i = 0; i < 5; i++) {
+      db.run(
+        "UPDATE outbox SET next_retry_at = NULL WHERE session_id = ? AND kind = 'topic_start'",
+        failing.sessionId,
+      )
+      await runtime.outbox.flushOnce()
+    }
+    const topicOutbox = db.get<{ status: string }>(
+      "SELECT status FROM outbox WHERE session_id = ? AND kind = 'topic_start'",
+      failing.sessionId,
+    )
+    expect(topicOutbox?.status).toBe('failed')
+    expect(isTopicAwaitingBindingInDb(db, failing.sessionId)).toBe(true)
+    expect(
+      claimNextTurnInDb({
+        db,
+        sessions: runtime.sessions,
+        eventBus: runtime.eventBus,
+        activeOwners: new Set(),
+        sessionId: failing.sessionId,
+      }),
+    ).toBeUndefined()
+    const hubFailureNote = db.get<{ payload_json: string }>(
+      "SELECT payload_json FROM inbox_events WHERE session_id = ? AND dedupe_key LIKE 'topic-failed:%'",
+      hub.id,
+    )
+    expect(hubFailureNote?.payload_json).toContain(
+      'failed to open its topic thread',
+    )
+
+    // 2. Partial attachment cloning rollback leaves zero orphan rows
+    const validBlob = await runtime.blobs.storeInbound({
+      sessionId: hub.id,
+      projectId: project.id,
+      filename: 'ok.txt',
+      bytes: new TextEncoder().encode('ok'),
+    })
+    await expect(
+      startProjectSession(
+        {
+          db,
+          blobs: runtime.blobs,
+          eventBus: runtime.eventBus,
+          scheduleSession: () => {},
+        },
+        {
+          callerSessionId: hub.id,
+          title: 'Rollback test',
+          brief: 'Second blob missing',
+          attachments: [
+            { blobId: validBlob.id, name: 'ok.txt' },
+            { blobId: 'missing-blob-id', name: 'missing.txt' },
+          ],
+        },
+      ),
+    ).rejects.toThrow(/not found/)
+    expect(
+      db.all<{ id: string }>('SELECT id FROM blobs WHERE session_id IS NULL'),
+    ).toHaveLength(0)
+
+    // 3. Approval resumption + batched rooms + room-B timer delivery
+    const childWaiting = runtime.sessions.create({
+      projectId: project.id,
+      kind: 'work',
+      parentSessionId: hub.id,
+      location: { environment: 'local', cwd: root },
+    })
+    db.run(
+      "UPDATE sessions SET state = 'waiting_human', waiting_reason = 'Pick env' WHERE id = ?",
+      childWaiting.id,
+    )
+    db.run(
+      `INSERT INTO runs (id, session_id, project_id, driver, trigger, status, started_at, updated_at)
+       VALUES ('run-wait-c', ?, ?, 'vela', 'session', 'waiting_human', ?, ?)`,
+      childWaiting.id,
+      project.id,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    )
+    createApprovalRequest(db, runtime.eventBus, {
+      sessionId: childWaiting.id,
+      projectId: project.id,
+      runId: 'run-wait-c',
+      toolCallRowId: null,
+      toolCallId: null,
+      toolName: 'wait_for_input',
+      summary: 'Pick env',
+      input: { reason: 'Pick env' },
+    })
+
+    let hubCall = 0
+    const gatedModel = createFauxModel({
+      responses: Array.from({ length: 6 }, () => (req) => {
+        if (req.system.includes('You are the hub session')) {
+          hubCall++
+          if (hubCall === 1) {
+            return fauxToolCall('bash', { command: 'echo approve-me' })
+          }
+          if (hubCall === 2) {
+            return [
+              fauxToolCall('session_forward', {
+                session_id: childWaiting.id,
+                text: 'Proceed in chat B',
+              }),
+              fauxToolCall('timers', {
+                action: 'create',
+                kind: 'followup',
+                delay_seconds: 60,
+                message: 'Room B reminder',
+              }),
+            ]
+          }
+          if (req.lastUserText.includes('Room B reminder')) {
+            return fauxText('Reminder delivered to room B')
+          }
+          return fauxText('Forwarded after approval')
+        }
+        return fauxText('Child received forwarded approval')
+      }),
+    })
+    runtime.registerDriver(
+      createVelaAgentDriver({
+        db,
+        agentDir: root,
+        blobs: runtime.blobs,
+        environments: runtime.environments,
+        timers: runtime.timers,
+        subscriptions: runtime.subscriptions,
+        eventBus: runtime.eventBus,
+        defaultModel: gatedModel,
+        offline: true,
+        toolApprovalCheck: async (toolName) =>
+          toolName === 'bash'
+            ? { requireApproval: true, summary: 'Run bash?' }
+            : undefined,
+      }),
+    )
+
+    await ingest({
+      channel: 'lark',
+      dedupeKey: 'b-active-1',
+      externalChatId: 'chat-B',
+      kind: 'group',
+      messageId: 'msg-b-1',
+      senderId: 'u1',
+      senderName: 'Liam',
+      mentioned: true,
+      text: 'Forward this to child and set reminder',
+      timestamp: new Date().toISOString(),
+    })
+    await ingest({
+      channel: 'lark',
+      dedupeKey: 'a-passive-1',
+      externalChatId: 'chat-A',
+      kind: 'group',
+      messageId: 'msg-a-passive',
+      senderId: 'u2',
+      senderName: 'Other',
+      passive: true,
+      text: 'Passive noise in room A',
+      timestamp: new Date().toISOString(),
+      attachments: [{ ref: 'room-a-att', name: 'room-a.txt' }],
+    })
+    await runtime.waitForIdle(hub.id)
+    expect(runtime.sessions.get(hub.id)?.state).toBe('waiting_human')
+
+    const pendingApproval = runtime.listPendingApprovals(hub.id)[0]!
+    runtime.resolveApproval({
+      approvalId: pendingApproval.id,
+      decision: 'approved',
+    })
+    await runtime.waitForIdle(hub.id)
+    await runtime.waitForIdle(childWaiting.id)
+    expect(runtime.sessions.get(childWaiting.id)?.state).toBe('idle')
+    expect(
+      delivered.some(
+        (m) =>
+          m.externalChatId === 'chat-B' &&
+          m.text.includes('Forwarded after approval'),
+      ),
+    ).toBe(true)
+
+    const timerRow = runtime.timers.list({ sessionId: hub.id })[0]!
+    db.run(
+      'UPDATE timers SET next_fire_at = ? WHERE id = ?',
+      new Date(Date.now() - 1000).toISOString(),
+      timerRow.id,
+    )
+    runtime.timers.tick()
+    await runtime.waitForIdle(hub.id)
+    expect(
+      delivered.some(
+        (m) =>
+          m.externalChatId === 'chat-B' &&
+          m.text.includes('Reminder delivered to room B'),
+      ),
+    ).toBe(true)
   } finally {
     await runtime.dispose()
     db.close()

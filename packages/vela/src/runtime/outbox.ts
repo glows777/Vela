@@ -422,6 +422,52 @@ export class OutboxDispatcher {
                 row.id,
                 row.attempt,
               ).changes === 1
+            if (ok && row.kind === 'topic_start' && row.sessionId) {
+              this.db.run(
+                `UPDATE inbox_events
+                 SET status = 'dropped', processed_at = COALESCE(processed_at, ?)
+                 WHERE session_id = ? AND status = 'pending'`,
+                updatedAt,
+                row.sessionId,
+              )
+              const child = this.db.get<{
+                name: string | null
+                project_id: string | null
+                parent_session_id: string | null
+              }>(
+                'SELECT name, project_id, parent_session_id FROM sessions WHERE id = ?',
+                row.sessionId,
+              )
+              const parentId =
+                child?.parent_session_id ??
+                (child?.project_id
+                  ? this.db.get<{ hub_session_id: string | null }>(
+                      'SELECT hub_session_id FROM projects WHERE id = ?',
+                      child.project_id,
+                    )?.hub_session_id
+                  : undefined)
+              if (parentId) {
+                const label = child?.name
+                  ? `"${child.name}" (${row.sessionId})`
+                  : row.sessionId
+                this.db.run(
+                  `INSERT OR IGNORE INTO inbox_events (
+                     id, session_id, project_id, source, dedupe_key, wake, passive, payload_json, status, created_at
+                   ) VALUES (?, ?, ?, 'handoff', ?, 0, 0, ?, 'pending', ?)`,
+                  randomUUID(),
+                  parentId,
+                  child?.project_id ?? null,
+                  `topic-failed:${row.id}`,
+                  JSON.stringify({
+                    type: 'handoff_note',
+                    childSessionId: row.sessionId,
+                    status: 'failed',
+                    text: `${label} failed to open its topic thread: ${errorText}`,
+                  }),
+                  updatedAt,
+                )
+              }
+            }
           } else {
             const delayMs = BASE_RETRY_MS * 2 ** (attempt - 1)
             const nextRetryAt = new Date(nowMs + delayMs).toISOString()

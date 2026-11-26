@@ -240,10 +240,51 @@ export function requeueProcessingForRunInTx(
   return res.changes
 }
 
+export function isTopicAwaitingBindingInDb(
+  db: VelaDatabase,
+  sessionId: string,
+): boolean {
+  return Boolean(
+    db.get<{ ok: number }>(
+      `SELECT 1 AS ok FROM sessions s
+       WHERE s.id = ?
+         AND s.kind = 'topic'
+         AND NOT EXISTS (
+           SELECT 1 FROM channel_bindings cb
+           WHERE cb.session_id = s.id AND cb.enabled = 1
+         )
+         AND EXISTS (
+           SELECT 1 FROM outbox ob
+           WHERE ob.session_id = s.id
+             AND ob.kind = 'topic_start'
+             AND ob.status IN ('pending', 'sending', 'failed')
+         )
+       LIMIT 1`,
+      sessionId,
+    ),
+  )
+}
+
 export function listSessionsWithPendingWake(db: VelaDatabase): string[] {
   const rows = db.all<{ session_id: string }>(
-    `SELECT DISTINCT session_id FROM inbox_events
-     WHERE session_id IS NOT NULL AND status = 'pending' AND wake = 1`,
+    `SELECT DISTINCT e.session_id FROM inbox_events e
+     JOIN sessions s ON s.id = e.session_id
+     WHERE e.session_id IS NOT NULL
+       AND e.status = 'pending'
+       AND e.wake = 1
+       AND NOT (
+         s.kind = 'topic'
+         AND NOT EXISTS (
+           SELECT 1 FROM channel_bindings cb
+           WHERE cb.session_id = s.id AND cb.enabled = 1
+         )
+         AND EXISTS (
+           SELECT 1 FROM outbox ob
+           WHERE ob.session_id = s.id
+             AND ob.kind = 'topic_start'
+             AND ob.status IN ('pending', 'sending', 'failed')
+         )
+       )`,
   )
   return rows.map((row) => row.session_id)
 }

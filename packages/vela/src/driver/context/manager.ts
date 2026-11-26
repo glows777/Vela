@@ -149,11 +149,18 @@ export class ContextManager {
       const after = estimateRequestTokens(request, nextMessages)
       request.abortSignal?.throwIfAborted()
       const [summaryMessage, firstKept] = compacted.messages
+      const preservedMemoryId =
+        latestMemoryMsg && !compacted.messages.includes(latestMemoryMsg)
+          ? this.store.idOf(latestMemoryMsg)
+          : undefined
       const entry = this.store.appendCompaction(
         summaryMessage as ModelMessage,
         compacted.summary,
         firstKept,
         before,
+        preservedMemoryId
+          ? { preservedEntryIds: [preservedMemoryId] }
+          : undefined,
       )
       this.replace(nextMessages, compacted.summary, false)
       this.tracker.setEstimatedTokens(after)

@@ -624,3 +624,155 @@ test('MemoryDream isolates scopes, excludes disabled/non-human turns, ignores ro
     db.close()
   }
 })
+
+test('R2: MemoryStore prevents cross-name overwrites, keeps legacy # scalars & Dream <ISO> logs,Dream checks ExecutionEnv paths & excludes template text, and compaction survives reopen', async () => {
+  const root = tempDir('vela-r2-mem-')
+  const memDir = join(root, 'mem')
+  const store = new MemoryStore(memDir, undefined, root)
+
+  // Same normalized slug (`build-flags`) must not overwrite distinct logical names
+  const fFlags = store.save({
+    name: 'build flags',
+    description: 'd1',
+    type: 'project',
+    content: 'flag content 1',
+  })
+  const fUnderscore = store.save({
+    name: 'build_flags',
+    description: 'd2',
+    type: 'project',
+    content: 'flag content 2',
+  })
+  expect(fFlags).not.toBe(fUnderscore)
+  expect(
+    store
+      .list()
+      .map((e) => e.name)
+      .sort(),
+  ).toEqual(['build flags', 'build_flags'])
+
+  // Legacy unquoted `#` scalar headers survive list & search
+  writeFileSync(
+    join(memDir, 'project_hash-solo.md'),
+    '---\nname: #release\ndescription: Sprint #42 tracker\ntype: project\n---\n\nbody one\n',
+  )
+  writeFileSync(
+    join(memDir, 'project_hash-mid.md'),
+    '---\nname: Sprint #42\ndescription: Legacy #tag\ntype: project\n---\n\nbody two\n',
+  )
+  expect(store.list().map((e) => e.name)).toEqual(
+    expect.arrayContaining(['#release', 'Sprint #42']),
+  )
+
+  // Legacy log.md header with `## Dream <ISO timestamp>` imports cleanly
+  const dreamDir = join(root, 'dream-log-test')
+  mkdirSync(join(dreamDir, '.dream'), { recursive: true })
+  writeFileSync(
+    join(dreamDir, '.dream', 'log.md'),
+    '# Dream Log\n\n## Dream 2026-02-01T12:00:00.000Z\n[dream] 2 changes. Merged legacy logs.\n',
+  )
+  const db = openDatabase({ path: join(root, 'vela.db') })
+  try {
+    const legacyDream = new MemoryDream(new MemoryStore(dreamDir), db, {
+      kind: 'tagged',
+      key: `dir:${dreamDir}`,
+    })
+    expect(legacyDream.auditState().logs).toHaveLength(1)
+    expect(legacyDream.auditState().logs[0]!.report).toContain(
+      'Merged legacy logs',
+    )
+
+    // Overflow compaction retains [memory] across SQLite reopen
+    const sessStore = new SessionStore('comp-reopen', db, {
+      blobsDir: join(root, 'blobs'),
+    })
+    const memMsg = {
+      role: 'user' as const,
+      content: '[memory]\nPersisted memory index',
+    }
+    const oldUser = { role: 'user' as const, content: 'older user turn' }
+    const oldAssistant = {
+      role: 'assistant' as const,
+      content: 'older assistant '.repeat(200),
+    }
+    const lastUser = { role: 'user' as const, content: 'current question' }
+    sessStore.runInTransaction(() => {
+      sessStore.appendCustomMessage(memMsg, {
+        customType: 'memory',
+        display: false,
+      })
+      sessStore.appendMessage(oldUser)
+      sessStore.appendMessage(oldAssistant)
+      sessStore.appendMessage(lastUser)
+    })
+    const liveMessages = [memMsg, oldUser, oldAssistant, lastUser]
+    const tracker = new TokenTracker()
+    const cm = new ContextManager(
+      sessStore,
+      tracker,
+      { messages: liveMessages, timestamps: new Map(), summary: '' },
+      () => {},
+      { maxInputTokens: 200 },
+    )
+    await cm.compact(
+      createRequestSnapshot(
+        createFauxModel({ responses: [fauxText('## Goal\nRetain memory')] }),
+        'sys',
+        { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
+        liveMessages,
+      ),
+      undefined,
+      'overflow',
+    )
+    const reopened = new SessionStore('comp-reopen', db, {
+      blobsDir: join(root, 'blobs'),
+    })
+    const saved = await reopened.loadSaved()
+    expect(saved?.messages.map((m) => m.content)).toEqual(
+      liveMessages.map((m) => m.content),
+    )
+
+    // Template expansion sends expanded body to model while Dream keeps raw `/ref`
+    const tplWorkspace = join(root, 'tpl-ws')
+    mkdirSync(join(tplWorkspace, '.vela', 'prompts'), { recursive: true })
+    writeFileSync(
+      join(tplWorkspace, '.vela', 'prompts', 'ref.md'),
+      '---\ndescription: test ref template\n---\nEXPANDED_TEMPLATE_BODY_SECRET\n',
+    )
+    const runtime = new VelaRuntimeEngine({ db, agentDir: root })
+    const tplModel = createFauxModel({
+      responses: [fauxText('Template handled')],
+    })
+    runtime.registerDriver(
+      createVelaAgentDriver({
+        db,
+        agentDir: root,
+        blobs: runtime.blobs,
+        environments: runtime.environments,
+        defaultModel: tplModel,
+        dreamEnabled: false,
+        trustOverride: () => true,
+      }),
+    )
+    const tplSess = runtime.sessions.create({
+      kind: 'chat',
+      location: { environment: 'local', cwd: tplWorkspace },
+    })
+    runtime.submitPrompt({ sessionId: tplSess.id, text: '/ref' })
+    await runtime.waitForIdle(tplSess.id)
+    expect(tplModel.calls[0]!.lastUserText).toContain(
+      'EXPANDED_TEMPLATE_BODY_SECRET',
+    )
+    const dreamPending = new MemoryDream(
+      new MemoryStore(join(root, 'memory')),
+      db,
+      { kind: 'global' },
+    ).auditState().pendingTurns
+    const recordedTurn = dreamPending.find((t) => t.sessionId === tplSess.id)
+    expect(recordedTurn?.user).toBe('/ref')
+    expect(recordedTurn?.user).not.toContain('EXPANDED_TEMPLATE_BODY_SECRET')
+    await runtime.dispose()
+  } finally {
+    db.close()
+  }
+})

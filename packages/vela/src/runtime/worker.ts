@@ -19,6 +19,7 @@ import {
   completeInboxBatchInTx,
   enqueueInboxEvent,
   type InboxEventRecord,
+  isTopicAwaitingBindingInDb,
   listProcessingInboxForRun,
   listSessionsWithPendingWake,
   requeueProcessingForRunInTx,
@@ -124,7 +125,9 @@ export function recoverRuntimeState(params: {
           run.session_id,
         )
         recoveredRuns.push(run.id)
-        sessionsToWake.add(run.session_id)
+        if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
+          sessionsToWake.add(run.session_id)
+        }
       } else {
         db.run(
           `UPDATE runs
@@ -143,7 +146,9 @@ export function recoverRuntimeState(params: {
         db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${run.id}`)
         db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${run.id}`)
         requeuedInboxRuns.push(run.id)
-        sessionsToWake.add(run.session_id)
+        if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
+          sessionsToWake.add(run.session_id)
+        }
       }
     }
 
@@ -168,7 +173,9 @@ export function recoverRuntimeState(params: {
         wake: true,
         payload: { type: 'approval_resolved', runId: run.id },
       })
-      sessionsToWake.add(run.session_id)
+      if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
+        sessionsToWake.add(run.session_id)
+      }
     }
 
     const orphanedProcessing = db.all<{
@@ -218,7 +225,9 @@ export function recoverRuntimeState(params: {
         `UPDATE inbox_events SET status = 'pending', run_id = NULL WHERE id = ?`,
         row.id,
       )
-      if (row.session_id) sessionsToWake.add(row.session_id)
+      if (row.session_id && !isTopicAwaitingBindingInDb(db, row.session_id)) {
+        sessionsToWake.add(row.session_id)
+      }
     }
   })
 
@@ -246,14 +255,8 @@ export function claimNextTurnInDb(params: {
   return db.transaction(() => {
     const session = sessions.get(sessionId)
     if (!session) return undefined
-    if (session.kind === 'topic') {
-      const pendingTopicStart = db.get<{ id: string }>(
-        `SELECT id FROM outbox
-         WHERE session_id = ? AND kind = 'topic_start' AND status IN ('pending', 'sending')
-         LIMIT 1`,
-        sessionId,
-      )
-      if (pendingTopicStart) return undefined
+    if (session.kind === 'topic' && isTopicAwaitingBindingInDb(db, sessionId)) {
+      return undefined
     }
 
     if (session.state === 'running') {
@@ -460,13 +463,17 @@ export function commitCompletedTurnInTx(params: {
   if (updatedRun.changes !== 1) {
     throw new LostRunOwnershipError(claimed.runId)
   }
-  db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${claimed.runId}`)
-  db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${claimed.runId}`)
+  db.run(
+    'DELETE FROM kv_meta WHERE key IN (?, ?)',
+    `run_target:${claimed.runId}`,
+    `stop_requested:${claimed.runId}`,
+  )
   if (finalStatus !== 'waiting_human') {
-    db.run('DELETE FROM kv_meta WHERE key = ?', `run_silent:${claimed.runId}`)
     db.run(
-      'DELETE FROM kv_meta WHERE key = ?',
+      'DELETE FROM kv_meta WHERE key IN (?, ?, ?)',
+      `run_silent:${claimed.runId}`,
       `run_handoff_depth:${claimed.runId}`,
+      `run_input_meta:${claimed.runId}`,
     )
   }
   db.run(
@@ -552,15 +559,13 @@ export function finalizeTurnInDb(params: {
       throw new LostRunOwnershipError(claimed.runId)
     }
     if (status !== 'waiting_human') {
-      db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${claimed.runId}`)
       db.run(
-        'DELETE FROM kv_meta WHERE key = ?',
+        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
+        `run_target:${claimed.runId}`,
         `stop_requested:${claimed.runId}`,
-      )
-      db.run('DELETE FROM kv_meta WHERE key = ?', `run_silent:${claimed.runId}`)
-      db.run(
-        'DELETE FROM kv_meta WHERE key = ?',
+        `run_silent:${claimed.runId}`,
         `run_handoff_depth:${claimed.runId}`,
+        `run_input_meta:${claimed.runId}`,
       )
     }
     db.run(
@@ -676,7 +681,12 @@ function outboxTargetFromInputs(
   for (const requireWake of [true, false]) {
     for (let i = inputs.length - 1; i >= 0; i--) {
       const item = inputs[i]!
-      if (item.source !== 'channel' || item.passive) continue
+      if (
+        (item.source !== 'channel' && item.source !== 'timer') ||
+        item.passive
+      ) {
+        continue
+      }
       if (requireWake && !item.wake) continue
       const payload = item.payload
       if (

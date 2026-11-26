@@ -56,8 +56,10 @@ import { createRuntimeTools } from './runtime-tools.ts'
 import {
   assistantText,
   createRuntimeEventForwarder,
-  extractInputMeta,
   prepareRuntimeTurnMessages,
+  recordRuntimeDreamTurn,
+  resolveRunInputMeta,
+  resolveRunSilenceAndDepth,
   scheduleRuntimeAutoDream,
 } from './runtime-turn.ts'
 import { SessionStore } from './session/index.ts'
@@ -131,6 +133,7 @@ interface ActiveRunMeta {
   projectId: string | null
   replyToMessageId?: string
   handoffDepth?: number
+  channelTarget?: { channel: string; externalChatId: string; threadId?: string }
   humanProvenance?: { inboxEventId: string; senderName?: string }
   attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
   markSilent: () => void
@@ -286,58 +289,24 @@ export function createVelaAgentDriver(
         return resolvedEnv
       }
 
-      const silentKvKey = `run_silent:${request.runId}`
-      const depthKvKey = `run_handoff_depth:${request.runId}`
-      const savedSilent = options.db.get<{ value_json: string }>(
-        'SELECT value_json FROM kv_meta WHERE key = ?',
-        silentKvKey,
+      const inputMeta = resolveRunInputMeta(options.db, request)
+      const runState = resolveRunSilenceAndDepth(
+        options.db,
+        request.runId,
+        inputMeta.handoffDepth ?? 0,
       )
-      let isSilent = false
-      if (savedSilent) {
-        try {
-          isSilent = JSON.parse(savedSilent.value_json) === true
-        } catch {
-          isSilent = false
-        }
-      }
-      const inputMeta = extractInputMeta(request.inputs)
-      let handoffDepth = inputMeta.handoffDepth ?? 0
-      const savedDepth = options.db.get<{ value_json: string }>(
-        'SELECT value_json FROM kv_meta WHERE key = ?',
-        depthKvKey,
-      )
-      if (savedDepth) {
-        try {
-          const parsedDepth = Number(JSON.parse(savedDepth.value_json))
-          if (Number.isFinite(parsedDepth) && parsedDepth > handoffDepth) {
-            handoffDepth = parsedDepth
-          }
-        } catch {
-          /* ignore malformed depth */
-        }
-      } else if (handoffDepth > 0) {
-        options.db.run(
-          'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
-          depthKvKey,
-          JSON.stringify(handoffDepth),
-          new Date().toISOString(),
-        )
-      }
+      let isSilent = runState.isSilent
       activeRunMeta.set(request.sessionId, {
         runId: request.runId,
         projectId: request.projectId,
         replyToMessageId: inputMeta.replyToMessageId,
-        handoffDepth,
+        handoffDepth: runState.handoffDepth,
+        channelTarget: inputMeta.channelTarget,
         humanProvenance: inputMeta.humanProvenance,
         attachments: inputMeta.attachments,
         markSilent: () => {
           isSilent = true
-          options.db.run(
-            'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
-            silentKvKey,
-            'true',
-            new Date().toISOString(),
-          )
+          runState.markSilent()
         },
       })
 
@@ -348,6 +317,7 @@ export function createVelaAgentDriver(
       const boundChannel = getActiveChannelForSession(
         options.db,
         request.sessionId,
+        request.runId,
       )
       const hasChannelBinding = Boolean(boundChannel)
       const sessionKind = (sessionRow?.kind ??
@@ -638,6 +608,7 @@ export function createVelaAgentDriver(
 
       let lastAssistant: AssistantModelMessage | undefined
       let committedInTx = false
+      let recordedDreamInTx = false
       const driver = new VelaDriver({
         sessionId: request.sessionId,
         db: options.db,
@@ -716,6 +687,18 @@ export function createVelaAgentDriver(
           ? ({ assistant }) => {
               lastAssistant = assistant
               committedInTx = true
+              if (memoryActive && !isSilent && !disposed) {
+                recordRuntimeDreamTurn({
+                  db: options.db,
+                  activeDreams,
+                  localStore: memoryStores.local,
+                  projectId: request.projectId,
+                  sessionId: request.sessionId,
+                  userEntryId: turnUserMsg.userEntryId,
+                  hasHumanText: turnUserMsg.hasHumanText,
+                })
+                recordedDreamInTx = true
+              }
               request.onTerminalCommitInTx?.({
                 status: 'completed',
                 replyText: assistantText(assistant),
@@ -739,17 +722,28 @@ export function createVelaAgentDriver(
       }
 
       if (memoryActive && !isSilent && !disposed) {
+        if (!recordedDreamInTx) {
+          recordRuntimeDreamTurn({
+            db: options.db,
+            activeDreams,
+            localStore: memoryStores.local,
+            projectId: request.projectId,
+            sessionId: request.sessionId,
+            userEntryId: turnUserMsg.userEntryId,
+            hasHumanText: turnUserMsg.hasHumanText,
+          })
+        }
         scheduleRuntimeAutoDream({
           db: options.db,
           activeDreams,
           localStore: memoryStores.local,
           projectId: request.projectId,
           sessionId: request.sessionId,
-          userEntryId: turnUserMsg.userEntryId,
-          hasHumanText: turnUserMsg.hasHumanText,
           dreamEnabled: options.dreamEnabled,
           resolved,
           tracker,
+          resolveEnv,
+          signal: controller.signal,
           logger,
         })
       }

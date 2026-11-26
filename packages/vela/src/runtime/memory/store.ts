@@ -130,11 +130,48 @@ export class MemoryStore {
     let resolvedTarget = targetFilename
     if (!resolvedTarget) {
       const canonicalName = `${entry.type}_${slug}.md`
-      if (!fs.existsSync(path.join(this.memoryDir, canonicalName))) {
+      const canonicalPath = this.memoryFile(canonicalName)
+      if (!fs.existsSync(canonicalPath)) {
         const existing = this.list().find(
           (item) => item.type === entry.type && item.name === entry.name,
         )
         if (existing) resolvedTarget = path.basename(existing.filePath)
+      } else {
+        const occupant = this.parseFrontmatter(
+          fs.readFileSync(canonicalPath, 'utf-8'),
+        )
+        if (
+          occupant &&
+          (occupant.type !== entry.type || occupant.name !== entry.name)
+        ) {
+          const existing = this.list().find(
+            (item) => item.type === entry.type && item.name === entry.name,
+          )
+          if (existing) {
+            resolvedTarget = path.basename(existing.filePath)
+          } else {
+            const hash = createHash('sha256')
+              .update(entry.name)
+              .digest('hex')
+              .slice(0, 8)
+            const shortBase = slug.slice(0, 55).replace(/-+$/g, '') || 'note'
+            let candidate = `${entry.type}_${shortBase}-${hash}.md`
+            let counter = 2
+            while (fs.existsSync(this.memoryFile(candidate))) {
+              const other = this.parseFrontmatter(
+                fs.readFileSync(this.memoryFile(candidate), 'utf-8'),
+              )
+              if (
+                !other ||
+                (other.type === entry.type && other.name === entry.name)
+              ) {
+                break
+              }
+              candidate = `${entry.type}_${shortBase}-${hash}-${counter++}.md`
+            }
+            resolvedTarget = candidate
+          }
+        }
       }
     }
     const filename = resolvedTarget ?? `${entry.type}_${slug}.md`
@@ -360,10 +397,30 @@ export class MemoryStore {
     return { frontmatter, body }
   }
 
+  private parseRawScalarFields(normalized: string): Map<string, string> {
+    const endIdx = normalized.indexOf('\n---', 3)
+    const rawScalars = new Map<string, string>()
+    if (endIdx === -1) return rawScalars
+    const header = normalized.slice(4, endIdx)
+    for (const rawLine of header.split('\n')) {
+      const colon = rawLine.indexOf(':')
+      if (colon <= 0) continue
+      const key = rawLine.slice(0, colon).trim()
+      const val = rawLine.slice(colon + 1).trim()
+      if (!key || !val) continue
+      // Only treat unquoted single-line values (old writer format) as literal raw scalars.
+      if (!/^["'[|>]/.test(val)) {
+        rawScalars.set(key, val)
+      }
+    }
+    return rawScalars
+  }
+
   private parseFrontmatter(raw: string): Omit<MemoryEntry, 'filePath'> | null {
     try {
       const normalized = raw.replace(/\r\n/g, '\n')
       if (!normalized.startsWith('---\n')) return null
+      const rawScalars = this.parseRawScalarFields(normalized)
       let frontmatter: Record<string, unknown>
       let body: string
       try {
@@ -378,19 +435,21 @@ export class MemoryStore {
       }
       if (!body) return null
 
-      const coerceScalar = (value: unknown): string => {
+      const coerceScalar = (key: string, value: unknown): string => {
+        const rawFallback = rawScalars.get(key)
+        if (rawFallback !== undefined) return rawFallback
         if (typeof value === 'string') return value.trim()
         if (typeof value === 'number' || typeof value === 'boolean') {
           return String(value)
         }
         return ''
       }
-      const name = coerceScalar(frontmatter.name)
-      const type = coerceScalar(frontmatter.type)
+      const name = coerceScalar('name', frontmatter.name)
+      const type = coerceScalar('type', frontmatter.type)
       const validTypes = ['user', 'feedback', 'project', 'reference']
       if (!name || !type || !validTypes.includes(type)) return null
 
-      const description = coerceScalar(frontmatter.description)
+      const description = coerceScalar('description', frontmatter.description)
       let sources: string[] | undefined
       if (
         Array.isArray(frontmatter.sources) &&
