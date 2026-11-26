@@ -69,7 +69,10 @@ export interface ProviderContext {
 const localOnlyOAuthChecks = new WeakMap<ProviderContext, () => boolean>()
 const managedModelRefs = new WeakMap<ModelHandle, string>()
 const managedModelOwners = new WeakMap<ModelHandle, ModelRegistry>()
-const localOnlyOAuthHandles = new WeakMap<ModelHandle, () => boolean>()
+const localOnlyChannelRebinders = new WeakMap<
+  ModelHandle,
+  (channel: () => string | undefined) => ResolvedModel
+>()
 
 /** @internal True when this request's channel session withheld a `localOnly` OAuth token. */
 export function isLocalOnlyOAuthBlocked(ctx: ProviderContext): boolean {
@@ -81,15 +84,6 @@ function managedModelRef(model: ModelInput): string | undefined {
   return typeof model === 'object' && model !== null
     ? managedModelRefs.get(model)
     : undefined
-}
-
-/** True when `model` is a resolved handle backed by a `localOnly` OAuth credential. */
-function isLocalOnlyOAuthHandle(model: ModelInput): boolean {
-  return (
-    typeof model === 'object' &&
-    model !== null &&
-    (localOnlyOAuthHandles.get(model)?.() ?? false)
-  )
 }
 
 /** Optional provider-hosted equivalents for Vela tools, resolved for each request. */
@@ -530,9 +524,8 @@ export class ModelRegistry {
       managedModelRefs.set(model, `${provider}/${id}`)
       managedModelOwners.set(model, this)
       if (def.oauth?.localOnly) {
-        localOnlyOAuthHandles.set(
-          model,
-          () => this.credentials.get(provider)?.type === 'oauth',
+        localOnlyChannelRebinders.set(model, (channel) =>
+          this.resolve(`${provider}/${id}`, { channel }),
         )
       }
     }
@@ -562,7 +555,7 @@ export function resolveModelInput(
     return registry.resolve(input, { channel })
   }
   const activeChannel = channel?.()
-  if (activeChannel) {
+  if (activeChannel && channel) {
     if (managedModelOwners.get(input) === registry) {
       const ref = managedModelRef(input)
       if (ref) {
@@ -572,10 +565,9 @@ export function resolveModelInput(
         }
       }
     }
-    if (isLocalOnlyOAuthHandle(input)) {
-      throw new Error(
-        `Sign in with ChatGPT is only for local sessions, not ${activeChannel}`,
-      )
+    const rebind = localOnlyChannelRebinders.get(input)
+    if (rebind) {
+      return rebind(channel)
     }
   }
   return { model: input, info: describeModel(input) }

@@ -1114,7 +1114,7 @@ test('Round 2 regressions: in-memory emitted declarations expose zero SessionSco
   expect(sessionOptionsBlock).not.toMatch(/\bscope\s*[?:]/)
 }, 30_000)
 
-test('Round 2 regressions: late channel binding blocks localOnly OAuth handle while preserving custom supplied local handles', async () => {
+test('Round 2 regressions: late channel binding and credential changes enforce localOnly while preserving custom local handles', async () => {
   const dir = tempRoot('vela-r2-late-channel-')
   let defaultHits = 0
   let customHits = 0
@@ -1139,9 +1139,12 @@ test('Round 2 regressions: late channel binding blocks localOnly OAuth handle wh
       },
       authSource: (c) => c?.type,
       models: [{ id: 'gpt-5.2' }],
-      createModel: () => ({
+      createModel: (_id, ctx) => ({
         ...defaultModel,
         async doStream(options: Parameters<typeof defaultModel.doStream>[0]) {
+          if (!(await ctx.credential())) {
+            throw new Error('Credential withheld on channel')
+          }
           defaultHits += 1
           return defaultModel.doStream(options)
         },
@@ -1191,6 +1194,7 @@ test('Round 2 regressions: late channel binding blocks localOnly OAuth handle wh
     await runtime.dispose()
   }
 
+  // Late channel binding rebinds localOnly handles to enforce channel eligibility.
   const vela = createVela({
     dataDir: dir,
     credentials: oauthCredentials,
@@ -1204,11 +1208,74 @@ test('Round 2 regressions: late channel binding blocks localOnly OAuth handle wh
     void session.model
     vela.session('late-ch', { channel: 'lark' })
     expect(session.channel).toBe('lark')
-    expect(() => session.model).toThrow(
-      'Sign in with ChatGPT is only for local sessions, not lark',
+    await expect(session.prompt('hello')).rejects.toThrow(
+      /Credential withheld on channel/,
     )
   } finally {
     await vela.dispose()
+  }
+
+  // Dynamic credential switch from api_key -> oauth on a cached foreign handle still blocks oauth on channel sessions.
+  const sharedCreds = memoryCredentialStore({
+    openai: { type: 'api_key', key: 'sk-initial' },
+  })
+  let customEndpointHits = 0
+  const foreignLocalOnlyModel = createFauxModel({
+    responses: [fauxText('api-key-ok'), fauxText('should-block')],
+  })
+  const foreignProviders: Record<string, ProviderDefinition> = {
+    openai: {
+      oauth: {
+        name: 'OpenAI ChatGPT',
+        localOnly: true,
+        login: async () => {
+          throw new Error('unused')
+        },
+      },
+      authSource: (c) => c?.type,
+      models: [{ id: 'gpt-5.2' }],
+      createModel: (_id, ctx) => ({
+        ...foreignLocalOnlyModel,
+        async doStream(
+          options: Parameters<typeof foreignLocalOnlyModel.doStream>[0],
+        ) {
+          const cred = await ctx.credential()
+          if (!cred) throw new Error('Credential withheld on channel')
+          customEndpointHits += 1
+          return foreignLocalOnlyModel.doStream(options)
+        },
+      }),
+    },
+  }
+  const switchingHandle = resolveModel('openai/gpt-5.2', {
+    providers: foreignProviders,
+    credentials: sharedCreds,
+  })
+  const velaSwitch = createVela({
+    dataDir: tempRoot('vela-r2-switch-cred-'),
+    providers: defaultProviders,
+    credentials: sharedCreds,
+  })
+  try {
+    const chSess = velaSwitch.session('switch-ch', {
+      channel: 'lark',
+      model: switchingHandle,
+    })
+    await chSess.prompt('step 1 with api key')
+    expect(customEndpointHits).toBe(1)
+
+    await sharedCreds.modify('openai', async () => ({
+      type: 'oauth',
+      access: 'oauth-after-login',
+      refresh: 'r',
+      expires: Date.now() + 600_000,
+    }))
+    await expect(chSess.prompt('step 2 after oauth login')).rejects.toThrow(
+      /Credential withheld on channel/,
+    )
+    expect(customEndpointHits).toBe(1)
+  } finally {
+    await velaSwitch.dispose()
   }
 })
 
