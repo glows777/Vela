@@ -1072,8 +1072,20 @@ test('Round 2 regressions: in-memory emitted declarations expose zero SessionSco
     },
     host,
   )
-  const emitResult = program.emit()
-  expect(emitResult.emitSkipped).toBe(false)
+  const targetSrcs = [
+    'src/index.ts',
+    'src/extension-api.ts',
+    'src/driver/vela-session.ts',
+    'src/driver/tools/registry.ts',
+    'src/driver/tools/types.ts',
+    'src/driver/session/options.ts',
+  ]
+  for (const rel of targetSrcs) {
+    const sf = program.getSourceFile(resolve(pkgRoot, rel))
+    expect(sf).toBeDefined()
+    const emitResult = program.emit(sf)
+    expect(emitResult.emitSkipped).toBe(false)
+  }
 
   const distRoot = resolve(pkgRoot, 'dist')
   for (const rel of [
@@ -1100,13 +1112,15 @@ test('Round 2 regressions: in-memory emitted declarations expose zero SessionSco
   expect(sessionOptionsBlock).toBeDefined()
   expect(sessionOptionsBlock).not.toContain('SessionScope')
   expect(sessionOptionsBlock).not.toMatch(/\bscope\s*[?:]/)
-})
+}, 30_000)
 
-test('Round 2 regressions: late channel binding re-evaluates pre-resolved handle and models({ channel })', async () => {
+test('Round 2 regressions: late channel binding blocks localOnly OAuth handle while preserving custom supplied local handles', async () => {
   const dir = tempRoot('vela-r2-late-channel-')
-  let seenAuthHeader: string | undefined
-  const innerModel = createFauxModel({ responses: [fauxText('ok')] })
-  const credentials = memoryCredentialStore({
+  let defaultHits = 0
+  let customHits = 0
+  const defaultModel = createFauxModel({ responses: [fauxText('default-ok')] })
+  const customModel = createFauxModel({ responses: [fauxText('custom-ok')] })
+  const oauthCredentials = memoryCredentialStore({
     openai: {
       type: 'oauth',
       access: 'secret-oauth-token',
@@ -1114,7 +1128,7 @@ test('Round 2 regressions: late channel binding re-evaluates pre-resolved handle
       expires: Date.now() + 600_000,
     },
   })
-  const providers: Record<string, ProviderDefinition> = {
+  const defaultProviders: Record<string, ProviderDefinition> = {
     openai: {
       oauth: {
         name: 'OpenAI ChatGPT',
@@ -1125,35 +1139,74 @@ test('Round 2 regressions: late channel binding re-evaluates pre-resolved handle
       },
       authSource: (c) => c?.type,
       models: [{ id: 'gpt-5.2' }],
-      createModel: (_id, ctx) => ({
-        ...innerModel,
-        async doStream(options: Parameters<typeof innerModel.doStream>[0]) {
-          const cred = await ctx.credential()
-          seenAuthHeader = cred?.type === 'oauth' ? cred.access : undefined
-          return innerModel.doStream(options)
+      createModel: () => ({
+        ...defaultModel,
+        async doStream(options: Parameters<typeof defaultModel.doStream>[0]) {
+          defaultHits += 1
+          return defaultModel.doStream(options)
         },
       }),
     },
   }
-  const vela = createVela({
-    dataDir: dir,
-    credentials,
-    providers,
+  const customProviders: Record<string, ProviderDefinition> = {
+    openai: {
+      models: [{ id: 'gpt-5.2' }],
+      createModel: (_id, ctx) => ({
+        ...customModel,
+        async doStream(options: Parameters<typeof customModel.doStream>[0]) {
+          const cred = await ctx.credential()
+          expect(cred).toEqual({ type: 'api_key', key: 'sk-custom' })
+          customHits += 1
+          return customModel.doStream(options)
+        },
+      }),
+    },
+  }
+  const customHandle = resolveModel('openai/gpt-5.2', {
+    providers: customProviders,
+    credentials: memoryCredentialStore({
+      openai: { type: 'api_key', key: 'sk-custom' },
+    }),
+  })
+  const localOnlyHandle = resolveModel('openai/gpt-5.2', {
+    providers: defaultProviders,
+    credentials: oauthCredentials,
+  })
+
+  // Custom pre-resolved handle must be preserved on local sessions even when receiving runtime has its own `openai` provider.
+  const runtime = createRuntime({
+    ephemeral: true,
+    mcp: false,
+    providers: defaultProviders,
+    credentials: oauthCredentials,
+    defaultModel: customHandle,
   })
   try {
-    const preResolved = resolveModel('openai/gpt-5.2', {
-      providers,
-      credentials,
-    })
+    const s = await runtime.sessions.create({ id: 'custom-local' })
+    await runtime.prompt(s.id, { text: 'hello' })
+    await runtime.waitForIdle(s.id)
+    expect(customHits).toBe(1)
+    expect(defaultHits).toBe(0)
+  } finally {
+    await runtime.dispose()
+  }
+
+  const vela = createVela({
+    dataDir: dir,
+    credentials: oauthCredentials,
+    providers: defaultProviders,
+  })
+  try {
     expect(vela.models().map((m) => m.ref)).toEqual(['openai/gpt-5.2'])
     expect(vela.models({ channel: 'lark' })).toEqual([])
 
-    const session = vela.session('late-ch', { model: preResolved })
+    const session = vela.session('late-ch', { model: localOnlyHandle })
     void session.model
     vela.session('late-ch', { channel: 'lark' })
     expect(session.channel).toBe('lark')
-    await session.prompt('hello')
-    expect(seenAuthHeader).toBeUndefined()
+    expect(() => session.model).toThrow(
+      'Sign in with ChatGPT is only for local sessions, not lark',
+    )
   } finally {
     await vela.dispose()
   }

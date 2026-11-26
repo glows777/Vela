@@ -68,7 +68,8 @@ export interface ProviderContext {
 
 const localOnlyOAuthChecks = new WeakMap<ProviderContext, () => boolean>()
 const managedModelRefs = new WeakMap<ModelHandle, string>()
-const localOnlyManagedHandles = new WeakSet<ModelHandle>()
+const managedModelOwners = new WeakMap<ModelHandle, ModelRegistry>()
+const localOnlyOAuthHandles = new WeakMap<ModelHandle, () => boolean>()
 
 /** @internal True when this request's channel session withheld a `localOnly` OAuth token. */
 export function isLocalOnlyOAuthBlocked(ctx: ProviderContext): boolean {
@@ -82,12 +83,12 @@ function managedModelRef(model: ModelInput): string | undefined {
     : undefined
 }
 
-/** True when `model` is a resolved handle for a provider with `oauth.localOnly`. */
-function isLocalOnlyManagedHandle(model: ModelInput): boolean {
+/** True when `model` is a resolved handle backed by a `localOnly` OAuth credential. */
+function isLocalOnlyOAuthHandle(model: ModelInput): boolean {
   return (
     typeof model === 'object' &&
     model !== null &&
-    localOnlyManagedHandles.has(model)
+    (localOnlyOAuthHandles.get(model)?.() ?? false)
   )
 }
 
@@ -527,8 +528,12 @@ export class ModelRegistry {
     const model = def.createModel(id, ctx)
     if (typeof model === 'object' && model !== null) {
       managedModelRefs.set(model, `${provider}/${id}`)
+      managedModelOwners.set(model, this)
       if (def.oauth?.localOnly) {
-        localOnlyManagedHandles.add(model)
+        localOnlyOAuthHandles.set(
+          model,
+          () => this.credentials.get(provider)?.type === 'oauth',
+        )
       }
     }
     return {
@@ -544,8 +549,9 @@ export class ModelRegistry {
 }
 
 /**
- * Resolves a string ref or pre-resolved `ModelHandle`, re-resolving managed handles
- * against `channel` when channel-scoped so `localOnly` OAuth rules cannot be bypassed.
+ * Resolves a string ref or pre-resolved `ModelHandle`, re-resolving same-registry
+ * managed handles on channel sessions and blocking `localOnly` OAuth handles from
+ * channels while preserving custom caller-supplied handles on local sessions.
  */
 export function resolveModelInput(
   registry: ModelRegistry,
@@ -555,19 +561,21 @@ export function resolveModelInput(
   if (typeof input === 'string') {
     return registry.resolve(input, { channel })
   }
-  if (channel) {
-    const ref = managedModelRef(input)
-    if (ref) {
-      const provider = ref.slice(0, ref.indexOf('/'))
-      if (registry.hasProvider(provider)) {
-        return registry.resolve(ref, { channel })
+  const activeChannel = channel?.()
+  if (activeChannel) {
+    if (managedModelOwners.get(input) === registry) {
+      const ref = managedModelRef(input)
+      if (ref) {
+        const provider = ref.slice(0, ref.indexOf('/'))
+        if (registry.hasProvider(provider)) {
+          return registry.resolve(ref, { channel })
+        }
       }
-      const activeChannel = channel()
-      if (activeChannel && isLocalOnlyManagedHandle(input)) {
-        throw new Error(
-          `Sign in with ChatGPT is only for local sessions, not ${activeChannel}`,
-        )
-      }
+    }
+    if (isLocalOnlyOAuthHandle(input)) {
+      throw new Error(
+        `Sign in with ChatGPT is only for local sessions, not ${activeChannel}`,
+      )
     }
   }
   return { model: input, info: describeModel(input) }
