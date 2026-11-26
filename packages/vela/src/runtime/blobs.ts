@@ -708,7 +708,7 @@ export class BlobStore {
       await link(tempPath, storagePath)
       createdStorageFile = true
       await rm(tempPath, { force: true }).catch(() => {})
-      chmodSync(storagePath, 0o600)
+      chmodSync(storagePath, 0o400)
     } catch (error) {
       await rm(tempPath, { force: true }).catch(() => {})
       throw error

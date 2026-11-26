@@ -21,6 +21,7 @@ export interface CreateRuntimeMcpAdapterOptions {
   pool?: McpPool
   idleTtlMs?: number
   hostEnv?: Record<string, string | undefined>
+  skipUserConfig?: boolean
   createTransport?: (entry: McpServerEntry, cwd: string) => Promise<Transport>
   logger?: VelaLogger
 }
@@ -33,7 +34,10 @@ export function createRuntimeMcpAdapter(
 ): RuntimeMcpAdapter {
   const ownsPool = !options.pool
   const pool =
-    options.pool ?? new McpPool({ idleTtlMs: options.idleTtlMs ?? 0 })
+    options.pool ??
+    new McpPool(
+      options.idleTtlMs !== undefined ? { idleTtlMs: options.idleTtlMs } : {},
+    )
 
   return {
     async attach({
@@ -45,6 +49,7 @@ export function createRuntimeMcpAdapter(
       env,
       waitMs = DIRECT_WAIT_MS,
       discoveredTools = [],
+      signal,
     }): Promise<RuntimeMcpLease> {
       if (environment !== 'local') {
         return {
@@ -58,6 +63,7 @@ export function createRuntimeMcpAdapter(
         projectDir: join(cwd, '.vela'),
         trusted,
         env: mergedEnv,
+        skipUserConfig: options.skipUserConfig,
       })
       const { entries, errors } = parseServers(loaded.servers, loaded.sources)
       errors.unshift(...loaded.errors)
@@ -78,9 +84,13 @@ export function createRuntimeMcpAdapter(
         )
       }
 
+      const preservedDiscovered = new Set(discoveredTools)
       const syncTools = (connection: McpConnection) => {
         const { name: server, config } = connection.entry
         for (const toolName of registered.get(server) ?? []) {
+          if (registry.discoveredTools.has(toolName)) {
+            preservedDiscovered.add(toolName)
+          }
           registry.unregister(toolName)
           owners.delete(toolName)
         }
@@ -110,6 +120,9 @@ export function createRuntimeMcpAdapter(
                 caller: connection,
               }),
             )
+            if (preservedDiscovered.has(name)) {
+              registry.discoveredTools.add(name)
+            }
             names.push(name)
             owners.set(name, owner)
           } catch (error) {
@@ -136,25 +149,31 @@ export function createRuntimeMcpAdapter(
         },
       })
 
-      if (lease.hasWork) {
-        lease.start()
-        const extraServers = new Set<string>()
-        for (const entry of entries) {
-          if (entry.config.enabled === false) continue
-          const prefix = `${namespaceName(entry.name)}__`
-          if (discoveredTools.some((t) => t.startsWith(prefix))) {
-            extraServers.add(entry.name)
+      try {
+        if (lease.hasWork) {
+          lease.start()
+          const extraServers = new Set<string>()
+          for (const entry of entries) {
+            if (entry.config.enabled === false) continue
+            const prefix = `${namespaceName(entry.name)}__`
+            if (discoveredTools.some((t) => t.startsWith(prefix))) {
+              extraServers.add(entry.name)
+            }
           }
+          await lease.waitForDirect(
+            waitMs,
+            extraServers.size > 0 ? extraServers : undefined,
+            signal,
+          )
         }
-        await lease.waitForDirect(
-          waitMs,
-          extraServers.size > 0 ? extraServers : undefined,
-        )
-      }
 
-      return {
-        waitForAll: () => lease.waitForAll(),
-        release: () => lease.release(),
+        return {
+          waitForAll: (waitSignal) => lease.waitForAll(waitSignal ?? signal),
+          release: () => lease.release(),
+        }
+      } catch (error) {
+        await lease.release().catch(() => {})
+        throw error
       }
     },
     async dispose() {

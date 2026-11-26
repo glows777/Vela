@@ -283,6 +283,97 @@ function repairChannelBindingsPartialIndexes(db: VelaDatabase): void {
 }
 
 /**
+ * Transparently upgrades pre-S3-fix v1 databases so `inbox_events.project_id` uses `ON DELETE SET NULL`,
+ * and `subscriptions` deduplicates and enforces `(source, event_key, session_id)` uniqueness without
+ * bumping `SCHEMA_VERSION`.
+ */
+function repairV1InboxAndSubscriptions(db: VelaDatabase): void {
+  const hasInboxEvents = Boolean(
+    db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'inbox_events'`,
+    ),
+  )
+  const inboxFk = hasInboxEvents
+    ? db
+        .all<{ from: string; table: string; on_delete: string }>(
+          "PRAGMA foreign_key_list('inbox_events')",
+        )
+        .find((fk) => fk.from === 'project_id' && fk.table === 'projects')
+    : undefined
+  const needsInboxFkRepair = Boolean(
+    inboxFk && inboxFk.on_delete.toUpperCase() !== 'SET NULL',
+  )
+  const hasSubscriptions = Boolean(
+    db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'subscriptions'`,
+    ),
+  )
+  const needsSubsRepair =
+    hasSubscriptions &&
+    !db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_subscriptions_unique'`,
+    )
+  if (!needsInboxFkRepair && !needsSubsRepair) return
+
+  db.exec('PRAGMA foreign_keys = OFF')
+  try {
+    db.transaction(() => {
+      if (needsInboxFkRepair) {
+        db.exec(`
+          CREATE TABLE inbox_events_v1_repaired (
+            id TEXT PRIMARY KEY NOT NULL,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+            source TEXT NOT NULL,
+            dedupe_key TEXT,
+            wake INTEGER NOT NULL DEFAULT 1 CHECK (wake IN (0, 1)),
+            passive INTEGER NOT NULL DEFAULT 0 CHECK (passive IN (0, 1)),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'done', 'dropped')),
+            payload_json TEXT NOT NULL,
+            run_id TEXT,
+            created_at TEXT NOT NULL,
+            processed_at TEXT
+          );
+          INSERT INTO inbox_events_v1_repaired (
+            id, session_id, project_id, source, dedupe_key, wake,
+            passive, status, payload_json, run_id, created_at, processed_at
+          )
+          SELECT id, session_id, project_id, source, dedupe_key, wake,
+                 passive, status, payload_json, run_id, created_at, processed_at
+          FROM inbox_events;
+          DROP TABLE inbox_events;
+          ALTER TABLE inbox_events_v1_repaired RENAME TO inbox_events;
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_source_dedupe
+            ON inbox_events (source, dedupe_key)
+            WHERE dedupe_key IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_inbox_session_status
+            ON inbox_events (session_id, status, created_at);
+          CREATE INDEX IF NOT EXISTS idx_inbox_status_created
+            ON inbox_events (status, created_at);
+        `)
+      }
+      if (needsSubsRepair) {
+        db.exec(`
+          DELETE FROM subscriptions
+          WHERE id != (
+            SELECT s2.id FROM subscriptions s2
+            WHERE s2.source = subscriptions.source
+              AND s2.event_key = subscriptions.event_key
+              AND s2.session_id = subscriptions.session_id
+            ORDER BY s2.created_at ASC, s2.rowid ASC
+            LIMIT 1
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique
+            ON subscriptions (source, event_key, session_id);
+        `)
+      }
+    }, 'IMMEDIATE')
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON')
+  }
+}
+
+/**
  * Opens `vela.db` (or `':memory:'`), configures WAL + foreign keys + busy timeout,
  * enforces `0600` file permissions on disk, and applies forward schema migrations.
  */
@@ -330,6 +421,7 @@ export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
     applyMigrations(db, { readonly })
     if (!readonly) {
       repairChannelBindingsPartialIndexes(db)
+      repairV1InboxAndSubscriptions(db)
     }
 
     if (!isMemory && !readonly) {

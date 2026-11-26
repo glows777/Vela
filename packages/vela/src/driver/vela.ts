@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { openDatabase } from '../db/index.ts'
+import { openDatabase, withReadonlyDb } from '../db/index.ts'
 import type { OAuthRegistrationStore } from '../providers/auth/types.ts'
 import {
   DEFAULT_THINKING_LEVEL,
@@ -85,12 +85,9 @@ function lazyFileRegistrationStore(dbPath: string): OAuthRegistrationStore {
   return {
     get(provider) {
       if (!existsSync(dbPath)) return undefined
-      const db = openDatabase({ path: dbPath, readonly: true })
-      try {
-        return new SqliteOAuthRegistrationStore(db).get(provider)
-      } finally {
-        db.close()
-      }
+      return withReadonlyDb(dbPath, (db) =>
+        new SqliteOAuthRegistrationStore(db).get(provider),
+      )
     },
     set(provider, registration) {
       const db = openDatabase({ path: dbPath })

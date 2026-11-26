@@ -102,6 +102,7 @@ export class McpConnection implements McpToolCaller {
   /** Aborted by close(): cancels a connect in progress, including the wait between retries */
   private readonly shutdown = new AbortController()
   private stderrTail = ''
+  private generation = 0
 
   constructor(private readonly options: McpConnectionOptions) {
     this.entry = options.entry
@@ -128,41 +129,52 @@ export class McpConnection implements McpToolCaller {
       return Promise.reject(
         new Error(`MCP server "${this.name}" has been shut down`),
       )
-    this.opening ??= this.open().finally(() => {
-      this.opening = undefined
-    })
+    if (!this.opening) {
+      const generation = this.generation
+      const attempt = this.open(generation).finally(() => {
+        if (this.opening === attempt) {
+          this.opening = undefined
+        }
+      })
+      this.opening = attempt
+    }
     return this.opening
   }
 
-  private async open(): Promise<Client> {
+  private async open(generation: number): Promise<Client> {
     this.setState('connecting')
     const isHttp = 'url' in this.entry.config
     for (let attempt = 0; ; attempt++) {
       try {
-        const client = await this.openOnce()
-        if (this.shutdown.signal.aborted) {
-          await client.close().catch(() => {})
+        const opened = await this.openOnce(generation)
+        if (this.shutdown.signal.aborted || generation !== this.generation) {
+          await opened.client.close().catch(() => {})
           throw new Error('shut down')
         }
-        this.client = client
+        this.client = opened.client
+        this.instructions = opened.instructions
+        this.tools = opened.tools
         this.setState('connected')
         this.options.onTools(this)
-        return client
+        return opened.client
       } catch (error) {
         const delay = CONNECT_RETRY_DELAYS_MS[attempt]
         if (
           isHttp &&
           delay !== undefined &&
           isTransient(error) &&
-          !this.shutdown.signal.aborted
+          !this.shutdown.signal.aborted &&
+          generation === this.generation
         ) {
           await sleep(delay, undefined, { signal: this.shutdown.signal }).catch(
             () => {},
           )
-          if (!this.shutdown.signal.aborted) continue
+          if (!this.shutdown.signal.aborted && generation === this.generation)
+            continue
         }
         const message = this.describeConnectError(error)
-        if (this.state !== 'closed') this.setState('failed', message)
+        if (this.state !== 'closed' && generation === this.generation)
+          this.setState('failed', message)
         throw new Error(message)
       }
     }
@@ -180,7 +192,11 @@ export class McpConnection implements McpToolCaller {
     return message
   }
 
-  private async openOnce(): Promise<Client> {
+  private async openOnce(generation: number): Promise<{
+    client: Client
+    instructions: string | undefined
+    tools: McpTool[]
+  }> {
     const [
       { Client },
       { ToolListChangedNotificationSchema },
@@ -190,18 +206,19 @@ export class McpConnection implements McpToolCaller {
       import('@modelcontextprotocol/sdk/types.js'),
       import('@modelcontextprotocol/sdk/validation/cfworker'),
     ])
-    this.stderrTail = ''
     const transport = await (
       this.options.createTransport ?? this.createTransport
     )(this.entry, this.options.cwd)
-    if (this.shutdown.signal.aborted) {
+    if (this.shutdown.signal.aborted || generation !== this.generation) {
       await transport.close().catch(() => {})
       throw new Error('shut down')
     }
+    this.stderrTail = ''
     this.connecting = transport
     const stderr = (transport as { stderr?: NodeJS.ReadableStream | null })
       .stderr
     stderr?.on('data', (chunk: Buffer | string) => {
+      if (generation !== this.generation) return
       this.stderrTail = (this.stderrTail + chunk.toString()).slice(
         -STDERR_TAIL_CHARS,
       )
@@ -226,17 +243,21 @@ export class McpConnection implements McpToolCaller {
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
       void this.refreshTools(client).catch(() => {})
     })
+    let instructions: string | undefined
+    let tools: McpTool[]
     try {
       await client.connect(transport, { timeout: this.timeoutMs })
-      this.instructions = client.getInstructions()?.trim() || undefined
-      this.tools = await this.listTools(client)
+      instructions = client.getInstructions()?.trim() || undefined
+      tools = await this.listTools(client)
     } catch (error) {
       await client.close().catch(() => {})
       throw error
     } finally {
-      this.connecting = undefined
+      if (this.connecting === transport) {
+        this.connecting = undefined
+      }
     }
-    return client
+    return { client, instructions, tools }
   }
 
   private async createTransport(
@@ -303,21 +324,37 @@ export class McpConnection implements McpToolCaller {
 
   /** Closes the connection (stdio: close stdin, then SIGTERM, then SIGKILL, as the SDK does). */
   async close(): Promise<void> {
+    this.generation++
     this.shutdown.abort()
     this.setState('closed')
     const client = this.client
     this.client = undefined
+    void this.opening?.catch(() => {})
+    this.opening = undefined
+    const connecting = this.connecting
+    this.connecting = undefined
     await Promise.all([
       client?.close().catch(() => {}),
-      this.connecting?.close().catch(() => {}),
+      connecting?.close().catch(() => {}),
     ])
   }
 
   /** Drops the connection and connects again (`/mcp reconnect`). */
   async reconnect(): Promise<void> {
+    if (this.state === 'closed') {
+      throw new Error(`MCP server "${this.name}" has been shut down`)
+    }
+    this.generation++
     const client = this.client
     this.client = undefined
-    await client?.close().catch(() => {})
+    void this.opening?.catch(() => {})
+    this.opening = undefined
+    const connecting = this.connecting
+    this.connecting = undefined
+    await Promise.all([
+      client?.close().catch(() => {}),
+      connecting?.close().catch(() => {}),
+    ])
     await this.connect()
   }
 }

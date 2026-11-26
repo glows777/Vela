@@ -159,6 +159,7 @@ export class VelaDriver {
 
   async run(options: VelaDriverRunOptions): Promise<{
     reason: 'done' | 'waiting_human'
+    committedInTx?: boolean
   }> {
     const { db, store, registry, tracker, sessionId } = this.deps
     const limits = resolveLimits(options.limits)
@@ -473,7 +474,6 @@ export class VelaDriver {
                       )
                     }
                     if (canCompleteInTx) {
-                      committedTerminalInTx = true
                       options.onTerminalCommitInTx?.({
                         assistantEntryId,
                         assistant,
@@ -483,6 +483,9 @@ export class VelaDriver {
                   }
                 : undefined,
           })
+        if (canCompleteInTx) {
+          committedTerminalInTx = true
+        }
 
         options.messages.push(assistant)
         newMessages.push(assistant)
@@ -672,8 +675,11 @@ export class VelaDriver {
         messages: newMessages,
         reason: 'done',
       })
-      return { reason: 'done' }
+      return { reason: 'done', committedInTx: committedTerminalInTx }
     } catch (error) {
+      if (committedTerminalInTx) {
+        return { reason: 'done', committedInTx: true }
+      }
       const draining = Boolean(options.isDraining?.())
       const aborted = Boolean(options.abortSignal?.aborted || draining)
       const { hasRunPendingApproval, hasSessionPendingApproval } =

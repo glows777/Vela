@@ -201,6 +201,8 @@ export function enqueueOutboxInTx(
  */
 export class OutboxDispatcher {
   private flushing: Promise<{ delivered: number; failed: number }> | undefined
+  private flushAgain = false
+  private readonly inFlightByChannel = new Map<string, Set<Promise<void>>>()
 
   constructor(
     private readonly db: VelaDatabase,
@@ -261,6 +263,43 @@ export class OutboxDispatcher {
     return rows.map(rowToOutbox)
   }
 
+  /**
+   * Returns the earliest pending wake timestamp among deliverable `(session_id, channel)` FIFO queue heads,
+   * skipping followers blocked behind an in-flight or backing-off queue head.
+   */
+  nextPendingWakeAt(channels: readonly string[]): string | null {
+    if (channels.length === 0) return null
+    const allowed = new Set(channels)
+    const rows = this.db.all<{
+      session_id: string | null
+      channel: string
+      status: string
+      next_retry_at: string | null
+      created_at: string
+    }>(
+      `SELECT session_id, channel, status, next_retry_at, created_at
+       FROM outbox
+       WHERE status IN ('pending', 'sending')
+       ORDER BY created_at ASC, rowid ASC`,
+    )
+    const seenHeads = new Set<string>()
+    let earliest: string | null = null
+    let earliestMs = Number.POSITIVE_INFINITY
+    for (const row of rows) {
+      const fifoKey = `${row.session_id}:${row.channel}`
+      if (seenHeads.has(fifoKey)) continue
+      seenHeads.add(fifoKey)
+      if (row.status !== 'pending' || !allowed.has(row.channel)) continue
+      const candidate = row.next_retry_at ?? row.created_at
+      const ms = Date.parse(candidate)
+      if (Number.isFinite(ms) && ms < earliestMs) {
+        earliestMs = ms
+        earliest = candidate
+      }
+    }
+    return earliest
+  }
+
   listBySession(sessionId: string): OutboxRecord[] {
     const rows = this.db.all<Record<string, unknown>>(
       `SELECT * FROM outbox WHERE session_id = ? ORDER BY created_at ASC`,
@@ -270,39 +309,78 @@ export class OutboxDispatcher {
   }
 
   async flushOnce(
-    nowMs = Date.now(),
+    nowMs?: number,
   ): Promise<{ delivered: number; failed: number }> {
-    if (this.flushing) return this.flushing
-    this.flushing = this.runFlush(nowMs).finally(() => {
+    if (this.flushing) {
+      this.flushAgain = true
+      return this.flushing
+    }
+    this.flushAgain = false
+    this.flushing = (async () => {
+      let delivered = 0
+      let failed = 0
+      do {
+        this.flushAgain = false
+        const pass = await this.runFlush(nowMs)
+        delivered += pass.delivered
+        failed += pass.failed
+      } while (this.flushAgain)
+      return { delivered, failed }
+    })().finally(() => {
       this.flushing = undefined
     })
     return this.flushing
   }
 
+  async drain(): Promise<void> {
+    while (this.flushing) {
+      await this.flushing.catch(() => {})
+    }
+  }
+
+  async drainChannel(channel: string): Promise<void> {
+    for (;;) {
+      const active = this.inFlightByChannel.get(channel)
+      if (!active || active.size === 0) return
+      await Promise.allSettled([...active])
+    }
+  }
+
   private async runFlush(
-    nowMs: number,
+    fixedNowMs?: number,
   ): Promise<{ delivered: number; failed: number }> {
-    const nowIso = new Date(nowMs).toISOString()
+    const clock = () => fixedNowMs ?? Date.now()
     let delivered = 0
     let failed = 0
 
     let retryScheduled = false
     for (;;) {
+      const stepNowMs = clock()
+      const stepNowIso = new Date(stepNowMs).toISOString()
       const candidate = this.db.transaction(() => {
         const rows = this.db.all<Record<string, unknown>>(
           `SELECT * FROM outbox
-           WHERE status = 'pending'
-             AND (next_retry_at IS NULL OR next_retry_at <= ?)
+           WHERE status IN ('pending', 'sending')
            ORDER BY created_at ASC, rowid ASC`,
-          nowIso,
         ) as unknown as OutboxRow[]
+        const blockedSessionChannels = new Set<string>()
         for (const row of rows) {
+          const fifoKey = `${row.session_id}:${row.channel}`
+          if (row.status === 'sending') {
+            blockedSessionChannels.add(fifoKey)
+            continue
+          }
+          if (blockedSessionChannels.has(fifoKey)) continue
+          if (row.next_retry_at !== null && row.next_retry_at > stepNowIso) {
+            blockedSessionChannels.add(fifoKey)
+            continue
+          }
           const adapter = this.getAdapter(row.channel)
           if (!adapter) continue
           const leaseToken = `${PROCESS_OWNER_PREFIX}:${process.pid}:${randomUUID()}`
           const claimed = this.db.run(
             `UPDATE outbox SET status = 'sending', updated_at = ? WHERE id = ? AND status = 'pending'`,
-            nowIso,
+            stepNowIso,
             row.id,
           )
           if (claimed.changes !== 1) continue
@@ -312,7 +390,7 @@ export class OutboxDispatcher {
              ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
             leaseKey(row.id),
             JSON.stringify(leaseToken),
-            nowIso,
+            stepNowIso,
           )
           LIVE_OUTBOX_LEASES.set(row.id, leaseToken)
           return { row: rowToOutbox(row), adapter, leaseToken }
@@ -340,31 +418,38 @@ export class OutboxDispatcher {
         ...(row.payload.files ? { files: row.payload.files } : {}),
       }
 
-      try {
-        const result = await adapter.deliver(message)
-        const topicThreadId =
-          row.kind === 'topic_start'
-            ? (result.threadId ?? result.rootId ?? result.externalMessageId)
-            : undefined
-        if (row.kind === 'topic_start' && !topicThreadId) {
-          throw new Error(
-            'Channel adapter returned no threadId, rootId, or externalMessageId for topic_start',
-          )
-        }
-        const sentAt = new Date().toISOString()
-        const applied = this.db.transaction(() => {
-          const leaseRow = this.db.get<{ value_json: string }>(
-            'SELECT value_json FROM kv_meta WHERE key = ?',
-            leaseKey(row.id),
-          )
-          if (!leaseRow) return false
-          try {
-            if (JSON.parse(leaseRow.value_json) !== leaseToken) return false
-          } catch {
-            return false
+      const channel = row.channel
+      let activeSet = this.inFlightByChannel.get(channel)
+      if (!activeSet) {
+        activeSet = new Set<Promise<void>>()
+        this.inFlightByChannel.set(channel, activeSet)
+      }
+      const delivery = (async () => {
+        try {
+          const result = await adapter.deliver(message)
+          const topicThreadId =
+            row.kind === 'topic_start'
+              ? (result.threadId ?? result.rootId ?? result.externalMessageId)
+              : undefined
+          if (row.kind === 'topic_start' && !topicThreadId) {
+            throw new Error(
+              'Channel adapter returned no threadId, rootId, or externalMessageId for topic_start',
+            )
           }
-          const updated = this.db.run(
-            `UPDATE outbox
+          const sentAt = new Date().toISOString()
+          const applied = this.db.transaction(() => {
+            const leaseRow = this.db.get<{ value_json: string }>(
+              'SELECT value_json FROM kv_meta WHERE key = ?',
+              leaseKey(row.id),
+            )
+            if (!leaseRow) return false
+            try {
+              if (JSON.parse(leaseRow.value_json) !== leaseToken) return false
+            } catch {
+              return false
+            }
+            const updated = this.db.run(
+              `UPDATE outbox
              SET status = 'sent',
                  external_message_id = ?,
                  sent_at = ?,
@@ -372,128 +457,142 @@ export class OutboxDispatcher {
                  next_retry_at = NULL,
                  updated_at = ?
              WHERE id = ? AND status = 'sending' AND attempt = ?`,
-            result.externalMessageId ?? null,
-            sentAt,
-            sentAt,
-            row.id,
-            row.attempt,
-          )
-          if (
-            updated.changes === 1 &&
-            row.kind === 'topic_start' &&
-            topicThreadId
-          ) {
-            syncTopicBindingOnDeliveryInTx(this.db, row, topicThreadId, sentAt)
+              result.externalMessageId ?? null,
+              sentAt,
+              sentAt,
+              row.id,
+              row.attempt,
+            )
+            if (
+              updated.changes === 1 &&
+              row.kind === 'topic_start' &&
+              topicThreadId
+            ) {
+              syncTopicBindingOnDeliveryInTx(
+                this.db,
+                row,
+                topicThreadId,
+                sentAt,
+              )
+            }
+            this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
+            return updated.changes === 1
+          })
+          if (applied) {
+            delivered++
+            if (row.kind === 'topic_start') {
+              this.onTopicBound?.(row.sessionId)
+            }
           }
-          this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
-          return updated.changes === 1
-        })
-        if (applied) {
-          delivered++
-          if (row.kind === 'topic_start') {
-            this.onTopicBound?.(row.sessionId)
-          }
-        }
-      } catch (error) {
-        const attempt = row.attempt + 1
-        const errorText = error instanceof Error ? error.message : String(error)
-        const updatedAt = new Date().toISOString()
-        const applied = this.db.transaction(() => {
-          const leaseRow = this.db.get<{ value_json: string }>(
-            'SELECT value_json FROM kv_meta WHERE key = ?',
-            leaseKey(row.id),
-          )
-          if (!leaseRow) return false
-          try {
-            if (JSON.parse(leaseRow.value_json) !== leaseToken) return false
-          } catch {
-            return false
-          }
-          let ok = false
-          if (attempt >= MAX_OUTBOX_ATTEMPTS) {
-            ok =
-              this.db.run(
-                `UPDATE outbox
+        } catch (error) {
+          const attempt = row.attempt + 1
+          const errorText =
+            error instanceof Error ? error.message : String(error)
+          const updatedAt = new Date().toISOString()
+          const applied = this.db.transaction(() => {
+            const leaseRow = this.db.get<{ value_json: string }>(
+              'SELECT value_json FROM kv_meta WHERE key = ?',
+              leaseKey(row.id),
+            )
+            if (!leaseRow) return false
+            try {
+              if (JSON.parse(leaseRow.value_json) !== leaseToken) return false
+            } catch {
+              return false
+            }
+            let ok = false
+            if (attempt >= MAX_OUTBOX_ATTEMPTS) {
+              ok =
+                this.db.run(
+                  `UPDATE outbox
                  SET status = 'failed', attempt = ?, last_error = ?, next_retry_at = NULL, updated_at = ?
                  WHERE id = ? AND status = 'sending' AND attempt = ?`,
-                attempt,
-                errorText,
-                updatedAt,
-                row.id,
-                row.attempt,
-              ).changes === 1
-            if (ok && row.kind === 'topic_start' && row.sessionId) {
-              this.db.run(
-                `UPDATE inbox_events
+                  attempt,
+                  errorText,
+                  updatedAt,
+                  row.id,
+                  row.attempt,
+                ).changes === 1
+              if (ok && row.kind === 'topic_start' && row.sessionId) {
+                this.db.run(
+                  `UPDATE inbox_events
                  SET status = 'dropped', processed_at = COALESCE(processed_at, ?)
                  WHERE session_id = ? AND status = 'pending'`,
-                updatedAt,
-                row.sessionId,
-              )
-              const child = this.db.get<{
-                name: string | null
-                project_id: string | null
-                parent_session_id: string | null
-              }>(
-                'SELECT name, project_id, parent_session_id FROM sessions WHERE id = ?',
-                row.sessionId,
-              )
-              const parentId =
-                child?.parent_session_id ??
-                (child?.project_id
-                  ? this.db.get<{ hub_session_id: string | null }>(
-                      'SELECT hub_session_id FROM projects WHERE id = ?',
-                      child.project_id,
-                    )?.hub_session_id
-                  : undefined)
-              if (parentId) {
-                const label = child?.name
-                  ? `"${child.name}" (${row.sessionId})`
-                  : row.sessionId
-                this.db.run(
-                  `INSERT OR IGNORE INTO inbox_events (
+                  updatedAt,
+                  row.sessionId,
+                )
+                const child = this.db.get<{
+                  name: string | null
+                  project_id: string | null
+                  parent_session_id: string | null
+                }>(
+                  'SELECT name, project_id, parent_session_id FROM sessions WHERE id = ?',
+                  row.sessionId,
+                )
+                const parentId =
+                  child?.parent_session_id ??
+                  (child?.project_id
+                    ? this.db.get<{ hub_session_id: string | null }>(
+                        'SELECT hub_session_id FROM projects WHERE id = ?',
+                        child.project_id,
+                      )?.hub_session_id
+                    : undefined)
+                if (parentId) {
+                  const label = child?.name
+                    ? `"${child.name}" (${row.sessionId})`
+                    : row.sessionId
+                  this.db.run(
+                    `INSERT OR IGNORE INTO inbox_events (
                      id, session_id, project_id, source, dedupe_key, wake, passive, payload_json, status, created_at
                    ) VALUES (?, ?, ?, 'handoff', ?, 0, 0, ?, 'pending', ?)`,
-                  randomUUID(),
-                  parentId,
-                  child?.project_id ?? null,
-                  `topic-failed:${row.id}`,
-                  JSON.stringify({
-                    type: 'handoff_note',
-                    childSessionId: row.sessionId,
-                    status: 'failed',
-                    text: `${label} failed to open its topic thread: ${errorText}`,
-                  }),
-                  updatedAt,
-                )
+                    randomUUID(),
+                    parentId,
+                    child?.project_id ?? null,
+                    `topic-failed:${row.id}`,
+                    JSON.stringify({
+                      type: 'handoff_note',
+                      childSessionId: row.sessionId,
+                      status: 'failed',
+                      text: `${label} failed to open its topic thread: ${errorText}`,
+                    }),
+                    updatedAt,
+                  )
+                }
               }
-            }
-          } else {
-            const delayMs = BASE_RETRY_MS * 2 ** (attempt - 1)
-            const nextRetryAt = new Date(nowMs + delayMs).toISOString()
-            ok =
-              this.db.run(
-                `UPDATE outbox
+            } else {
+              const delayMs = BASE_RETRY_MS * 2 ** (attempt - 1)
+              const nextRetryAt = new Date(clock() + delayMs).toISOString()
+              ok =
+                this.db.run(
+                  `UPDATE outbox
                  SET status = 'pending', attempt = ?, last_error = ?, next_retry_at = ?, updated_at = ?
                  WHERE id = ? AND status = 'sending' AND attempt = ?`,
-                attempt,
-                errorText,
-                nextRetryAt,
-                updatedAt,
-                row.id,
-                row.attempt,
-              ).changes === 1
-            if (ok) retryScheduled = true
+                  attempt,
+                  errorText,
+                  nextRetryAt,
+                  updatedAt,
+                  row.id,
+                  row.attempt,
+                ).changes === 1
+              if (ok) retryScheduled = true
+            }
+            this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
+            return ok
+          })
+          if (applied) failed++
+        } finally {
+          if (LIVE_OUTBOX_LEASES.get(row.id) === leaseToken) {
+            LIVE_OUTBOX_LEASES.delete(row.id)
           }
-          this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
-          return ok
-        })
-        if (applied) failed++
-      } finally {
-        if (LIVE_OUTBOX_LEASES.get(row.id) === leaseToken) {
-          LIVE_OUTBOX_LEASES.delete(row.id)
         }
-      }
+      })().finally(() => {
+        activeSet.delete(delivery)
+        if (activeSet.size === 0) {
+          this.inFlightByChannel.delete(channel)
+        }
+      })
+      activeSet.add(delivery)
+      await delivery
     }
 
     if (retryScheduled) {

@@ -27,7 +27,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `-c`, `--continue` | Continue the most recent saved session of this project, or start a new one if there is none. |
 | `-r`, `--resume` | Pick a saved session at startup. Interactive mode only. |
 | `--session <id>` | Open the session with this id, creating it if it does not exist. Ids use letters, digits, `.`, `_` and `-`, do not start with `.`, and are at most 128 characters; an invalid id is a usage error (exit code 2). |
-| `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Tool call history, usage records and long tool output are not written to the data directory (tool history and long output use a temporary directory removed when the session closes). Memory and the knowledge base are still written. |
+| `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Tool call history, usage records and long tool output are not written to SQLite or the data directory (long tool output uses a temporary directory removed when the session closes). Memory is still written. |
 | `--fork <id>` | Copy the saved session `<id>` into a new session (with a new id) and start there, like pi. The original is not changed. |
 | `--export <id> [output]` | Write a saved session from `vela.db` (by id) directly without initializing models or extensions and exit, like pi. Writes HTML by default (`vela-session-<id>…html` in the current folder), or JSONL when `output` ends with `.jsonl`. |
 | `--model <provider/id>` | Use this model. See [Models](models.md). |
@@ -104,7 +104,7 @@ Print mode has no UI: confirmation dialogs from extensions answer "no". Extensio
 
 ## Sessions
 
-Each launch starts a new session with an id like `20261008-081430-df22` (local date, time and four random characters). Sessions are saved in the [project's data directory](settings.md#data-directory) after every prompt.
+Each launch starts a new session with an id like `20261008-081430-df22` (local date, time and four random characters). CLI sessions are persisted in SQLite at `$VELA_DIR/vela.db` (`~/.vela/vela.db`), with long tool outputs spilled under the [project data directory](settings.md#data-directory).
 
 | Flag | Behavior |
 |---|---|
@@ -112,7 +112,7 @@ Each launch starts a new session with an id like `20261008-081430-df22` (local d
 | `-c`, `--continue` | Continue the most recently saved session of this project, or start a new one if there is none. |
 | `-r`, `--resume` | Show a picker of saved sessions (interactive mode only; use `-c` or `--session` in the other modes). |
 | `--session <id>` | Open the session with that id, creating it if it does not exist. |
-| `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Tool call history, usage logs and long tool output are not written to the data directory; tool history and long output use a temporary directory removed when the session closes. Memory and the knowledge base are still written. |
+| `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Tool call history, usage logs and long tool output are not written to SQLite or the data directory; long tool output uses a temporary directory removed when the session closes. Memory is still written. |
 | `--fork <id>` | Copy that saved session into a new one and start there. |
 
 ```bash

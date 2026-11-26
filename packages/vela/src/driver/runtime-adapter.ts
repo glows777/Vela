@@ -1,16 +1,12 @@
 import { join } from 'node:path'
-import type { VelaDatabase } from '../db/index.ts'
-import type { CredentialStore } from '../providers/auth/types.ts'
-import { resolveProviderTools } from '../providers/index.ts'
 import { clampThinkingLevel } from '../providers/models/catalog.ts'
 import {
   DEFAULT_THINKING_LEVEL,
+  limitsForModel,
   ModelRegistry,
-  type ProviderDefinition,
   reasoningOption,
   resolveModelInput,
   THINKING_LEVELS,
-  type ThinkingLevel,
 } from '../providers/models/index.ts'
 import { getActiveChannelForSession } from '../runtime/control-ops.ts'
 import type { SessionRecord } from '../runtime/domain.ts'
@@ -20,134 +16,64 @@ import {
   type DriverTurnRequest,
   type DriverTurnResult,
 } from '../runtime/driver.ts'
-import type { RuntimeEventBus } from '../runtime/event-bus.ts'
-import type { BlobStore, EnvironmentRegistry } from '../runtime/index.ts'
 import { MEMORY_RULES, MemoryRegistry } from '../runtime/memory/index.ts'
-import type { SubscriptionManager } from '../runtime/subscriptions.ts'
-import type { TimerScheduler } from '../runtime/timers.ts'
-import type { VelaLimits } from '../shared/limits.ts'
-import { silentLogger, type VelaLogger } from '../shared/logger.ts'
-import type { ModelInput } from '../shared/provider-types.ts'
-import { ContextManager, createRequestSnapshot } from './context/manager.ts'
+import { silentLogger } from '../shared/logger.ts'
+import { ContextManager } from './context/manager.ts'
+import { resolveRequestSnapshot } from './context/request.ts'
 import { createSessionLocalExecutionEnv } from './execution/local.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
-import { createBackgroundTools } from './extensions/background/tool.ts'
-import { createMemoryTool } from './extensions/memory/tool.ts'
-import { createTodoTool } from './extensions/todo/tool.ts'
 import type { MemoryDream } from './memory/dream.ts'
 import {
   type AssistantModelMessage,
   type ModelMessage,
   withoutForeignReasoning,
 } from './messages.ts'
-import type { ContextFile } from './prompt/context-files.ts'
 import { localDateString } from './prompt/environment.ts'
-import type { PromptTemplate } from './prompt/templates.ts'
 import {
   createRuntimeBackgroundController,
   type RuntimeBackgroundController,
 } from './runtime-background.ts'
 import {
+  recordRuntimeDreamTurn,
+  scheduleRuntimeAutoDream,
+} from './runtime-dream.ts'
+import {
   buildRuntimePromptSections,
   runtimeToolModifiers,
 } from './runtime-prompt.ts'
 import {
-  createRuntimeWebTools,
   loadTrustedRuntimeResources,
   resolveRuntimeMemoryStores,
 } from './runtime-resources.ts'
-import { createRuntimeTools } from './runtime-tools.ts'
+import { createRuntimeSessionToolRegistry } from './runtime-tools.ts'
 import {
   applyRuntimeProjectToolSelection,
   assistantText,
   createRuntimeEventForwarder,
   flushUnconsumedSteering,
-  loadExistingTurnUserMsg,
   prepareRuntimeTurnMessages,
-  recordRuntimeDreamTurn,
   resolveRunInputMeta,
   resolveRunSilenceAndDepth,
-  scheduleRuntimeAutoDream,
 } from './runtime-turn.ts'
-import { resolveRunProducer } from './session/defaults.ts'
+import type {
+  ActiveRunMeta,
+  RuntimeMcpAdapter,
+  RuntimeMcpLease,
+  VelaAgentDriverOptions,
+} from './runtime-types.ts'
+import {
+  resolveRunProducer,
+  runPostTurnCompaction,
+} from './session/defaults.ts'
 import { SessionStore } from './session/index.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
-import type { SkillDefinition } from './skills/loader.ts'
+import { pendingToolCalls } from './session/recovery.ts'
 import { repairStoppedPendingToolStepInTx } from './step-recovery.ts'
-import { createCoreTools } from './tools/index.ts'
-import { type ToolDefinition, ToolRegistry } from './tools/registry.ts'
-import { registerToolSearchTool } from './tools/tool-search.ts'
-import { TokenTracker } from './usage/tracker.ts'
+import type { ToolRegistry } from './tools/registry.ts'
+import { CONTEXT_WINDOW, TokenTracker } from './usage/tracker.ts'
 import { VelaDriver } from './vela-driver.ts'
 
-export interface RuntimeMcpLease {
-  waitForAll: () => Promise<void>
-  release: () => Promise<void>
-}
-
-export interface RuntimeMcpAdapter {
-  attach: (options: {
-    registry: ToolRegistry
-    agentDir: string
-    cwd: string
-    environment: string
-    trusted: boolean
-    env?: Record<string, string | undefined>
-    waitMs?: number
-    discoveredTools?: readonly string[]
-  }) => Promise<RuntimeMcpLease>
-  dispose?: () => Promise<void>
-}
-
-export interface VelaAgentDriverOptions {
-  db: VelaDatabase
-  agentDir: string
-  blobs: BlobStore
-  environments: EnvironmentRegistry
-  timers?: TimerScheduler
-  subscriptions?: SubscriptionManager
-  eventBus?: RuntimeEventBus
-  wakeSession?: (sessionId: string) => void
-  flushOutbox?: () => void
-  mcp?: RuntimeMcpAdapter
-  memoryRegistry?: MemoryRegistry
-  defaultModel?: ModelInput
-  defaultThinkingLevel?: ThinkingLevel
-  providers?: Record<string, ProviderDefinition>
-  credentials?: CredentialStore
-  /** @internal Shared ModelRegistry (for live OAuth registrations & planLabel consistency). */
-  models?: ModelRegistry
-  limits?: Partial<VelaLimits>
-  tools?: ToolDefinition[]
-  extensionConfig?: Record<string, Record<string, unknown>>
-  hostEnv?: Record<string, string | undefined>
-  contextFiles?: readonly ContextFile[]
-  skills?: readonly SkillDefinition[]
-  promptTemplates?: readonly PromptTemplate[]
-  offline?: boolean
-  dreamEnabled?: boolean
-  trustOverride?: (location: ExecutionLocation) => boolean | Promise<boolean>
-  toolApprovalCheck?: (
-    toolName: string,
-    input: unknown,
-    sessionId: string,
-  ) =>
-    | Promise<{ requireApproval?: boolean; summary?: string } | undefined>
-    | { requireApproval?: boolean; summary?: string }
-    | undefined
-  logger?: VelaLogger
-}
-
-interface ActiveRunMeta {
-  runId: string
-  projectId: string | null
-  replyToMessageId?: string
-  handoffDepth?: number
-  channelTarget?: { channel: string; externalChatId: string; threadId?: string }
-  humanProvenance?: { inboxEventId: string; senderName?: string }
-  attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
-  markSilent: () => void
-}
+export type { RuntimeMcpAdapter, RuntimeMcpLease, VelaAgentDriverOptions }
 
 /**
  * Bridges `Runtime`'s driver-agnostic `AgentDriver` contract onto `VelaDriver`
@@ -165,8 +91,10 @@ export function createVelaAgentDriver(
   const activeRunMeta = new Map<string, ActiveRunMeta>()
   const sessionBackgrounds = new Map<string, RuntimeBackgroundController>()
   const activeDreams = new Map<string, MemoryDream>()
+  const pendingDreamTasks = new Set<Promise<void>>()
   const activeMcpLeases = new Set<RuntimeMcpLease>()
   const activeTurns = new Set<Promise<DriverTurnResult>>()
+  const disposeController = new AbortController()
   let disposed = false
 
   return {
@@ -188,14 +116,21 @@ export function createVelaAgentDriver(
         .get(sessionId)
         ?.abort(new DOMException('Stopped', 'AbortError'))
     },
+    async waitForBackground() {
+      while (pendingDreamTasks.size > 0) {
+        await Promise.allSettled([...pendingDreamTasks])
+      }
+    },
     async dispose() {
       if (disposed) return
       disposed = true
+      disposeController.abort(new DOMException('Driver disposed', 'AbortError'))
       for (const controller of activeAbort.values()) {
         controller.abort(new DOMException('Driver disposed', 'AbortError'))
       }
       await Promise.allSettled([...activeTurns])
       await Promise.allSettled([...activeDreams.values()].map((d) => d.stop()))
+      await Promise.allSettled([...pendingDreamTasks])
       activeDreams.clear()
       await Promise.allSettled(
         [...sessionBackgrounds.values()].map((bg) => bg.stopAll()),
@@ -264,6 +199,9 @@ export function createVelaAgentDriver(
     let store: SessionStore | undefined
     let registry: ToolRegistry | undefined
     let mcpLease: RuntimeMcpLease | undefined
+    let lastAssistant: AssistantModelMessage | undefined
+    let committedInTx = false
+    let isSilent = false
 
     try {
       const activeStore = new SessionStore(request.sessionId, options.db, {
@@ -326,7 +264,7 @@ export function createVelaAgentDriver(
         request.runId,
         inputMeta.handoffDepth ?? 0,
       )
-      let isSilent = runState.isSilent
+      isSilent = runState.isSilent
       activeRunMeta.set(request.sessionId, {
         runId: request.runId,
         projectId: request.projectId,
@@ -362,9 +300,12 @@ export function createVelaAgentDriver(
       const resources = await loadTrustedRuntimeResources({
         db: options.db,
         agentDir: options.agentDir,
+        trustDataDir: options.environments.dataDir,
         location,
         resolveEnv,
         signal: controller.signal,
+        systemPrompt: options.systemPrompt,
+        appendSystemPrompt: options.appendSystemPrompt,
         hostContextFiles: options.contextFiles,
         hostSkills: options.skills,
         hostPromptTemplates: options.promptTemplates,
@@ -372,43 +313,32 @@ export function createVelaAgentDriver(
         trustOverride,
       })
 
-      registry = new ToolRegistry(spillDir)
-      registry.setLogger(logger)
-      registry.register(
-        ...createCoreTools({ cwd: location.cwd }),
-        ...createBackgroundTools((ctx) => {
-          if (!ctx?.background) {
-            throw new Error('Background commands require an open session')
-          }
-          return ctx.background
-        }).map((tool) => ({ ...tool, name: `background_${tool.name}` })),
-        createTodoTool(),
-        createMemoryTool(memoryStores.global, () => memoryStores.local),
-        ...createRuntimeWebTools({
-          webConfig: options.extensionConfig?.web,
-          hostEnv: options.hostEnv,
-          offline: options.offline,
-        }),
-      )
-      if (options.timers && options.subscriptions && options.eventBus) {
-        registry.register(
-          ...createRuntimeTools({
-            db: options.db,
-            blobs: options.blobs,
-            eventBus: options.eventBus,
-            timers: options.timers,
-            subscriptions: options.subscriptions,
-            scheduleSession:
-              request.wakeSession ?? options.wakeSession ?? (() => {}),
-            flushOutbox: request.flushOutbox ?? options.flushOutbox,
-            getRunContext: (sid) => activeRunMeta.get(sid),
-          }),
-        )
-      }
-      registerToolSearchTool(registry)
-      if (options.tools?.length) {
-        registry.register(...options.tools)
-      }
+      registry = createRuntimeSessionToolRegistry({
+        spillDir,
+        cwd: location.cwd,
+        logger,
+        memoryGlobal: memoryStores.global,
+        memoryLocal: () => memoryStores.local,
+        webConfig: options.extensionConfig?.web,
+        hostEnv: options.hostEnv,
+        offline: options.offline,
+        ...(options.timers && options.subscriptions && options.eventBus
+          ? {
+              runtimeToolDeps: {
+                db: options.db,
+                blobs: options.blobs,
+                eventBus: options.eventBus,
+                timers: options.timers,
+                subscriptions: options.subscriptions,
+                scheduleSession:
+                  request.wakeSession ?? options.wakeSession ?? (() => {}),
+                flushOutbox: request.flushOutbox ?? options.flushOutbox,
+                getRunContext: (sid) => activeRunMeta.get(sid),
+              },
+            }
+          : {}),
+        extraTools: options.tools,
+      })
 
       if (options.mcp) {
         mcpLease = await options.mcp.attach({
@@ -419,6 +349,7 @@ export function createVelaAgentDriver(
           trusted: resources.trusted,
           env: options.hostEnv,
           discoveredTools: saved?.discoveredTools,
+          signal: controller.signal,
         })
         activeMcpLeases.add(mcpLease)
       }
@@ -457,6 +388,7 @@ export function createVelaAgentDriver(
         bgController.setRunContext({
           runId: request.runId,
           wakeSession: request.wakeSession ?? options.wakeSession,
+          location,
         })
       }
       registry.background = bgController
@@ -464,7 +396,7 @@ export function createVelaAgentDriver(
         resolveEnv: () => resolveEnv(),
         before: async (toolName, input, ctx) => {
           if (toolName === 'tool_search' && mcpLease) {
-            await mcpLease.waitForAll()
+            await mcpLease.waitForAll(controller.signal)
           }
           if (!options.toolApprovalCheck) return { input }
           const decision = await options.toolApprovalCheck(
@@ -488,6 +420,11 @@ export function createVelaAgentDriver(
       const tracker = new TokenTracker((record) =>
         activeStore.recordUsageRecord(record, { runId: request.runId }),
       )
+      tracker.setModel(
+        resolved.info.contextWindow ?? CONTEXT_WINDOW,
+        resolved.info.cost,
+        { keepCalibration: true },
+      )
       const messages: ModelMessage[] = [...(saved?.messages ?? [])]
       for (const m of messages) tracker.addMessage(m)
       if (saved?.latestAssistantUsage) {
@@ -497,12 +434,16 @@ export function createVelaAgentDriver(
           saved.latestAssistantUsage.trailingMessages,
         )
       }
+      const effectiveLimits = limitsForModel(resolved.info, options.limits)
+      const forwardEvent = createRuntimeEventForwarder(request, (msg) => {
+        lastAssistant = msg
+      })
       const contextManager = new ContextManager(
         activeStore,
         tracker,
         { messages, timestamps: new Map(), summary: '' },
-        () => {},
-        options.limits ?? {},
+        forwardEvent,
+        effectiveLimits,
       )
 
       const activeTools = registry.getActiveTools()
@@ -534,35 +475,41 @@ export function createVelaAgentDriver(
         })
       }
 
-      const turnUserMsg = !alreadyHasRunMessages
-        ? await prepareRuntimeTurnMessages({
-            db: options.db,
-            blobs: options.blobs,
-            store: activeStore,
-            tracker,
-            request,
-            messages,
-            memoryActive,
-            memoryStores,
-            resolveEnv,
-            signal: controller.signal,
-            skills: resources.skills,
-            promptTemplates: resources.promptTemplates,
-          })
-        : loadExistingTurnUserMsg(options.db, request.sessionId, request.runId)
+      const deferWaitForInput =
+        alreadyHasRunMessages && pendingToolCalls(messages).length > 0
+      const prepareTurnMessages = (defer: boolean) =>
+        prepareRuntimeTurnMessages({
+          db: options.db,
+          blobs: options.blobs,
+          store: activeStore,
+          tracker,
+          request,
+          messages,
+          memoryActive,
+          memoryStores,
+          resolveEnv,
+          signal: controller.signal,
+          skills: resources.skills,
+          promptTemplates: resources.promptTemplates,
+          onlyWaitForInput: alreadyHasRunMessages,
+          deferWaitForInput: defer,
+        })
+      let turnUserMsg = await prepareTurnMessages(deferWaitForInput)
 
       const pinnedDate = localDateString(
         new Date(sessionRow?.created_at ?? Date.now()),
       )
       const builder = createSessionPrompt(
         () => ({
+          systemPrompt: resources.systemPrompt,
+          appendSystemPrompt: resources.appendSystemPrompt,
           contextFiles: resources.contextFiles,
           skills: resources.skills,
           promptTemplates: resources.promptTemplates,
         }),
         () => location.cwd,
         () => undefined,
-        false,
+        location.environment === 'local' ? options.docsPaths : false,
         () => location.environment === 'local',
         () => options.environments.osFor(location.environment),
         () => pinnedDate,
@@ -577,18 +524,15 @@ export function createVelaAgentDriver(
         ...(memoryActive ? { memory: MEMORY_RULES } : {}),
       }
 
-      let lastAssistant: AssistantModelMessage | undefined
-      let committedInTx = false
-      let recordedDreamInTx = false
+      committedInTx = false
+      let attemptedDreamInTx = false
       const driver = new VelaDriver({
         sessionId: request.sessionId,
         db: options.db,
         store: activeStore,
         registry,
         tracker,
-        onEvent: createRuntimeEventForwarder(request, (msg) => {
-          lastAssistant = msg
-        }),
+        onEvent: forwardEvent,
       })
 
       claim = {
@@ -608,6 +552,15 @@ export function createVelaAgentDriver(
           deferredToolSummary: activeRegistry.getDeferredToolSummary(),
           extensionSections: runtimeSections,
         })
+      const buildSnapshot = (sig?: AbortSignal) =>
+        resolveRequestSnapshot(
+          resolved.model,
+          buildSystemPrompt(),
+          activeRegistry.toProviderTools(),
+          messages,
+          sig,
+          resolved.info.maxTokens,
+        )
       const result = await driver.run({
         model: resolved.model,
         producer: () =>
@@ -620,6 +573,7 @@ export function createVelaAgentDriver(
           ),
         systemPrompt: buildSystemPrompt,
         messages,
+        prepareContext: (snapshot) => contextManager.prepare(snapshot),
         transformContext: async (msgs, producerForAttempt) =>
           withoutForeignReasoning(
             msgs,
@@ -634,23 +588,21 @@ export function createVelaAgentDriver(
           clampThinkingLevel(thinkingLevel, resolved.info, THINKING_LEVELS),
           resolved.info,
         ),
-        limits: options.limits,
+        limits: effectiveLimits,
         abortSignal: controller.signal,
         recoverPending: request.recoverPending,
         allowWaitingHuman: request.allowWaitingHuman,
+        onRecoveryComplete: deferWaitForInput
+          ? async () => {
+              turnUserMsg = await prepareTurnMessages(false)
+            }
+          : undefined,
         compactOnOverflow: async (sig) => {
-          const resolvedTools = await resolveProviderTools(
-            resolved.model,
-            activeRegistry.toProviderTools(),
+          await contextManager.compact(
+            await buildSnapshot(sig),
+            undefined,
+            'overflow',
           )
-          const snapshot = createRequestSnapshot(
-            resolved.model,
-            buildSystemPrompt(),
-            resolvedTools,
-            messages,
-            sig,
-          )
-          await contextManager.compact(snapshot, undefined, 'overflow')
         },
         hasSteering: () =>
           (activeSteering.get(request.sessionId)?.length ?? 0) > 0,
@@ -673,7 +625,6 @@ export function createVelaAgentDriver(
               if (live?.length) deferredSteering.push(...live)
               activeSteering.delete(request.sessionId)
               lastAssistant = assistant
-              committedInTx = true
               if (memoryActive && !isSilent && !disposed) {
                 recordRuntimeDreamTurn({
                   db: options.db,
@@ -684,7 +635,7 @@ export function createVelaAgentDriver(
                   userEntryId: turnUserMsg.userEntryId,
                   hasHumanText: turnUserMsg.hasHumanText,
                 })
-                recordedDreamInTx = true
+                attemptedDreamInTx = true
               }
               request.onTerminalCommitInTx?.({
                 status: 'completed',
@@ -694,6 +645,8 @@ export function createVelaAgentDriver(
             }
           : undefined,
       })
+      committedInTx = Boolean(result.committedInTx)
+      const recordedDreamInTx = committedInTx && attemptedDreamInTx
       const waitingApproval = options.db.get<{ id: string }>(
         "SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1",
         request.runId,
@@ -710,6 +663,15 @@ export function createVelaAgentDriver(
       }
       flushSteering(!controller.signal.aborted)
 
+      await runPostTurnCompaction({
+        enabled: contextManager.autoCompaction && !isSilent && !disposed,
+        signal: controller.signal,
+        isDraining: () => disposed,
+        buildSnapshot: () => buildSnapshot(controller.signal),
+        compactIfNeeded: (req) => contextManager.compactIfNeeded(req),
+        warn: (msg) => logger.warn(`[runtime] auto-compaction skipped: ${msg}`),
+      })
+
       if (memoryActive && !isSilent && !disposed) {
         if (!recordedDreamInTx) {
           recordRuntimeDreamTurn({
@@ -725,6 +687,7 @@ export function createVelaAgentDriver(
         scheduleRuntimeAutoDream({
           db: options.db,
           activeDreams,
+          pendingDreamTasks,
           localStore: memoryStores.local,
           projectId: request.projectId,
           sessionId: request.sessionId,
@@ -732,7 +695,7 @@ export function createVelaAgentDriver(
           resolved,
           tracker,
           resolveEnv,
-          signal: controller.signal,
+          signal: disposeController.signal,
           logger,
         })
       }
@@ -744,6 +707,14 @@ export function createVelaAgentDriver(
         committedInTx,
       }
     } catch (error) {
+      if (committedInTx) {
+        return {
+          status: 'completed',
+          replyText: assistantText(lastAssistant),
+          silent: isSilent,
+          committedInTx: true,
+        }
+      }
       if (controller.signal.aborted) {
         return { status: 'stopped' }
       }

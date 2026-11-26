@@ -1,4 +1,4 @@
-export type { ApprovalRecord } from './approvals.ts'
+export type { ApprovalRecord, ApprovalStatus } from './approvals.ts'
 export { type BlobDirection, type BlobRecord, BlobStore } from './blobs.ts'
 export type {
   ChannelAdapter,
@@ -15,13 +15,26 @@ export type {
   CreateProjectInput,
   CreateSessionInput,
   ProjectRecord,
+  SessionKind,
   SessionRecord,
+  SessionState,
   SessionStatusInfo,
   UpdateProjectInput,
   UpsertChannelBindingInput,
 } from './domain.ts'
-export type { AgentDriver } from './driver.ts'
-export { EnvironmentRegistry } from './environments.ts'
+export type {
+  AgentDriver,
+  AgentDriverCapabilities,
+  DriverInboxItem,
+  DriverTerminalOutcome,
+  DriverTurnRequest,
+  DriverTurnResult,
+  RunTrigger,
+} from './driver.ts'
+export {
+  EnvironmentRegistry,
+  type EnvironmentRegistryOptions,
+} from './environments.ts'
 export type { RuntimeEventListener, StreamDeltaListener } from './event-bus.ts'
 export type {
   RunEndStatus,

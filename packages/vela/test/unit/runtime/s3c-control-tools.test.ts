@@ -16,6 +16,7 @@ import {
   sendProjectSessionMessage,
   startProjectSession,
 } from '../../../src/runtime/control-ops.ts'
+import { createEnvironmentRegistryForTest } from '../../../src/runtime/environments.ts'
 import {
   isTopicAwaitingBindingInDb,
   listSessionsWithPendingWake,
@@ -23,7 +24,6 @@ import {
 import {
   type ChannelAdapter,
   type ChannelOutboundMessage,
-  EnvironmentRegistry,
   VelaRuntimeEngine,
 } from '../../../src/runtime/index.ts'
 import { claimNextTurnInDb } from '../../../src/runtime/worker.ts'
@@ -1014,7 +1014,7 @@ test('restricted network overrides +web_fetch and explicit selection, prompt sec
   // Non-local canonical symlink trust + MCP isolation
   const root = tempRoot('vela-r1-trust-')
   const db = openDatabase({ path: join(root, 'vela.db') })
-  const environments = new EnvironmentRegistry({
+  const environments = createEnvironmentRegistryForTest({
     dataDir: root,
     environments: { dev: { image: 'node:22', network: 'restricted' } },
     openDocker: async () =>

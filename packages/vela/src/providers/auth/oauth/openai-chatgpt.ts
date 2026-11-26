@@ -107,6 +107,7 @@ function credentialFrom(
   clientId: string,
   previous?: OAuthCredential,
   identity?: StoredIdentity,
+  hostId?: string,
 ): OAuthCredential {
   const text = (value: unknown, field: string) => {
     if (typeof value !== 'string' || !value.trim())
@@ -149,6 +150,7 @@ function credentialFrom(
     expires: Date.now() + token.expires_in * 1000 - EXPIRY_MARGIN_MS,
     clientId,
     ...(scopes ? { scopes } : {}),
+    ...(hostId ? { hostId } : {}),
     ...identity,
   }
 }
@@ -528,11 +530,17 @@ export const openaiChatGPTLogin: OAuthLogin = {
             ? 'The ChatGPT sign-in returned a different account than the one already saved for this installation; sign in with that account, or log out first to replace it'
             : 'The ChatGPT sign-in returned a different account than the retained registration; choose "Switch to a different ChatGPT account" during /login or run /logout openai --forget to register a new account',
         )
-      const credential = credentialFrom(token, clientId, undefined, {
-        idToken,
-        subject: verified.subject,
-        ...(verified.email ? { email: verified.email } : {}),
-      })
+      const credential = credentialFrom(
+        token,
+        clientId,
+        undefined,
+        {
+          idToken,
+          subject: verified.subject,
+          ...(verified.email ? { email: verified.email } : {}),
+        },
+        deviceId,
+      )
       // The plan notice introduces the plan itself, so it belongs to the first sign-in that does not replace an
       // earlier ChatGPT sign-in; switching an API key over to the plan is such a first sign-in
       if (options.previous?.type !== 'oauth')
@@ -567,6 +575,7 @@ export const openaiChatGPTLogin: OAuthLogin = {
       clientId,
       credential,
       storedIdentity(credential),
+      typeof credential.hostId === 'string' ? credential.hostId : undefined,
     )
   },
   async logout(credential, signal) {

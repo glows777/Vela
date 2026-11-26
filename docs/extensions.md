@@ -4,7 +4,7 @@ Extensions are TypeScript or JavaScript modules that add behavior to Vela: tools
 
 An extension runs inside the Vela process with the same permissions as the user who started it. It can read files, call the network, see every prompt and tool call, and change tool input and output. Vela does not sandbox extensions. Load only extensions you trust; see [Security](security.md).
 
-The built-in memory, knowledge base, web and Lark features are extensions too; see [Built-in extensions](built-in-extensions.md).
+The built-in memory, background, todo, web and Lark features are extensions too; see [Built-in extensions](built-in-extensions.md).
 
 Core always installs `auditLog`, including in the SDK with no user extensions and the CLI with `--no-extensions`. After extension factories finish loading, its `tool_call` handlers are registered last so `write` and `edit` audit events record the final rewritten path before execution. An unavailable tool or a blocking or throwing handler stops before auditing. User extensions can ask for confirmation in their own `tool_call` handlers.
 

@@ -119,7 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_channel_bindings_session
 CREATE TABLE IF NOT EXISTS inbox_events (
   id TEXT PRIMARY KEY NOT NULL,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
-  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   source TEXT NOT NULL,
   dedupe_key TEXT,
   wake INTEGER NOT NULL DEFAULT 1 CHECK (wake IN (0, 1)),
@@ -266,6 +266,9 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_source_key
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_session
   ON subscriptions (session_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique
+  ON subscriptions (source, event_key, session_id);
 
 CREATE TABLE IF NOT EXISTS background_jobs (
   id TEXT PRIMARY KEY NOT NULL,

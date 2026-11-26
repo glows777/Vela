@@ -18,12 +18,21 @@ import { enqueueInboxEvent } from './inbox.ts'
 import { type ControlShortcut, parseControlShortcut } from './shortcuts.ts'
 
 function resolveChannelTargetInDb(params: {
+  db: VelaDatabase
   projects: ProjectStore
   sessions: SessionStoreControl
   bindings: ChannelBindingStore
   msg: ChannelInboundMessage
+  allowCreateTopic?: boolean
 }): { binding: ChannelBinding; session: SessionRecord } | undefined {
-  const { projects, sessions, bindings, msg } = params
+  const {
+    db,
+    projects,
+    sessions,
+    bindings,
+    msg,
+    allowCreateTopic = true,
+  } = params
   const exact = bindings.findByExternal(
     msg.channel,
     msg.externalChatId,
@@ -38,11 +47,11 @@ function resolveChannelTargetInDb(params: {
     const session = exact.sessionId
       ? sessions.get(exact.sessionId)
       : exact.projectId
-        ? getOrCreateHubSession(projects, sessions, exact.projectId)
+        ? getOrCreateHubSession(db, projects, sessions, exact.projectId)
         : undefined
     return session ? { binding: exact, session } : undefined
   }
-  if (!msg.threadId) return undefined
+  if (!msg.threadId || !allowCreateTopic) return undefined
   const root = bindings.findByExternal(msg.channel, msg.externalChatId)
   if (!root?.enabled || !root.projectId) return undefined
   const topicSession = sessions.create({
@@ -63,19 +72,60 @@ function resolveChannelTargetInDb(params: {
 }
 
 function getOrCreateHubSession(
+  db: VelaDatabase,
   projects: ProjectStore,
   sessions: SessionStoreControl,
   projectId: string,
 ): SessionRecord | undefined {
-  const project = projects.get(projectId)
-  if (!project) return undefined
-  if (project.hubSessionId) {
-    return sessions.get(project.hubSessionId)
-  }
-  return sessions.create({ projectId, kind: 'work' })
+  return db.transaction(() => {
+    const project = projects.get(projectId)
+    if (!project) return undefined
+    if (project.hubSessionId) {
+      const linked = sessions.get(project.hubSessionId)
+      if (linked && !linked.archived) return linked
+    }
+    const existingHub = db.get<{ id: string }>(
+      `SELECT id FROM sessions
+       WHERE project_id = ? AND kind = 'hub' AND archived = 0
+       ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+      projectId,
+    )
+    const hub = existingHub
+      ? sessions.get(existingHub.id)!
+      : sessions.create({ projectId, kind: 'hub' })
+    db.run(
+      `UPDATE projects SET hub_session_id = ?, updated_at = ? WHERE id = ?`,
+      hub.id,
+      new Date().toISOString(),
+      projectId,
+    )
+    return hub
+  })
 }
 
-const IN_FLIGHT_DELIVERIES = new Set<string>()
+function findExistingChannelInboxId(
+  db: VelaDatabase,
+  channel: string,
+  channelDedupeKey: string,
+  rawDedupeKey: string | undefined,
+): string | undefined {
+  const prefixed = db.get<{ id: string }>(
+    `SELECT id FROM inbox_events WHERE source = 'channel' AND dedupe_key = ? LIMIT 1`,
+    channelDedupeKey,
+  )
+  if (prefixed) return prefixed.id
+  if (!rawDedupeKey || rawDedupeKey === channelDedupeKey) return undefined
+  return db.get<{ id: string }>(
+    `SELECT id FROM inbox_events
+     WHERE source = 'channel'
+       AND dedupe_key = ?
+       AND json_valid(payload_json)
+       AND json_extract(payload_json, '$.channel') = ?
+     LIMIT 1`,
+    rawDedupeKey,
+    channel,
+  )?.id
+}
 
 export async function ingestChannelMessageInRuntime(params: {
   db: VelaDatabase
@@ -84,6 +134,7 @@ export async function ingestChannelMessageInRuntime(params: {
   sessions: SessionStoreControl
   bindings: ChannelBindingStore
   eventBus?: RuntimeEventBus
+  inFlightDeliveries?: Set<string>
   adapter: ChannelAdapter
   msg: ChannelInboundMessage
   executeShortcut: (input: {
@@ -106,27 +157,31 @@ export async function ingestChannelMessageInRuntime(params: {
     scheduleSession,
   } = params
 
-  const inFlightKey = msg.dedupeKey
+  const inFlight = params.inFlightDeliveries
+  const channelDedupeKey = msg.dedupeKey
     ? `${msg.channel}:${msg.dedupeKey}`
     : undefined
-  if (inFlightKey) {
-    if (IN_FLIGHT_DELIVERIES.has(inFlightKey)) return
-    IN_FLIGHT_DELIVERIES.add(inFlightKey)
+  if (channelDedupeKey && inFlight) {
+    if (inFlight.has(channelDedupeKey)) return
+    inFlight.add(channelDedupeKey)
   }
 
   try {
-    const shortcut = parseControlShortcut(msg.text)
+    const shortcut =
+      msg.passive === true ? undefined : parseControlShortcut(msg.text)
     if (shortcut) {
       const resolved = resolveChannelTargetInDb({
+        db,
         projects,
         sessions,
         bindings,
         msg,
+        allowCreateTopic: false,
       })
       if (!resolved) return
       const { binding, session } = resolved
-      const shortcutKey = msg.dedupeKey
-        ? `channel_shortcut:${msg.channel}:${msg.dedupeKey}`
+      const shortcutKey = channelDedupeKey
+        ? `channel_shortcut:${channelDedupeKey}`
         : undefined
       if (shortcutKey) {
         const claimed = db.run(
@@ -163,15 +218,21 @@ export async function ingestChannelMessageInRuntime(params: {
       return
     }
 
-    if (msg.dedupeKey) {
-      const existingInbox = db.get<{ id: string }>(
-        `SELECT id FROM inbox_events WHERE source = 'channel' AND dedupe_key = ? LIMIT 1`,
-        msg.dedupeKey,
-      )
-      if (existingInbox) return
+    if (channelDedupeKey) {
+      if (
+        findExistingChannelInboxId(
+          db,
+          msg.channel,
+          channelDedupeKey,
+          msg.dedupeKey,
+        )
+      ) {
+        return
+      }
     }
 
     const resolved = resolveChannelTargetInDb({
+      db,
       projects,
       sessions,
       bindings,
@@ -185,67 +246,85 @@ export async function ingestChannelMessageInRuntime(params: {
       name: string
       mimeType?: string
     }> = []
-    if (msg.attachments?.length && adapter.fetchAttachment) {
-      for (const att of msg.attachments) {
-        const bytes = await adapter.fetchAttachment(att.ref)
-        const blob = await blobs.storeInbound({
+    let inserted = false
+    try {
+      if (msg.attachments?.length && adapter.fetchAttachment) {
+        for (const att of msg.attachments) {
+          const bytes = await adapter.fetchAttachment(att.ref)
+          const blob = await blobs.storeInbound({
+            sessionId: session.id,
+            projectId: binding.projectId,
+            filename: att.name,
+            mimeType: att.mimeType,
+            bytes,
+          })
+          attachments.push({
+            blobId: blob.id,
+            name: att.name,
+            ...(att.mimeType ? { mimeType: att.mimeType } : {}),
+          })
+        }
+      }
+
+      const passive = msg.passive === true
+      const wake = msg.wake ?? !passive
+      const result = db.transaction(() => {
+        if (
+          channelDedupeKey &&
+          findExistingChannelInboxId(
+            db,
+            msg.channel,
+            channelDedupeKey,
+            msg.dedupeKey,
+          )
+        ) {
+          return undefined
+        }
+        const enqueued = enqueueInboxEvent(db, {
           sessionId: session.id,
           projectId: binding.projectId,
-          filename: att.name,
-          mimeType: att.mimeType,
-          bytes,
+          source: 'channel',
+          dedupeKey: channelDedupeKey,
+          wake,
+          passive,
+          payload: {
+            type: 'channel',
+            channel: msg.channel,
+            externalChatId: msg.externalChatId,
+            kind: msg.kind,
+            ...(msg.threadId ? { threadId: msg.threadId } : {}),
+            ...(msg.messageId ? { messageId: msg.messageId } : {}),
+            senderId: msg.senderId,
+            senderName: msg.senderName,
+            text: msg.text,
+            ...(msg.mentioned !== undefined
+              ? { mentioned: msg.mentioned }
+              : {}),
+            timestamp: msg.timestamp,
+            ...(attachments.length ? { attachments } : {}),
+          },
         })
-        attachments.push({
-          blobId: blob.id,
-          name: att.name,
-          ...(att.mimeType ? { mimeType: att.mimeType } : {}),
-        })
-      }
-    }
-
-    const passive = msg.passive === true
-    const wake = msg.wake ?? !passive
-    const { event, inserted } = db.transaction(() => {
-      const enqueued = enqueueInboxEvent(db, {
-        sessionId: session.id,
-        projectId: binding.projectId,
-        source: 'channel',
-        dedupeKey: msg.dedupeKey,
-        wake,
-        passive,
-        payload: {
-          type: 'channel',
-          channel: msg.channel,
-          externalChatId: msg.externalChatId,
-          kind: msg.kind,
-          ...(msg.threadId ? { threadId: msg.threadId } : {}),
-          ...(msg.messageId ? { messageId: msg.messageId } : {}),
-          senderId: msg.senderId,
-          senderName: msg.senderName,
-          text: msg.text,
-          ...(msg.mentioned !== undefined ? { mentioned: msg.mentioned } : {}),
-          timestamp: msg.timestamp,
-          ...(attachments.length ? { attachments } : {}),
-        },
+        if (enqueued.inserted && wake && !passive && eventBus) {
+          resolveWaitForInputOnUserReplyInTx(db, eventBus, {
+            sessionId: session.id,
+            replyText: msg.text,
+            decidedBy: msg.senderName,
+          })
+        }
+        return enqueued
       })
-      if (enqueued.inserted && wake && !passive && eventBus) {
-        resolveWaitForInputOnUserReplyInTx(db, eventBus, {
-          sessionId: session.id,
-          replyText: msg.text,
-          decidedBy: msg.senderName,
-        })
+      inserted = Boolean(result?.inserted)
+      if (result?.inserted && result.event.wake) {
+        scheduleSession(session.id)
       }
-      return enqueued
-    })
-    if (!inserted && attachments.length > 0) {
-      for (const att of attachments) {
-        await blobs.deleteBlob(att.blobId)
+    } finally {
+      if (!inserted && attachments.length > 0) {
+        for (const att of attachments) {
+          await blobs.deleteBlob(att.blobId).catch(() => {})
+        }
       }
-    }
-    if (inserted && event.wake) {
-      scheduleSession(session.id)
     }
   } finally {
-    if (inFlightKey) IN_FLIGHT_DELIVERIES.delete(inFlightKey)
+    if (channelDedupeKey && inFlight) inFlight.delete(channelDedupeKey)
   }
 }

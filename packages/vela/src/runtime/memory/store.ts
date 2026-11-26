@@ -74,7 +74,7 @@ const YAML_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$/
 function formatYamlScalar(value: string): string {
   if (
     value.length > 0 &&
-    !/[\r\n:#{}[\],&*!|>'"%@`]|^\s|\s$/.test(value) &&
+    !/[\r\n:#{}[\],&*!|>'"%@`]|^\s|\s$|^(?:-|\?)(?:\s|$)/.test(value) &&
     !YAML_KEYWORD_RE.test(value) &&
     !YAML_NUMBER_RE.test(value) &&
     !YAML_DATE_RE.test(value)

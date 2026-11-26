@@ -1,13 +1,10 @@
 import type { VelaDatabase } from '../db/index.ts'
-import type { ResolvedModel } from '../providers/models/index.ts'
 import type { DriverInboxItem, DriverTurnRequest } from '../runtime/driver.ts'
 import { enqueueInboxEvent } from '../runtime/inbox.ts'
 import type { BlobStore } from '../runtime/index.ts'
 import type { MemoryStore } from '../runtime/memory/index.ts'
-import type { VelaLogger } from '../shared/logger.ts'
 import type { VelaEvent } from './agent/events.ts'
 import type { ExecutionEnv } from './execution/types.ts'
-import { type DreamScope, dreamKvKey, MemoryDream } from './memory/dream.ts'
 import type { AssistantModelMessage, ModelMessage } from './messages.ts'
 import {
   expandPromptTemplate,
@@ -401,6 +398,8 @@ export async function prepareRuntimeTurnMessages(options: {
   signal: AbortSignal
   skills?: readonly SkillDefinition[]
   promptTemplates?: readonly PromptTemplate[]
+  onlyWaitForInput?: boolean
+  deferWaitForInput?: boolean
 }): Promise<{ userEntryId?: string; hasHumanText: boolean }> {
   const {
     db,
@@ -415,9 +414,15 @@ export async function prepareRuntimeTurnMessages(options: {
     signal,
     skills,
     promptTemplates,
+    onlyWaitForInput = false,
+    deferWaitForInput = false,
   } = options
 
-  if (memoryActive) {
+  if (deferWaitForInput && onlyWaitForInput) {
+    return loadExistingTurnUserMsg(db, request.sessionId, request.runId)
+  }
+
+  if (memoryActive && !onlyWaitForInput) {
     const previousMemoryText = lastActiveCustomMessageText({
       db,
       sessionId: request.sessionId,
@@ -456,10 +461,45 @@ export async function prepareRuntimeTurnMessages(options: {
     }
   }
 
-  const usableInputs = request.inputs.filter(
-    (item) => item.source !== 'approval' || item.payload.waitForInput === true,
-  )
-  if (usableInputs.length === 0) return { hasHumanText: false }
+  let committedInboxIds: Set<string> | undefined
+  if (onlyWaitForInput) {
+    committedInboxIds = new Set<string>()
+    const existingRows = db.all<{ details_json: string | null }>(
+      `SELECT details_json FROM vela_messages
+       WHERE session_id = ? AND run_id = ? AND kind = 'message' AND role = 'user'`,
+      request.sessionId,
+      request.runId,
+    )
+    for (const row of existingRows) {
+      if (!row.details_json) continue
+      try {
+        const parsed = JSON.parse(row.details_json) as {
+          inboxEventIds?: unknown
+        }
+        if (Array.isArray(parsed.inboxEventIds)) {
+          for (const id of parsed.inboxEventIds) {
+            if (typeof id === 'string') committedInboxIds.add(id)
+          }
+        }
+      } catch {}
+    }
+  }
+
+  const usableInputs = request.inputs.filter((item) => {
+    if (onlyWaitForInput) {
+      return (
+        item.source === 'approval' &&
+        item.payload.waitForInput === true &&
+        !committedInboxIds?.has(item.id)
+      )
+    }
+    return item.source !== 'approval' || item.payload.waitForInput === true
+  })
+  if (usableInputs.length === 0) {
+    return onlyWaitForInput
+      ? loadExistingTurnUserMsg(db, request.sessionId, request.runId)
+      : { hasHumanText: false }
+  }
 
   const lines: string[] = []
   const humanLines: string[] = []
@@ -493,7 +533,11 @@ export async function prepareRuntimeTurnMessages(options: {
     if (line) lines.push(line)
     if (formatted.humanText) humanLines.push(formatted.humanText)
   }
-  if (lines.length === 0) return { hasHumanText: false }
+  if (lines.length === 0) {
+    return onlyWaitForInput
+      ? loadExistingTurnUserMsg(db, request.sessionId, request.runId)
+      : { hasHumanText: false }
+  }
 
   const dreamHumanText = humanLines.join('\n\n')
   const userMsg: ModelMessage = {
@@ -504,7 +548,10 @@ export async function prepareRuntimeTurnMessages(options: {
   store.runInTransaction(() => {
     const entry = store.appendMessage(userMsg, {
       runId: request.runId,
-      ...(dreamHumanText ? { details: { dreamHumanText } } : {}),
+      details: {
+        ...(dreamHumanText ? { dreamHumanText } : {}),
+        inboxEventIds: usableInputs.map((i) => i.id),
+      },
     })
     userEntryId = entry.id
     request.onEvent({
@@ -581,7 +628,7 @@ export function createRuntimeEventForwarder(
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           summary: event.summary,
-          input: {},
+          input: event.input ?? {},
         })
         break
       case 'message_end':
@@ -603,76 +650,6 @@ export function createRuntimeEventForwarder(
         break
     }
   }
-}
-
-function resolveRuntimeDream(options: {
-  db: VelaDatabase
-  activeDreams: Map<string, MemoryDream>
-  localStore: MemoryStore
-  projectId: string | null
-}): MemoryDream {
-  const dreamScope: DreamScope = options.projectId
-    ? { kind: 'project', projectId: options.projectId }
-    : { kind: 'global' }
-  const key = dreamKvKey(dreamScope)
-  let dream = options.activeDreams.get(key)
-  if (!dream) {
-    dream = new MemoryDream(options.localStore, options.db, dreamScope)
-    options.activeDreams.set(key, dream)
-  }
-  return dream
-}
-
-export function recordRuntimeDreamTurn(options: {
-  db: VelaDatabase
-  activeDreams: Map<string, MemoryDream>
-  localStore: MemoryStore
-  projectId: string | null
-  sessionId: string
-  userEntryId?: string
-  hasHumanText?: boolean
-}): void {
-  if (!options.hasHumanText || !options.userEntryId) return
-  resolveRuntimeDream(options).recordMessages(options.sessionId, [
-    { messageId: options.userEntryId, time: Date.now() },
-  ])
-}
-
-export function scheduleRuntimeAutoDream(options: {
-  db: VelaDatabase
-  activeDreams: Map<string, MemoryDream>
-  localStore: MemoryStore
-  projectId: string | null
-  sessionId: string
-  dreamEnabled?: boolean
-  resolved: ResolvedModel
-  tracker: TokenTracker
-  resolveEnv: () => Promise<ExecutionEnv>
-  signal: AbortSignal
-  logger: VelaLogger
-}): void {
-  const dream = resolveRuntimeDream(options)
-  if (options.dreamEnabled === false || !dream.due()) return
-  void dream
-    .run({
-      sessionId: options.sessionId,
-      model: options.resolved.model,
-      pricing: options.resolved.info.cost,
-      checkPath: async (candidate) => {
-        const env = await options.resolveEnv()
-        const abs = await env.absolutePath(candidate, options.signal)
-        if (!abs.ok) return false
-        const exists = await env.exists(abs.value, options.signal)
-        return exists.ok && exists.value
-      },
-      recordUsage: (modelId, usage, meta, pricing) =>
-        options.tracker.record(modelId, usage, meta, pricing),
-    })
-    .catch((error) => {
-      options.logger.warn(
-        `[dream] ${error instanceof Error ? error.message : String(error)}`,
-      )
-    })
 }
 
 /** Re-enqueues unconsumed in-memory `steer()` inputs into durable `inbox_events` when a turn exits before consuming them. */
@@ -743,7 +720,7 @@ export function applyRuntimeProjectToolSelection(
 }
 
 /** Reads persisted human-turn metadata for an already-started run during recovery/resume. */
-export function loadExistingTurnUserMsg(
+function loadExistingTurnUserMsg(
   db: VelaDatabase,
   sessionId: string,
   runId: string,

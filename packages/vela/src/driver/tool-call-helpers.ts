@@ -208,6 +208,10 @@ export function markApprovalRequested(
     toolCallId: row.tool_call_id,
     toolName: row.tool_name,
     summary: safeSummary,
+    input:
+      input !== null && typeof input === 'object' && !Array.isArray(input)
+        ? (input as Record<string, unknown>)
+        : { value: input },
   })
 }
 

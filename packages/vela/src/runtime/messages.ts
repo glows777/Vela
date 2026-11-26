@@ -107,14 +107,16 @@ export function listRuntimeSessionMessages(
   if (!session) throw new Error(`Session ${input.sessionId} not found`)
 
   const rawLimit = input.limit ?? 100
+  if (!Number.isFinite(rawLimit) || rawLimit < 1) {
+    throw new Error(`Invalid messages limit: "${input.limit}"`)
+  }
   const limit = Math.max(1, Math.min(500, Math.trunc(rawLimit)))
   let afterSeq = -1
   if (input.cursor !== undefined) {
-    const parsed = Number(input.cursor)
-    if (!Number.isInteger(parsed) || parsed < 0) {
+    if (!/^\d+$/.test(input.cursor)) {
       throw new Error(`Invalid messages cursor: "${input.cursor}"`)
     }
-    afterSeq = parsed
+    afterSeq = Number(input.cursor)
   }
 
   if (session.leaf_message_id === null) {

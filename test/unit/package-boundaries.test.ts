@@ -321,15 +321,8 @@ test('build inheriting development mappings is rejected', async () => {
   ).toMatch(/explicitly clear/)
 })
 
-test('memory dream alone may import the internal usage tracker', async () => {
-  expect(
-    await errors({
-      'packages/vela/src/driver/usage/tracker.ts': 'export const usage = true',
-      'packages/vela/src/driver/extensions/memory/dream.ts':
-        "export {usage} from '../../usage/tracker.ts'",
-    }),
-  ).toEqual([])
-  for (const file of ['memory/index.ts', 'web/index.ts']) {
+test('light builtins under extensions cannot import the internal usage tracker', async () => {
+  for (const file of ['memory/dream.ts', 'memory/index.ts', 'web/index.ts']) {
     expect(
       (
         await errors({

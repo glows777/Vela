@@ -88,6 +88,9 @@ function validateSchedule(schedule: RoutineSchedule): void {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time)) {
     throw new Error(`Invalid routine time "${schedule.time}"; expected HH:MM`)
   }
+  if (schedule.days !== undefined && schedule.days.length === 0) {
+    throw new Error('Routine days array must not be empty')
+  }
 }
 
 /**
@@ -101,6 +104,42 @@ export class TimerScheduler {
     private readonly onWakeSession?: (sessionId: string) => void,
     private readonly onScheduleChanged?: () => void,
   ) {}
+
+  private assertRoutineCapacityInTx(
+    projectId: string | null,
+    sessionId: string | null,
+    excludeTimerId?: string,
+  ): void {
+    const excludeClause = excludeTimerId ? ' AND id != ?' : ''
+    const extra = excludeTimerId ? [excludeTimerId] : []
+    if (projectId) {
+      const count =
+        this.db.get<{ n: number }>(
+          `SELECT count(*) AS n FROM timers
+           WHERE project_id = ? AND kind = 'routine' AND enabled = 1${excludeClause}`,
+          projectId,
+          ...extra,
+        )?.n ?? 0
+      if (count >= MAX_ROUTINES_PER_PROJECT) {
+        throw new Error(
+          `Project ${projectId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
+        )
+      }
+    } else if (sessionId) {
+      const count =
+        this.db.get<{ n: number }>(
+          `SELECT count(*) AS n FROM timers
+           WHERE session_id = ? AND project_id IS NULL AND kind = 'routine' AND enabled = 1${excludeClause}`,
+          sessionId,
+          ...extra,
+        )?.n ?? 0
+      if (count >= MAX_ROUTINES_PER_PROJECT) {
+        throw new Error(
+          `Session ${sessionId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
+        )
+      }
+    }
+  }
 
   createRoutine(input: {
     id?: string
@@ -144,18 +183,7 @@ export class TimerScheduler {
         }
         resolvedProjectId ??= session.project_id
       }
-      if (resolvedProjectId) {
-        const count =
-          this.db.get<{ n: number }>(
-            `SELECT count(*) AS n FROM timers WHERE project_id = ? AND kind = 'routine'`,
-            resolvedProjectId,
-          )?.n ?? 0
-        if (count >= MAX_ROUTINES_PER_PROJECT) {
-          throw new Error(
-            `Project ${resolvedProjectId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
-          )
-        }
-      }
+      this.assertRoutineCapacityInTx(resolvedProjectId, input.sessionId ?? null)
       this.db.run(
         `INSERT INTO timers (
            id, kind, project_id, session_id, channel, creator_id, creator_name,
@@ -325,30 +353,47 @@ export class TimerScheduler {
       existing.enabled &&
       enabled &&
       existing.nextFireAt !== null
-    const nextFireAt = !enabled
-      ? null
-      : preserveExistingDeadline
-        ? existing.nextFireAt
-        : (() => {
-            const ms = nextOccurrence(schedule, nowMs, zone)
-            return ms === undefined ? null : new Date(ms).toISOString()
-          })()
-    this.db.run(
-      `UPDATE timers
-       SET message = ?, schedule_json = ?, timezone = ?, enabled = ?,
-           next_fire_at = ?, schedule_updated_at = ?, updated_at = ?
-       WHERE id = ?`,
-      patch.message ?? existing.message,
-      JSON.stringify(schedule),
-      zone,
-      enabled ? 1 : 0,
-      nextFireAt,
-      scheduleChanged ? nowIso : existing.scheduleUpdatedAt,
-      nowIso,
-      id,
-    )
+    let nextFireAt: string | null = null
+    if (enabled) {
+      if (preserveExistingDeadline) {
+        nextFireAt = existing.nextFireAt
+      } else {
+        const ms = nextOccurrence(schedule, nowMs, zone)
+        if (ms === undefined) {
+          throw new Error('Timer schedule has no future occurrence')
+        }
+        nextFireAt = new Date(ms).toISOString()
+      }
+    }
+    const updated = this.db.transaction(() => {
+      const current = this.get(id)
+      if (!current) return undefined
+      if (enabled && !current.enabled && current.kind === 'routine') {
+        this.assertRoutineCapacityInTx(
+          current.projectId,
+          current.sessionId,
+          current.id,
+        )
+      }
+      this.db.run(
+        `UPDATE timers
+         SET message = ?, schedule_json = ?, timezone = ?, enabled = ?,
+             next_fire_at = ?, schedule_updated_at = ?, updated_at = ?
+         WHERE id = ?`,
+        patch.message ?? current.message,
+        JSON.stringify(schedule),
+        zone,
+        enabled ? 1 : 0,
+        nextFireAt,
+        scheduleChanged ? nowIso : current.scheduleUpdatedAt,
+        nowIso,
+        id,
+      )
+      return this.get(id)
+    })
+    if (!updated) return undefined
     this.onScheduleChanged?.()
-    return this.get(id)
+    return updated
   }
 
   delete(id: string): boolean {
@@ -359,6 +404,30 @@ export class TimerScheduler {
     })
     if (res.changes > 0) this.onScheduleChanged?.()
     return res.changes > 0
+  }
+
+  cancelFollowupsForSession(sessionId: string): number {
+    const now = new Date().toISOString()
+    const cancelled = this.db.transaction(() => {
+      const rows = this.db.all<{ id: string }>(
+        `SELECT id FROM timers WHERE session_id = ? AND kind = 'followup' AND enabled = 1`,
+        sessionId,
+      )
+      if (rows.length === 0) return 0
+      const res = this.db.run(
+        `UPDATE timers
+         SET enabled = 0, next_fire_at = NULL, updated_at = ?
+         WHERE session_id = ? AND kind = 'followup' AND enabled = 1`,
+        now,
+        sessionId,
+      )
+      for (const r of rows) {
+        this.db.run('DELETE FROM kv_meta WHERE key = ?', `timer_target:${r.id}`)
+      }
+      return res.changes
+    })
+    if (cancelled > 0) this.onScheduleChanged?.()
+    return cancelled
   }
 
   private readTimerTarget(id: string): TimerTarget | undefined {
@@ -458,7 +527,7 @@ export class TimerScheduler {
             sessionId: targetSessionId,
             projectId: timer.projectId,
             source: 'timer',
-            dedupeKey: `followup:${timer.id}`,
+            dedupeKey: `followup:${timer.id}:${nowIso}`,
             wake: true,
             payload: {
               type: 'timer',
@@ -558,15 +627,47 @@ export class TimerScheduler {
   private resolveTargetSessionId(timer: TimerRecord): string | undefined {
     if (timer.sessionId) return timer.sessionId
     if (!timer.projectId) return undefined
-    const project = this.db.get<{ hub_session_id: string | null }>(
-      'SELECT hub_session_id FROM projects WHERE id = ?',
+    const project = this.db.get<{
+      hub_session_id: string | null
+      cwd: string | null
+      default_driver: string
+      default_location_json: string | null
+      default_model: string | null
+      default_thinking_level: string | null
+    }>(
+      `SELECT hub_session_id, cwd, default_driver, default_location_json, default_model, default_thinking_level
+       FROM projects WHERE id = ?`,
       timer.projectId,
     )
-    if (project?.hub_session_id) return project.hub_session_id
+    if (!project) return undefined
+    if (project.hub_session_id) return project.hub_session_id
     const latest = this.db.get<{ id: string }>(
       'SELECT id FROM sessions WHERE project_id = ? AND archived = 0 ORDER BY updated_at DESC LIMIT 1',
       timer.projectId,
     )
-    return latest?.id
+    if (latest) return latest.id
+    if (timer.kind !== 'routine') return undefined
+    const sessionId = randomUUID()
+    const now = new Date().toISOString()
+    const locationJson =
+      project.default_location_json ??
+      (project.cwd
+        ? JSON.stringify({ environment: 'local', cwd: project.cwd })
+        : null)
+    this.db.run(
+      `INSERT INTO sessions (
+         id, project_id, kind, driver, model, thinking_level, location_json,
+         state, created_at, updated_at
+       ) VALUES (?, ?, 'work', ?, ?, ?, ?, 'idle', ?, ?)`,
+      sessionId,
+      timer.projectId,
+      project.default_driver,
+      project.default_model,
+      project.default_thinking_level,
+      locationJson,
+      now,
+      now,
+    )
+    return sessionId
   }
 }

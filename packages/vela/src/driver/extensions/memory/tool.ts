@@ -1,3 +1,4 @@
+import { basename } from 'node:path'
 import z from 'zod'
 import type { MemoryStore } from '../../../runtime/memory/store.ts'
 import type { ToolContext, ToolDefinition } from '../../extension-api.ts'
@@ -95,7 +96,10 @@ export function createMemoryTool(
           return (
             `Memories (${entries.length}):\n` +
             entries
-              .map((e) => `  [${e.type}] ${e.name} — ${e.description}`)
+              .map(
+                (e) =>
+                  `  [${e.type}] ${e.name} — ${e.description} (file: ${basename(e.filePath)})`,
+              )
               .join('\n')
           )
         }
@@ -108,7 +112,7 @@ export function createMemoryTool(
             results
               .map(
                 (h) =>
-                  `  [score=${h.score.toFixed(2)}] [${h.entry.type}] ${h.entry.name} — ${h.entry.description}`,
+                  `  [score=${h.score.toFixed(2)}] [${h.entry.type}] ${h.entry.name} — ${h.entry.description} (file: ${basename(h.entry.filePath)})`,
               )
               .join('\n')
           )

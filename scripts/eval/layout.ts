@@ -42,9 +42,22 @@ export function runtimePaths(runtime: string) {
     .map((p) => join(runtime, p))
     .find((p) => existsSync(p))
   const sqliteSessions = sqliteStore !== undefined
+  const fileToolPath = [
+    'packages/vela/src/driver/tools/file.ts',
+    'packages/vela/dist/driver/tools/file.js',
+    'packages/core/src/tools/file.ts',
+    'packages/core/dist/tools/file.js',
+    'src/tools/file.ts',
+  ]
+    .map((p) => join(runtime, p))
+    .find((p) => existsSync(p))
+  const usesPiCoreToolNames =
+    fileToolPath !== undefined &&
+    /name:\s*['"]read['"]/.test(readFileSync(fileToolPath, 'utf8'))
   return {
     channelName: lark ? ('lark' as const) : ('feishu' as const),
     sqliteSessions,
+    usesPiCoreToolNames,
     /** The transcript path of a session id, relative to the sessions directory. */
     sessionTranscript: (id: string) =>
       sqliteSessions

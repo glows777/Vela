@@ -1,5 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename } from 'node:path'
 import z from 'zod'
 import type { VelaDatabase } from '../../db/index.ts'
 import {
@@ -136,212 +135,35 @@ function parseRawKvState(raw: string | undefined): DreamKvState {
   }
 }
 
-function hasLegacyDreamFiles(memoryDir: string): boolean {
-  const dir = join(memoryDir, '.dream')
-  return (
-    existsSync(join(dir, 'inbox.jsonl')) ||
-    existsSync(join(dir, 'state.json')) ||
-    existsSync(join(dir, 'log.md'))
-  )
-}
-
-function parseLegacyLogs(raw: string): DreamLogEntry[] {
-  const entries: DreamLogEntry[] = []
-  for (const section of raw.split(/^## /m)) {
-    const trimmed = section.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const nl = trimmed.indexOf('\n')
-    const rawHeader = nl === -1 ? trimmed : trimmed.slice(0, nl).trim()
-    const header = rawHeader.replace(/^Dream\s+/i, '')
-    const body = nl === -1 ? '' : trimmed.slice(nl + 1).trim()
-    const time = Date.parse(header)
-    if (Number.isFinite(time) && body) {
-      entries.push({ time, report: body })
-    }
-  }
-  return entries.slice(-20)
-}
-
-/**
- * Imports legacy `.dream/{inbox.jsonl,state.json,log.md}` once in read-only mode
- * (without writing or touching `.dream/`) and assigns monotonic sequences.
- */
-function importLegacyDreamState(
-  memoryDir: string,
-  state: DreamKvState,
-): { state: DreamKvState; imported: boolean } {
-  if (state.migratedLegacy) return { state, imported: false }
-  if (!hasLegacyDreamFiles(memoryDir)) {
-    return { state: { ...state, migratedLegacy: true }, imported: false }
-  }
-  const dreamDir = join(memoryDir, '.dream')
-  let nextSeq = state.nextSeq
-  const legacyTurns: DreamTurn[] = [...(state.legacyTurns ?? [])]
-  const inboxPath = join(dreamDir, 'inbox.jsonl')
-  if (existsSync(inboxPath)) {
-    try {
-      const lines = readFileSync(inboxPath, 'utf-8').split('\n').filter(Boolean)
-      for (const line of lines) {
-        try {
-          const item = JSON.parse(line) as {
-            id?: unknown
-            sessionId?: unknown
-            time?: unknown
-            user?: unknown
-            tools?: unknown
-          }
-          if (typeof item.sessionId !== 'string') continue
-          const userText =
-            typeof item.user === 'string' ? item.user.slice(0, 2000) : ''
-          if (!userText) continue
-          const seq = nextSeq++
-          legacyTurns.push({
-            id:
-              typeof item.id === 'string' && item.id
-                ? item.id
-                : `${item.sessionId}:legacy:${seq}`,
-            seq,
-            sessionId: item.sessionId,
-            time:
-              typeof item.time === 'number' && Number.isFinite(item.time)
-                ? item.time
-                : Date.now(),
-            user: userText,
-            tools: Array.isArray(item.tools)
-              ? item.tools
-                  .filter((t): t is string => typeof t === 'string')
-                  .slice(0, 50)
-              : [],
-          })
-        } catch {
-          /* skip malformed legacy inbox line */
-        }
-      }
-    } catch {
-      /* ignore unreadable legacy inbox */
-    }
-  }
-
-  let lastRun = state.lastRun
-  const statePath = join(dreamDir, 'state.json')
-  if (!lastRun && existsSync(statePath)) {
-    try {
-      const legacyState = JSON.parse(readFileSync(statePath, 'utf-8')) as {
-        lastRun?: {
-          time?: unknown
-          changes?: unknown
-          report?: unknown
-          inboxLength?: unknown
-          failed?: unknown
-          skipped?: unknown
-        }
-      }
-      if (legacyState.lastRun && typeof legacyState.lastRun === 'object') {
-        const lr = legacyState.lastRun
-        lastRun = {
-          time:
-            typeof lr.time === 'number' && Number.isFinite(lr.time)
-              ? lr.time
-              : Date.now(),
-          changes: typeof lr.changes === 'number' ? lr.changes : 0,
-          report: typeof lr.report === 'string' ? lr.report : '',
-          inboxLength:
-            typeof lr.inboxLength === 'number'
-              ? lr.inboxLength
-              : legacyTurns.length,
-          attemptMaxSeq: nextSeq - 1,
-          ...(typeof lr.failed === 'string' ? { failed: lr.failed } : {}),
-          ...(typeof lr.skipped === 'string' ? { skipped: lr.skipped } : {}),
-        }
-      }
-    } catch {
-      /* ignore malformed legacy state.json */
-    }
-  }
-
-  let logs = state.logs
-  const logPath = join(dreamDir, 'log.md')
-  if (logs.length === 0 && existsSync(logPath)) {
-    try {
-      logs = parseLegacyLogs(readFileSync(logPath, 'utf-8'))
-    } catch {
-      /* ignore unreadable log.md */
-    }
-  }
-
-  return {
-    state: {
-      ...state,
-      nextSeq,
-      ...(legacyTurns.length ? { legacyTurns } : {}),
-      ...(lastRun ? { lastRun } : {}),
-      logs,
-      migratedLegacy: true,
-    },
-    imported: true,
-  }
-}
-
 export function readDreamKvState(
   db: VelaDatabase,
   scopeKey: string,
-  memoryDir?: string,
+  _memoryDir?: string,
 ): DreamKvState {
   if (!db.open) return emptyState()
-  const readRow = () =>
-    db.get<{ value_json: string }>(
-      'SELECT value_json FROM kv_meta WHERE key = ?',
-      scopeKey,
-    )
-  const initial = parseRawKvState(readRow()?.value_json)
-  if (!initial.migratedLegacy && memoryDir && hasLegacyDreamFiles(memoryDir)) {
-    if (db.readonly) {
-      return importLegacyDreamState(memoryDir, initial).state
-    }
-    return db.transaction(() => {
-      const current = parseRawKvState(readRow()?.value_json)
-      if (current.migratedLegacy) return current
-      const { state: migrated, imported } = importLegacyDreamState(
-        memoryDir,
-        current,
-      )
-      if (imported) {
-        db.run(
-          'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
-          scopeKey,
-          JSON.stringify(migrated),
-          new Date().toISOString(),
-        )
-      }
-      return migrated
-    })
-  }
-  return initial
+  const row = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    scopeKey,
+  )
+  return parseRawKvState(row?.value_json)
 }
 
 export function mutateDreamKvState(
   db: VelaDatabase | undefined,
   memoryState: DreamKvState,
   scopeKey: string,
-  memoryDir: string,
+  _memoryDir: string,
   mutator: (state: DreamKvState) => DreamKvState,
 ): DreamKvState {
   if (!db?.open) {
-    const base = memoryState.migratedLegacy
-      ? memoryState
-      : importLegacyDreamState(memoryDir, memoryState).state
-    return mutator(base)
+    return mutator(memoryState)
   }
   return db.transaction(() => {
     const row = db.get<{ value_json: string }>(
       'SELECT value_json FROM kv_meta WHERE key = ?',
       scopeKey,
     )
-    const parsed = parseRawKvState(row?.value_json)
-    const base = parsed.migratedLegacy
-      ? parsed
-      : importLegacyDreamState(memoryDir, parsed).state
-    const next = mutator(base)
+    const next = mutator(parseRawKvState(row?.value_json))
     db.run(
       'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
       scopeKey,

@@ -44,11 +44,12 @@ export class MemoryRegistry {
   constructor(private readonly logger?: VelaLogger) {}
 
   get(memoryDir: string, projectDir = '.'): MemoryStore {
-    const key = resolve(memoryDir)
+    const normalizedDir = resolve(memoryDir)
+    const normalizedProject = projectDir === '.' ? '.' : resolve(projectDir)
+    const key = JSON.stringify([normalizedDir, normalizedProject])
     let store = this.stores.get(key)
     if (!store) {
-      store = new MemoryStore(key, this.logger, projectDir)
-      store.init()
+      store = new MemoryStore(normalizedDir, this.logger, normalizedProject)
       this.stores.set(key, store)
     }
     return store
@@ -64,7 +65,7 @@ export class MemoryRegistry {
     projectDir = '.',
   ): { local: MemoryStore; global: MemoryStore; isProject: boolean } {
     const dirs = resolveMemoryDirs(agentDir, projectId)
-    const global = this.get(dirs.globalDir, projectDir)
+    const global = this.get(dirs.globalDir, dirs.isProject ? '.' : projectDir)
     const local = dirs.isProject ? this.get(dirs.localDir, projectDir) : global
     return { local, global, isProject: dirs.isProject }
   }

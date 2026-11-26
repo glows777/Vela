@@ -81,7 +81,7 @@ export function isOwnerLive(
   return isPidAlive(Number(pidText))
 }
 
-interface AgentDriverCapabilities {
+export interface AgentDriverCapabilities {
   readonly recovery: 'step' | 'turn'
   readonly executionEnv: 'managed' | 'self'
   readonly steer: boolean
@@ -140,5 +140,6 @@ export interface AgentDriver {
   runTurn(request: DriverTurnRequest): Promise<DriverTurnResult>
   steer?(sessionId: string, text: string): boolean | Promise<boolean>
   abort?(sessionId: string): void | Promise<void>
+  waitForBackground?(): Promise<void>
   dispose?(): void | Promise<void>
 }

@@ -127,6 +127,37 @@ export interface McpPoolAcquireOptions {
   onError: (problems: string[]) => void
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('Aborted', 'AbortError')
+}
+
+async function raceWithAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise
+  throwIfAborted(signal)
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new DOMException('Aborted', 'AbortError'),
+      )
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([promise, aborted])
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort)
+  }
+}
+
 export interface McpPoolLease {
   readonly key: string
   readonly hasWork: boolean
@@ -134,8 +165,9 @@ export interface McpPoolLease {
   waitForDirect(
     timeoutMs: number,
     extraServers?: ReadonlySet<string>,
+    signal?: AbortSignal,
   ): Promise<void>
-  waitForAll(): Promise<void>
+  waitForAll(signal?: AbortSignal): Promise<void>
   reconnect(
     server: string | undefined,
   ): Promise<
@@ -242,39 +274,64 @@ export class McpPool {
         leaseState.reportedConfig = true
         leaseState.onError([...leaseErrors])
       }
-      if (!activeBucket.started) {
-        const attemptsByServer = new Map<string, Promise<string | undefined>>()
-        const attempts = [...activeBucket.connections.values()].map(
-          (connection) => {
-            const done = connection.connect().then(
+      const attemptsByServer =
+        activeBucket.connectAttempts ??
+        new Map<string, Promise<string | undefined>>()
+      activeBucket.connectAttempts = attemptsByServer
+      const batch: Array<{
+        connection: McpConnection
+        done: Promise<string | undefined>
+      }> = []
+      let launchedNew = false
+      for (const connection of activeBucket.connections.values()) {
+        let done = attemptsByServer.get(connection.name)
+        if (
+          !done &&
+          (connection.state === 'idle' ||
+            connection.state === 'failed' ||
+            connection.state === 'disconnected')
+        ) {
+          launchedNew = true
+          done = connection
+            .connect()
+            .then(
               () => undefined,
               (error: unknown) =>
                 error instanceof Error ? error.message : String(error),
             )
-            attemptsByServer.set(connection.name, done)
-            return { connection, done }
-          },
-        )
-        activeBucket.connectAttempts = attemptsByServer
+            .finally(() => {
+              if (attemptsByServer.get(connection.name) === done) {
+                attemptsByServer.delete(connection.name)
+              }
+            })
+          attemptsByServer.set(connection.name, done)
+        }
+        if (done) {
+          batch.push({ connection, done })
+        }
+      }
+      if (!activeBucket.started || launchedNew) {
         activeBucket.directReady = Promise.all(
-          attempts
+          batch
             .filter(({ connection }) => hasDirectTools(connection.entry))
             .map(({ done }) => done),
         ).then(() => {})
-        activeBucket.started = Promise.all(
-          attempts.map(({ done }) => done),
-        ).then((failures) => {
-          const problems = failures.filter((f): f is string => f !== undefined)
-          if (problems.length > 0 && !this.disposed && !activeBucket.closed) {
-            for (const cb of [...activeBucket.leases]) {
-              if (!cb.released && !cb.reportedConnect) {
-                cb.reportedConnect = true
-                cb.onError(problems)
+        activeBucket.started = Promise.all(batch.map(({ done }) => done)).then(
+          (failures) => {
+            const problems = failures.filter(
+              (f): f is string => f !== undefined,
+            )
+            if (problems.length > 0 && !this.disposed && !activeBucket.closed) {
+              for (const cb of [...activeBucket.leases]) {
+                if (!cb.released && !cb.reportedConnect) {
+                  cb.reportedConnect = true
+                  cb.onError(problems)
+                }
               }
             }
-          }
-          return problems
-        })
+            return problems
+          },
+        )
       } else {
         void activeBucket.started.then(() => {
           const liveProblems = [...activeBucket.connections.values()]
@@ -298,8 +355,9 @@ export class McpPool {
       key,
       hasWork: activeBucket.connections.size > 0 || leaseErrors.length > 0,
       start,
-      waitForDirect: async (timeoutMs, extraServers) => {
+      waitForDirect: async (timeoutMs, extraServers, signal) => {
         if (!activeBucket.started) return
+        throwIfAborted(signal)
         const extraPromises: Promise<unknown>[] = []
         if (
           extraServers &&
@@ -318,16 +376,24 @@ export class McpPool {
               )
             : activeBucket.directReady
         let timer: ReturnType<typeof setTimeout> | undefined
-        await Promise.race([
-          readiness,
-          new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, timeoutMs)
-          }),
-        ])
-        clearTimeout(timer)
+        try {
+          await raceWithAbort(
+            Promise.race([
+              readiness,
+              new Promise<void>((resolve) => {
+                timer = setTimeout(resolve, timeoutMs)
+              }),
+            ]),
+            signal,
+          )
+        } finally {
+          clearTimeout(timer)
+        }
       },
-      waitForAll: async () => {
-        if (activeBucket.started) await activeBucket.started
+      waitForAll: async (signal) => {
+        if (activeBucket.started) {
+          await raceWithAbort(activeBucket.started, signal)
+        }
       },
       reconnect: async (server) => {
         const connection = server

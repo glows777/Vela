@@ -128,7 +128,10 @@ export function mcp(options: McpOptions = {}): VelaExtension {
 
     const ownsPool = !options.pool
     const pool =
-      options.pool ?? new McpPool({ idleTtlMs: options.idleTtlMs ?? 0 })
+      options.pool ??
+      new McpPool(
+        options.idleTtlMs !== undefined ? { idleTtlMs: options.idleTtlMs } : {},
+      )
     const reporters = new Map<string, (message: string) => void>()
     const report = (problems: string[]) => {
       if (problems.length === 0) return

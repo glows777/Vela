@@ -191,13 +191,21 @@ export function claimApprovalInboxBatchInTx(
 export function hasSessionPendingWake(
   db: VelaDatabase,
   sessionId: string,
+  excludeIds?: ReadonlySet<string>,
 ): boolean {
-  return Boolean(
-    db.get<{ id: string }>(
-      `SELECT id FROM inbox_events WHERE session_id = ? AND status = 'pending' AND wake = 1 LIMIT 1`,
-      sessionId,
-    ),
+  if (!excludeIds || excludeIds.size === 0) {
+    return Boolean(
+      db.get<{ id: string }>(
+        `SELECT id FROM inbox_events WHERE session_id = ? AND status = 'pending' AND wake = 1 LIMIT 1`,
+        sessionId,
+      ),
+    )
+  }
+  const rows = db.all<{ id: string }>(
+    `SELECT id FROM inbox_events WHERE session_id = ? AND status = 'pending' AND wake = 1`,
+    sessionId,
   )
+  return rows.some((row) => !excludeIds.has(row.id))
 }
 
 export function listProcessingInboxForRun(

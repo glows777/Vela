@@ -523,12 +523,7 @@ export async function checkBoundaries(root: string): Promise<string[]> {
             destination === driverAPI ||
             (memoryBuiltin &&
               (inside(destination, resolve(pkg.dir, 'src/runtime/memory')) ||
-                inside(destination, resolve(pkg.dir, 'src/driver/memory')))) ||
-            (file ===
-              resolve(pkg.dir, 'src/driver/extensions/memory/dream.ts') &&
-              (destination ===
-                resolve(pkg.dir, 'src/driver/usage/tracker.ts') ||
-                destination === resolve(pkg.dir, 'src/providers/index.ts'))))
+                inside(destination, resolve(pkg.dir, 'src/driver/memory')))))
         if (destination && !local)
           report(
             file,
@@ -588,7 +583,6 @@ export async function checkBoundaries(root: string): Promise<string[]> {
     })
     const checker = program.getTypeChecker()
     for (const file of builtinFiles) {
-      const record = sourceMap.get(file)!
       const source = program.getSourceFile(file)
       if (!source) continue
       const visit = (node: ts.Node) => {
@@ -609,13 +603,6 @@ export async function checkBoundaries(root: string): Promise<string[]> {
               )
             : undefined
           if (
-            !(
-              file ===
-                resolve(
-                  record.pkg.dir,
-                  'src/driver/extensions/memory/dream.ts',
-                ) && member === 'tracker'
-            ) &&
             symbol?.declarations?.some((d) =>
               ts.getJSDocTags(d).some((t) => t.tagName.text === 'internal'),
             )

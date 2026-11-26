@@ -80,7 +80,7 @@ Load the example with `vela -e ./examples/extensions/confirm-dangerous.ts`, or i
 
 ## Prompt injection
 
-The model reads text from many places: files, command output, web pages from the `web` extension, knowledge base results, memory, and messages from channel senders. Any of it can contain instructions that try to make the model do something else. Vela does not detect or block this.
+The model reads text from many places: files, command output, web pages from the `web` extension, memory, and messages from channel senders. Any of it can contain instructions that try to make the model do something else. Vela does not detect or block this.
 
 Enabled Lark chats have full access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider a user extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts) for writing your own).
 

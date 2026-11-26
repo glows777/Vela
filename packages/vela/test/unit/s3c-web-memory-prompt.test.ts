@@ -489,11 +489,11 @@ test('memorySlug hashes >64-char collisions, save updates matching type+name, fr
   expect(envReport).not.toContain('src/guest-only.ts')
 })
 
-test('MemoryDream isolates scopes, excludes disabled/non-human turns, ignores rowid reuse, imports legacy .dream once, and overflow compaction keeps memory message', async () => {
+test('MemoryDream isolates scopes, excludes disabled/non-human turns, ignores rowid reuse, ignores legacy .dream files, and overflow compaction keeps memory message', async () => {
   const root = tempDir('vela-r1-dream-')
   const db = openDatabase({ path: join(root, 'vela.db') })
 
-  // Pre-seed legacy .dream directory for read-only one-time migration check
+  // Pre-seed legacy .dream directory to verify it is ignored (zero file probing / migration)
   const legacyDir = join(root, 'legacy-mem')
   mkdirSync(join(legacyDir, '.dream'), { recursive: true })
   writeFileSync(
@@ -518,10 +518,8 @@ test('MemoryDream isolates scopes, excludes disabled/non-human turns, ignores ro
       key: `dir:${legacyDir}`,
     })
     const initialAudit = migratedDream.auditState()
-    expect(initialAudit.pendingTurns.map((t) => t.user)).toContain(
-      'Old preference fact',
-    )
-    expect(initialAudit.logs).toHaveLength(1)
+    expect(initialAudit.pendingTurns).toHaveLength(0)
+    expect(initialAudit.logs).toHaveLength(0)
 
     // Global Dream must ignore private tagged SDK sessions and non-human Runtime turns
     const runtime = new VelaRuntimeEngine({ db, agentDir: root })
@@ -664,7 +662,7 @@ test('R2: MemoryStore prevents cross-name overwrites, keeps legacy # scalars & D
     expect.arrayContaining(['#release', 'Sprint #42']),
   )
 
-  // Legacy log.md header with `## Dream <ISO timestamp>` imports cleanly
+  // Legacy .dream/log.md is ignored (v0.9 2A clean cut, SQLite-only)
   const dreamDir = join(root, 'dream-log-test')
   mkdirSync(join(dreamDir, '.dream'), { recursive: true })
   writeFileSync(
@@ -677,10 +675,7 @@ test('R2: MemoryStore prevents cross-name overwrites, keeps legacy # scalars & D
       kind: 'tagged',
       key: `dir:${dreamDir}`,
     })
-    expect(legacyDream.auditState().logs).toHaveLength(1)
-    expect(legacyDream.auditState().logs[0]!.report).toContain(
-      'Merged legacy logs',
-    )
+    expect(legacyDream.auditState().logs).toHaveLength(0)
 
     // Overflow compaction retains [memory] across SQLite reopen
     const sessStore = new SessionStore('comp-reopen', db, {

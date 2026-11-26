@@ -105,10 +105,12 @@ export async function saveModelSetup(options: {
   } catch (error) {
     // A credential file may already be on disk; saying only "failed" would hide that.
     if (written.length === 0) throw error
-    throw new Error(
+    const wrapped = new Error(
       `${error instanceof Error ? error.message : String(error)} (already written: ${written.join(', ')})`,
       { cause: error },
-    )
+    ) as Error & { writtenFiles?: string[] }
+    wrapped.writtenFiles = [...written]
+    throw wrapped
   }
   return { written, definition }
 }

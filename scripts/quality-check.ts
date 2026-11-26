@@ -19,6 +19,7 @@ import madge from 'madge'
 import desktopConfig from '../apps/desktop/tsconfig.json'
 import { checkBoundaries } from './check-boundaries.ts'
 import { checkDocLinks } from './check-doc-links.ts'
+import { checkDocsConsistency } from './check-docs-consistency.ts'
 import { checkExecutionBoundaries } from './check-execution-boundaries.ts'
 import { readWorkspaces } from './workspaces.ts'
 
@@ -223,6 +224,12 @@ report(
   links.length === 0,
   `doc links: ${links.length === 0 ? 'ok' : `${links.length} broken`}`,
   links,
+)
+const docs = await checkDocsConsistency(ROOT)
+report(
+  docs.length === 0,
+  `docs consistency: ${docs.length === 0 ? 'ok' : `${docs.length} mismatch(es)`}`,
+  docs,
 )
 const elapsed = ((performance.now() - started) / 1000).toFixed(1)
 

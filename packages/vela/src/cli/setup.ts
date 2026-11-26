@@ -2,6 +2,7 @@ import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { VelaSettings } from '../config/index.ts'
 import { savedTrust, saveTrust } from '../db/index.ts'
+import { canonicalLocalPath } from '../db/trust.ts'
 import {
   assertSessionId,
   getToolListError,
@@ -601,14 +602,19 @@ export function cliWorkspaceModeAt(options: {
   const { agentDir, dataDir, startupCwd, approve, location } = options
   const environment = options.environment ?? 'local'
   if (environment === 'local') {
-    if (join(location, '.vela') === agentDir) return 'home'
-    if (resolve(location) === resolve(startupCwd)) {
+    const canonicalLoc = canonicalLocalPath(location)
+    const canonicalStartup = canonicalLocalPath(startupCwd)
+    const canonicalAgentDir = canonicalLocalPath(agentDir)
+    if (canonicalLocalPath(join(canonicalLoc, '.vela')) === canonicalAgentDir) {
+      return 'home'
+    }
+    if (canonicalLoc === canonicalStartup) {
       return approve === true ||
-        (approve !== false && savedTrust(agentDir, location) === true)
+        (approve !== false && savedTrust(agentDir, canonicalLoc) === true)
         ? 'all'
         : 'none'
     }
-    return approve !== false && savedTrust(agentDir, location) === true
+    return approve !== false && savedTrust(agentDir, canonicalLoc) === true
       ? 'all'
       : 'none'
   }

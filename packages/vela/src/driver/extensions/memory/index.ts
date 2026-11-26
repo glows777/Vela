@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { MemoryRegistry } from '../../../runtime/memory/registry.ts'
 import {
   MEMORY_RULES,
@@ -116,7 +116,9 @@ export function memory(): VelaExtension {
           const flag = reports.some((r) => r.entry.filePath === e.filePath)
             ? '⚠️ '
             : '   '
-          lines.push(`${flag} [${e.type}] ${e.name} — ${e.description}`)
+          lines.push(
+            `${flag} [${e.type}] ${e.name} (${basename(e.filePath)}) — ${e.description}`,
+          )
         }
         ctx.notify(lines.join('\n'))
       },
@@ -175,7 +177,7 @@ function searchReport(store: MemoryStore, query: string): string {
     `[BM25 search] "${query}" → ${results.length} results:`,
     ...results.map(
       (h) =>
-        `  [score=${h.score.toFixed(2)}] [${h.entry.type}] ${h.entry.name} — ${h.entry.description}`,
+        `  [score=${h.score.toFixed(2)}] [${h.entry.type}] ${h.entry.name} (${basename(h.entry.filePath)}) — ${h.entry.description}`,
     ),
   ].join('\n')
 }

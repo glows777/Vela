@@ -1,3 +1,4 @@
+import { posix } from 'node:path'
 import type { ExecutionEnv, ExecutionLocation } from '../shared/execution.ts'
 import { openDockerEnvironment } from './docker/adapter.ts'
 import {
@@ -6,6 +7,7 @@ import {
   dockerContainerId,
 } from './docker/container.ts'
 import { ownerDockerCredentials } from './docker/credentials.ts'
+import { withDockerCwd } from './docker/operations.ts'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -17,8 +19,26 @@ export interface EnvironmentRegistryOptions {
   hostEnv?: Record<string, string | undefined>
   guestPath?: string
   dockerHost?: string
+}
+
+interface EnvironmentRegistryTestHooks {
   openDocker?: typeof openDockerEnvironment
   probeAlive?: (containerId: string, env: ExecutionEnv) => Promise<boolean>
+}
+
+let pendingTestHooks: EnvironmentRegistryTestHooks | undefined
+
+/** Internal-only helper for injecting mock Docker adapters without exposing hooks in the public `.d.ts` constructor. */
+export function createEnvironmentRegistryForTest(
+  options: EnvironmentRegistryOptions & EnvironmentRegistryTestHooks,
+): EnvironmentRegistry {
+  const { openDocker, probeAlive, ...publicOptions } = options
+  pendingTestHooks = { openDocker, probeAlive }
+  try {
+    return new EnvironmentRegistry(publicOptions)
+  } finally {
+    pendingTestHooks = undefined
+  }
 }
 
 function parseDockerDefinition(
@@ -60,8 +80,8 @@ function parseDockerDefinition(
  * credential proxy bindings, and dead-container cache invalidation/re-probing).
  */
 export class EnvironmentRegistry {
+  readonly dataDir: string
   private readonly definitions: Record<string, unknown>
-  private readonly dataDir: string
   private readonly hostEnv: Record<string, string | undefined>
   private readonly guestPath?: string
   private readonly dockerHost?: string
@@ -78,14 +98,16 @@ export class EnvironmentRegistry {
   private disposed = false
 
   constructor(options: EnvironmentRegistryOptions) {
+    const hooks = pendingTestHooks
+    pendingTestHooks = undefined
     this.dataDir = options.dataDir
     this.hostEnv = options.hostEnv ?? {}
     this.guestPath = options.guestPath
     this.dockerHost = options.dockerHost
-    this.openDocker = options.openDocker ?? openDockerEnvironment
+    this.openDocker = hooks?.openDocker ?? openDockerEnvironment
     const docker = createDockerRunner(this.dockerHost, this.hostEnv)
     this.probeAlive =
-      options.probeAlive ??
+      hooks?.probeAlive ??
       (async (containerId) => {
         try {
           const state = await docker([
@@ -144,33 +166,53 @@ export class EnvironmentRegistry {
     return 'on'
   }
 
+  private normalizeCwd(cwd: string): string {
+    if (!posix.isAbsolute(cwd) || cwd.includes('\0')) {
+      throw Error('An absolute Docker working directory is required')
+    }
+    return posix.resolve('/', cwd)
+  }
+
+  private scopeToCwd(baseEnv: ExecutionEnv, targetCwd: string): ExecutionEnv {
+    if (baseEnv.cwd === targetCwd) return baseEnv
+    const derive = (
+      baseEnv as { [withDockerCwd]?: (nextCwd: string) => ExecutionEnv }
+    )[withDockerCwd]
+    if (derive) return derive(targetCwd)
+    return {
+      ...baseEnv,
+      cwd: targetCwd,
+      cleanup: async () => {},
+    }
+  }
+
   async resolve(target: {
     sessionId: string
     location: ExecutionLocation
   }): Promise<ExecutionEnv | undefined> {
     if (this.disposed) throw Error('EnvironmentRegistry has been disposed')
-    const { environment: name, cwd } = target.location
+    const name = target.location.environment
     if (name === 'local' || !Object.hasOwn(this.definitions, name)) return
-    const key = JSON.stringify([name, cwd])
-    return this.serialized(key, async () => {
+    const normalizedCwd = this.normalizeCwd(target.location.cwd)
+    return this.serialized(name, async () => {
       for (;;) {
         if (this.disposed) throw Error('EnvironmentRegistry has been disposed')
-        const cached = this.opened.get(key)
+        const cached = this.opened.get(name)
         if (cached) {
           let env: ExecutionEnv | undefined
           try {
             env = await cached
           } catch {
-            if (this.opened.get(key) === cached) this.opened.delete(key)
+            if (this.opened.get(name) === cached) this.opened.delete(name)
           }
           if (env) {
             const alive = await this.isContainerAlive(env)
             if (this.disposed)
               throw Error('EnvironmentRegistry has been disposed')
             // If invalidated or replaced while the probe was in flight, re-resolve.
-            if (this.opened.get(key) !== cached) continue
-            if (alive) return env
-            this.opened.delete(key)
+            if (this.opened.get(name) !== cached) continue
+            if (alive) return this.scopeToCwd(env, normalizedCwd)
+            this.opened.delete(name)
             await this.trackCleanup(env.cleanup(), false)
           }
         }
@@ -181,12 +223,22 @@ export class EnvironmentRegistry {
           ...(this.guestPath ? { guestPath: this.guestPath } : {}),
           ...(this.dockerHost ? { dockerHost: this.dockerHost } : {}),
         }
-        const pending = this.openDocker(options, cwd)
-        this.opened.set(key, pending)
+        const pending = this.openDocker(options, normalizedCwd)
+        this.opened.set(name, pending)
         try {
-          return await pending
+          const opened = await pending
+          if (this.disposed) {
+            if (this.opened.get(name) === pending) this.opened.delete(name)
+            await this.trackCleanup(opened.cleanup(), false)
+            throw Error('EnvironmentRegistry has been disposed')
+          }
+          if (this.opened.get(name) !== pending) {
+            await this.trackCleanup(opened.cleanup(), false)
+            continue
+          }
+          return this.scopeToCwd(opened, normalizedCwd)
         } catch (error) {
-          if (this.opened.get(key) === pending) this.opened.delete(key)
+          if (this.opened.get(name) === pending) this.opened.delete(name)
           throw error
         }
       }
@@ -194,7 +246,7 @@ export class EnvironmentRegistry {
   }
 
   invalidate(location: ExecutionLocation): void {
-    const key = JSON.stringify([location.environment, location.cwd])
+    const key = location.environment
     const pending = this.opened.get(key)
     if (!pending) return
     this.opened.delete(key)
