@@ -99,6 +99,10 @@ const typeChecks = () => {
   void session.prompt(42)
   // @ts-expect-error tool availability is configured only through tools
   vela.session('legacy', { permissions: { bash: 'ask' } })
+  // @ts-expect-error SessionScope is removed from the public API
+  vela.session('scoped', { scope: { id: 'x', kind: 'chat' } })
+  // @ts-expect-error Session.scope is removed from the public API
+  void session.scope
 }
 void typeChecks
 // @ts-expect-error no such event type
@@ -466,6 +470,42 @@ try {
           BUN_INSTALL_CACHE_DIR: join(work, 'bun-cache'),
         })
       await $`./node_modules/.bin/tsc -p .`.cwd(app)
+      if (pkg.name === '@glows777/vela' && runtime === 'node') {
+        const distRoot = join(app, 'node_modules/@glows777/vela/dist')
+        for (const rel of [
+          'index.d.ts',
+          'extension-api.d.ts',
+          'driver/vela-session.d.ts',
+          'driver/tools/registry.d.ts',
+          'driver/tools/types.d.ts',
+        ]) {
+          const text = await readFile(join(distRoot, rel), 'utf8')
+          if (
+            text.includes('SessionScope') ||
+            text.includes('InternalSessionOptions') ||
+            /\bscope\s*[?:]/.test(text) ||
+            /\bget scope\s*\(/.test(text)
+          ) {
+            throw new Error(`Unexpected scope declaration leaked in ${rel}`)
+          }
+        }
+        const optionsDts = await readFile(
+          join(distRoot, 'driver/session/options.d.ts'),
+          'utf8',
+        )
+        const sessionOptionsBlock = optionsDts.match(
+          /export interface SessionOptions \{[\s\S]*?\n\}/,
+        )?.[0]
+        if (
+          !sessionOptionsBlock ||
+          sessionOptionsBlock.includes('SessionScope') ||
+          /\bscope\s*[?:]/.test(sessionOptionsBlock)
+        ) {
+          throw new Error(
+            'Unexpected scope declaration leaked on SessionOptions',
+          )
+        }
+      }
       await $`${runtime} smoke.ts`.cwd(app)
       await cli(app, runtime, pkg.version)
       console.log(`PASS ${pkg.name} on ${runtime}`)

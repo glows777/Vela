@@ -2213,4 +2213,26 @@ test('renamed S3c control-plane tool names grade identically to legacy channel_*
       }),
     ).find((c) => c.name === 'hand-off tool')?.pass,
   ).toBe(false)
+
+  expect(
+    grade(
+      'G6',
+      evidence({
+        calls: [
+          {
+            name: 'channel_message_topic',
+            args: { target: 'other-group-g6_b', text: 'Code: ORBIT-73' },
+            phase: 0,
+            sessionId: 'lark-oc_group-g6_a',
+            success: true,
+          },
+        ],
+        inputs: [
+          { topicRootId: 'g6_b', text: 'Wait for A.' },
+          { topicRootId: 'g6_a', text: 'Read the fixture.' },
+        ],
+        deliveries: [{ scope: 'topic', topicRootId: 'g6_b', text: 'ORBIT-73' }],
+      }),
+    ).find((c) => c.name === 'hand-off tool')?.pass,
+  ).toBe(false)
 })

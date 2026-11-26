@@ -1,6 +1,7 @@
 import type { VelaDatabase } from '../db/index.ts'
 import type { ResolvedModel } from '../providers/models/index.ts'
 import type { DriverInboxItem, DriverTurnRequest } from '../runtime/driver.ts'
+import { enqueueInboxEvent } from '../runtime/inbox.ts'
 import type { BlobStore } from '../runtime/index.ts'
 import type { MemoryStore } from '../runtime/memory/index.ts'
 import type { VelaLogger } from '../shared/logger.ts'
@@ -17,8 +18,10 @@ import {
   lastActiveCustomMessageText,
 } from './runtime-resources.ts'
 import type { SessionStore } from './session/index.ts'
+import { messageText } from './session/message-queue.ts'
 import { expandEnvironmentSkill } from './skills/environment-skills.ts'
 import type { SkillDefinition } from './skills/loader.ts'
+import type { ToolRegistry } from './tools/registry.ts'
 import type { TokenTracker } from './usage/tracker.ts'
 
 export function assistantText(msg: AssistantModelMessage | undefined): string {
@@ -670,4 +673,102 @@ export function scheduleRuntimeAutoDream(options: {
         `[dream] ${error instanceof Error ? error.message : String(error)}`,
       )
     })
+}
+
+/** Re-enqueues unconsumed in-memory `steer()` inputs into durable `inbox_events` when a turn exits before consuming them. */
+export function flushUnconsumedSteering(options: {
+  db: VelaDatabase
+  sessionId: string
+  projectId: string | null
+  unconsumed: readonly ModelMessage[]
+  wake: boolean
+  shouldWakeSession: boolean
+  wakeSession?: (sessionId: string) => void
+}): void {
+  if (options.unconsumed.length === 0) return
+  let insertedAny = false
+  for (const msg of options.unconsumed) {
+    const text = messageText(msg).trim()
+    if (!text) continue
+    const res = enqueueInboxEvent(options.db, {
+      sessionId: options.sessionId,
+      projectId: options.projectId,
+      source: 'user',
+      wake: options.wake,
+      passive: false,
+      payload: { type: 'user', text },
+    })
+    if (res.inserted) insertedAny = true
+  }
+  if (insertedAny && options.wake && options.shouldWakeSession) {
+    options.wakeSession?.(options.sessionId)
+  }
+}
+
+/** Applies persisted per-project tool overrides onto `registry` on top of runtime base modifiers. */
+export function applyRuntimeProjectToolSelection(
+  db: VelaDatabase,
+  registry: ToolRegistry,
+  projectId: string | null,
+  baseModifiers: readonly string[],
+): void {
+  if (projectId) {
+    const proj = db.get<{ default_tools_json: string | null }>(
+      'SELECT default_tools_json FROM projects WHERE id = ?',
+      projectId,
+    )
+    if (proj?.default_tools_json) {
+      const list = JSON.parse(proj.default_tools_json) as unknown
+      if (
+        !Array.isArray(list) ||
+        !list.every((item) => typeof item === 'string')
+      ) {
+        throw new Error(
+          `Invalid default_tools_json for project ${projectId}: expected a JSON array of tool names`,
+        )
+      }
+      if (
+        list.length > 0 &&
+        list.every((name) => name.startsWith('+') || name.startsWith('-'))
+      ) {
+        registry.setDefaultToolModifiers([...baseModifiers, ...list])
+      } else {
+        registry.setDefaultToolModifiers(baseModifiers)
+        registry.setSelection(list)
+      }
+      return
+    }
+  }
+  registry.setDefaultToolModifiers([...baseModifiers])
+}
+
+/** Reads persisted human-turn metadata for an already-started run during recovery/resume. */
+export function loadExistingTurnUserMsg(
+  db: VelaDatabase,
+  sessionId: string,
+  runId: string,
+): { userEntryId?: string; hasHumanText: boolean } {
+  const existingUser = db.get<{
+    id: string
+    details_json: string | null
+  }>(
+    `SELECT id, details_json FROM vela_messages
+     WHERE session_id = ? AND run_id = ? AND kind = 'message' AND role = 'user'
+     ORDER BY rowid DESC LIMIT 1`,
+    sessionId,
+    runId,
+  )
+  if (existingUser?.details_json) {
+    try {
+      const parsed = JSON.parse(existingUser.details_json) as {
+        dreamHumanText?: unknown
+      }
+      if (typeof parsed.dreamHumanText === 'string' && parsed.dreamHumanText) {
+        return { userEntryId: existingUser.id, hasHumanText: true }
+      }
+    } catch {
+      /* ignore malformed details_json */
+    }
+  }
+  return { hasHumanText: false }
 }

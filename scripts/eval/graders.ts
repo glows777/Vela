@@ -540,7 +540,7 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
           !inB(call) &&
           (call.args.root_id === 'g6_b' ||
             call.args.target === 'g6_b' ||
-            String(call.args.target ?? '').endsWith('-g6_b')) &&
+            call.args.target === 'lark-oc_group-g6_b') &&
           fact(String(call.args.text ?? '')),
       )
       check(

@@ -52,6 +52,7 @@ import {
   type QueueMode,
   type SendMessageOptions,
   type SessionHost,
+  type SessionOptions,
   type SessionPersistence,
   type SessionUsage,
 } from './session/options.ts'
@@ -163,11 +164,8 @@ export class VelaSession {
   private readonly hosts: ReturnType<typeof buildSessionHosts<VelaSession>>
 
   /** @internal Created by vela.session() */
-  constructor(
-    id: string,
-    deps: SessionDeps,
-    options: InternalSessionOptions = {},
-  ) {
+  constructor(id: string, deps: SessionDeps, options: SessionOptions = {}) {
+    const internalOptions = options as InternalSessionOptions
     assertSessionId(id)
     this.id = id
     this.position = resolveLocation(options.location, deps.cwd, options.cwd)
@@ -183,7 +181,7 @@ export class VelaSession {
       cwd: this.cwd,
       location: this.position,
       deps,
-      options,
+      options: internalOptions,
       messages: this.messages,
       busy: this.busy,
       emit: this.emit,
@@ -206,13 +204,13 @@ export class VelaSession {
     this.timestamps = parts.contextManager.state.timestamps
     this.userBash = parts.userBash
     this.messageQueue = parts.messageQueue
-    bindInitialRouting(this, options)
+    bindInitialRouting(this, internalOptions)
     this.hosts = buildSessionHosts<VelaSession>({
       ...parts,
       id,
       session: this,
       deps,
-      options,
+      options: internalOptions,
       messages: this.messages,
       toolDetails: this.toolDetails,
       busy: this.busy,
@@ -308,6 +306,13 @@ export class VelaSession {
   }
 
   private resolveModel(): ResolvedModel {
+    if (
+      this.defaults.resolved &&
+      this.defaults.resolvedChannel !== this.channel
+    ) {
+      this.defaults.resolved = undefined
+      this.defaults.hooked = undefined
+    }
     if (!this.defaults.resolved) {
       applySessionResolvedModel({
         resolved: this.deps.resolveModel(this.defaults.modelChoice, this),
@@ -316,6 +321,7 @@ export class VelaSession {
         contextManager: this.contextManager,
         tracker: this.tracker,
       })
+      this.defaults.resolvedChannel = this.channel
     }
     return this.defaults.resolved as ResolvedModel
   }
@@ -361,6 +367,7 @@ export class VelaSession {
       contextManager: this.contextManager,
       tracker: this.tracker,
     })
+    this.defaults.resolvedChannel = this.channel
     if (record && typeof model === 'string')
       this.store.setModelChoice(resolved.info.ref ?? model)
     if (record && this.thinkingLevel !== thinking)

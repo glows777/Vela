@@ -134,12 +134,7 @@ export async function logoutCommand(
     p.source === 'auth.json' || p.source === 'OAuth (auth.json)'
   const stored = providers.filter(isStoredCredential)
   const candidates = forget
-    ? providers.filter(
-        (p) =>
-          isStoredCredential(p) ||
-          p.hasRegistration ||
-          (stored.length === 0 && Boolean(p.oauth)),
-      )
+    ? providers.filter((p) => isStoredCredential(p) || p.hasRegistration)
     : stored
   const provider =
     requested ||

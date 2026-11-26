@@ -31,7 +31,7 @@ function currentModelRef(host: ModelHost): string | undefined {
 /** `/model` and Ctrl+L: pick from the models of providers with a credential, with search (like pi) */
 export async function selectModel(host: ModelHost): Promise<void> {
   const current = currentModelRef(host)
-  const models = host.vela.models()
+  const models = host.vela.models({ channel: host.session.channel })
   if (!models.length) {
     host.addNotice(
       'No models available: sign in with /login, set a provider API key (e.g. ANTHROPIC_API_KEY), or switch directly with /model provider/id',
@@ -105,7 +105,7 @@ export async function cycleModel(
     const resources = await active.resources()
     if (active !== host.session) return
     const models = scopedModels(
-      host.vela.models(),
+      host.vela.models({ channel: host.session.channel }),
       resources.enabledModels ?? host.options.enabledModels,
     )
     const next = nextModel(models, currentModelRef(host), direction)

@@ -9,8 +9,10 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import * as ts from 'typescript'
 import { z } from 'zod'
+import { logoutCommand } from '../../src/cli/tui/auth-dialogs.ts'
 import { openDatabase } from '../../src/db/sqlite.ts'
 import { createVela } from '../../src/driver/index.ts'
 import {
@@ -32,6 +34,7 @@ import type {
 import {
   ModelRegistry,
   type ProviderDefinition,
+  resolveModel,
 } from '../../src/providers/models/index.ts'
 import {
   type ChannelAdapter,
@@ -1045,8 +1048,34 @@ test('Round 1 regressions: --no-session --forget clears persistent vela.db regis
   )
 })
 
-test('Round 1 regressions: emitted package declarations expose zero SessionScope or .scope surface', async () => {
-  const distRoot = join(import.meta.dir, '../../dist')
+test('Round 2 regressions: in-memory emitted declarations expose zero SessionScope or .scope surface', () => {
+  const pkgRoot = resolve(import.meta.dir, '../..')
+  const tsconfigPath = join(pkgRoot, 'tsconfig.build.json')
+  const readCfg = ts.readConfigFile(tsconfigPath, ts.sys.readFile)
+  expect(readCfg.error).toBeUndefined()
+  const parsed = ts.parseJsonConfigFileContent(readCfg.config, ts.sys, pkgRoot)
+  expect(parsed.errors).toEqual([])
+  const emitted = new Map<string, string>()
+  const host = ts.createCompilerHost(parsed.options)
+  host.writeFile = (fileName, text) => {
+    emitted.set(resolve(fileName), text)
+  }
+  const program = ts.createProgram(
+    parsed.fileNames,
+    {
+      ...parsed.options,
+      incremental: false,
+      tsBuildInfoFile: undefined,
+      noEmit: false,
+      declaration: true,
+      emitDeclarationOnly: true,
+    },
+    host,
+  )
+  const emitResult = program.emit()
+  expect(emitResult.emitSkipped).toBe(false)
+
+  const distRoot = resolve(pkgRoot, 'dist')
   for (const rel of [
     'index.d.ts',
     'extension-api.d.ts',
@@ -1054,18 +1083,430 @@ test('Round 1 regressions: emitted package declarations expose zero SessionScope
     'driver/tools/registry.d.ts',
     'driver/tools/types.d.ts',
   ]) {
-    const text = await Bun.file(join(distRoot, rel)).text()
+    const text = emitted.get(resolve(distRoot, rel))
+    expect(text).toBeDefined()
     expect(text).not.toContain('SessionScope')
+    expect(text).not.toContain('InternalSessionOptions')
     expect(text).not.toMatch(/\bscope\s*[?:]/)
     expect(text).not.toMatch(/\bget scope\s*\(/)
   }
-  const optionsDts = await Bun.file(
-    join(distRoot, 'driver/session/options.d.ts'),
-  ).text()
-  const sessionOptionsBlock = optionsDts.match(
+  const optionsDts = emitted.get(
+    resolve(distRoot, 'driver/session/options.d.ts'),
+  )
+  expect(optionsDts).toBeDefined()
+  const sessionOptionsBlock = optionsDts?.match(
     /export interface SessionOptions \{[\s\S]*?\n\}/,
   )?.[0]
   expect(sessionOptionsBlock).toBeDefined()
   expect(sessionOptionsBlock).not.toContain('SessionScope')
   expect(sessionOptionsBlock).not.toMatch(/\bscope\s*[?:]/)
+})
+
+test('Round 2 regressions: late channel binding re-evaluates pre-resolved handle and models({ channel })', async () => {
+  const dir = tempRoot('vela-r2-late-channel-')
+  let seenAuthHeader: string | undefined
+  const innerModel = createFauxModel({ responses: [fauxText('ok')] })
+  const credentials = memoryCredentialStore({
+    openai: {
+      type: 'oauth',
+      access: 'secret-oauth-token',
+      refresh: 'r',
+      expires: Date.now() + 600_000,
+    },
+  })
+  const providers: Record<string, ProviderDefinition> = {
+    openai: {
+      oauth: {
+        name: 'OpenAI ChatGPT',
+        localOnly: true,
+        login: async () => {
+          throw new Error('unused')
+        },
+      },
+      authSource: (c) => c?.type,
+      models: [{ id: 'gpt-5.2' }],
+      createModel: (_id, ctx) => ({
+        ...innerModel,
+        async doStream(options: Parameters<typeof innerModel.doStream>[0]) {
+          const cred = await ctx.credential()
+          seenAuthHeader = cred?.type === 'oauth' ? cred.access : undefined
+          return innerModel.doStream(options)
+        },
+      }),
+    },
+  }
+  const vela = createVela({
+    dataDir: dir,
+    credentials,
+    providers,
+  })
+  try {
+    const preResolved = resolveModel('openai/gpt-5.2', {
+      providers,
+      credentials,
+    })
+    expect(vela.models().map((m) => m.ref)).toEqual(['openai/gpt-5.2'])
+    expect(vela.models({ channel: 'lark' })).toEqual([])
+
+    const session = vela.session('late-ch', { model: preResolved })
+    void session.model
+    vela.session('late-ch', { channel: 'lark' })
+    expect(session.channel).toBe('lark')
+    await session.prompt('hello')
+    expect(seenAuthHeader).toBeUndefined()
+  } finally {
+    await vela.dispose()
+  }
+})
+
+test('Round 2 regressions: createRuntime honors saved channel from createVela on resume', async () => {
+  const dir = tempRoot('vela-r2-saved-channel-')
+  let seenCredentialType: string | undefined
+  const providers: Record<string, ProviderDefinition> = {
+    openai: {
+      oauth: openaiChatGPTLogin,
+      authSource: (c) => c?.type,
+      models: [{ id: 'gpt-5.2' }],
+      createModel: (_id, ctx) => {
+        const inner = createFauxModel({
+          responses: [fauxText('first'), fauxText('second')],
+        })
+        return {
+          ...inner,
+          async doStream(options: Parameters<typeof inner.doStream>[0]) {
+            const cred = await ctx.credential()
+            seenCredentialType = cred?.type
+            return inner.doStream(options)
+          },
+        }
+      },
+    },
+  }
+  const credentials = memoryCredentialStore({
+    openai: {
+      type: 'oauth',
+      access: 'oauth-tok',
+      refresh: 'ref-tok',
+      expires: Date.now() + 600_000,
+    },
+  })
+
+  const vela = createVela({
+    agentDir: dir,
+    credentials,
+    providers,
+  })
+  try {
+    const s = vela.session('persisted-ch', {
+      channel: 'lark',
+      model: 'openai/gpt-5.2',
+    })
+    await s.prompt('step 1')
+    expect(seenCredentialType).toBeUndefined()
+  } finally {
+    await vela.dispose()
+  }
+
+  seenCredentialType = 'should-stay-undefined'
+  const runtime = createRuntime({
+    agentDir: dir,
+    credentials,
+    providers,
+    defaultModel: 'openai/gpt-5.2',
+  })
+  try {
+    await runtime.prompt('persisted-ch', { text: 'step 2' })
+    await runtime.waitForIdle('persisted-ch')
+    expect((await runtime.sessions.get('persisted-ch'))?.state).toBe('idle')
+    expect(seenCredentialType).toBeUndefined()
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('Round 2 regressions: unconsumed steer() persists into inbox_events across waiting_human and failure', async () => {
+  const dir = tempRoot('vela-r2-steer-durable-')
+  let steeredOnWait: Promise<void> | undefined
+  const dbPath = join(dir, 'vela.db')
+  const runtime = createRuntime({
+    agentDir: dir,
+    mcp: false,
+    trustOverride: () => true,
+    defaultModel: createFauxModel({
+      responses: [
+        fauxToolCall('dangerous_action', {}),
+        fauxText('after approval'),
+        fauxText('from preserved steer'),
+      ],
+    }),
+    tools: [
+      {
+        name: 'dangerous_action',
+        description: 'Needs approval',
+        inputSchema: z.object({}),
+        execute: async () => 'ran-tool',
+      },
+    ],
+    toolApprovalCheck: (toolName) =>
+      toolName === 'dangerous_action'
+        ? { requireApproval: true, summary: 'Approve dangerous_action' }
+        : undefined,
+  })
+  const unsub = runtime.events.subscribe((evt) => {
+    if (
+      evt.sessionId === 'steer-wait' &&
+      evt.type === 'approval_requested' &&
+      !steeredOnWait
+    ) {
+      steeredOnWait = runtime.steer(
+        'steer-wait',
+        'follow up while waiting approval',
+      )
+    }
+  })
+  try {
+    const created = await runtime.sessions.create({ id: 'steer-wait' })
+    await runtime.prompt(created.id, { text: 'run tool' })
+    await runtime.waitForIdle(created.id)
+    await steeredOnWait
+    expect(steeredOnWait).toBeDefined()
+    expect((await runtime.sessions.get(created.id))?.state).toBe(
+      'waiting_human',
+    )
+
+    const pendingInbox = openDatabase({ path: dbPath, readonly: true })
+    try {
+      const pendingRows = pendingInbox.all<{ payload_json: string }>(
+        "SELECT payload_json FROM inbox_events WHERE session_id = ? AND status = 'pending'",
+        created.id,
+      )
+      expect(
+        pendingRows.some((r) =>
+          r.payload_json.includes('follow up while waiting approval'),
+        ),
+      ).toBe(true)
+    } finally {
+      pendingInbox.close()
+    }
+
+    const approvals = await runtime.approvals.list(created.id)
+    expect(approvals).toHaveLength(1)
+    await runtime.approvals.resolve({
+      approvalId: approvals[0]!.id,
+      decision: 'approved',
+    })
+    await runtime.waitForIdle(created.id)
+
+    const page = await runtime.sessions.messages({ sessionId: created.id })
+    expect(
+      page.messages.some((m) =>
+        m.text.includes('follow up while waiting approval'),
+      ),
+    ).toBe(true)
+    expect(
+      page.messages.some((m) => m.text.includes('from preserved steer')),
+    ).toBe(true)
+  } finally {
+    unsub()
+    await runtime.dispose()
+  }
+})
+
+test('Round 2 regressions: runtime strips foreign OAuth reasoning when credentials switch mid-run', async () => {
+  const dir = tempRoot('vela-r2-foreign-reasoning-')
+  const seenPrompts: string[] = []
+  const creds = memoryCredentialStore({
+    openai: {
+      type: 'oauth',
+      access: 'oauth-tok',
+      refresh: 'ref-tok',
+      expires: Date.now() + 600_000,
+    },
+  })
+  const inner = createFauxModel({
+    responses: [
+      fauxToolCall(
+        'switch_auth',
+        {},
+        { id: 'c1', reasoning: 'secret-oauth-reasoning' },
+      ),
+      fauxText('done after switch'),
+    ],
+  })
+  const runtime = createRuntime({
+    agentDir: dir,
+    credentials: creds,
+    defaultModel: 'openai/gpt-5.2',
+    providers: {
+      openai: {
+        oauth: openaiChatGPTLogin,
+        authSource: (c) => c?.type,
+        models: [{ id: 'gpt-5.2', reasoning: true }],
+        createModel: () => ({
+          ...inner,
+          async doStream(options: Parameters<typeof inner.doStream>[0]) {
+            seenPrompts.push(JSON.stringify(options.prompt))
+            return inner.doStream(options)
+          },
+        }),
+      },
+    },
+    tools: [
+      {
+        name: 'switch_auth',
+        description: 'Deletes oauth credential mid-run',
+        inputSchema: z.object({}),
+        execute: async () => {
+          await creds.delete('openai')
+          return 'switched'
+        },
+      },
+    ],
+  })
+  try {
+    const s = await runtime.sessions.create({ id: 'rt-reasoning' })
+    await runtime.prompt(s.id, { text: 'go' })
+    await runtime.waitForIdle(s.id)
+    expect((await runtime.sessions.get(s.id))?.state).toBe('idle')
+    expect(seenPrompts).toHaveLength(2)
+    expect(seenPrompts[1]).not.toContain('secret-oauth-reasoning')
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('Round 2 regressions: login/logout ordering, lazy getDeviceId, hostId check on activePrevious, and --forget filtering', async () => {
+  // P2-R2-4: api_key login must not call getDeviceId
+  let apiKeyDeviceCalls = 0
+  const apiKeyRegistry = new ModelRegistry(
+    {
+      deepseek: {
+        apiKeyLogin: true,
+        models: [{ id: 'deepseek-chat' }],
+        createModel: () => createFauxModel(),
+      },
+    },
+    memoryCredentialStore(),
+  )
+  await apiKeyRegistry.login(
+    'deepseek',
+    'api_key',
+    {
+      signal: new AbortController().signal,
+      prompt: async () => 'sk-test-123',
+      notify: () => {},
+    },
+    {
+      getDeviceId: () => {
+        apiKeyDeviceCalls += 1
+        return '11111111-1111-4111-8111-111111111111'
+      },
+    },
+  )
+  expect(apiKeyDeviceCalls).toBe(0)
+
+  // P1-R2-4: failed registration delete during logout(--forget) leaves credential intact
+  const credStore = memoryCredentialStore({
+    openai: {
+      type: 'oauth',
+      access: 'a',
+      refresh: 'r',
+      expires: Date.now() + 600_000,
+      clientId: 'oaiapp_keep',
+    },
+  })
+  const failingRegStore = {
+    get: () => ({ clientId: 'oaiapp_keep' }),
+    set: () => {},
+    delete: () => {
+      throw new Error('reg delete failed')
+    },
+  }
+  const failLogoutReg = new ModelRegistry(
+    {
+      openai: {
+        oauth: {
+          name: 'OpenAI ChatGPT',
+          login: async () => {
+            throw new Error('unused')
+          },
+        },
+        authSource: (c) => c?.type,
+        models: [{ id: 'gpt-5.2' }],
+        createModel: () => createFauxModel(),
+      },
+    },
+    credStore,
+    failingRegStore,
+  )
+  await expect(
+    failLogoutReg.logout('openai', { forget: true }),
+  ).rejects.toThrow('reg delete failed')
+  expect(credStore.get('openai')).toBeDefined()
+
+  // P2-R2-3: mismatched hostId on activePrevious forces fresh client registration instead of reusing previous clientId
+  const freshFlow = fakeOpenAIOAuth({
+    issuedClientId: 'oaiapp_fresh_host',
+    subject: 'sub-fresh',
+  })
+  const ui = freshFlow.interactionFor()
+  const migratedRegistry = new ModelRegistry(
+    {
+      openai: {
+        oauth: openaiChatGPTLogin,
+        authSource: (c) => c?.type,
+        models: [{ id: 'gpt-5.2' }],
+        createModel: () => createFauxModel(),
+      },
+    },
+    memoryCredentialStore({
+      openai: {
+        type: 'oauth',
+        access: 'old-a',
+        refresh: 'old-r',
+        expires: Date.now() + 600_000,
+        clientId: 'oaiapp_other_host',
+        hostId: '11111111-1111-4111-8111-111111111111',
+        subject: 'sub-old',
+      },
+    }),
+  )
+  await migratedRegistry.login('openai', 'oauth', ui.interaction, {
+    getDeviceId: () => '22222222-2222-4222-8222-222222222222',
+  })
+  expect(freshFlow.authorizeCalls[0]?.searchParams.get('client_id')).toBe(
+    'dynamic_agent_client',
+  )
+
+  // P2-R2-7: logoutCommand --forget skips unused OAuth providers without credential or registration
+  const notices: Array<{ text: string; level?: string }> = []
+  let selected = false
+  await logoutCommand(
+    {
+      vela: {
+        loginProviders: () => [
+          {
+            provider: 'openai',
+            oauth: 'Sign in with ChatGPT (Plus/Pro)',
+            apiKey: false,
+          },
+        ],
+      } as never,
+      options: {},
+      addNotice: (text: string, level?: string) =>
+        notices.push({ text, level }),
+      renderHeader: () => {},
+      select: async () => {
+        selected = true
+        return undefined
+      },
+      confirm: async () => false,
+      progress: () => ({ update: () => {}, stop: () => {} }),
+    } as unknown as Parameters<typeof logoutCommand>[0],
+    '--forget',
+  )
+  expect(selected).toBe(false)
+  expect(notices[0]?.text).toContain(
+    'No stored credentials or saved registrations',
+  )
 })

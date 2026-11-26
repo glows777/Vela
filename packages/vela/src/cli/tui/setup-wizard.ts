@@ -415,6 +415,26 @@ export async function setupWizard(host: Host): Promise<boolean> {
     )
     if (save !== 'yes') return false
     const written: string[] = []
+    let prevRegistration: ReturnType<SqliteOAuthRegistrationStore['get']>
+    let hasPrevRegistration = false
+    let registrationUpdated = false
+    const applyStagedRegistration = (mode: 'apply' | 'rollback'): void => {
+      const staged = stagedRegistrations.get(provider)
+      const next = mode === 'apply' ? staged : prevRegistration
+      if (!next && !existsSync(dbPath)) return
+      const db = openDatabase({ path: dbPath })
+      try {
+        const regStore = new SqliteOAuthRegistrationStore(db)
+        if (mode === 'apply') {
+          prevRegistration = regStore.get(provider)
+          hasPrevRegistration = true
+        }
+        if (next) regStore.set(provider, next)
+        else regStore.delete(provider)
+      } finally {
+        db.close()
+      }
+    }
     try {
       mkdirSync(agentDir, { recursive: true, mode: 0o700 })
       if (newInstallationId) {
@@ -424,29 +444,35 @@ export async function setupWizard(host: Host): Promise<boolean> {
         )
         written.push(join(agentDir, 'installation-id'))
       }
-      const saved = await saveModelSetup({
-        agentDir,
-        ref,
-        providers: finalProviders,
-        ...(newCredential ||
-        JSON.stringify(memory.get(provider)) !== JSON.stringify(stored)
-          ? { credential: memory.get(provider) }
-          : {}),
-        ...(finalOverride ? { preset: finalOverride } : {}),
-        thinkingLevel: thinking as ThinkingLevel,
-      })
       if (stagedRegistrations.has(provider)) {
-        const staged = stagedRegistrations.get(provider)
-        if (staged || existsSync(dbPath)) {
-          const db = openDatabase({ path: dbPath })
+        applyStagedRegistration('apply')
+        registrationUpdated = true
+      }
+      let saved: Awaited<ReturnType<typeof saveModelSetup>>
+      try {
+        saved = await saveModelSetup({
+          agentDir,
+          ref,
+          providers: finalProviders,
+          ...(newCredential ||
+          JSON.stringify(memory.get(provider)) !== JSON.stringify(stored)
+            ? { credential: memory.get(provider) }
+            : {}),
+          ...(finalOverride ? { preset: finalOverride } : {}),
+          thinkingLevel: thinking as ThinkingLevel,
+        })
+      } catch (error) {
+        const authPath = join(agentDir, 'auth.json')
+        const wroteAuth =
+          error instanceof Error && error.message.includes(authPath)
+        if (registrationUpdated && hasPrevRegistration && !wroteAuth) {
           try {
-            const regStore = new SqliteOAuthRegistrationStore(db)
-            if (staged) regStore.set(provider, staged)
-            else regStore.delete(provider)
-          } finally {
-            db.close()
+            applyStagedRegistration('rollback')
+          } catch {
+            /* preserve saveModelSetup error */
           }
         }
+        throw error
       }
       written.push(...saved.written)
       host.vela.configureProvider(provider, saved.definition)

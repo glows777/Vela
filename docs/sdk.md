@@ -327,7 +327,7 @@ Sessions in one Vela run concurrently. Tool definitions, extensions, skills, mem
 
 ## createRuntime() and VelaRuntime
 
-`createRuntime(options?: CreateRuntimeOptions): LocalVelaRuntime` is the v0.9 transport-compatible Runtime SDK built around `$VELA_DIR/vela.db` (`<agentDir>/vela.db`, or `:memory:` when `ephemeral: true`), implementing the same client contract that daemon IPC (`connectRuntime()`) exposes. Domain records, cursors, events, and results are JSON-serializable; over daemon IPC, `Uint8Array` blob payloads encode as base64, `subscribe` / `subscribeDeltas` return synchronous unsubscribe functions backed by the daemon event stream, and `logout` `AbortSignal` cancels client waits/RPC:
+`createRuntime(options?: CreateRuntimeOptions): LocalVelaRuntime` is the v0.9 transport-compatible Runtime SDK built around `$VELA_DIR/vela.db` (`<agentDir>/vela.db`, or `:memory:` when `ephemeral: true`), implementing the `VelaRuntime` client contract (which the daemon IPC client — planned as `connectRuntime()` in S4a — will implement). Domain records, cursors, events, and results are JSON-serializable; over future daemon IPC, `Uint8Array` blob payloads encode as base64, `subscribe` / `subscribeDeltas` return synchronous unsubscribe functions backed by the daemon event stream, and `logout` `AbortSignal` cancels client waits/RPC:
 
 - `projects`: `list()`, `get(id)`, `getByCwd(cwd)`, `create(input)`, `update(id, patch)`, `remove(id, { deleteSessions? })`
 - `sessions`: `list({ projectId?, includeArchived? })`, `get(id)`, `create(input?)`, `rename(id, name)`, `delete(id)`, `reset(id)`, `status(id)`, `messages({ sessionId, cursor?, limit? })`

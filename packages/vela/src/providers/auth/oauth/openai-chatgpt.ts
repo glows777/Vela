@@ -408,12 +408,16 @@ export const openaiChatGPTLogin: OAuthLogin = {
       )
     const activePrevious =
       options.previous?.type === 'oauth' ? options.previous : undefined
-    let known = issuedClientId(activePrevious)
-    let retainedIdentity = storedIdentity(activePrevious)
-    let expectedSubject = retainedField(activePrevious, 'subject')
-    const sameHost =
+    const previousHost = activePrevious?.hostId ?? options.registration?.hostId
+    const sameHost = !previousHost || previousHost === deviceId
+    let known = sameHost ? issuedClientId(activePrevious) : undefined
+    let retainedIdentity = sameHost ? storedIdentity(activePrevious) : undefined
+    let expectedSubject = sameHost
+      ? retainedField(activePrevious, 'subject')
+      : undefined
+    const regSameHost =
       !options.registration?.hostId || options.registration.hostId === deviceId
-    if (!activePrevious && options.registration && sameHost) {
+    if (!activePrevious && options.registration && regSameHost) {
       const mode =
         options.accountMode ??
         (await interaction.prompt({

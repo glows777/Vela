@@ -3,6 +3,7 @@ import {
   DEFAULT_LIMITS,
   type VelaLimits,
 } from '../../shared/limits.ts'
+import type { OAuthRegistration } from '../../shared/oauth-registration.ts'
 import type { ModelHandle, ModelInput } from '../../shared/provider-types.ts'
 import { resolveCredential } from '../auth/resolve.ts'
 import { memoryCredentialStore } from '../auth/store.ts'
@@ -301,7 +302,14 @@ export class ModelRegistry {
   ): Promise<void> {
     const def = this.providers.get(provider)
     if (!def) throw new Error(`No provider named ${provider}`)
-    const deviceId = options.getDeviceId?.()
+    let resolvedDeviceId: string | undefined
+    const rawGetDeviceId = options.getDeviceId
+    const getMemoizedDeviceId = rawGetDeviceId
+      ? (): string => {
+          resolvedDeviceId ??= rawGetDeviceId()
+          return resolvedDeviceId
+        }
+      : undefined
     let credential: Credential
     if (method === 'oauth') {
       if (!def.oauth)
@@ -309,7 +317,7 @@ export class ModelRegistry {
       const registration = this.registrations?.get(provider)
       credential = await def.oauth.login(interaction, {
         ...options,
-        ...(deviceId !== undefined ? { getDeviceId: () => deviceId } : {}),
+        ...(getMemoizedDeviceId ? { getDeviceId: getMemoizedDeviceId } : {}),
         previous: this.credentials.get(provider),
         ...(registration ? { registration } : {}),
       })
@@ -333,20 +341,19 @@ export class ModelRegistry {
         credential.clientId
           ? {
               clientId: credential.clientId,
-              ...(deviceId ? { hostId: deviceId } : {}),
+              ...(resolvedDeviceId ? { hostId: resolvedDeviceId } : {}),
               ...(typeof credential.subject === 'string' && credential.subject
                 ? { subject: credential.subject }
                 : {}),
             }
           : undefined
-      const prevRegistration =
-        nextRegistration && this.registrations
-          ? this.registrations.get(provider)
-          : undefined
+      let prevRegistration: OAuthRegistration | undefined
       let wroteRegistration = false
       try {
         await this.credentials.modify(provider, async () => {
+          interaction.signal.throwIfAborted()
           if (nextRegistration && this.registrations) {
+            prevRegistration = this.registrations.get(provider)
             this.registrations.set(provider, nextRegistration)
             wroteRegistration = true
           }
@@ -411,22 +418,19 @@ export class ModelRegistry {
           notice = `Could not confirm that ${provider} revoked this sign-in at the provider; the credential is removed locally.`
         }
       }
-      const removed = await this.credentials.deleteIf(provider, (current) =>
-        sameCredential(credential, current),
-      )
+      const prevRegistration = this.registrations?.get(provider)
       let forgotten = false
+      let backfilled = false
       if (options.forget) {
-        if (removed || !this.credentials.get(provider)) {
-          forgotten = Boolean(this.registrations?.delete(provider))
-        }
+        forgotten = Boolean(this.registrations?.delete(provider))
       } else if (
-        removed &&
         credential.type === 'oauth' &&
         typeof credential.clientId === 'string' &&
         credential.clientId &&
-        !this.registrations?.get(provider)
+        !prevRegistration &&
+        this.registrations
       ) {
-        this.registrations?.set(provider, {
+        this.registrations.set(provider, {
           clientId: credential.clientId,
           ...(typeof credential.hostId === 'string' && credential.hostId
             ? { hostId: credential.hostId }
@@ -435,6 +439,46 @@ export class ModelRegistry {
             ? { subject: credential.subject }
             : {}),
         })
+        backfilled = true
+      }
+      let removed: boolean
+      try {
+        removed = await this.credentials.deleteIf(provider, (current) =>
+          sameCredential(credential, current),
+        )
+      } catch (error) {
+        if (
+          options.forget &&
+          forgotten &&
+          prevRegistration &&
+          this.registrations
+        ) {
+          try {
+            this.registrations.set(provider, prevRegistration)
+          } catch {
+            /* preserve original error */
+          }
+        } else if (backfilled && this.registrations) {
+          try {
+            this.registrations.delete(provider)
+          } catch {
+            /* preserve original error */
+          }
+        }
+        throw error
+      }
+      if (!removed && this.registrations) {
+        if (
+          options.forget &&
+          forgotten &&
+          prevRegistration &&
+          this.credentials.get(provider)
+        ) {
+          this.registrations.set(provider, prevRegistration)
+          forgotten = false
+        } else if (backfilled && this.credentials.get(provider)) {
+          this.registrations.delete(provider)
+        }
       }
       return {
         removed,
@@ -511,15 +555,15 @@ export function resolveModelInput(
   if (typeof input === 'string') {
     return registry.resolve(input, { channel })
   }
-  const activeChannel = channel?.()
-  if (activeChannel) {
+  if (channel) {
     const ref = managedModelRef(input)
     if (ref) {
       const provider = ref.slice(0, ref.indexOf('/'))
       if (registry.hasProvider(provider)) {
         return registry.resolve(ref, { channel })
       }
-      if (isLocalOnlyManagedHandle(input)) {
+      const activeChannel = channel()
+      if (activeChannel && isLocalOnlyManagedHandle(input)) {
         throw new Error(
           `Sign in with ChatGPT is only for local sessions, not ${activeChannel}`,
         )

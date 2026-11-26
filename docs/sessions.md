@@ -18,7 +18,7 @@ Persistent session deletion is manual. Before deleting a session's rows from `ve
 
 The owner can retain or remove each matching guest directory as part of the same retention decision. Deleting the host session alone leaves these container caches in place. The canonical downloads belong to the chat's private `files/` directory and can be shared across topics. Archiving and closing a persistent session preserve its files.
 
-In the SDK, sessions are stored in `<agentDir>/vela.db` when `agentDir` is passed (including `createRuntime()`), in `<dataDir>/vela.db` when only `dataDir` is passed to `createVela()`, or in memory (`:memory:`) when neither is provided. See [SDK](sdk.md#session-storage).
+In the SDK, `createRuntime()` stores sessions in `<agentDir>/vela.db` (`~/.vela/vela.db` by default, or `:memory:` with `ephemeral: true`). With `createVela()`, sessions are stored in `<agentDir>/vela.db` when `agentDir` is passed, in `<dataDir>/vela.db` when only `dataDir` is passed, or in memory (`:memory:`) when neither is provided (or when `ephemeralSessions: true`). See [SDK](sdk.md#session-storage).
 
 ## Continue or switch sessions
 
