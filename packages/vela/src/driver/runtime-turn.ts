@@ -146,10 +146,11 @@ function resolvePrimaryChannelRoute(inputs: readonly DriverInboxItem[]):
   for (const requireWake of [true, false]) {
     for (let i = inputs.length - 1; i >= 0; i--) {
       const item = inputs[i]!
-      if (
-        (item.source !== 'channel' && item.source !== 'timer') ||
-        item.passive
-      ) {
+      const isRouteSource =
+        item.source === 'channel' ||
+        item.source === 'timer' ||
+        (item.source === 'approval' && item.payload.waitForInput === true)
+      if (!isRouteSource || item.passive) {
         continue
       }
       if (requireWake && !item.wake) continue

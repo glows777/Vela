@@ -463,14 +463,11 @@ export function commitCompletedTurnInTx(params: {
   if (updatedRun.changes !== 1) {
     throw new LostRunOwnershipError(claimed.runId)
   }
-  db.run(
-    'DELETE FROM kv_meta WHERE key IN (?, ?)',
-    `run_target:${claimed.runId}`,
-    `stop_requested:${claimed.runId}`,
-  )
+  db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${claimed.runId}`)
   if (finalStatus !== 'waiting_human') {
     db.run(
-      'DELETE FROM kv_meta WHERE key IN (?, ?, ?)',
+      'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?)',
+      `run_target:${claimed.runId}`,
       `run_silent:${claimed.runId}`,
       `run_handoff_depth:${claimed.runId}`,
       `run_input_meta:${claimed.runId}`,
@@ -681,10 +678,11 @@ function outboxTargetFromInputs(
   for (const requireWake of [true, false]) {
     for (let i = inputs.length - 1; i >= 0; i--) {
       const item = inputs[i]!
-      if (
-        (item.source !== 'channel' && item.source !== 'timer') ||
-        item.passive
-      ) {
+      const isRouteSource =
+        item.source === 'channel' ||
+        item.source === 'timer' ||
+        (item.source === 'approval' && item.payload.waitForInput === true)
+      if (!isRouteSource || item.passive) {
         continue
       }
       if (requireWake && !item.wake) continue
@@ -693,15 +691,19 @@ function outboxTargetFromInputs(
         typeof payload.channel === 'string' &&
         typeof payload.externalChatId === 'string'
       ) {
+        const replyToMessageId =
+          typeof payload.replyToMessageId === 'string'
+            ? payload.replyToMessageId
+            : typeof payload.messageId === 'string'
+              ? payload.messageId
+              : undefined
         return {
           channel: payload.channel,
           externalChatId: payload.externalChatId,
           ...(typeof payload.threadId === 'string'
             ? { threadId: payload.threadId }
             : {}),
-          ...(typeof payload.messageId === 'string'
-            ? { replyToMessageId: payload.messageId }
-            : {}),
+          ...(replyToMessageId ? { replyToMessageId } : {}),
         }
       }
     }

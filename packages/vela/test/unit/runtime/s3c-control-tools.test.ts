@@ -1374,3 +1374,104 @@ test('R2: topic readiness matches claim predicate, failed topic notifies hub wit
     db.close()
   }
 })
+
+test('R3 Codex P1: wait_for_input resolved via resolveApproval preserves originating Room B route and replyToMessageId on fresh run', async () => {
+  const root = tempRoot('vela-r3-wait-route-')
+  const db = openDatabase({ path: join(root, 'vela.db') })
+  const delivered: ChannelOutboundMessage[] = []
+  let ingest!: Parameters<ChannelAdapter['start']>[0]['ingest']
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('wait_for_input', { reason: 'Confirm deployment target' }),
+      fauxText('Deploy to staging or prod?'),
+      (req) => {
+        expect(req.lastUserText).toContain('staging')
+        return fauxText('Proceeding with staging deploy')
+      },
+    ],
+  })
+  const runtime = new VelaRuntimeEngine({ db, agentDir: root })
+  await runtime.registerChannel({
+    name: 'lark',
+    async start(ctx) {
+      ingest = ctx.ingest
+    },
+    async stop() {},
+    async deliver(msg) {
+      delivered.push(msg)
+      return { externalMessageId: `out-${delivered.length}` }
+    },
+  })
+  runtime.registerDriver(
+    createVelaAgentDriver({
+      db,
+      agentDir: root,
+      blobs: runtime.blobs,
+      environments: runtime.environments,
+      timers: runtime.timers,
+      subscriptions: runtime.subscriptions,
+      eventBus: runtime.eventBus,
+      defaultModel: model,
+      offline: true,
+    }),
+  )
+
+  try {
+    const project = runtime.projects.create({ name: 'multi-wait', cwd: root })
+    const hub = runtime.sessions.create({
+      projectId: project.id,
+      kind: 'topic',
+      location: { environment: 'local', cwd: root },
+    })
+    runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'chat-room-A',
+      kind: 'group',
+      projectId: project.id,
+      sessionId: hub.id,
+      enabled: true,
+    })
+    runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'chat-room-B',
+      kind: 'group',
+      projectId: project.id,
+      sessionId: hub.id,
+      enabled: true,
+    })
+
+    await ingest({
+      channel: 'lark',
+      dedupeKey: 'room-b-wait-1',
+      externalChatId: 'chat-room-B',
+      kind: 'group',
+      messageId: 'msg-room-B-99',
+      senderId: 'u1',
+      senderName: 'Liam',
+      mentioned: true,
+      text: 'Deploy the release',
+      timestamp: new Date().toISOString(),
+    })
+    await runtime.waitForIdle(hub.id)
+    expect(runtime.sessions.get(hub.id)?.state).toBe('waiting_human')
+
+    const approval = runtime.listPendingApprovals(hub.id)[0]!
+    runtime.resolveApproval({
+      approvalId: approval.id,
+      decision: 'approved',
+      reason: 'staging',
+      decidedBy: 'Liam',
+    })
+    await runtime.waitForIdle(hub.id)
+
+    const finalOutbox = delivered.find((m) =>
+      m.text.includes('Proceeding with staging deploy'),
+    )
+    expect(finalOutbox).toBeDefined()
+    expect(finalOutbox?.externalChatId).toBe('chat-room-B')
+    expect(finalOutbox?.replyToMessageId).toBe('msg-room-B-99')
+  } finally {
+    await runtime.dispose()
+    db.close()
+  }
+})

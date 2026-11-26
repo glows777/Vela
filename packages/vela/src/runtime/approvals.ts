@@ -285,12 +285,51 @@ export function resolveRuntimeApproval(
         row.run_id,
       ),
     )
+    let originTarget:
+      | {
+          channel: string
+          externalChatId: string
+          threadId?: string
+          replyToMessageId?: string
+        }
+      | undefined
     if (
       isWaitForInput &&
       input.decision !== 'cancelled' &&
       !remaining &&
       !hasPendingToolCalls
     ) {
+      const targetRow = db.get<{ value_json: string }>(
+        'SELECT value_json FROM kv_meta WHERE key = ?',
+        `run_target:${row.run_id}`,
+      )
+      if (targetRow) {
+        try {
+          const parsed = JSON.parse(targetRow.value_json) as {
+            channel?: unknown
+            externalChatId?: unknown
+            threadId?: unknown
+            replyToMessageId?: unknown
+          }
+          if (
+            typeof parsed.channel === 'string' &&
+            typeof parsed.externalChatId === 'string'
+          ) {
+            originTarget = {
+              channel: parsed.channel,
+              externalChatId: parsed.externalChatId,
+              ...(typeof parsed.threadId === 'string'
+                ? { threadId: parsed.threadId }
+                : {}),
+              ...(typeof parsed.replyToMessageId === 'string'
+                ? { replyToMessageId: parsed.replyToMessageId }
+                : {}),
+            }
+          }
+        } catch {
+          /* ignore malformed run_target */
+        }
+      }
       db.run(
         `UPDATE runs
          SET status = 'completed', finished_at = COALESCE(finished_at, ?), updated_at = ?
@@ -304,6 +343,14 @@ export function resolveRuntimeApproval(
          WHERE id = ? AND state = 'waiting_human'`,
         now,
         row.session_id,
+      )
+      db.run(
+        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
+        `run_target:${row.run_id}`,
+        `stop_requested:${row.run_id}`,
+        `run_silent:${row.run_id}`,
+        `run_handoff_depth:${row.run_id}`,
+        `run_input_meta:${row.run_id}`,
       )
     }
     const shouldWake = !remaining && input.enqueueWake !== false
@@ -323,6 +370,7 @@ export function resolveRuntimeApproval(
           decision: input.decision,
           ...(input.reason ? { reason: input.reason } : {}),
           ...(input.decidedBy ? { decidedBy: input.decidedBy } : {}),
+          ...(originTarget ?? {}),
         },
       })
     }
