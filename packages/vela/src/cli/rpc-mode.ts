@@ -284,7 +284,9 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       session.setModel(model)
       return session.modelInfo
     },
-    get_available_models: () => ({ models: vela.models() }),
+    get_available_models: () => ({
+      models: vela.models({ channel: session.channel }),
+    }),
     set_thinking_level(command) {
       session.setThinkingLevel(command.level as ThinkingLevel)
     },
@@ -302,7 +304,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         current = session.modelInfo.ref
       } catch {}
       const next = nextModel(
-        scopedModels(vela.models(), enabledModels),
+        scopedModels(vela.models({ channel: session.channel }), enabledModels),
         current,
       )
       if (!next) return null

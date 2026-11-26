@@ -623,17 +623,14 @@ test('an unreachable provider is retried until the budget runs out, then the loc
     { openai: { oauth: openaiChatGPTLogin, createModel: () => 'test-model' } },
     credentials,
   )
-  const notices: string[] = []
-  expect(
-    await registry.logout('openai', { onNotice: (text) => notices.push(text) }),
-  ).toBe(true)
+  const res = await registry.logout('openai')
+  expect(res.removed).toBe(true)
   // One attempt per backoff step fits the test budget; a single POST would mean no retry at all
   expect(
     calls.filter((call) => call.url === OPENAI_REVOKE).length,
   ).toBeGreaterThan(1)
   expect(registry.credentials.list()).toEqual([])
-  expect(notices).toHaveLength(1)
-  expect(notices[0]).toContain('Could not confirm that openai revoked')
+  expect(res.notice).toContain('Could not confirm that openai revoked')
 })
 
 test('a credential without an issued client id cannot be revoked', async () => {
@@ -656,13 +653,10 @@ test('logout still removes the credential when the revocation fails, and says so
     { openai: { oauth: openaiChatGPTLogin, createModel: () => 'test-model' } },
     credentials,
   )
-  const notices: string[] = []
-  expect(
-    await registry.logout('openai', { onNotice: (text) => notices.push(text) }),
-  ).toBe(true)
+  const res = await registry.logout('openai')
+  expect(res.removed).toBe(true)
   expect(registry.credentials.list()).toEqual([])
-  expect(notices).toHaveLength(1)
-  expect(notices[0]).toContain('Could not confirm that openai revoked')
+  expect(res.notice).toContain('Could not confirm that openai revoked')
 })
 
 test('logout revokes the session while the credential is still stored', async () => {
@@ -678,13 +672,10 @@ test('logout revokes the session while the credential is still stored', async ()
     { openai: { oauth: openaiChatGPTLogin, createModel: () => 'test-model' } },
     credentials,
   )
-  const notices: string[] = []
-  expect(
-    await registry.logout('openai', { onNotice: (text) => notices.push(text) }),
-  ).toBe(true)
+  const res = await registry.logout('openai')
+  expect(res).toEqual({ removed: true })
   expect(storedDuringRevocation).toEqual(['openai'])
   expect(registry.credentials.list()).toEqual([])
-  expect(notices).toEqual([])
 })
 
 test('OpenRouter sign-in exchanges the code for an API key', async () => {

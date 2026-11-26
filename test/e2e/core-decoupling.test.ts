@@ -4,6 +4,9 @@ import { join } from 'node:path'
 import { tempDir } from '@glows777/vela/testing'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { background } from '../../packages/vela/src/driver/extensions/background/index.ts'
+import type { InternalSessionOptions } from '../../packages/vela/src/driver/session/options.ts'
+import { sessionScope } from '../../packages/vela/src/driver/session/routing.ts'
+import { getToolContextScope } from '../../packages/vela/src/driver/session/scope.ts'
 import {
   createFauxModel,
   fauxText,
@@ -47,13 +50,13 @@ test('first routing binding preserves a preopened session and its cwd and tools'
           async execute(_input, context) {
             observed.push({
               sessionId: context?.sessionId,
-              scope: context?.scope,
+              scope: getToolContextScope(context),
             })
             return 'observed'
           },
         })
         api.on('before_agent_start', (_event, ctx) => {
-          observed.push(ctx.session.scope)
+          observed.push(sessionScope(ctx.session))
         })
       },
     ],
@@ -74,14 +77,17 @@ test('first routing binding preserves a preopened session and its cwd and tools'
     channel: 'fake',
     cwd: 'ignored',
     tools: ['bash'],
-  })
+  } as InternalSessionOptions)
   expect(bound).toBe(session)
   expect(session.cwd).toBe(join(cwd, 'original'))
-  expect(session.scope).toEqual(scope)
+  expect(sessionScope(session)).toEqual(scope)
   expect(session.channel).toBe('fake')
   expect(session.getActiveTools()).toEqual(['probe_scope'])
   expect(
-    vela.session(session.id, { scope: { ...scope }, channel: 'fake' }),
+    vela.session(session.id, {
+      scope: { ...scope },
+      channel: 'fake',
+    } as InternalSessionOptions),
   ).toBe(session)
   await session.prompt('observe routing')
   expect(observed).toEqual([scope, { sessionId: session.id, scope }])
@@ -103,10 +109,13 @@ test('conflicting routing names the session and both routes without changing its
   const session = vela.session('same-session', {
     scope: first,
     channel: 'fake',
-  })
+  } as InternalSessionOptions)
   let error: unknown
   try {
-    vela.session(session.id, { scope: second, channel: 'fake' })
+    vela.session(session.id, {
+      scope: second,
+      channel: 'fake',
+    } as InternalSessionOptions)
   } catch (caught) {
     error = caught
   }
@@ -114,7 +123,7 @@ test('conflicting routing names the session and both routes without changing its
   expect((error as Error).name).toBe('SessionRoutingConflictError')
   for (const text of [session.id, first.id, second.id])
     expect((error as Error).message).toContain(text)
-  expect(session.scope).toEqual(first)
+  expect(sessionScope(session)).toEqual(first)
 })
 
 test('a real channel logs a conflicting route once without retrying or calling the model', async () => {
@@ -151,7 +160,7 @@ test('a real channel logs a conflicting route once without retrying or calling t
   vela.session('fake-c1', {
     channel: 'fake',
     scope: { id: 'wrong-group', kind: 'shared', dataDir: join(cwd, 'wrong') },
-  })
+  } as InternalSessionOptions)
   await vela.startChannels()
   await deliver({
     channelId: 'c1',
@@ -191,8 +200,8 @@ test('clone and fork retain history without inheriting routing authority', async
         delivered.push(text)
       },
     },
-  } as import('../../packages/vela/src/driver/session/options.ts').InternalSessionOptions)
-  expect(source.scope?.id).toBe('group')
+  } as InternalSessionOptions)
+  expect(sessionScope(source)?.id).toBe('group')
   await source.prompt('hello')
   const clone = (await source.clone({ sessionId: 'copy' })).session!
   const user = source
@@ -213,7 +222,7 @@ test('clone and fork retain history without inheriting routing authority', async
   expect(delivered).toEqual([])
   expect(model.calls.length).toBeGreaterThan(before)
   for (const child of [clone, fork]) {
-    expect(child.scope).toBeUndefined()
+    expect(sessionScope(child)).toBeUndefined()
     expect(child.channel).toBeUndefined()
     expect(child.host).toBeUndefined()
   }

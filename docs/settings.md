@@ -182,7 +182,7 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
 ```text
 ~/.vela/
 ├── config.json
-├── vela.db                           trusted_paths (project trust decisions)
+├── vela.db                           sessions, messages, tool calls, runs, approvals, usage, trusted_paths, oauth_registrations
 ├── debug.log                         VELA_DEBUG=1 in interactive mode
 ├── bin/                              rg / fd downloaded by the CLI
 ├── extensions/
@@ -193,7 +193,6 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
 ├── APPEND_SYSTEM.md                  appended to the system prompt (optional)
 └── projects/
     └── --home-me-code-app--1a2b3c4d/
-        ├── vela.db                   sessions, messages, tool calls, runs, approvals, usage
         ├── sessions/
         │   └── <session id>/
         │       ├── tool-results/     spilled long tool outputs
@@ -201,7 +200,7 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
         └── memory/                   memory extension (MEMORY.md and one file per memory)
 ```
 
-The hash keeps two folders whose readable names collide (`/a-b/c` and `/a/b-c`) apart. Set `dataDir` to store a project's data somewhere else. Session files are described in [Session format](session-format.md).
+The hash keeps two folders whose readable names collide (`/a-b/c` and `/a/b-c`) apart. Set `dataDir` to store a project's per-project files (`sessions/`, `memory/`) somewhere else (CLI database state still lives in `$VELA_DIR/vela.db` / `~/.vela/vela.db`). Session storage and export format are described in [Session format](session-format.md).
 
 ## Project trust
 

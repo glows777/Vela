@@ -120,37 +120,64 @@ async function authPrompt(
   return answer
 }
 
-/** `/logout [provider]`: removes the stored credential, revoking the provider's session first where it can
- * (environment variables and config.json keys stay) */
+/** `/logout [provider] [--forget]`: removes the stored credential, revoking the provider's session first where it can
+ * (environment variables and config.json keys stay; `--forget` also clears retained OAuth registration) */
 export async function logoutCommand(
   host: AuthHost,
   args: string,
 ): Promise<void> {
-  const stored = host.vela
-    .loginProviders()
-    .filter((p) => p.source === 'auth.json' || p.source === 'OAuth (auth.json)')
+  const tokens = args.trim().split(/\s+/).filter(Boolean)
+  const forget = tokens.includes('--forget')
+  const requested = tokens.find((token) => token !== '--forget')
+  const providers = host.vela.loginProviders()
+  const isStoredCredential = (p: (typeof providers)[number]) =>
+    p.source === 'auth.json' || p.source === 'OAuth (auth.json)'
+  const stored = providers.filter(isStoredCredential)
+  const candidates = forget
+    ? providers.filter((p) => isStoredCredential(p) || p.hasRegistration)
+    : stored
   const provider =
-    args.trim() ||
-    (stored.length
+    requested ||
+    (candidates.length
       ? await host.select(
-          'Sign out of',
-          stored.map((p) => ({ value: p.provider, label: p.provider })),
+          forget ? 'Sign out and forget registration of' : 'Sign out of',
+          candidates.map((p) => ({
+            value: p.provider,
+            label: p.provider,
+            ...(!isStoredCredential(p) && p.hasRegistration
+              ? { description: 'saved OAuth registration' }
+              : p.source
+                ? { description: p.source }
+                : {}),
+          })),
         )
       : undefined)
   if (!provider) {
-    if (!stored.length) host.addNotice('No stored credentials', 'dim')
+    if (!candidates.length) {
+      host.addNotice(
+        forget
+          ? 'No stored credentials or saved registrations'
+          : 'No stored credentials',
+        'dim',
+      )
+    }
     return
   }
   try {
-    const removed = await host.vela.logout(provider, {
-      onNotice: (text) => host.addNotice(text, 'dim'),
-    })
-    host.addNotice(
-      removed
-        ? `Removed the stored credential for ${provider}`
-        : `No stored credential for ${provider}`,
-      'dim',
-    )
+    const result = await host.vela.logout(provider, { forget })
+    if (result.notice) host.addNotice(result.notice, 'dim')
+    if (result.removed && result.forgotten) {
+      host.addNotice(
+        `Removed the stored credential and cleared saved registration for ${provider}`,
+        'dim',
+      )
+    } else if (result.removed) {
+      host.addNotice(`Removed the stored credential for ${provider}`, 'dim')
+    } else if (result.forgotten) {
+      host.addNotice(`Cleared saved registration for ${provider}`, 'dim')
+    } else {
+      host.addNotice(`No stored credential for ${provider}`, 'dim')
+    }
   } catch (error) {
     host.addNotice(errorMessage(error), 'error')
   }

@@ -34,6 +34,7 @@ import type { SessionDefaults } from './resources.ts'
 export class SessionDefaultState {
   modelChoice: ModelInput | undefined
   resolved?: ResolvedModel
+  resolvedChannel?: string
   /** Last resolved model ref (retained when defaults clear `resolved` so switching models resets calibration). */
   lastResolvedRef?: string
   /** The selected model wrapped with extension provider hooks. */

@@ -91,6 +91,7 @@ registerExtensionHostModules({
       import('../legacy-channels/index.ts'),
       import('../load-config.ts'),
       import('../mcp/index.ts'),
+      import('../runtime-sdk.ts'),
       import('../settings.ts'),
       import('../vela.ts'),
     ]).then((mods) => Object.assign({}, ...mods)),

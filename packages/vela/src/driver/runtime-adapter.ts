@@ -5,10 +5,10 @@ import { resolveProviderTools } from '../providers/index.ts'
 import { clampThinkingLevel } from '../providers/models/catalog.ts'
 import {
   DEFAULT_THINKING_LEVEL,
-  describeModel,
   ModelRegistry,
   type ProviderDefinition,
   reasoningOption,
+  resolveModelInput,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../providers/models/index.ts'
@@ -35,7 +35,11 @@ import { createBackgroundTools } from './extensions/background/tool.ts'
 import { createMemoryTool } from './extensions/memory/tool.ts'
 import { createTodoTool } from './extensions/todo/tool.ts'
 import type { MemoryDream } from './memory/dream.ts'
-import type { AssistantModelMessage, ModelMessage } from './messages.ts'
+import {
+  type AssistantModelMessage,
+  type ModelMessage,
+  withoutForeignReasoning,
+} from './messages.ts'
 import type { ContextFile } from './prompt/context-files.ts'
 import { localDateString } from './prompt/environment.ts'
 import type { PromptTemplate } from './prompt/templates.ts'
@@ -54,14 +58,18 @@ import {
 } from './runtime-resources.ts'
 import { createRuntimeTools } from './runtime-tools.ts'
 import {
+  applyRuntimeProjectToolSelection,
   assistantText,
   createRuntimeEventForwarder,
+  flushUnconsumedSteering,
+  loadExistingTurnUserMsg,
   prepareRuntimeTurnMessages,
   recordRuntimeDreamTurn,
   resolveRunInputMeta,
   resolveRunSilenceAndDepth,
   scheduleRuntimeAutoDream,
 } from './runtime-turn.ts'
+import { resolveRunProducer } from './session/defaults.ts'
 import { SessionStore } from './session/index.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
 import type { SkillDefinition } from './skills/loader.ts'
@@ -107,6 +115,8 @@ export interface VelaAgentDriverOptions {
   defaultThinkingLevel?: ThinkingLevel
   providers?: Record<string, ProviderDefinition>
   credentials?: CredentialStore
+  /** @internal Shared ModelRegistry (for live OAuth registrations & planLabel consistency). */
+  models?: ModelRegistry
   limits?: Partial<VelaLimits>
   tools?: ToolDefinition[]
   extensionConfig?: Record<string, Record<string, unknown>>
@@ -147,7 +157,8 @@ export function createVelaAgentDriver(
   options: VelaAgentDriverOptions,
 ): AgentDriver {
   const logger = options.logger ?? silentLogger
-  const models = new ModelRegistry(options.providers, options.credentials)
+  const models =
+    options.models ?? new ModelRegistry(options.providers, options.credentials)
   const memoryRegistry = options.memoryRegistry ?? new MemoryRegistry(logger)
   const activeAbort = new Map<string, AbortController>()
   const activeSteering = new Map<string, ModelMessage[]>()
@@ -167,9 +178,10 @@ export function createVelaAgentDriver(
       approval: true,
     },
     steer(sessionId, text) {
-      const list = activeSteering.get(sessionId) ?? []
+      const list = activeSteering.get(sessionId)
+      if (!list) return false
       list.push({ role: 'user', content: text })
-      activeSteering.set(sessionId, list)
+      return true
     },
     abort(sessionId) {
       activeAbort
@@ -224,6 +236,21 @@ export function createVelaAgentDriver(
     }
     activeAbort.set(request.sessionId, controller)
     activeSteering.set(request.sessionId, [])
+    const deferredSteering: ModelMessage[] = []
+    let waitingHuman = false
+    const flushSteering = (wake: boolean): void => {
+      const live = activeSteering.get(request.sessionId)
+      activeSteering.delete(request.sessionId)
+      flushUnconsumedSteering({
+        db: options.db,
+        sessionId: request.sessionId,
+        projectId: request.projectId,
+        unconsumed: [...deferredSteering.splice(0), ...(live ?? [])],
+        wake,
+        shouldWakeSession: !waitingHuman && !disposed,
+        wakeSession: request.wakeSession ?? options.wakeSession,
+      })
+    }
 
     let releasedClaim = false
     let claim:
@@ -250,15 +277,19 @@ export function createVelaAgentDriver(
         environment: 'local',
         cwd,
       }
+      const boundChannel =
+        getActiveChannelForSession(
+          options.db,
+          request.sessionId,
+          request.runId,
+        ) ?? saved?.channel
+      const hasChannelBinding = Boolean(boundChannel)
       const modelInput =
-        saved?.model ?? options.defaultModel ?? models.defaultRef()
+        saved?.model ?? options.defaultModel ?? models.defaultRef(boundChannel)
       if (!modelInput) {
         throw new Error(`No model configured for session ${request.sessionId}`)
       }
-      const resolved =
-        typeof modelInput === 'string'
-          ? models.resolve(modelInput)
-          : { model: modelInput, info: describeModel(modelInput) }
+      const resolved = resolveModelInput(models, modelInput, () => boundChannel)
       const thinkingLevel =
         saved?.thinkingLevel ??
         options.defaultThinkingLevel ??
@@ -314,12 +345,6 @@ export function createVelaAgentDriver(
         'SELECT kind, created_at FROM sessions WHERE id = ?',
         request.sessionId,
       )
-      const boundChannel = getActiveChannelForSession(
-        options.db,
-        request.sessionId,
-        request.runId,
-      )
-      const hasChannelBinding = Boolean(boundChannel)
       const sessionKind = (sessionRow?.kind ??
         (request.projectId ? 'work' : 'chat')) as SessionRecord['kind']
       const networkMode = options.environments.networkMode(location.environment)
@@ -408,37 +433,12 @@ export function createVelaAgentDriver(
         hasChannelBinding,
         networkMode,
       })
-      let appliedSelection = false
-      if (request.projectId) {
-        const proj = options.db.get<{ default_tools_json: string | null }>(
-          'SELECT default_tools_json FROM projects WHERE id = ?',
-          request.projectId,
-        )
-        if (proj?.default_tools_json) {
-          const list = JSON.parse(proj.default_tools_json) as unknown
-          if (
-            !Array.isArray(list) ||
-            !list.every((i) => typeof i === 'string')
-          ) {
-            throw new Error(
-              `Invalid default_tools_json for project ${request.projectId}: expected a JSON array of tool names`,
-            )
-          }
-          if (
-            list.length > 0 &&
-            list.every((name) => name.startsWith('+') || name.startsWith('-'))
-          ) {
-            registry.setDefaultToolModifiers([...baseModifiers, ...list])
-          } else {
-            registry.setDefaultToolModifiers(baseModifiers)
-            registry.setSelection(list)
-          }
-          appliedSelection = true
-        }
-      }
-      if (!appliedSelection) {
-        registry.setDefaultToolModifiers(baseModifiers)
-      }
+      applyRuntimeProjectToolSelection(
+        options.db,
+        registry,
+        request.projectId,
+        baseModifiers,
+      )
       if (saved?.discoveredTools.length) {
         registry.discoveredTools = new Set(saved.discoveredTools)
       }
@@ -534,51 +534,22 @@ export function createVelaAgentDriver(
         })
       }
 
-      let turnUserMsg: { userEntryId?: string; hasHumanText: boolean } = {
-        hasHumanText: false,
-      }
-      if (!alreadyHasRunMessages) {
-        turnUserMsg = await prepareRuntimeTurnMessages({
-          db: options.db,
-          blobs: options.blobs,
-          store: activeStore,
-          tracker,
-          request,
-          messages,
-          memoryActive,
-          memoryStores,
-          resolveEnv,
-          signal: controller.signal,
-          skills: resources.skills,
-          promptTemplates: resources.promptTemplates,
-        })
-      } else {
-        const existingUser = options.db.get<{
-          id: string
-          details_json: string | null
-        }>(
-          `SELECT id, details_json FROM vela_messages
-           WHERE session_id = ? AND run_id = ? AND kind = 'message' AND role = 'user'
-           ORDER BY rowid DESC LIMIT 1`,
-          request.sessionId,
-          request.runId,
-        )
-        if (existingUser?.details_json) {
-          try {
-            const parsed = JSON.parse(existingUser.details_json) as {
-              dreamHumanText?: unknown
-            }
-            if (
-              typeof parsed.dreamHumanText === 'string' &&
-              parsed.dreamHumanText
-            ) {
-              turnUserMsg = { userEntryId: existingUser.id, hasHumanText: true }
-            }
-          } catch {
-            /* ignore malformed details_json */
-          }
-        }
-      }
+      const turnUserMsg = !alreadyHasRunMessages
+        ? await prepareRuntimeTurnMessages({
+            db: options.db,
+            blobs: options.blobs,
+            store: activeStore,
+            tracker,
+            request,
+            messages,
+            memoryActive,
+            memoryStores,
+            resolveEnv,
+            signal: controller.signal,
+            skills: resources.skills,
+            promptTemplates: resources.promptTemplates,
+          })
+        : loadExistingTurnUserMsg(options.db, request.sessionId, request.runId)
 
       const pinnedDate = localDateString(
         new Date(sessionRow?.created_at ?? Date.now()),
@@ -639,9 +610,22 @@ export function createVelaAgentDriver(
         })
       const result = await driver.run({
         model: resolved.model,
-        producer: resolved.info.ref,
+        producer: () =>
+          resolveRunProducer(
+            resolved.model,
+            modelInput,
+            resolved.info.provider,
+            boundChannel,
+            (provider, channel) => models.authMode(provider, channel),
+          ),
         systemPrompt: buildSystemPrompt,
         messages,
+        transformContext: async (msgs, producerForAttempt) =>
+          withoutForeignReasoning(
+            msgs,
+            producerForAttempt,
+            activeStore.producers,
+          ),
         trigger: request.trigger,
         claim,
         supportsImages: resolved.info.input?.includes('image') ?? true,
@@ -685,6 +669,9 @@ export function createVelaAgentDriver(
         },
         onTerminalCommitInTx: request.onTerminalCommitInTx
           ? ({ assistant }) => {
+              const live = activeSteering.get(request.sessionId)
+              if (live?.length) deferredSteering.push(...live)
+              activeSteering.delete(request.sessionId)
               lastAssistant = assistant
               committedInTx = true
               if (memoryActive && !isSilent && !disposed) {
@@ -707,12 +694,13 @@ export function createVelaAgentDriver(
             }
           : undefined,
       })
-
       const waitingApproval = options.db.get<{ id: string }>(
         "SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1",
         request.runId,
       )
       if (result.reason === 'waiting_human' || waitingApproval) {
+        waitingHuman = true
+        flushSteering(true)
         return {
           status: 'waiting_human',
           replyText: assistantText(lastAssistant),
@@ -720,6 +708,7 @@ export function createVelaAgentDriver(
           committedInTx,
         }
       }
+      flushSteering(!controller.signal.aborted)
 
       if (memoryActive && !isSilent && !disposed) {
         if (!recordedDreamInTx) {
@@ -763,6 +752,13 @@ export function createVelaAgentDriver(
         error: error instanceof Error ? error.message : String(error),
       }
     } finally {
+      try {
+        flushSteering(!controller.signal.aborted)
+      } catch (error) {
+        logger.warn(
+          `[runtime] failed preserving unconsumed steer inputs for ${request.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
       if (store && registry) {
         store.setDiscoveredTools(registry.discoveredTools)
       }

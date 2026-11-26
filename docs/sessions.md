@@ -1,8 +1,8 @@
 # Sessions and context
 
-A session is one conversation: its message history, queued messages, compaction state, token usage, tool results and run lock. Like pi, Vela appends each message to the session file as it enters the history, so a crash loses at most the step in progress, and you can continue the session later. This page covers where sessions live, how to continue them, and how Vela keeps a long session within the model's context window.
+A session is one conversation: its message history, queued messages, compaction state, token usage, tool results and run lock. Like pi, Vela appends each message to SQLite (`vela.db`) as it enters the history, so a crash loses at most the step in progress, and you can continue the session later. This page covers where sessions live, how to continue them, and how Vela keeps a long session within the model's context window.
 
-For the API, see [SDK](sdk.md#sessions). For the file contents, see [Session format](session-format.md).
+For the API, see [SDK](sdk.md#sessions). For the storage and export details, see [Session format](session-format.md).
 
 ## Session ids and storage
 
@@ -12,13 +12,13 @@ Every session has an id (`sessions.id`). Ids use letters, digits, `.`, `_` and `
 - Channel sessions get `<channel>-<conversationId>`, one shared session per chat (hashed when the ids have other characters). See [Channels](channels.md).
 - In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
 
-Vela persists active sessions in SQLite at `<dataDir>/vela.db` (`sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`), inside the [project data directory](settings.md#data-directory). Spilled long tool outputs for a session live under `<dataDir>/sessions/<id>/tool-results/`. Opening and closing an empty session leaves no rows in `vela.db`; `--no-session` (`ephemeralSessions: true`) uses an in-memory SQLite database (`:memory:`) and a temporary spill directory removed when the session closes. Memory and the knowledge base are unchanged.
+In the CLI, Vela persists active sessions in SQLite at `$VELA_DIR/vela.db` (`~/.vela/vela.db`: `sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`), while spilled long tool outputs for a session live under `<dataDir>/sessions/<id>/tool-results/` inside the [project data directory](settings.md#data-directory). Opening and closing an empty session leaves no rows in `vela.db`; `--no-session` (`ephemeralSessions: true`) uses an in-memory SQLite database (`:memory:`) and a temporary spill directory removed when the session closes. Memory and the knowledge base are unchanged.
 
 Persistent session deletion is manual. Before deleting a session's rows from `vela.db` or removing `<dataDir>/sessions/<id>/`, record the exact session ID and the environments in its saved `location` metadata and branch entries. For each Docker environment the session used, match the container to that environment name and the same owner data directory. Inside that container, `~/.vela/uploads/<id>/` under the guest user's home is the cache for this session. A fork or clone has its own ID and cache.
 
 The owner can retain or remove each matching guest directory as part of the same retention decision. Deleting the host session alone leaves these container caches in place. The canonical downloads belong to the chat's private `files/` directory and can be shared across topics. Archiving and closing a persistent session preserve its files.
 
-In the SDK, sessions are stored in `<dataDir>/vela.db` when you pass `dataDir`, in memory (`:memory:`) when you don't, or in an explicitly shared `db` handle. See [SDK](sdk.md#session-storage).
+In the SDK, `createRuntime()` stores sessions in `<agentDir>/vela.db` (`~/.vela/vela.db` by default, or `:memory:` with `ephemeral: true`). With `createVela()`, sessions are stored in `<agentDir>/vela.db` when `agentDir` is passed, in `<dataDir>/vela.db` when only `dataDir` is passed, or in memory (`:memory:`) when neither is provided (or when `ephemeralSessions: true`). See [SDK](sdk.md#session-storage).
 
 ## Continue or switch sessions
 
@@ -56,7 +56,7 @@ Like pi, a session is a tree: moving back to an earlier entry does not erase the
 
 | Action | Result | Use it when |
 |---|---|---|
-| `/tree` | Moves within the same session file | Related alternatives should stay together |
+| `/tree` | Moves within the same session | Related alternatives should stay together |
 | `/fork` | Creates a new session from before an earlier user message | The alternative should become separate work |
 | `/clone` | Copies the current branch into a new session | You want a separate copy of the current state |
 
@@ -74,7 +74,7 @@ In the SDK these are `session.navigateTree(entryId, { summarize, focus, label })
 
 ## Export
 
-`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`, or `vela --export <id> branch.jsonl`) writes the branch in the [session file format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
+`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`, or `vela --export <id> branch.jsonl`) writes the branch in the [session export format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
 
 Review an export before you share it: it can contain your prompts, the model's answers, tool arguments, command output and file contents. Vela has no `/share` upload (pi's `/share` uploads to a gist).
 
@@ -133,7 +133,7 @@ The token thresholds are `summaryThreshold` and `maxInputTokens`. Their defaults
 
 A tool result longer than the tool's line limit (200 lines for `grep` and `find`, 500 lines by default and for web tools; `read` pages and `bash` previews have their own limits; see [Tools](tools.md#result-size-and-truncation)) is saved in full to `<dataDir>/sessions/<id>/tool-results/<callId>.txt`. The model gets the head up to the limit, followed by one line with the file path and a hint to page through the rest with `read` and `offset`. Bash keeps its existing tail preview, with the file path only when truncated.
 
-Every tool call and its result is also recorded in SQLite (`vela_tool_calls` in `<dataDir>/vela.db`), which survives compaction. See [Session format](session-format.md#tool-call-history).
+Every tool call and its result is also recorded in SQLite (`vela_tool_calls` in `$VELA_DIR/vela.db` for the CLI, or SDK `<agentDir>/vela.db` / `<dataDir>/vela.db`), which survives compaction. See [Session format](session-format.md#tool-call-history).
 
 Vela doesn't expire tool results by age: content changes only through compaction summaries when reached.
 
@@ -170,11 +170,11 @@ The memory index and the RAG source list are sent as messages after the user mes
 
 Every model request records input, output, cache-read and cache-write tokens and, when the price is known, a cost. The price comes from the model entry's `cost` under `providers` in `config.json`, otherwise from a small built-in table of common models; a model in neither has no cost, so Vela shows its tokens without a dollar amount. Set `cost` for such a model to see its cost (see [Models](models.md#model-fields)).
 
-- `/status` shows a short overview: the CLI version, session id and file (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, message count, the context estimate and this session's token usage. The dollar amount matches the footer. A channel session also shows its channel, and a fork shows the session it was copied from. Paths under your home directory are shown with `~`, and paths under the configured agent directory (`VELA_DIR`, or `~/.vela`) with `$VELA_DIR`. The Path line is fitted to the terminal's display columns, so a session id is not broken across lines. An unsaved session keeps `not written yet` even when the destination is too long to show.
+- `/status` shows a short overview: the CLI version, session id and storage (`vela.db` path; `not written yet` until the first save; in-memory with `--no-session`), working directory, model, thinking level, message count, the context estimate and this session's token usage. The dollar amount matches the footer. A channel session also shows its channel, and a fork shows the session it was copied from. Paths under your home directory are shown with `~`, and paths under the configured agent directory (`VELA_DIR`, or `~/.vela`) with `$VELA_DIR`. The Path line is fitted to the terminal's display columns, so a session id is not broken across lines. An unsaved session keeps `not written yet` even when the destination is too long to show.
 - `/usage` shows the session's totals, cache hit rate, the cost and what it would have cost without caching. The cost lines only appear when at least one request had a known price.
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.
 - `session.usage` in the SDK returns `{ tokens, percent, needsAction, totals }`.
-- Each request records input, output, cache-read, cache-write tokens and cost in `usage_records` in `<dataDir>/vela.db`. `--no-session` keeps the same totals in memory without persisting to disk.
+- Each request records input, output, cache-read, cache-write tokens and cost in `usage_records` in `$VELA_DIR/vela.db` (or SDK `<agentDir>/vela.db` / `<dataDir>/vela.db`). `--no-session` keeps the same totals in memory without persisting to disk.
 
 `usage` events carry the same numbers per request. See [SDK](sdk.md#events).

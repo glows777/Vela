@@ -339,6 +339,20 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
         .replace(
           /^lark_(start_topic|forward_to_topic|list_topics|read_topic|skip_reply|wait_for_input|routines)$/,
           'channel_$1',
+        )
+        .replace(
+          /^(session_start|session_forward|session_list|session_read|session_message|skip_reply|wait_for_input|timers)$/,
+          (tool) =>
+            ({
+              session_start: 'channel_start_topic',
+              session_forward: 'channel_forward_to_topic',
+              session_list: 'channel_list_topics',
+              session_read: 'channel_read_topic',
+              session_message: 'channel_message_topic',
+              skip_reply: 'channel_skip_reply',
+              wait_for_input: 'channel_wait_for_input',
+              timers: 'channel_routines',
+            })[tool] ?? tool,
         ),
       sessionId: call.sessionId?.replace(/^feishu-/, 'lark-'),
     })),
@@ -524,7 +538,9 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
           call.name === 'channel_message_topic' &&
           call.success &&
           !inB(call) &&
-          call.args.root_id === 'g6_b' &&
+          (call.args.root_id === 'g6_b' ||
+            call.args.target === 'g6_b' ||
+            call.args.target === 'lark-oc_group-g6_b') &&
           fact(String(call.args.text ?? '')),
       )
       check(

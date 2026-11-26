@@ -1,44 +1,31 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { VelaDatabase } from '../db/index.ts'
-import type {
-  AuthInteraction,
-  CredentialStore,
-  LoginOptions,
-} from '../providers/auth/types.ts'
+import { openDatabase } from '../db/index.ts'
+import type { OAuthRegistrationStore } from '../providers/auth/types.ts'
 import {
   DEFAULT_THINKING_LEVEL,
-  describeModel,
-  type LoginProvider,
-  type ModelInfo,
   ModelRegistry,
-  type ProviderDefinition,
   type ResolvedModel,
+  resolveModelInput,
   type ThinkingLevel,
 } from '../providers/models/index.ts'
-import { resolveLimits, type VelaLimits } from '../shared/limits.ts'
-import { silentLogger, type VelaLogger } from '../shared/logger.ts'
+import { SqliteOAuthRegistrationStore } from '../runtime/index.ts'
+import { resolveLimits } from '../shared/limits.ts'
+import { silentLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import type { VelaSessionEventListener } from './agent/events.ts'
-import type { ConfigResourceSplit } from './config/runtime-resources.ts'
 import { createLocalExecutionEnv } from './execution/local.ts'
 import { abortable, sameLocation } from './execution/location.ts'
-import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
+import type { ExecutionLocation } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
-import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
-import type { VelaExtension } from './extensions/types.ts'
-import type { ContextFile } from './prompt/context-files.ts'
-import {
-  type DocsPaths,
-  localDateString,
-  type SystemPromptBuilder,
-} from './prompt/index.ts'
-import { loadPromptTemplates, type PromptTemplate } from './prompt/templates.ts'
+import { ExtensionRunner } from './extensions/runner.ts'
+import { localDateString } from './prompt/index.ts'
+import { loadPromptTemplates } from './prompt/templates.ts'
 import {
   listSessionSummariesFromDb,
   searchSessionsInDb,
   setSavedSessionArchivedInDb,
 } from './session/db-queries.ts'
-import type { SessionSummary } from './session/entries.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
 import {
@@ -52,7 +39,6 @@ import {
 } from './session/prompt-builder.ts'
 import { WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
-import type { SessionSearchHit } from './session/search.ts'
 import {
   cleanupFailedVelaInit,
   disposeVelaRuntime,
@@ -63,221 +49,21 @@ import {
   workspaceKey,
 } from './session/workspace.ts'
 import { SkillLoader } from './skills/loader.ts'
-import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
+import { createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
 import { registerToolSearchTool } from './tools/tool-search.ts'
 import { VelaSession } from './vela-session.ts'
+import {
+  type SavedSessionOptions,
+  setVelaInternals,
+  type Vela,
+  type VelaOptions,
+  velaInternals,
+} from './vela-types.ts'
 
-export interface VelaOptions {
-  /** @internal Host/workspace resource split from the frontend configuration. */
-  sessionResources?: ConfigResourceSplit
-  /** @internal Synchronous OS metadata lookup by environment name. */
-  envOs?: (environment: string) => string | undefined
-  /** @internal Synchronous network mode lookup by environment name. */
-  envNetworkMode?: (environment: string) => 'on' | 'off' | 'restricted'
-  /** Resolve the execution environment for a session tool call. */
-  env?: (target: {
-    sessionId: string
-    location: ExecutionLocation
-  }) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>
-  /** Observes real nonempty storage writes, including writes outside prompts. */
-  onSessionSaved?: (sessionId: string) => void
-  /** Stops external ingress after factories settle and before sessions close. */
-  beforeDispose?: () => void | Promise<void>
-  /**
-   * Default model: an AI SDK LanguageModel (tests pass faux), or `provider/id` (looked up in `providers`
-   * and providers registered by extensions). Core never reads environment variables: the CLI uses the
-   * providers from loadConfig(). Without it, a session must call setModel() (or resume a session with a
-   * saved model) before it can prompt.
-   */
-  model?: ModelInput
-  /** Model providers (built-in anthropic / openai / openrouter / deepseek + models.json from loadConfig(), or your own) */
-  providers?: Record<string, ProviderDefinition>
-  /**
-   * Credentials stored by `/login` and `vela.login()`, read by providers per request. Default: in memory only.
-   * The CLI passes `loadConfig().credentials` (`~/.vela/auth.json`).
-   */
-  credentials?: CredentialStore
-  /** Thinking level for new sessions, default medium (like pi) */
-  thinkingLevel?: ThinkingLevel
-  /**
-   * Automatic compaction for new sessions, default on (like pi's `compaction.enabled`). Off: the context is never
-   * compacted on its own (no threshold summary, no compact-and-retry on overflow); `compact()` still works.
-   */
-  autoCompaction?: boolean
-  /** Working directory for file, search and bash tools and skills; default process.cwd(). */
-  cwd?: string
-  /**
-   * @internal Root user agent directory (`~/.vela`) owning the shared `<agentDir>/vela.db` and `<agentDir>/blobs/`.
-   */
-  agentDir?: string
-  /**
-   * Project data directory (memory/, tool-results/, container workspace/); relative paths resolve against cwd.
-   * Without it nothing persists: sessions stay in memory, long tool output etc. goes to a temp dir deleted by dispose().
-   * The CLI uses `~/.vela/projects/<encoded cwd>` (see loadConfig).
-   */
-  dataDir?: string
-  /**
-   * @internal Pre-opened SQLite database to share across sessions (defaults to `<dataDir>/vela.db` or `:memory:` when ephemeral).
-   */
-  db?: VelaDatabase
-  /** Force in-memory SQLite session persistence even when `dataDir` is set (`--no-session`). */
-  ephemeralSessions?: boolean
-  /**
-   * Skill directories or `.md` files (Agent Skills format, see docs/skills.md), in priority order: the first skill
-   * with a name wins. Default `<cwd>/.vela/skills`, `<cwd>/.skills`. The model sees each skill's name, description
-   * and path and reads the file itself; `/skill:<name> args` sends a skill explicitly.
-   */
-  skillDirs?: string[]
-  /** Prompt template directories or `.md` files (`/<name> args` expands the template); first name wins. Default `<cwd>/.vela/prompts` */
-  promptTemplateDirs?: string[]
-  /**
-   * AGENTS.md / CLAUDE.md files put into the system prompt. Default: found from cwd
-   * up to the filesystem root like pi (`loadContextFiles({ cwd })`; the CLI also passes `~/.vela/AGENTS.md`). `false` loads none.
-   */
-  contextFiles?: false | ContextFile[]
-  /** Text appended to the system prompt (pi's `--append-system-prompt`) */
-  appendSystemPrompt?: string
-  /**
-   * Replaces the default system prompt (pi's `--system-prompt` / `SYSTEM.md`): this text becomes the intro and
-   * the tool list, rules and docs sections are left out. Addendum, project context, skills, cwd, env and
-   * extension sections stay. `--append-system-prompt` still applies on top.
-   */
-  systemPrompt?: string
-  /**
-   * Where Vela's own README, docs and examples live, for the `<docs>` section: the CLI and the SDK umbrella point
-   * at their package. Only folders that exist are used; without a docs folder the section stays off. `false` for none.
-   */
-  docs?: DocsPaths | false
-  /** Config section per extension; each extension reads its own section from `vela.config` (by extension name) */
-  extensionConfig?: Record<string, Record<string, unknown>>
-  /** Retry, compaction threshold and other limits; missing fields use defaults (see src/limits.ts). */
-  limits?: Partial<VelaLimits>
-  /**
-   * Where the grep / find tools keep ripgrep and fd (the CLI uses `~/.vela/bin`). Checked before
-   * PATH; a missing program is downloaded here (same as pi). Without it only PATH is searched.
-   */
-  binDir?: string
-  /** Shell the bash tool and `session.executeBash()` run commands with. Default: bash on PATH, or bash.exe on Windows. */
-  shellPath?: string
-  /** Don't download ripgrep / fd into `binDir` (the CLI sets this from `VELA_OFFLINE=1`). */
-  offline?: boolean
-  /** Diagnostic output that is not an event (extensions, hooks, bad session file lines, ...); silent by default. */
-  logger?: VelaLogger
-  /**
-   * Extensions to load, run in order (like pi; the SDK includes no built-in extensions by default).
-   * Memory, knowledge base and web tools are extensions too: `[memory(), rag({ embedder }), web({ tavilyKey })]`.
-   * Extension config is passed as factory arguments, e.g. `lark({ appId, appSecret })`.
-   */
-  extensions?: VelaExtension[]
-}
-
-/** Which saved sessions a listing or search covers. */
-export interface SavedSessionOptions {
-  /** Also cover sessions archived with `setSessionArchived()` (default false) */
-  includeArchived?: boolean
-}
-
-/** Return value of createVela(). */
-export interface Vela {
-  readonly cwd: string
-  readonly dataDir: string
-  /** Default model (a name is resolved on first access; throws if none is given or it cannot be resolved) */
-  readonly model: ModelInput
-  readonly limits: VelaLimits
-  /**
-   * Models of the providers that have a credential (`provider/id`, context window, price, ...), used by `/model`
-   * and `--list-models`; `{ all: true }` includes providers without one.
-   */
-  models(options?: { all?: boolean }): ModelInfo[]
-  /** Update a configured provider for subsequent model selections. */
-  configureProvider(name: string, provider: ProviderDefinition): void
-  /** Set defaults for subsequently created sessions, without changing open sessions. */
-  setDefaults(model: ModelInput, thinkingLevel: ThinkingLevel): void
-  /** Providers `/login` can sign in to, with their current credential source */
-  loginProviders(): LoginProvider[]
-  /**
-   * Signs in to a provider and stores the credential (pi's `/login`): `oauth` runs the provider's sign-in,
-   * `api_key` asks for a key through `interaction`. Sessions use the new credential from their next request.
-   */
-  login(
-    provider: string,
-    method: 'oauth' | 'api_key',
-    interaction: AuthInteraction,
-    options?: LoginOptions,
-  ): Promise<void>
-  /**
-   * Removes a provider's stored credential (`/logout`); returns false when none was stored. A provider whose
-   * sign-in can revoke its session does so first, and `onNotice` hears about it when that could not be confirmed.
-   */
-  logout(
-    provider: string,
-    options?: { signal?: AbortSignal; onNotice?: (text: string) => void },
-  ): Promise<boolean>
-  /**
-   * Opens a session (or returns it if already open); with file storage the id names the directory `sessions/<id>/`.
-   * Options apply on first open, except a first scope/channel routing binding may attach to an existing object. Call `await session.resume()` to restore history.
-   */
-  session(id?: string, options?: SessionOptions): VelaSession
-  /** Currently open sessions */
-  sessions(): VelaSession[]
-  /**
-   * Saved sessions, newest first, from `vela.db`.
-   * Sessions archived with `setSessionArchived()` are left out unless `includeArchived` is set.
-   */
-  listSessions(options?: SavedSessionOptions): Promise<SessionSummary[]>
-  /**
-   * Archives or unarchives a saved session, without opening it; the flag is appended to the session file and
-   * survives a restart. Resolves when the entry is saved; rejects when nothing is saved under `id`.
-   */
-  setSessionArchived(id: string, archived: boolean): Promise<void>
-  /**
-   * Searches the text of saved sessions' user and assistant messages (not tool output, `!` commands, summaries
-   * or custom messages); newest first, one hit per session with a short match around the query.
-   */
-  searchSessions(
-    query: string,
-    options?: SavedSessionOptions,
-  ): Promise<SessionSearchHit[]>
-  /** Subscribes to events from all sessions; returns an unsubscribe function */
-  subscribe(listener: VelaSessionEventListener): () => void
-  /** Waits for all extensions (including async factories) to load; rejects if loading fails */
-  ready(): Promise<void>
-  /** Loaded extensions and the tools, commands and channels they registered */
-  extensions(sessionId?: string): LoadedExtension[]
-  /** Commands registered by extensions */
-  commands(
-    sessionId?: string,
-  ): { name: string; description?: string; extension: string }[]
-  /**
-   * Attempts all cleanup, then rejects with AggregateError if any step failed.
-   * Concurrent/repeated calls share the same result; failed cleanup is not retried.
-   */
-  dispose(): Promise<void>
-}
-
-/** Internals used by the CLI and tests; not part of the public API. */
-export interface VelaInternals {
-  logger: VelaLogger
-  registry: ToolRegistry
-  runner: ExtensionRunner
-  builder: SystemPromptBuilder
-  skillLoader: SkillLoader
-  promptTemplates: PromptTemplate[]
-  loadedContextFiles: readonly ContextFile[]
-  /** Finds (or downloads) rg / fd, shared with the grep and find tools */
-  resolveBinary: BinaryResolver
-}
-
-const internals = new WeakMap<Vela, VelaInternals>()
-
-/** @internal Gets Vela's internals (for CLI commands and tests). */
-export function velaInternals(vela: Vela): VelaInternals {
-  const found = internals.get(vela)
-  if (!found) throw new Error('Not a Vela created by createVela()')
-  return found
-}
+export type { SavedSessionOptions, Vela, VelaOptions }
+export { velaInternals }
 
 /** Assembles one host with per-session history, execution and location-bound project capabilities. */
 export function createVela(options: VelaOptions = {}): Vela {
@@ -292,6 +78,37 @@ export function createVela(options: VelaOptions = {}): Vela {
       storage.dataDir,
     )
     throw error
+  }
+}
+
+function lazyFileRegistrationStore(dbPath: string): OAuthRegistrationStore {
+  return {
+    get(provider) {
+      if (!existsSync(dbPath)) return undefined
+      const db = openDatabase({ path: dbPath, readonly: true })
+      try {
+        return new SqliteOAuthRegistrationStore(db).get(provider)
+      } finally {
+        db.close()
+      }
+    },
+    set(provider, registration) {
+      const db = openDatabase({ path: dbPath })
+      try {
+        new SqliteOAuthRegistrationStore(db).set(provider, registration)
+      } finally {
+        db.close()
+      }
+    },
+    delete(provider) {
+      if (!existsSync(dbPath)) return false
+      const db = openDatabase({ path: dbPath })
+      try {
+        return new SqliteOAuthRegistrationStore(db).delete(provider)
+      } finally {
+        db.close()
+      }
+    },
   }
 }
 
@@ -312,20 +129,27 @@ function initVelaInstance(
   let { model } = options
   let defaultsChanged = false
   let defaultThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL
-  const models = new ModelRegistry(options.providers, options.credentials)
+  const registrations =
+    options.registrations ??
+    (agentDir && ephemeralSessions && !options.db
+      ? lazyFileRegistrationStore(join(agentDir, 'vela.db'))
+      : new SqliteOAuthRegistrationStore(db))
+  const models = new ModelRegistry(
+    options.providers,
+    options.credentials,
+    registrations,
+  )
   const resolveModel = (
     requested: ModelInput | undefined,
     from?: VelaSession,
   ): ResolvedModel => {
     // Like pi: without a chosen model, the first provider with a credential supplies its default model
-    const choice = requested ?? models.defaultRef()
+    const choice = requested ?? models.defaultRef(from?.channel)
     if (choice === undefined)
       throw new Error(
         'No model selected: pass model to createVela(), or call session.setModel()',
       )
-    return typeof choice === 'string'
-      ? models.resolve(choice, { channel: () => from?.channel })
-      : { model: choice, info: describeModel(choice) }
+    return resolveModelInput(models, choice, () => from?.channel)
   }
   const limits = resolveLimits(options.limits)
   const logger = options.logger ?? silentLogger
@@ -710,7 +534,8 @@ function initVelaInstance(
       return defaultModel
     },
     limits,
-    models: (opts) => (opts?.all ? models.list() : models.available()),
+    models: (opts) =>
+      opts?.all ? models.list(opts.channel) : models.available(opts?.channel),
     configureProvider: (name, provider) => {
       models.configure(name, provider)
       defaultModel = undefined
@@ -725,7 +550,7 @@ function initVelaInstance(
     loginProviders: () => models.loginProviders(),
     login: (provider, method, interaction, loginOptions) =>
       models.login(provider, method, interaction, loginOptions),
-    logout: (provider, options) => models.logout(provider, options),
+    logout: (provider, logoutOptions) => models.logout(provider, logoutOptions),
     session,
     sessions: () => [...sessions.values()],
     listSessions: async (listOptions) =>
@@ -784,7 +609,7 @@ function initVelaInstance(
       return disposing
     },
   }
-  internals.set(vela, {
+  setVelaInternals(vela, {
     logger,
     registry,
     runner,

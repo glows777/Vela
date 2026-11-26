@@ -33,7 +33,7 @@ Vela publishes a single npm package, `@glows777/vela`, with explicit export-map 
 
 | Entry | Public contract |
 |---|---|
-| `@glows777/vela` | Root SDK (`createVela`, built-in extensions, Lark and Local channel adapters) and CLI/TUI (`vela`) |
+| `@glows777/vela` | Root SDK (`createRuntime`, `VelaRuntime`, `LocalVelaRuntime`, transitional `createVela`, built-in extensions, Lark and Local channel adapters) and CLI/TUI (`vela`) |
 | `@glows777/vela/extension-api` | Extension authoring types and hook helpers |
 | `@glows777/vela/testing` | Offline faux model, test harness (`createTestVela`), and scenario recording/replay |
 
@@ -51,7 +51,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `thinkingLevel` | `medium` | Thinking level for new sessions: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `autoCompaction` | `true` | Automatic compaction for new sessions (pi's `compaction.enabled`). `false`: no threshold summary or compact-and-retry on overflow; `compact()` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
 | `cwd` | `process.cwd()` | Working directory for file, search and bash tools and for skills. |
-| `dataDir` | temp dir | Project data directory: `vela.db`, spilled tool outputs under `sessions/`, and extension data such as `memory/`. Relative paths resolve against `cwd`. Without it nothing persists: sessions stay in memory and long tool output goes to a temp dir that `dispose()` deletes. The CLI uses the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. |
+| `dataDir` | temp dir | Project data directory: spilled tool outputs under `sessions/` and extension data such as `memory/` (plus `<dataDir>/vela.db` when `agentDir` is not set). Relative paths resolve against `cwd`. Without `agentDir` or `dataDir`, sessions stay in memory and long tool output goes to a temp dir that `dispose()` deletes. The CLI consolidates SQLite state in `$VELA_DIR/vela.db` (`~/.vela/vela.db`) and keeps per-project files under `~/.vela/projects/`. |
 | `env` | local environment | Optional per-tool resolver `({ sessionId, location }) => ExecutionEnv \| undefined` (also async). File tools, search, bash (including user commands), and background jobs use the returned adapter. Resource preparation also resolves the session environment. A local location requires `node:local`. For a non-local location the trusted resolver supplies a distinct, stable adapter identity and the requested environment cwd. An adapter that implements `exec` keeps its existing contract: a background command passes `spill` like a foreground one, so the complete output lands in the adapter's own spill file, whose `spillPath` the exit delivery names. The first turn, fork or compaction that needs to prepare workspace instructions fails before contacting the model if the resolver is unavailable, even for plain text. Retry after the environment returns. Later tool calls still resolve independently. The default session shell is a login shell; a custom adapter made with `createLocalExecutionEnv` runs commands with `bash -c`. Local commands have the host user's authority. |
 | `ephemeralSessions` | `false` | Keep session history and usage in an in-memory SQLite DB even when `dataDir` is configured. See [Session storage](#session-storage). |
 | `skillDirs` | `<cwd>/.vela/skills`, `<cwd>/.skills` | Skill directories or files in the [Agent Skills format](settings.md#skills). The first skill with a name wins. |
@@ -77,10 +77,10 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `cwd`, `dataDir` | Resolved working and data directories |
 | `model` | Default `LanguageModel`; a name is resolved on first access. Throws if none was given or it cannot be resolved. |
 | `limits` | Limits in effect (defaults plus overrides) |
-| `models(options?)` | Available models: those of providers that have a credential, like pi (`ModelInfo`: `provider`, `id`, `ref`, `name`, `contextWindow`, `maxTokens`, `reasoning`, `thinkingLevelMap`, `input`, `cost`). `{ all: true }` returns every listed model. |
+| `models(options?)` | Available models: those of providers that have a credential, with live `planLabel` (`{ provider, id, ref, name, contextWindow, maxTokens, reasoning, thinkingLevelMap, input, cost, planLabel? }`). `{ all: true, channel? }` returns all catalog models, filtered for channel eligibility. |
 | `configureProvider(name, definition)` | Replace or add a provider for subsequent model selections, for example after saving setup. Existing sessions switch with `setModel()`. |
 | `setDefaults(model, thinkingLevel)` | Set defaults for subsequently created sessions without changing open sessions. |
-| `loginProviders()`, `login(provider, method, interaction, options?)`, `logout(provider)` | What `/login` and `/logout` do: list the providers that take a sign-in, run one (`method` `oauth` or `api_key`; `interaction` shows links and asks for input) and store the credential, or remove it. See [Models](models.md#credentials-and-login). |
+| `loginProviders()`, `login(provider, method, interaction, options?)`, `logout(provider, options?)` | What `/login` and `/logout` do: list the providers that take a sign-in (with credential `source` and retained `hasRegistration`), run one (`method` `oauth` or `api_key`, optional `accountMode: 'reuse' \| 'switch'`) saving credentials in `credentials` (`~/.vela/auth.json` in CLI) and non-secret OAuth client registration metadata (`clientId`, `hostId`, `subject`) in `vela.db` (`oauth_registrations`), or remove it returning `Promise<LogoutResult>` (`{ removed, forgotten?, notice? }`; pass `{ forget: true }` to drop saved OAuth registration). See [Models](models.md#credentials-and-login). |
 | `session(id?, options?)` | Opens a session, or returns it if it is already open. `id` defaults to `default`. |
 | `sessions()` | Open sessions |
 | `listSessions(options?)` | Saved sessions, newest first, from `vela.db`. Leaves out sessions without messages. Sessions archived with `setSessionArchived()` are left out unless `options.includeArchived` is true. A summary has `id`, `name?`, `updatedAt`, `messageCount` and `firstMessage`, plus `cwd` and `channel` when the session has them, and `archived: true` when archived. |
@@ -325,17 +325,31 @@ await Promise.all([alice.prompt('Hi'), bob.prompt('Hello')])
 
 Sessions in one Vela run concurrently. Tool definitions, extensions, skills, memory and channels are shared; history, queues, compaction, usage, tool results and the run lock are per session. Channels rely on this: the gateway opens one shared session per conversation (`<channel>-<channelId>`). See [03-multi-session.ts](../examples/sdk/03-multi-session.ts) and [Sessions](sessions.md#multiple-sessions).
 
+## createRuntime() and VelaRuntime
+
+`createRuntime(options?: CreateRuntimeOptions): LocalVelaRuntime` is the v0.9 transport-compatible Runtime SDK built around `$VELA_DIR/vela.db` (`<agentDir>/vela.db`, or `:memory:` when `ephemeral: true`), implementing the `VelaRuntime` client contract (which the daemon IPC client — planned as `connectRuntime()` in S4a — will implement). Domain records, cursors, events, and results are JSON-serializable; over future daemon IPC, `Uint8Array` blob payloads encode as base64, `subscribe` / `subscribeDeltas` return synchronous unsubscribe functions backed by the daemon event stream, and `logout` `AbortSignal` cancels client waits/RPC:
+
+- `projects`: `list()`, `get(id)`, `getByCwd(cwd)`, `create(input)`, `update(id, patch)`, `remove(id, { deleteSessions? })`
+- `sessions`: `list({ projectId?, includeArchived? })`, `get(id)`, `create(input?)`, `rename(id, name)`, `delete(id)`, `reset(id)`, `status(id)`, `messages({ sessionId, cursor?, limit? })`
+- Turn & approval control: `prompt(sessionId, input)`, `steer(sessionId, text)`, `stop(sessionId, reason?)`, `waitForIdle(sessionId?)`, `approvals.list(sessionId?)`, `approvals.resolve({ approvalId, decision, reason?, decidedBy? })`
+- Platform & storage: `timers`, `subscriptions`, `bindings`, `blobs` (`get`, `list`, `read`, `storeInbound`), `events` (`list`, `bufferedDeltas`, `subscribe`, `subscribeDeltas`), `models({ all?, channel? })`, `loginProviders()`, `logout(provider, { signal?, forget? })`, `recover()`, `dispose()`
+- Execution configuration: `environments` loads owner Docker definitions from `<agentDir>/config.json` by default (unless `ephemeral: true`), or accepts declarative definitions via `CreateRuntimeOptions.environments`
+- Host-local hooks on `LocalVelaRuntime`: `registerChannel(adapter)`, `unregisterChannel(name)`, `registerDriver(driver)`, `login(provider, method, interaction, options?)`
+
 ## Session storage
 
 | Setup | Storage |
 |---|---|
-| `ephemeralSessions: true` (or no `dataDir`) | In-memory SQLite (`:memory:`), gone when the process exits |
-| `dataDir` given (default) | Persistent SQLite WAL DB at `<dataDir>/vela.db` |
+| CLI (default) | Consolidated SQLite WAL DB at `$VELA_DIR/vela.db` (`~/.vela/vela.db`); project dirs hold `sessions/` spill outputs and `memory/` |
+| `createRuntime({ agentDir })` | Persistent SQLite WAL DB at `<agentDir>/vela.db` (or `:memory:` with `ephemeral: true`) |
+| `createVela({ dataDir })` (SDK without `agentDir`) | Persistent SQLite WAL DB at `<dataDir>/vela.db` |
+| `ephemeralSessions: true` (or neither `agentDir` nor `dataDir`) | In-memory SQLite (`:memory:`), gone when the process exits |
 
 ```typescript
-import { createVela } from '@glows777/vela'
+import { createRuntime, createVela } from '@glows777/vela'
 
-createVela({ dataDir: '.vela-data' })                     // persistent SQLite at .vela-data/vela.db
+const runtime = createRuntime({ agentDir: '.vela-home' }) // SQLite at .vela-home/vela.db
+createVela({ dataDir: '.vela-data' })                   // SDK fallback at .vela-data/vela.db
 createVela({ dataDir: '.vela-data', ephemeralSessions: true }) // keep memory data, not sessions
 ```
 
@@ -401,7 +415,7 @@ The CLI also fills built-in extension config from environment variables such as 
 
 ## Logger
 
-Diagnostics that are not events (extension loading, hook errors, unreadable session file lines) go to a `VelaLogger`. The default, `silentLogger`, drops everything.
+Diagnostics that are not events (extension loading, hook errors, recoverable warnings) go to a `VelaLogger`. The default, `silentLogger`, drops everything.
 
 ```typescript
 const vela = createVela({
@@ -467,7 +481,7 @@ The public surface is:
 - `config.json` keys,
 - the `--mode json` event stream and the RPC protocol,
 - event types,
-- the session file format.
+- the SQLite session model and JSONL export format.
 
 Anything marked `@internal` in the type declarations is not covered.
 
@@ -483,9 +497,9 @@ See [the offline tool-image example](../examples/sdk/06-tool-images.ts) and [too
 
 ## Routing and host lifecycle
 
-`vela.session(id, { scope, channel })` supplies a host's routing identity before session hooks and tool calls. A scope is `{ id, kind: 'private' | 'shared', dataDir }`; it selects shared storage and grants no permissions. `session.scope` and each tool call's `context.scope` are read-only snapshots; `context.sessionId` identifies the invoking session. Supply routing again on resume. `resume()` restores a channel saved in the session file, and supplying that same channel again writes nothing. Fork and clone omit routing.
+`vela.session(id, { channel })` supplies a host's channel routing identity before session hooks and tool calls (`SessionScope` / `session.scope` is `@internal` and reserved for legacy-channel transition until removal). `context.sessionId` identifies the invoking session. Supply routing again on resume. `resume()` restores a channel saved in `vela.db`, and supplying that same channel again writes nothing. Fork and clone omit routing.
 
-An existing unbound session accepts its first scope/channel binding while preserving object identity and its original cwd, tools and model. The binding is synchronous, and its `session_channel` entry is written like other session metadata: `listSessions()` shows the channel once that queued write completes (on `session.save()`, the next prompt, or `close()`). Repeating the same route is allowed. A channel already saved for the session is that binding after `resume()`, including when the new session was opened with a channel before `resume()`. A different channel throws an error named `SessionRoutingConflictError`, containing the session ID and both routes, without retry or rebinding. Other session options remain first-open-only.
+An existing unbound session accepts its first channel binding while preserving object identity and its original cwd, tools and model. The binding is synchronous, and its `channel` metadata is written like other session metadata: `listSessions()` shows the channel once that queued write completes (on `session.save()`, the next prompt, or `close()`). Repeating the same route is allowed. A channel already saved for the session is that binding after `resume()`, including when the new session was opened with a channel before `resume()`. A different channel throws an error named `SessionRoutingConflictError`, containing the session ID and both routes, without retry or rebinding. Other session options remain first-open-only.
 
 `session.getActiveTools()` returns the tools currently exposed to the model; use `tools` or `setActiveTools()` to control the selection. `session.save()` flushes pending session updates to `vela.db` and rejects on error. It does not close the session.
 

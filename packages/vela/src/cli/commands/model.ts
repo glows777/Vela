@@ -25,7 +25,7 @@ export const modelCommands: CommandHandler[] = [
       current = `(unavailable: ${error instanceof Error ? error.message : error})`
     }
     const lines = [`\n[model] Current: ${current}`]
-    const models = vela.models()
+    const models = vela.models({ channel: session.channel })
     if (models.length) {
       lines.push(
         '  Available models (switch with /model <provider/id>; unlisted ids work too):',

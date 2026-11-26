@@ -1,7 +1,6 @@
 import type { VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import { type ToolContent, toolContentText } from '../messages.ts'
-import type { SessionScope } from '../session/scope.ts'
 
 /** Execution metadata attached to a tool result (recorded on `vela_tool_calls` and `tool` messages). */
 export interface ExecutionMetadata {
@@ -118,7 +117,6 @@ export class ToolResultError extends Error {
 }
 
 export interface ToolRegistryForkOptions {
-  scope?: () => Readonly<SessionScope> | undefined
   /** This session's event callback */
   onEvent?: VelaEventListener
   /** Session id passed to hooks */

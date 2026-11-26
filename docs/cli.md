@@ -158,7 +158,7 @@ Vela's own keys:
 | Ctrl+C | Clear the editor; press twice within half a second to exit. |
 | Ctrl+D | Exit when the editor is empty; otherwise delete the character after the cursor. |
 
-`/hotkeys` shows the same list. On macOS, Alt is the Option key (⌥), so Vela's hints read Option+Enter and Option+Up there. The editor itself comes from `@earendil-works/pi-tui` and uses its default keys. In fullscreen mode, PageUp and PageDown scroll the transcript, and Ctrl+End jumps to the latest output:
+`/hotkeys` shows the same list. On macOS, Alt is the Option key (⌥), so Vela's hints read Option+Up there. The editor itself comes from `@earendil-works/pi-tui` and uses its default keys. In fullscreen mode, PageUp and PageDown scroll the transcript, and Ctrl+End jumps to the latest output:
 
 | Key | Action |
 |---|---|
@@ -199,7 +199,7 @@ On the command line, pass each attachment as its own `@file` argument: `vela @sh
 
 Non-image attachments are rejected before a model request if they start with `%PDF-`, contain NUL bytes or are not valid UTF-8. Convert documents with an external tool (for example `pdftotext`) before attaching their text. Supported images and valid UTF-8 text, including Chinese and emoji, are preserved.
 
-In the TUI, Ctrl+V (Alt+V on Windows) pastes what the local system clipboard holds. Copied files, such as a Finder file copy, are inserted as their original paths: one per line, or shell-quoted and space-separated in a `!` bash command. A path containing a control character is refused with a notice instead of being inserted. With no files, a copied image is written to a private temporary file and its path is inserted; submit a prompt asking the model to read it with `read`. With neither, the shortcut inserts clipboard text at the cursor. A pasted path is plain text for the model to `read`, never an image attachment. Clipboard reading only inserts content: Enter and Alt+Enter keep their normal behavior and do not wait for the read. Clipboard reads use pi-tui's native clipboard on macOS, Windows and X11, or `wl-paste` from `wl-clipboard` on Wayland; file paths come from pi-tui's native clipboard where it reports them, so Wayland keeps the image and text branches. Ordinary terminal text paste works as before. Temporary clipboard files are removed when Vela exits normally. Live and resumed history show short placeholders such as `[image png 340KB]` for user and tool images.
+In the TUI, Ctrl+V (Alt+V on Windows) pastes what the local system clipboard holds. Copied files, such as a Finder file copy, are inserted as their original paths: one per line, or shell-quoted and space-separated in a `!` bash command. A path containing a control character is refused with a notice instead of being inserted. With no files, a copied image is written to a private temporary file and its path is inserted; submit a prompt asking the model to read it with `read`. With neither, the shortcut inserts clipboard text at the cursor. A pasted path is plain text for the model to `read`, never an image attachment. Clipboard reading only inserts content: Enter keeps its normal behavior and does not wait for the read. Clipboard reads use pi-tui's native clipboard on macOS, Windows and X11, or `wl-paste` from `wl-clipboard` on Wayland; file paths come from pi-tui's native clipboard where it reports them, so Wayland keeps the image and text branches. Ordinary terminal text paste works as before. Temporary clipboard files are removed when Vela exits normally. Live and resumed history show short placeholders such as `[image png 340KB]` for user and tool images.
 
 ## Slash commands
 
@@ -214,7 +214,7 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 | `/name [name]` | Show or set the session name. |
 | `/model [provider/id]` | Without an argument, open the searchable model picker (models of providers that have a credential). With an argument, switch to that model. |
 | `/login [provider]` | Sign in to a provider (Sign in with ChatGPT, OpenRouter, or an API key) and store the credential in `~/.vela/auth.json`. See [Models](models.md#credentials-and-login). |
-| `/logout [provider]` | Remove a provider's stored credential. |
+| `/logout [provider] [--forget]` | Remove a provider's stored credential (`--forget` also forgets saved OAuth client registration so the next sign-in re-registers). |
 | `/thinking [level]` | Without an argument, open a picker of the levels the model supports. With an argument, set it (clamped to a supported level). |
 | `/compact [focus]` | Summarize the conversation now, optionally telling the summary what to focus on. |
 | `/tree` | Move to another point in the session tree, optionally summarizing the branch you leave, or label an entry. See [Sessions](sessions.md#session-tree). |
@@ -231,7 +231,7 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 
 | Command | Description |
 |---|---|
-| `/status` | Session overview: CLI version, id, where the session file is (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, loaded context files, model, thinking level, message count, context estimate and token usage. The dollar amount uses the same rounding as the footer. A channel session also shows its channel; a fork shows the session it was copied from. |
+| `/status` | Session overview: CLI version, id, where the session is saved (`vela.db` path; `not written yet` until the first save; in-memory with `--no-session`), working directory, loaded context files, model, thinking level, message count, context estimate and token usage. The dollar amount uses the same rounding as the footer. A channel session also shows its channel; a fork shows the session it was copied from. |
 | `/context` | Context window usage by category (system prompt, tools, memory, skills index, messages) and the autocompact buffer (the window above the summary threshold). |
 | `/usage` | Token usage, cache hits and cost for this session. |
 | `/skill`, `/skills` | List skills. |

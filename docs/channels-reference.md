@@ -185,7 +185,7 @@ In an owned Lark topic, send `!stop`, `!restart` or `!status` with or without an
 
 `!stop` uses the progress card's Stop operation and keeps the session and its history. It also cancels input still preparing to start. An idle topic replies that no run is active.
 
-`!restart` stops and drains the old run, retains its session file, and atomically switches the directory's `activeSessionId`, appending the old ID to `previousSessionIds`. It replies "Restarted with a fresh session" without calling the model. The next topic message, including an unmentioned one, starts the new session and reads the full topic history. The logical topic and its listing stay the same; expired Stop controls cannot affect the new generation.
+`!restart` stops and drains the old run, retains its saved session history, and atomically switches the directory's `activeSessionId`, appending the old ID to `previousSessionIds`. It replies "Restarted with a fresh session" without calling the model. The next topic message, including an unmentioned one, starts the new session and reads the full topic history. The logical topic and its listing stay the same; expired Stop controls cannot affect the new generation.
 
 `!status` replies during an active run without steering, stopping or calling the model. It shows the current model, estimated context tokens/window, and topic/group token and cost totals. A reopened session restores its saved model and context first. Status does not add a user entry or reset the topic's running/stopped state.
 

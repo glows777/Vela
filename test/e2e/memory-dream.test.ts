@@ -207,10 +207,10 @@ test('shared groups consolidate only their own inbox and never modify global or 
   const bDir = t.dataPath('groups/b')
   const a = t.vela.session('group-a', {
     scope: { id: 'a', kind: 'shared', dataDir: aDir },
-  })
+  } as import('../../packages/vela/src/driver/session/options.ts').InternalSessionOptions)
   const b = t.vela.session('group-b', {
     scope: { id: 'b', kind: 'shared', dataDir: bDir },
-  })
+  } as import('../../packages/vela/src/driver/session/options.ts').InternalSessionOptions)
   new MemoryStore(join(aDir, 'memory')).save(deploy)
   new MemoryStore(join(bDir, 'memory')).save(deploy)
   new MemoryStore(t.dataPath('memory')).save({

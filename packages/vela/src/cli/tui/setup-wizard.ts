@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SelectItem } from '@earendil-works/pi-tui'
 import { formatJsonParseError } from '../../config/index.ts'
+import { openDatabase } from '../../db/index.ts'
 import { THINKING_LEVELS } from '../../driver/diagnostics.ts'
 import {
   type AuthInteraction,
@@ -15,7 +16,10 @@ import {
   type VelaSession,
   verifyProviderModel,
 } from '../../driver/index.ts'
+import type { OAuthRegistrationStore } from '../../providers/auth/types.ts'
+import { SqliteOAuthRegistrationStore } from '../../runtime/index.ts'
 import { saveModelSetup } from '../../settings.ts'
+import type { OAuthRegistration } from '../../shared/oauth-registration.ts'
 import type { Vela } from '../../vela.ts'
 import { createVela } from '../../vela.ts'
 import { openBrowser } from '../login.ts'
@@ -158,10 +162,38 @@ export async function setupWizard(host: Host): Promise<boolean> {
   ).fileCredentialStore(authPath)
   const stored = diskCredentials.get(provider)
   const memory = memoryCredentialStore(stored ? { [provider]: stored } : {})
+  const dbPath = join(agentDir, 'vela.db')
+  const readDiskRegistration = (
+    name: string,
+  ): OAuthRegistration | undefined => {
+    if (!existsSync(dbPath)) return undefined
+    const db = openDatabase({ path: dbPath, readonly: true })
+    try {
+      return new SqliteOAuthRegistrationStore(db).get(name)
+    } finally {
+      db.close()
+    }
+  }
+  const stagedRegistrations = new Map<string, OAuthRegistration | null>()
+  const stagingRegistrations: OAuthRegistrationStore = {
+    get: (name) =>
+      stagedRegistrations.has(name)
+        ? (stagedRegistrations.get(name) ?? undefined)
+        : readDiskRegistration(name),
+    set: (name, registration) => {
+      stagedRegistrations.set(name, registration)
+    },
+    delete: (name) => {
+      const existed = stagingRegistrations.get(name) !== undefined
+      stagedRegistrations.set(name, null)
+      return existed
+    },
+  }
   const temporary = createVela({
     providers,
     credentials: memory,
     cwd: host.vela.cwd,
+    registrations: stagingRegistrations,
   })
   let newCredential = false
   let newInstallationId: string | undefined
@@ -383,6 +415,26 @@ export async function setupWizard(host: Host): Promise<boolean> {
     )
     if (save !== 'yes') return false
     const written: string[] = []
+    let prevRegistration: ReturnType<SqliteOAuthRegistrationStore['get']>
+    let hasPrevRegistration = false
+    let registrationUpdated = false
+    const applyStagedRegistration = (mode: 'apply' | 'rollback'): void => {
+      const staged = stagedRegistrations.get(provider)
+      const next = mode === 'apply' ? staged : prevRegistration
+      if (!next && !existsSync(dbPath)) return
+      const db = openDatabase({ path: dbPath })
+      try {
+        const regStore = new SqliteOAuthRegistrationStore(db)
+        if (mode === 'apply') {
+          prevRegistration = regStore.get(provider)
+          hasPrevRegistration = true
+        }
+        if (next) regStore.set(provider, next)
+        else regStore.delete(provider)
+      } finally {
+        db.close()
+      }
+    }
     try {
       mkdirSync(agentDir, { recursive: true, mode: 0o700 })
       if (newInstallationId) {
@@ -392,17 +444,36 @@ export async function setupWizard(host: Host): Promise<boolean> {
         )
         written.push(join(agentDir, 'installation-id'))
       }
-      const saved = await saveModelSetup({
-        agentDir,
-        ref,
-        providers: finalProviders,
-        ...(newCredential ||
-        JSON.stringify(memory.get(provider)) !== JSON.stringify(stored)
-          ? { credential: memory.get(provider) }
-          : {}),
-        ...(finalOverride ? { preset: finalOverride } : {}),
-        thinkingLevel: thinking as ThinkingLevel,
-      })
+      if (stagedRegistrations.has(provider)) {
+        applyStagedRegistration('apply')
+        registrationUpdated = true
+      }
+      let saved: Awaited<ReturnType<typeof saveModelSetup>>
+      try {
+        saved = await saveModelSetup({
+          agentDir,
+          ref,
+          providers: finalProviders,
+          ...(newCredential ||
+          JSON.stringify(memory.get(provider)) !== JSON.stringify(stored)
+            ? { credential: memory.get(provider) }
+            : {}),
+          ...(finalOverride ? { preset: finalOverride } : {}),
+          thinkingLevel: thinking as ThinkingLevel,
+        })
+      } catch (error) {
+        const authPath = join(agentDir, 'auth.json')
+        const wroteAuth =
+          error instanceof Error && error.message.includes(authPath)
+        if (registrationUpdated && hasPrevRegistration && !wroteAuth) {
+          try {
+            applyStagedRegistration('rollback')
+          } catch {
+            /* preserve saveModelSetup error */
+          }
+        }
+        throw error
+      }
       written.push(...saved.written)
       host.vela.configureProvider(provider, saved.definition)
       host.vela.setDefaults(ref, thinking as ThinkingLevel)

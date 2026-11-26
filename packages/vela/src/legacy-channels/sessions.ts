@@ -276,7 +276,7 @@ export class ChannelSessions {
               },
             }
           : undefined,
-    })
+    } as InternalSessionOptions)
     if (options?.location) this.targets.set(session, options.location)
     // The chat's own split applies to a session something else opened too: a tool its chat turns off is
     // removed, and a hub's background commands are added, as when this call constructs the session.

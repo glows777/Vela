@@ -7,6 +7,7 @@ import {
   type ToolResultOutput,
   toolContentText,
 } from './messages.ts'
+import { getRegistryScope, setToolContextScope } from './session/scope.ts'
 import {
   checkCallableTool,
   createLocatedEnvResolver,
@@ -184,17 +185,19 @@ async function runSingleToolCall(
       let raw: unknown
       try {
         signal?.throwIfAborted()
-        raw = await tool.execute(input, {
+        const toolContext = {
           ...context,
           requireEnv: located?.requireEnv,
           background: registry.background,
-          scope: registry.currentScope(),
           spillDir: registry.spillDir,
           toolCallId: row.tool_call_id,
           signal,
           registry,
           onUpdate,
-        })
+        }
+        const scope = getRegistryScope(registry)
+        if (scope) setToolContextScope(toolContext, scope)
+        raw = await tool.execute(input, toolContext)
         const alreadyAbortedError =
           (raw instanceof ToolExecutionResult ||
             raw instanceof SpilledToolOutput) &&

@@ -75,11 +75,9 @@ export interface SessionHost {
   ): void | Promise<void>
 }
 
-/** Options for `vela.session(id, options)`; `scope` and `channel` also bind an already-open session. */
+/** Options for `vela.session(id, options)`; `channel` also binds an already-open session. */
 export interface SessionOptions {
-  /** Transient storage sharing identity; first routing binding can attach to an already-open session. */
-  scope?: SessionScope
-  /** Provider channel and tool eligibility, bound together with scope before hooks. */
+  /** Provider channel and tool eligibility, bound together with channel routing before hooks. */
   channel?: string
   /** Working directory for this session's tools and automatic context; relative to Vela's cwd. */
   cwd?: string
@@ -100,9 +98,10 @@ export interface SessionOptions {
   unattended?: boolean
 }
 
-/** @internal Session options including the transitional `legacy-channels` host hook. */
+/** @internal Session options including the transitional `legacy-channels` host hook and storage scope. */
 export interface InternalSessionOptions extends SessionOptions {
   host?: SessionHost
+  scope?: SessionScope
 }
 
 export type SessionPersistence =
