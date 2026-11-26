@@ -74,6 +74,48 @@ test('#591: checkDocsConsistency catches retired APIs, legacy migration claims, 
     expect(missingUnscoped).toContain(
       'docs/upgrading.md: trusted_paths entry must document',
     )
+
+    // #593: verify createRuntime() hostEnv default checks between runtime-sdk.ts, docs/sdk.md, and CHANGELOG.md
+    mkdirSync(join(root, 'packages/vela/src'), { recursive: true })
+    writeFileSync(
+      join(root, 'packages/vela/src/runtime-sdk.ts'),
+      'const hostEnv = options.hostEnv ?? {}\n',
+    )
+    writeFileSync(
+      join(root, 'CHANGELOG.md'),
+      '## [Unreleased]\n\n- `createRuntime()` now defaults `hostEnv` to `process.env` ($VELA_DIR/vela.db fallback createVela({ dataDir }) `<dataDir>/vela.db`).\n',
+    )
+    const hostEnvMismatch = (await checkDocsConsistency(root)).join('\n')
+    expect(hostEnvMismatch).toContain(
+      'CHANGELOG.md [Unreleased]: falsely claims createRuntime() defaults hostEnv to process.env',
+    )
+    expect(hostEnvMismatch).toContain(
+      'docs/sdk.md: must document that createRuntime() hostEnv defaults to {} (#593)',
+    )
+    expect(hostEnvMismatch).toContain(
+      'CHANGELOG.md [Unreleased]: must agree with docs/sdk.md and runtime-sdk.ts that createRuntime() hostEnv defaults to {} (#593)',
+    )
+
+    // Contradictory "inherits process.env" wording must still be rejected even alongside the "{}" sentence
+    writeFileSync(
+      join(root, 'CHANGELOG.md'),
+      '## [Unreleased]\n\n- `createRuntime()` keeps `hostEnv` defaulting to `{}`. Note: `createRuntime()` inherits `process.env` when `hostEnv` is omitted ($VELA_DIR/vela.db fallback createVela({ dataDir }) `<dataDir>/vela.db`).\n',
+    )
+    expect((await checkDocsConsistency(root)).join('\n')).toContain(
+      'CHANGELOG.md [Unreleased]: falsely claims createRuntime() defaults hostEnv to process.env',
+    )
+
+    // When docs/sdk.md states the default and CHANGELOG.md [Unreleased] does not mention hostEnv, neither #593 error fires
+    writeFileSync(
+      join(root, 'docs/sdk.md'),
+      '$VELA_DIR/vela.db\n`hostEnv` defaults to `{}`\n',
+    )
+    writeFileSync(
+      join(root, 'CHANGELOG.md'),
+      '## [Unreleased]\n\n$VELA_DIR/vela.db fallback createVela({ dataDir }) `<dataDir>/vela.db`\n',
+    )
+    const noHostEnvErrors = (await checkDocsConsistency(root)).join('\n')
+    expect(noHostEnvErrors).not.toContain('#593')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

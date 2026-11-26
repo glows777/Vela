@@ -33,6 +33,7 @@ export function assistantText(msg: AssistantModelMessage | undefined): string {
 async function expandHumanText(
   text: string,
   skills: readonly SkillDefinition[] | undefined,
+  hostSkills: ReadonlySet<SkillDefinition> | undefined,
   promptTemplates: readonly PromptTemplate[] | undefined,
   resolveEnv: () => Promise<ExecutionEnv>,
   signal: AbortSignal,
@@ -43,6 +44,7 @@ async function expandHumanText(
       skills,
       await resolveEnv(),
       signal,
+      hostSkills,
     )
     if (expanded !== undefined) return expanded
   }
@@ -57,6 +59,7 @@ async function formatInboxItemText(
   item: DriverInboxItem,
   options: {
     skills?: readonly SkillDefinition[]
+    hostSkills?: ReadonlySet<SkillDefinition>
     promptTemplates?: readonly PromptTemplate[]
     resolveEnv: () => Promise<ExecutionEnv>
     signal: AbortSignal
@@ -105,6 +108,7 @@ async function formatInboxItemText(
     const body = await expandHumanText(
       rawBody,
       options.skills,
+      options.hostSkills,
       options.promptTemplates,
       options.resolveEnv,
       options.signal,
@@ -116,6 +120,7 @@ async function formatInboxItemText(
     const expanded = await expandHumanText(
       rawBody,
       options.skills,
+      options.hostSkills,
       options.promptTemplates,
       options.resolveEnv,
       options.signal,
@@ -397,6 +402,7 @@ export async function prepareRuntimeTurnMessages(options: {
   resolveEnv: () => Promise<ExecutionEnv>
   signal: AbortSignal
   skills?: readonly SkillDefinition[]
+  hostSkills?: ReadonlySet<SkillDefinition> | readonly SkillDefinition[]
   promptTemplates?: readonly PromptTemplate[]
   onlyWaitForInput?: boolean
   deferWaitForInput?: boolean
@@ -413,6 +419,7 @@ export async function prepareRuntimeTurnMessages(options: {
     resolveEnv,
     signal,
     skills,
+    hostSkills,
     promptTemplates,
     onlyWaitForInput = false,
     deferWaitForInput = false,
@@ -501,11 +508,19 @@ export async function prepareRuntimeTurnMessages(options: {
       : { hasHumanText: false }
   }
 
+  const hostSkillSet = !hostSkills
+    ? undefined
+    : 'has' in hostSkills
+      ? hostSkills
+      : hostSkills.length > 0
+        ? new Set(hostSkills)
+        : undefined
   const lines: string[] = []
   const humanLines: string[] = []
   for (const item of usableInputs) {
     const formatted = await formatInboxItemText(item, {
       skills,
+      hostSkills: hostSkillSet,
       promptTemplates,
       resolveEnv,
       signal,

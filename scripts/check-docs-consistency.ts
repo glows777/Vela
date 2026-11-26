@@ -205,6 +205,51 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
     }
   }
 
+  const runtimeSdkPath = join(root, 'packages/vela/src/runtime-sdk.ts')
+  const runtimeSdk = existsSync(runtimeSdkPath)
+    ? await readFile(runtimeSdkPath, 'utf8')
+    : undefined
+  const sdkDefaultsHostEnvEmpty =
+    runtimeSdk === undefined ||
+    /const hostEnv = options\.hostEnv \?\? \{\}/.test(runtimeSdk)
+  const sdkDocText = existsSync(sdkDocPath)
+    ? await readFile(sdkDocPath, 'utf8')
+    : ''
+  const claimsDefaultProcessEnv = (text: string) =>
+    /hostEnv`?[^\n.]*\bdefaults?\s+to\s+`?process\.env`?/i.test(text) ||
+    /\bdefaults?\s+`?hostEnv`?\s+to\s+`?process\.env`?/i.test(text) ||
+    /`?hostEnv`?[^\n.]*\binherits?\s+`?process\.env`?/i.test(text) ||
+    /\binherits?\s+`?process\.env`?[^\n.]*`?hostEnv`?/i.test(text) ||
+    /\bdefaults?\s+to\s+inheriting\s+`?process\.env`?/i.test(text)
+  const statesDefaultEmptyObject = (text: string) =>
+    /`?hostEnv`?\s+(?:defaults?|defaulting)\s+to\s+`?\{\}`?/i.test(text)
+
+  if (claimsDefaultProcessEnv(unreleased)) {
+    errors.push(
+      'CHANGELOG.md [Unreleased]: falsely claims createRuntime() defaults hostEnv to process.env (it defaults to {}) (#593)',
+    )
+  }
+  if (claimsDefaultProcessEnv(sdkDocText)) {
+    errors.push(
+      'docs/sdk.md: falsely claims createRuntime() defaults hostEnv to process.env (it defaults to {}) (#593)',
+    )
+  }
+  if (sdkDefaultsHostEnvEmpty) {
+    if (sdkDocText && !statesDefaultEmptyObject(sdkDocText)) {
+      errors.push(
+        'docs/sdk.md: must document that createRuntime() hostEnv defaults to {} (#593)',
+      )
+    }
+    if (
+      /\bhostEnv\b/.test(unreleased) &&
+      !statesDefaultEmptyObject(unreleased)
+    ) {
+      errors.push(
+        'CHANGELOG.md [Unreleased]: must agree with docs/sdk.md and runtime-sdk.ts that createRuntime() hostEnv defaults to {} (#593)',
+      )
+    }
+  }
+
   return errors
 }
 

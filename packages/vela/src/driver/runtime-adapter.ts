@@ -21,6 +21,7 @@ import { silentLogger } from '../shared/logger.ts'
 import { ContextManager } from './context/manager.ts'
 import { resolveRequestSnapshot } from './context/request.ts'
 import { createSessionLocalExecutionEnv } from './execution/local.ts'
+import { resolveLocation } from './execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import type { MemoryDream } from './memory/dream.ts'
 import {
@@ -210,11 +211,7 @@ export function createVelaAgentDriver(
       })
       store = activeStore
       const saved = await activeStore.loadSaved()
-      const cwd = saved?.location?.cwd ?? process.cwd()
-      const location: ExecutionLocation = saved?.location ?? {
-        environment: 'local',
-        cwd,
-      }
+      const location: ExecutionLocation = resolveLocation(saved?.location)
       const boundChannel =
         getActiveChannelForSession(
           options.db,
@@ -490,6 +487,7 @@ export function createVelaAgentDriver(
           resolveEnv,
           signal: controller.signal,
           skills: resources.skills,
+          hostSkills: resources.hostSkills,
           promptTemplates: resources.promptTemplates,
           onlyWaitForInput: alreadyHasRunMessages,
           deferWaitForInput: defer,

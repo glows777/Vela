@@ -1,3 +1,4 @@
+import { sameLocation } from '../driver/execution/location.ts'
 import { setDefaultToolModifiers } from '../driver/index.ts'
 import type { InternalSessionOptions } from '../driver/session/options.ts'
 import type { SessionOptions, VelaSession } from '../extension-api.ts'
@@ -33,9 +34,10 @@ export class ChannelSessions {
     const target = this.targets.get(session)
     return (
       !target ||
-      (session.location.environment === target.environment &&
-        // A local group binding preserves the cwd of a topic already opened by its host.
-        (target.environment === 'local' || session.cwd === target.cwd))
+      // A local group binding preserves the cwd of a topic already opened by its host.
+      (target.environment === 'local'
+        ? session.location.environment === 'local'
+        : sameLocation(session.location, target))
     )
   }
 
@@ -54,10 +56,7 @@ export class ChannelSessions {
     const target = this.targets.get(session)
     if (!target) return
     let notice = this.directory.get(key)?.locationNotice
-    if (
-      notice &&
-      (target.environment !== notice.environment || target.cwd !== notice.cwd)
-    ) {
+    if (notice && !sameLocation(target, notice)) {
       await this.directory.setLocationNotice(key, session.id, undefined)
       notice = undefined
     }

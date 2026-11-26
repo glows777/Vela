@@ -96,17 +96,7 @@ export class SkillLoader {
     const name = space === -1 ? text.slice(7) : text.slice(7, space)
     const skill = this.skills.get(name)
     if (!skill) return
-    const args = space === -1 ? '' : text.slice(space + 1).trim()
-    let body: string
-    try {
-      body = parseFrontmatter(fs.readFileSync(skill.filePath, 'utf-8')).body
-    } catch (error) {
-      throw new Error(
-        `Could not load skill ${name} from ${skill.filePath}: ${(error as Error).message}`,
-      )
-    }
-    const block = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`
-    return args ? `${block}\n\n${args}` : block
+    return expandHostSkill(text, skill)
   }
 
   private loadDir(dir: string, includeRootFiles: boolean): SkillDefinition[] {
@@ -201,6 +191,30 @@ function isFile(dir: string, entry: fs.Dirent): boolean {
   } catch {
     return false
   }
+}
+
+export function formatSkillExpansion(
+  skill: SkillDefinition,
+  rawContent: string,
+  args: string,
+): string {
+  const body = parseFrontmatter(rawContent).body
+  const block = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`
+  return args ? `${block}\n\n${args}` : block
+}
+
+export function expandHostSkill(text: string, skill: SkillDefinition): string {
+  const space = text.search(/\s/)
+  const args = space === -1 ? '' : text.slice(space + 1).trim()
+  let raw: string
+  try {
+    raw = fs.readFileSync(skill.filePath, 'utf-8')
+  } catch (error) {
+    throw new Error(
+      `Could not load skill ${skill.name} from ${skill.filePath}: ${(error as Error).message}`,
+    )
+  }
+  return formatSkillExpansion(skill, raw, args)
 }
 
 function escapeXml(text: string): string {

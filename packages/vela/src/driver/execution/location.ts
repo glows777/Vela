@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, posix, resolve } from 'node:path'
 import type { ExecutionLocation } from './types.ts'
 
 /** Local paths follow host rules. A remote cwd is already in its environment's namespace. */
@@ -24,7 +24,7 @@ export function resolveLocation(
       )
     return Object.freeze({
       environment: location.environment,
-      cwd: location.cwd,
+      cwd: posix.resolve('/', location.cwd),
     })
   }
   return Object.freeze({
@@ -72,5 +72,7 @@ export function sameLocation(
   left: ExecutionLocation,
   right: ExecutionLocation,
 ) {
-  return left.environment === right.environment && left.cwd === right.cwd
+  if (left.environment !== right.environment) return false
+  if (left.environment === 'local') return left.cwd === right.cwd
+  return posix.resolve('/', left.cwd) === posix.resolve('/', right.cwd)
 }
