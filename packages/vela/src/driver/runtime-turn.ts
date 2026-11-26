@@ -402,7 +402,7 @@ export async function prepareRuntimeTurnMessages(options: {
   resolveEnv: () => Promise<ExecutionEnv>
   signal: AbortSignal
   skills?: readonly SkillDefinition[]
-  hostSkills?: readonly SkillDefinition[]
+  hostSkills?: ReadonlySet<SkillDefinition> | readonly SkillDefinition[]
   promptTemplates?: readonly PromptTemplate[]
   onlyWaitForInput?: boolean
   deferWaitForInput?: boolean
@@ -508,7 +508,13 @@ export async function prepareRuntimeTurnMessages(options: {
       : { hasHumanText: false }
   }
 
-  const hostSkillSet = hostSkills?.length ? new Set(hostSkills) : undefined
+  const hostSkillSet = !hostSkills
+    ? undefined
+    : 'has' in hostSkills
+      ? hostSkills
+      : hostSkills.length > 0
+        ? new Set(hostSkills)
+        : undefined
   const lines: string[] = []
   const humanLines: string[] = []
   for (const item of usableInputs) {

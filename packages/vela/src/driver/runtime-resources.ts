@@ -44,6 +44,8 @@ export interface TrustedRuntimeResources {
   appendSystemPrompt?: string
   contextFiles: ContextFile[]
   skills: SkillDefinition[]
+  /** Unshadowed skills originating from explicit SDK `hostSkills` (for host `/skill:<name>` fallback). */
+  hostSkills: ReadonlySet<SkillDefinition>
   promptTemplates: PromptTemplate[]
 }
 
@@ -70,6 +72,7 @@ export async function loadTrustedRuntimeResources(options: {
   const trustScopeDir = options.trustDataDir ?? options.agentDir
   const contextFiles: ContextFile[] = []
   const skillsByName = new Map<string, SkillDefinition>()
+  const hostSkillSet = new Set<SkillDefinition>()
   const templatesByName = new Map<string, PromptTemplate>()
 
   if (options.hostContextFiles !== undefined) {
@@ -77,12 +80,6 @@ export async function loadTrustedRuntimeResources(options: {
   } else if (isLocal) {
     const userContext = loadAgentContextFile(options.agentDir)
     if (userContext) contextFiles.push(userContext)
-  }
-  const userSkills =
-    options.hostSkills ??
-    (isLocal ? new SkillLoader([join(options.agentDir, 'skills')]).load() : [])
-  for (const skill of userSkills) {
-    skillsByName.set(skill.name, skill)
   }
   const userTemplates =
     options.hostPromptTemplates ??
@@ -115,6 +112,42 @@ export async function loadTrustedRuntimeResources(options: {
       ) === true
   }
 
+  if (!isLocal && options.hostSkills?.length) {
+    env ??= await options.resolveEnv()
+    for (const skill of options.hostSkills) {
+      let accessibleInEnv = false
+      if (skill.filePath.startsWith('/')) {
+        const exists = await env.exists(skill.filePath, options.signal)
+        accessibleInEnv = exists.ok && exists.value
+      }
+      // Do not advertise host-only paths in <available_skills> where guest tools cannot read them.
+      const effective =
+        !accessibleInEnv && !skill.disableModelInvocation
+          ? { ...skill, disableModelInvocation: true }
+          : skill
+      skillsByName.set(effective.name, effective)
+      hostSkillSet.add(effective)
+    }
+  } else {
+    const userSkills =
+      options.hostSkills ??
+      (isLocal
+        ? new SkillLoader([join(options.agentDir, 'skills')]).load()
+        : [])
+    for (const skill of userSkills) {
+      skillsByName.set(skill.name, skill)
+      if (options.hostSkills !== undefined) hostSkillSet.add(skill)
+    }
+  }
+
+  const buildSkillResult = () => {
+    const skills = [...skillsByName.values()]
+    return {
+      skills,
+      hostSkills: new Set(skills.filter((s) => hostSkillSet.has(s))),
+    }
+  }
+
   if (!trusted) {
     const systemPrompt =
       options.systemPrompt ??
@@ -127,7 +160,7 @@ export async function loadTrustedRuntimeResources(options: {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(appendSystemPrompt !== undefined ? { appendSystemPrompt } : {}),
       contextFiles,
-      skills: [...skillsByName.values()],
+      ...buildSkillResult(),
       promptTemplates: [...templatesByName.values()],
     }
   }
@@ -211,7 +244,7 @@ export async function loadTrustedRuntimeResources(options: {
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(appendSystemPrompt !== undefined ? { appendSystemPrompt } : {}),
     contextFiles,
-    skills: [...skillsByName.values()],
+    ...buildSkillResult(),
     promptTemplates: [...templatesByName.values()],
   }
 }

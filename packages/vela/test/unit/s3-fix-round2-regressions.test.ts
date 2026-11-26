@@ -16,6 +16,7 @@ import { createVelaAgentDriver } from '../../src/driver/runtime-adapter.ts'
 import { loadTrustedRuntimeResources } from '../../src/driver/runtime-resources.ts'
 import type { ProjectConfig } from '../../src/driver/session/project-config.ts'
 import { resolveSessionExecution } from '../../src/driver/session/workspace.ts'
+import { formatSkillsForPrompt } from '../../src/driver/skills/loader.ts'
 import { McpConnection } from '../../src/mcp/connection.ts'
 import { dockerContainerId } from '../../src/runtime/docker/container.ts'
 import { withDockerCwd } from '../../src/runtime/docker/operations.ts'
@@ -567,7 +568,21 @@ function makeRemoteDockerEnv(rootDir: string, cwd: string): ExecutionEnv {
   mkdirSync(containerRoot, { recursive: true })
   const local = createLocalExecutionEnv({ cwd: containerRoot })
   const baseAbsolutePath = local.absolutePath.bind(local)
+  const baseExists = local.exists.bind(local)
+  const baseFileInfo = local.fileInfo.bind(local)
+  const baseReadTextFile = local.readTextFile.bind(local)
   const baseJoinPath = local.joinPath.bind(local)
+  const normCwd = cwd.replace(/\/+$/, '') || '/'
+  const mapGuestPath = (p: string): string => {
+    if (p.startsWith('~/.vela')) return join(containerRoot, '.vela-missing')
+    if (p === normCwd || p.startsWith(`${normCwd}/`)) {
+      const rel = p.slice(normCwd.length).replace(/^\/+/, '')
+      return rel ? join(containerRoot, rel) : containerRoot
+    }
+    if (p === containerRoot || p.startsWith(`${containerRoot}/`)) return p
+    if (!p.startsWith('/')) return join(containerRoot, p)
+    return join(containerRoot, '__host_only_missing__')
+  }
   return Object.assign(local, {
     id: 'docker:dev',
     cwd,
@@ -575,16 +590,16 @@ function makeRemoteDockerEnv(rootDir: string, cwd: string): ExecutionEnv {
     [dockerContainerId]: 'cid-norm-1',
     [withDockerCwd]: (nextCwd: string) => makeRemoteDockerEnv(rootDir, nextCwd),
     async absolutePath(p: string, s?: AbortSignal) {
-      if (p.startsWith('~/.vela')) {
-        return {
-          ok: true as const,
-          value: join(containerRoot, '.vela-missing'),
-        }
-      }
-      const rel = p.startsWith(cwd)
-        ? p.slice(cwd.length).replace(/^\/+/, '')
-        : p
-      return baseAbsolutePath(rel || '.', s)
+      return baseAbsolutePath(mapGuestPath(p), s)
+    },
+    async exists(p: string, s?: AbortSignal) {
+      return baseExists(mapGuestPath(p), s)
+    },
+    async fileInfo(p: string, s?: AbortSignal) {
+      return baseFileInfo(mapGuestPath(p), s)
+    },
+    async readTextFile(p: string, s?: AbortSignal) {
+      return baseReadTextFile(mapGuestPath(p), s)
     },
     async joinPath(parts: string[], s?: AbortSignal) {
       const mapped = parts.map((part) => (part === cwd ? containerRoot : part))
@@ -597,6 +612,12 @@ test('#594: loadTrustedRuntimeResources preserves explicit SDK host resources on
   const dir = tempDir('vela-docker-host-ctx-')
   const agentDir = join(dir, 'agent')
   mkdirSync(agentDir, { recursive: true })
+  const containerSkillDir = join(dir, 'container-ws/custom-skill')
+  mkdirSync(containerSkillDir, { recursive: true })
+  writeFileSync(
+    join(containerSkillDir, 'SKILL.md'),
+    '---\nname: container-skill\ndescription: Readable inside container\n---\nContainer body\n',
+  )
   const db = openDatabase({ path: join(agentDir, 'vela.db') })
   // Implicit local host file should NOT be loaded for non-local sessions
   writeFileSync(
@@ -613,6 +634,13 @@ test('#594: loadTrustedRuntimeResources preserves explicit SDK host resources on
       description: 'Host skill',
       filePath: 'host://skill.md',
       baseDir: 'host://',
+      disableModelInvocation: false,
+    },
+    {
+      name: 'container-skill',
+      description: 'Readable inside container',
+      filePath: '/workspace/custom-skill/SKILL.md',
+      baseDir: '/workspace/custom-skill',
       disableModelInvocation: false,
     },
   ]
@@ -639,7 +667,15 @@ test('#594: loadTrustedRuntimeResources preserves explicit SDK host resources on
   })
   expect(res.trusted).toBe(false)
   expect(res.contextFiles).toEqual(hostContextFiles)
-  expect(res.skills.map((s) => s.name)).toEqual(['host-skill'])
+  expect(res.skills.map((s) => s.name)).toEqual([
+    'host-skill',
+    'container-skill',
+  ])
+  expect(res.skills[0]?.disableModelInvocation).toBe(true)
+  expect(res.skills[1]?.disableModelInvocation).toBe(false)
+  const advertisedUntrusted = formatSkillsForPrompt(res.skills, ['read'])
+  expect(advertisedUntrusted).toContain('container-skill')
+  expect(advertisedUntrusted).not.toContain('host-skill')
   expect(res.promptTemplates.map((t) => t.name)).toEqual(['host-tpl'])
 
   const trustedRes = await loadTrustedRuntimeResources({
@@ -655,7 +691,12 @@ test('#594: loadTrustedRuntimeResources preserves explicit SDK host resources on
   })
   expect(trustedRes.trusted).toBe(true)
   expect(trustedRes.contextFiles).toEqual(hostContextFiles)
-  expect(trustedRes.skills.map((s) => s.name)).toEqual(['host-skill'])
+  expect(trustedRes.skills.map((s) => s.name)).toEqual([
+    'host-skill',
+    'container-skill',
+  ])
+  expect(trustedRes.skills[0]?.disableModelInvocation).toBe(true)
+  expect(trustedRes.skills[1]?.disableModelInvocation).toBe(false)
   expect(trustedRes.promptTemplates.map((t) => t.name)).toEqual(['host-tpl'])
 
   db.close()
@@ -725,10 +766,12 @@ test('#594: non-local trailing-slash Docker cwd normalizes consistently across r
     environments: envReg,
   })
   const seenPrompts: string[] = []
+  const seenSystems: string[] = []
   const model = createFauxModel({
     responses: [
       (req) => {
         seenPrompts.push(req.lastUserText)
+        seenSystems.push(req.system)
         return fauxText('docker ok')
       },
     ],
@@ -766,6 +809,8 @@ test('#594: non-local trailing-slash Docker cwd normalizes consistently across r
   expect(lastRun?.status).toBe('completed')
   expect(lastRun?.error).toBeNull()
   expect(seenPrompts.join('\n')).toContain('Run the host checklist carefully.')
+  expect(seenSystems.join('\n')).not.toContain(hostSkillPath)
+  expect(seenSystems.join('\n')).not.toContain('<available_skills>')
 
   await runtime.dispose()
   db.close()

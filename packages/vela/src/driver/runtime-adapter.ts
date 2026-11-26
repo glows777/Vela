@@ -487,7 +487,7 @@ export function createVelaAgentDriver(
           resolveEnv,
           signal: controller.signal,
           skills: resources.skills,
-          hostSkills: options.skills,
+          hostSkills: resources.hostSkills,
           promptTemplates: resources.promptTemplates,
           onlyWaitForInput: alreadyHasRunMessages,
           deferWaitForInput: defer,
