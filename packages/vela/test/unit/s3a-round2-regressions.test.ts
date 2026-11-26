@@ -29,7 +29,7 @@ import {
 import { parseServers } from '../../src/mcp/config.ts'
 import { McpPool, mcp } from '../../src/mcp/index.ts'
 import { dockerContainerId } from '../../src/runtime/docker/container.ts'
-import { EnvironmentRegistry } from '../../src/runtime/index.ts'
+import { createEnvironmentRegistryForTest } from '../../src/runtime/environments.ts'
 import { silentLogger } from '../../src/shared/logger.ts'
 import {
   createFauxModel,
@@ -400,7 +400,7 @@ test('R2-P1-5 & R2-P1-6: in-flight invalidated probe retries cleanly and complet
   let holdProbe = true
   const cleanups: string[] = []
 
-  const reg = new EnvironmentRegistry({
+  const reg = createEnvironmentRegistryForTest({
     dataDir: dir.path,
     environments: { dev: { image: 'vela-base:local' } },
     openDocker: async (_opts, cwd = '/workspace') => {

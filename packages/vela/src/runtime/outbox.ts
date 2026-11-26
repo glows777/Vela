@@ -262,6 +262,43 @@ export class OutboxDispatcher {
     return rows.map(rowToOutbox)
   }
 
+  /**
+   * Returns the earliest pending wake timestamp among deliverable `(session_id, channel)` FIFO queue heads,
+   * skipping followers blocked behind an in-flight or backing-off queue head.
+   */
+  nextPendingWakeAt(channels: readonly string[]): string | null {
+    if (channels.length === 0) return null
+    const allowed = new Set(channels)
+    const rows = this.db.all<{
+      session_id: string | null
+      channel: string
+      status: string
+      next_retry_at: string | null
+      created_at: string
+    }>(
+      `SELECT session_id, channel, status, next_retry_at, created_at
+       FROM outbox
+       WHERE status IN ('pending', 'sending')
+       ORDER BY created_at ASC, rowid ASC`,
+    )
+    const seenHeads = new Set<string>()
+    let earliest: string | null = null
+    let earliestMs = Number.POSITIVE_INFINITY
+    for (const row of rows) {
+      const fifoKey = `${row.session_id}:${row.channel}`
+      if (seenHeads.has(fifoKey)) continue
+      seenHeads.add(fifoKey)
+      if (row.status !== 'pending' || !allowed.has(row.channel)) continue
+      const candidate = row.next_retry_at ?? row.created_at
+      const ms = Date.parse(candidate)
+      if (Number.isFinite(ms) && ms < earliestMs) {
+        earliestMs = ms
+        earliest = candidate
+      }
+    }
+    return earliest
+  }
+
   listBySession(sessionId: string): OutboxRecord[] {
     const rows = this.db.all<Record<string, unknown>>(
       `SELECT * FROM outbox WHERE session_id = ? ORDER BY created_at ASC`,

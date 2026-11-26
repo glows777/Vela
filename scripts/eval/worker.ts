@@ -394,8 +394,8 @@ export async function runAttempt(
         ? {
             tools:
               config.arm === 'old'
-                ? ['read', 'write', 'ls']
-                : ['read_file', 'write_file', 'list_directory'],
+                ? ['read_file', 'write_file', 'list_directory']
+                : ['read', 'write', 'ls'],
           }
         : undefined,
   })

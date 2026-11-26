@@ -49,6 +49,7 @@ import {
   dockerContainerId,
 } from '../../src/runtime/docker/container.ts'
 import { withDockerCwd } from '../../src/runtime/docker/operations.ts'
+import { createEnvironmentRegistryForTest } from '../../src/runtime/environments.ts'
 import { RuntimeEventBus } from '../../src/runtime/event-bus.ts'
 import {
   type ChannelAdapter,
@@ -645,7 +646,7 @@ test('DB & runtime regressions: FKs, subscriptions, approvals, channel ingress, 
     })
     return env
   }
-  const envReg = new EnvironmentRegistry({
+  const envReg = createEnvironmentRegistryForTest({
     dataDir: root,
     environments: { dev: { image: 'node:22-bookworm', network: 'off' } },
     openDocker: async (_config, cwd = '/workspace') => {
@@ -713,10 +714,27 @@ test('MCP & Driver regressions: McpPool retries failed, honors AbortSignal, and 
   await lease.release()
   await pool.dispose()
 
-  // Driver approval_requested forwards input & waitForBackground settles cleanly
+  // Driver approval_requested forwards input & waitForBackground waits for pending due auto-dream
   const db = openDatabase({ path: join(dir, 'vela.db') })
-  const model = createFauxModel({
+  let dreamStarted!: () => void
+  const dreamStartedPromise = new Promise<void>((r) => {
+    dreamStarted = r
+  })
+  let releaseDream!: () => void
+  const releaseDreamPromise = new Promise<void>((r) => {
+    releaseDream = r
+  })
+  const baseModel = createFauxModel({
     responses: [fauxToolCall('dangerous', { arg: 'v1' }), fauxText('done')],
+    generate: [fauxText(JSON.stringify({ ops: [], report: 'no changes' }))],
+  })
+  const origDoGenerate = baseModel.doGenerate.bind(baseModel)
+  const model = Object.assign(baseModel, {
+    doGenerate: async (opts: Parameters<typeof baseModel.doGenerate>[0]) => {
+      dreamStarted()
+      await releaseDreamPromise
+      return origDoGenerate(opts)
+    },
   })
   const runtime = new VelaRuntimeEngine({ db, agentDir: dir })
   const events: Array<Record<string, unknown>> = []
@@ -748,6 +766,24 @@ test('MCP & Driver regressions: McpPool retries failed, honors AbortSignal, and 
     kind: 'chat',
     location: { environment: 'local', cwd: dir },
   })
+  db.run(
+    `INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?)`,
+    'memory_dream:global',
+    JSON.stringify({
+      nextSeq: 2,
+      cursorSeq: 0,
+      pendingRefs: [
+        {
+          seq: 1,
+          sessionId: s.id,
+          messageId: 'stale-ref',
+          time: Date.now() - 25 * 3_600_000,
+        },
+      ],
+      logs: [],
+    }),
+    new Date().toISOString(),
+  )
   runtime.submitPrompt({ sessionId: s.id, text: 'run dangerous' })
   await runtime.waitForIdle(s.id)
   const apprEv = events.find((e) => e.type === 'approval_requested')
@@ -756,7 +792,18 @@ test('MCP & Driver regressions: McpPool retries failed, honors AbortSignal, and 
   const [pending] = runtime.listPendingApprovals(s.id)
   runtime.resolveApproval({ approvalId: pending!.id, decision: 'approved' })
   await runtime.waitForIdle(s.id)
-  await driver.waitForBackground?.()
+  await dreamStartedPromise
+  let bgSettled = false
+  const bgPromise = (driver.waitForBackground?.() ?? Promise.resolve()).then(
+    () => {
+      bgSettled = true
+    },
+  )
+  await Promise.resolve()
+  expect(bgSettled).toBe(false)
+  releaseDream()
+  await bgPromise
+  expect(bgSettled).toBe(true)
   await runtime.dispose()
   db.close()
 })

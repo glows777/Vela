@@ -105,6 +105,42 @@ export class TimerScheduler {
     private readonly onScheduleChanged?: () => void,
   ) {}
 
+  private assertRoutineCapacityInTx(
+    projectId: string | null,
+    sessionId: string | null,
+    excludeTimerId?: string,
+  ): void {
+    const excludeClause = excludeTimerId ? ' AND id != ?' : ''
+    const extra = excludeTimerId ? [excludeTimerId] : []
+    if (projectId) {
+      const count =
+        this.db.get<{ n: number }>(
+          `SELECT count(*) AS n FROM timers
+           WHERE project_id = ? AND kind = 'routine' AND enabled = 1${excludeClause}`,
+          projectId,
+          ...extra,
+        )?.n ?? 0
+      if (count >= MAX_ROUTINES_PER_PROJECT) {
+        throw new Error(
+          `Project ${projectId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
+        )
+      }
+    } else if (sessionId) {
+      const count =
+        this.db.get<{ n: number }>(
+          `SELECT count(*) AS n FROM timers
+           WHERE session_id = ? AND project_id IS NULL AND kind = 'routine' AND enabled = 1${excludeClause}`,
+          sessionId,
+          ...extra,
+        )?.n ?? 0
+      if (count >= MAX_ROUTINES_PER_PROJECT) {
+        throw new Error(
+          `Session ${sessionId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
+        )
+      }
+    }
+  }
+
   createRoutine(input: {
     id?: string
     projectId?: string | null
@@ -147,29 +183,7 @@ export class TimerScheduler {
         }
         resolvedProjectId ??= session.project_id
       }
-      if (resolvedProjectId) {
-        const count =
-          this.db.get<{ n: number }>(
-            `SELECT count(*) AS n FROM timers WHERE project_id = ? AND kind = 'routine' AND enabled = 1`,
-            resolvedProjectId,
-          )?.n ?? 0
-        if (count >= MAX_ROUTINES_PER_PROJECT) {
-          throw new Error(
-            `Project ${resolvedProjectId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
-          )
-        }
-      } else if (input.sessionId) {
-        const count =
-          this.db.get<{ n: number }>(
-            `SELECT count(*) AS n FROM timers WHERE session_id = ? AND project_id IS NULL AND kind = 'routine' AND enabled = 1`,
-            input.sessionId,
-          )?.n ?? 0
-        if (count >= MAX_ROUTINES_PER_PROJECT) {
-          throw new Error(
-            `Session ${input.sessionId} already has the maximum of ${MAX_ROUTINES_PER_PROJECT} routines`,
-          )
-        }
-      }
+      this.assertRoutineCapacityInTx(resolvedProjectId, input.sessionId ?? null)
       this.db.run(
         `INSERT INTO timers (
            id, kind, project_id, session_id, channel, creator_id, creator_name,
@@ -351,22 +365,35 @@ export class TimerScheduler {
         nextFireAt = new Date(ms).toISOString()
       }
     }
-    this.db.run(
-      `UPDATE timers
-       SET message = ?, schedule_json = ?, timezone = ?, enabled = ?,
-           next_fire_at = ?, schedule_updated_at = ?, updated_at = ?
-       WHERE id = ?`,
-      patch.message ?? existing.message,
-      JSON.stringify(schedule),
-      zone,
-      enabled ? 1 : 0,
-      nextFireAt,
-      scheduleChanged ? nowIso : existing.scheduleUpdatedAt,
-      nowIso,
-      id,
-    )
+    const updated = this.db.transaction(() => {
+      const current = this.get(id)
+      if (!current) return undefined
+      if (enabled && !current.enabled && current.kind === 'routine') {
+        this.assertRoutineCapacityInTx(
+          current.projectId,
+          current.sessionId,
+          current.id,
+        )
+      }
+      this.db.run(
+        `UPDATE timers
+         SET message = ?, schedule_json = ?, timezone = ?, enabled = ?,
+             next_fire_at = ?, schedule_updated_at = ?, updated_at = ?
+         WHERE id = ?`,
+        patch.message ?? current.message,
+        JSON.stringify(schedule),
+        zone,
+        enabled ? 1 : 0,
+        nextFireAt,
+        scheduleChanged ? nowIso : current.scheduleUpdatedAt,
+        nowIso,
+        id,
+      )
+      return this.get(id)
+    })
+    if (!updated) return undefined
     this.onScheduleChanged?.()
-    return this.get(id)
+    return updated
   }
 
   delete(id: string): boolean {

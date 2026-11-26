@@ -77,21 +77,54 @@ function getOrCreateHubSession(
   sessions: SessionStoreControl,
   projectId: string,
 ): SessionRecord | undefined {
-  const project = projects.get(projectId)
-  if (!project) return undefined
-  if (project.hubSessionId) {
-    return sessions.get(project.hubSessionId)
-  }
   return db.transaction(() => {
-    const existing = db.get<{ id: string }>(
+    const project = projects.get(projectId)
+    if (!project) return undefined
+    if (project.hubSessionId) {
+      const linked = sessions.get(project.hubSessionId)
+      if (linked && !linked.archived) return linked
+    }
+    const existingHub = db.get<{ id: string }>(
       `SELECT id FROM sessions
-       WHERE project_id = ? AND kind = 'work' AND archived = 0
+       WHERE project_id = ? AND kind = 'hub' AND archived = 0
        ORDER BY created_at ASC, rowid ASC LIMIT 1`,
       projectId,
     )
-    if (existing) return sessions.get(existing.id)
-    return sessions.create({ projectId, kind: 'work' })
+    const hub = existingHub
+      ? sessions.get(existingHub.id)!
+      : sessions.create({ projectId, kind: 'hub' })
+    db.run(
+      `UPDATE projects SET hub_session_id = ?, updated_at = ? WHERE id = ?`,
+      hub.id,
+      new Date().toISOString(),
+      projectId,
+    )
+    return hub
   })
+}
+
+function findExistingChannelInboxId(
+  db: VelaDatabase,
+  channel: string,
+  channelDedupeKey: string,
+  rawDedupeKey: string | undefined,
+): string | undefined {
+  const prefixed = db.get<{ id: string }>(
+    `SELECT id FROM inbox_events WHERE source = 'channel' AND dedupe_key = ? LIMIT 1`,
+    channelDedupeKey,
+  )
+  if (prefixed) return prefixed.id
+  if (!rawDedupeKey || rawDedupeKey === channelDedupeKey) return undefined
+  return db.get<{ id: string }>(
+    `SELECT id FROM inbox_events
+     WHERE source = 'channel'
+       AND dedupe_key = ?
+       AND json_valid(payload_json)
+       AND json_extract(payload_json, '$.channel') = ?
+     LIMIT 1`,
+    rawDedupeKey,
+    channel,
+  )?.id
 }
 
 export async function ingestChannelMessageInRuntime(params: {
@@ -186,11 +219,16 @@ export async function ingestChannelMessageInRuntime(params: {
     }
 
     if (channelDedupeKey) {
-      const existingInbox = db.get<{ id: string }>(
-        `SELECT id FROM inbox_events WHERE source = 'channel' AND dedupe_key = ? LIMIT 1`,
-        channelDedupeKey,
-      )
-      if (existingInbox) return
+      if (
+        findExistingChannelInboxId(
+          db,
+          msg.channel,
+          channelDedupeKey,
+          msg.dedupeKey,
+        )
+      ) {
+        return
+      }
     }
 
     const resolved = resolveChannelTargetInDb({
@@ -231,6 +269,17 @@ export async function ingestChannelMessageInRuntime(params: {
       const passive = msg.passive === true
       const wake = msg.wake ?? !passive
       const result = db.transaction(() => {
+        if (
+          channelDedupeKey &&
+          findExistingChannelInboxId(
+            db,
+            msg.channel,
+            channelDedupeKey,
+            msg.dedupeKey,
+          )
+        ) {
+          return undefined
+        }
         const enqueued = enqueueInboxEvent(db, {
           sessionId: session.id,
           projectId: binding.projectId,
@@ -264,8 +313,8 @@ export async function ingestChannelMessageInRuntime(params: {
         }
         return enqueued
       })
-      inserted = result.inserted
-      if (result.inserted && result.event.wake) {
+      inserted = Boolean(result?.inserted)
+      if (result?.inserted && result.event.wake) {
         scheduleSession(session.id)
       }
     } finally {

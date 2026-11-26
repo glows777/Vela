@@ -7,7 +7,10 @@ import {
   dockerContainerId,
   resolveDockerHost,
 } from '../../src/runtime/docker/container.ts'
-import { EnvironmentRegistry } from '../../src/runtime/index.ts'
+import {
+  createEnvironmentRegistryForTest,
+  EnvironmentRegistry,
+} from '../../src/runtime/environments.ts'
 import type { ExecutionEnv } from '../../src/shared/execution.ts'
 
 const dirs: { cleanup(): void }[] = []
@@ -41,7 +44,7 @@ test('EnvironmentRegistry validates definitions, reports OS metadata, and re-pro
   const cleanedIds: string[] = []
   const aliveIds = new Set<string>()
 
-  const registry = new EnvironmentRegistry({
+  const registry = createEnvironmentRegistryForTest({
     dataDir: dir.path,
     hostEnv: { TEST_TOKEN: 'secret-value' },
     environments: {
@@ -153,7 +156,7 @@ test('EnvironmentRegistry preserves healthy adapters on inconclusive probe error
   let blockInvalidateCleanup = false
   let failCleanup = false
 
-  const registry = new EnvironmentRegistry({
+  const registry = createEnvironmentRegistryForTest({
     dataDir: dir.path,
     environments: { dev: { image: 'vela-base:local' } },
     openDocker: async (options, cwd = '/workspace') => {

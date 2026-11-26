@@ -18,6 +18,13 @@ const RETIRED_BEHAVIOR_CLAIMS = [
   /automatically flattened into ~\/\.vela\/config\.json/i,
 ] as const
 
+const EXCLUDED_VELA_OPTIONS = new Set([
+  'beforeDispose',
+  'eventDefaultTarget',
+  'onSessionSaved',
+  'shellPath',
+])
+
 function extractInterfaceKeys(
   publicApi: string,
   interfaceName: string,
@@ -103,11 +110,9 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
       readFile(publicApiPath, 'utf8'),
       readFile(sdkDocPath, 'utf8'),
     ])
-    const velaOptionKeys = new Set([
-      ...extractInterfaceKeys(publicApi, 'VelaOptions'),
-      ...extractInterfaceKeys(publicApi, 'ChannelVelaOptions'),
-    ])
+    const velaOptionKeys = extractInterfaceKeys(publicApi, 'VelaOptions')
     const documentedOptions = extractSdkTableOptions(sdkDoc)
+    const documentedSet = new Set(documentedOptions)
     if (documentedOptions.length === 0) {
       errors.push('docs/sdk.md: missing "## createVela options" table')
     } else {
@@ -115,6 +120,13 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
         if (!velaOptionKeys.has(opt)) {
           errors.push(
             `docs/sdk.md: documented createVela option "${opt}" is absent from VelaOptions in packages/vela/api/public-api.txt (#576)`,
+          )
+        }
+      }
+      for (const opt of velaOptionKeys) {
+        if (!documentedSet.has(opt) && !EXCLUDED_VELA_OPTIONS.has(opt)) {
+          errors.push(
+            `docs/sdk.md: public VelaOptions property "${opt}" is missing from "## createVela options" table (#576)`,
           )
         }
       }
@@ -127,13 +139,20 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
   const changelogDoc = await readFile(join(root, 'CHANGELOG.md'), 'utf8')
   const unreleased = extractUnreleasedSection(changelogDoc)
 
+  const trustLines = upgradingDoc
+    .split('\n')
+    .filter((line) => line.includes('trusted_paths'))
   if (
-    !upgradingDoc.includes('trusted_paths') ||
-    (!upgradingDoc.includes('$VELA_DIR/vela.db') &&
-      !upgradingDoc.includes('~/.vela/vela.db'))
+    trustLines.length === 0 ||
+    !trustLines.some(
+      (line) =>
+        (line.includes('$VELA_DIR/vela.db') ||
+          line.includes('~/.vela/vela.db')) &&
+        !line.includes('<dataDir>/vela.db'),
+    )
   ) {
     errors.push(
-      'docs/upgrading.md: must document trusted_paths inside $VELA_DIR/vela.db (~/.vela/vela.db) (#581)',
+      'docs/upgrading.md: trusted_paths entry must document $VELA_DIR/vela.db (~/.vela/vela.db) rather than <dataDir>/vela.db (#581)',
     )
   }
   if (

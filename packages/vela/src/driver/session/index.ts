@@ -728,6 +728,17 @@ export class SessionStore {
     if (firstKept && !firstKeptEntryId)
       throw new Error('The first kept message is not in the session')
     return this.runInTransaction(() => {
+      if (this.started) {
+        const live = this.db.get<{ leaf_message_id: string | null }>(
+          'SELECT leaf_message_id FROM sessions WHERE id = ?',
+          this.sessionId,
+        )
+        if (!live || live.leaf_message_id !== (this.leafId ?? null)) {
+          throw new Error(
+            `Discarded stale compaction: session ${this.sessionId} branch changed concurrently`,
+          )
+        }
+      }
       const entry = this.append<CompactionEntry>({
         type: 'compaction',
         summary,

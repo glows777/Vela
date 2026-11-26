@@ -4,10 +4,19 @@
  * `.vela/config.json`. Invalid entries are reported and skipped; they don't stop other servers.
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { formatJsonParseError } from '../config/index.ts'
 import type { ExtensionConfigDefinition } from '../extension-api.ts'
+
+function canonicalFilePath(file: string): string {
+  const resolved = resolve(file)
+  try {
+    return realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -275,7 +284,7 @@ export function loadMcpServers(options: {
   const files = options.skipUserConfig ? [] : [userFile]
   if (
     options.trusted &&
-    (options.skipUserConfig || resolve(projectFile) !== resolve(userFile))
+    canonicalFilePath(projectFile) !== canonicalFilePath(userFile)
   ) {
     files.push(projectFile)
   }

@@ -24,9 +24,7 @@ import {
 } from './domain.ts'
 import {
   type AgentDriver,
-  type DriverTurnResult,
   isOwnerLive,
-  LostRunOwnershipError,
   PROCESS_OWNER_PREFIX,
   registerLiveOwner,
   unregisterLiveOwner,
@@ -37,7 +35,7 @@ import {
   type RuntimeEventListener,
   type StreamDeltaListener,
 } from './event-bus.ts'
-import type { RunEndStatus, RuntimeEvent, StreamDeltaEvent } from './events.ts'
+import type { RuntimeEvent, StreamDeltaEvent } from './events.ts'
 import {
   enqueueInboxEvent,
   hasSessionPendingWake,
@@ -47,12 +45,10 @@ import { OutboxDispatcher } from './outbox.ts'
 import { type ControlShortcut, executeControlShortcut } from './shortcuts.ts'
 import { SubscriptionManager } from './subscriptions.ts'
 import { TimerScheduler } from './timers.ts'
+import { executeRuntimeClaimedTurn } from './turn-runner.ts'
 import {
   claimNextTurnInDb,
-  commitCompletedTurnInTx,
-  finalizeTurnInDb,
   recoverRuntimeState,
-  resolveOutboxTargetInDb,
   stopExternalSessionRuns,
   stopSessionRunsInDb,
 } from './worker.ts'
@@ -96,7 +92,7 @@ export class VelaRuntimeEngine {
   private readonly drivers = new Map<string, AgentDriver>()
   private readonly channels = new Map<string, ChannelAdapter>()
   private readonly activeWorkers = new Map<string, ActiveWorker>()
-  private readonly stoppingSessions = new Set<string>()
+  private readonly stoppingSessions = new Map<string, number>()
   private readonly inFlightDeliveries = new Set<string>()
   private readonly activeOwners = new Set<string>()
   private readonly transientBlobDir?: string
@@ -180,9 +176,9 @@ export class VelaRuntimeEngine {
   async unregisterChannel(name: string): Promise<void> {
     const existing = this.channels.get(name)
     if (!existing) return
-    await this.outbox.drain().catch(() => {})
     this.channels.delete(name)
     await existing.stop()
+    await this.outbox.drain().catch(() => {})
   }
 
   channelAdapter(name: string): ChannelAdapter | undefined {
@@ -292,11 +288,30 @@ export class VelaRuntimeEngine {
     return result
   }
 
+  private enterStopFence(sessionId: string): void {
+    this.stoppingSessions.set(
+      sessionId,
+      (this.stoppingSessions.get(sessionId) ?? 0) + 1,
+    )
+  }
+
+  private leaveStopFence(sessionId: string): void {
+    const depth = (this.stoppingSessions.get(sessionId) ?? 0) - 1
+    if (depth > 0) {
+      this.stoppingSessions.set(sessionId, depth)
+      return
+    }
+    this.stoppingSessions.delete(sessionId)
+    if (!this.disposed && this.db.open && this.canWakeSessionNow(sessionId)) {
+      this.scheduleSession(sessionId)
+    }
+  }
+
   async stopSession(
     sessionId: string,
     reason = 'Stopped by user',
   ): Promise<boolean> {
-    this.stoppingSessions.add(sessionId)
+    this.enterStopFence(sessionId)
     try {
       let cancelledRun = false
       const active = this.activeWorkers.get(sessionId)
@@ -342,23 +357,30 @@ export class VelaRuntimeEngine {
       }
       return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
     } finally {
-      this.stoppingSessions.delete(sessionId)
+      this.leaveStopFence(sessionId)
     }
   }
 
   async restartSession(sessionId: string): Promise<SessionRecord> {
-    await this.stopSession(sessionId, 'Session restarted')
-    const remaining = this.db.all<{ id: string; owner_token: string | null }>(
-      `SELECT id, owner_token FROM runs WHERE session_id = ? AND status IN ('queued', 'running')`,
-      sessionId,
-    )
-    if (remaining.some((r) => isOwnerLive(r.owner_token, this.activeOwners))) {
-      throw new Error(
-        `Cannot restart session ${sessionId} while another live worker owns an active run`,
+    this.enterStopFence(sessionId)
+    try {
+      await this.stopSession(sessionId, 'Session restarted')
+      const remaining = this.db.all<{ id: string; owner_token: string | null }>(
+        `SELECT id, owner_token FROM runs WHERE session_id = ? AND status IN ('queued', 'running')`,
+        sessionId,
       )
+      if (
+        remaining.some((r) => isOwnerLive(r.owner_token, this.activeOwners))
+      ) {
+        throw new Error(
+          `Cannot restart session ${sessionId} while another live worker owns an active run`,
+        )
+      }
+      this.timers.cancelFollowupsForSession(sessionId)
+      return this.sessions.reset(sessionId)
+    } finally {
+      this.leaveStopFence(sessionId)
     }
-    this.timers.cancelFollowupsForSession(sessionId)
-    return this.sessions.reset(sessionId)
   }
 
   async executeShortcut(input: {
@@ -504,16 +526,7 @@ export class VelaRuntimeEngine {
       `SELECT min(next_fire_at) AS next_at FROM timers WHERE enabled = 1 AND next_fire_at IS NOT NULL`,
     )?.next_at
     const registeredChannels = [...this.channels.keys()]
-    const outboxDue =
-      registeredChannels.length > 0
-        ? this.db.get<{ next_at: string | null }>(
-            `SELECT min(COALESCE(next_retry_at, created_at)) AS next_at
-             FROM outbox
-             WHERE status = 'pending'
-               AND channel IN (${registeredChannels.map(() => '?').join(', ')})`,
-            ...registeredChannels,
-          )?.next_at
-        : null
+    const outboxDue = this.outbox.nextPendingWakeAt(registeredChannels)
     let earliestMs = Number.POSITIVE_INFINITY
     for (const candidate of [timerDue, outboxDue]) {
       if (!candidate) continue
@@ -584,12 +597,9 @@ export class VelaRuntimeEngine {
       await Promise.allSettled(
         [...this.activeWorkers.values()].map((w) => w.promise),
       )
-      await this.outbox
-        .drain()
-        .catch((error) =>
-          this.logger.error(`[runtime] outbox drain failed: ${error}`),
-        )
-      for (const [name, adapter] of this.channels) {
+      const channels = [...this.channels.entries()]
+      this.channels.clear()
+      for (const [name, adapter] of channels) {
         await adapter
           .stop()
           .catch((error) =>
@@ -598,7 +608,11 @@ export class VelaRuntimeEngine {
             ),
           )
       }
-      this.channels.clear()
+      await this.outbox
+        .drain()
+        .catch((error) =>
+          this.logger.error(`[runtime] outbox drain failed: ${error}`),
+        )
       for (const driver of this.drivers.values()) {
         await Promise.resolve(driver.dispose?.()).catch((error) =>
           this.logger.error(`[runtime] driver dispose failed: ${error}`),
@@ -667,129 +681,35 @@ export class VelaRuntimeEngine {
 
       worker.runId = claimed.runId
       worker.ownerToken = claimed.ownerToken
-      let stopPollTimer: ReturnType<typeof setInterval> | undefined
 
-      let result: DriverTurnResult | undefined
+      let outcome: { lostOwnership: boolean; status?: string }
       try {
-        const driver = this.drivers.get(claimed.session.driver)
-        if (!driver) {
-          throw new Error(
-            `No AgentDriver registered for "${claimed.session.driver}"`,
-          )
-        }
-        stopPollTimer = setInterval(() => {
-          if (
-            this.disposed ||
-            !this.db.open ||
-            worker.controller.signal.aborted
-          )
-            return
-          try {
-            if (
-              this.db.get(
-                'SELECT 1 FROM kv_meta WHERE key = ?',
-                `stop_requested:${claimed.runId}`,
-              )
-            ) {
-              worker.controller.abort(
-                new DOMException('Stopped by control request', 'AbortError'),
-              )
-              void driver.abort?.(sessionId)
-            }
-          } catch {}
-        }, 50)
-        stopPollTimer.unref?.()
-        const outboxTarget = resolveOutboxTargetInDb(
-          this.db,
-          claimed.session,
-          claimed.inputs,
-          claimed.runId,
-        )
-
-        result = await driver.runTurn({
-          sessionId: claimed.session.id,
-          projectId: claimed.session.projectId,
-          runId: claimed.runId,
-          ownerToken: claimed.ownerToken,
-          trigger: claimed.trigger,
-          inputs: claimed.inputs,
-          recoverPending: claimed.recoverPending,
-          allowWaitingHuman: claimed.allowWaitingHuman,
-          abortSignal: worker.controller.signal,
-          onDelta: (delta) => this.eventBus.emitDelta(delta),
-          onEvent: (payload) => {
-            if (
-              this.db.get(
-                'SELECT 1 FROM kv_meta WHERE key = ?',
-                `stop_requested:${claimed.runId}`,
-              )
-            ) {
-              worker.controller.abort(
-                new DOMException('Stopped by control request', 'AbortError'),
-              )
-            }
-            this.eventBus.append({
-              sessionId: claimed.session.id,
-              projectId: claimed.session.projectId,
-              runId: claimed.runId,
-              payload,
-            })
-          },
+        outcome = await executeRuntimeClaimedTurn({
+          db: this.db,
+          eventBus: this.eventBus,
+          driver: this.drivers.get(claimed.session.driver),
+          claimed,
+          abortController: worker.controller,
+          isDisposed: () => this.disposed,
           wakeSession: (sid) => this.scheduleSession(sid),
           flushOutbox: () => {
             if (this.channels.size > 0) void this.flushOutboxBestEffort()
           },
-          onTerminalCommitInTx: (outcome) =>
-            commitCompletedTurnInTx({
-              db: this.db,
-              eventBus: this.eventBus,
-              claimed,
-              outcome,
-              outboxTarget,
-            }),
         })
-
-        if (!result.committedInTx) {
-          finalizeTurnInDb({
-            db: this.db,
-            eventBus: this.eventBus,
-            claimed,
-            result,
-            outboxTarget,
-          })
-        }
-      } catch (error) {
-        if (error instanceof LostRunOwnershipError) {
-          break
-        }
-        const msg = error instanceof Error ? error.message : String(error)
-        const status: RunEndStatus = worker.controller.signal.aborted
-          ? 'stopped'
-          : 'failed'
-        try {
-          finalizeTurnInDb({
-            db: this.db,
-            eventBus: this.eventBus,
-            claimed,
-            result: { status, error: msg },
-          })
-        } catch (finError) {
-          if (!(finError instanceof LostRunOwnershipError)) throw finError
-        }
       } finally {
-        if (stopPollTimer) clearInterval(stopPollTimer)
         unregisterLiveOwner(claimed.ownerToken)
         this.activeOwners.delete(claimed.ownerToken)
         this.eventBus.clearDeltas(sessionId)
         stopWaitResolve?.()
       }
+      if (outcome.lostOwnership) break
 
       if (this.channels.size > 0) {
         await this.flushOutboxBestEffort()
       }
       this.syncWakeTimer()
       if (
-        result?.status === 'waiting_human' ||
+        outcome.status === 'waiting_human' ||
         this.sessions.get(sessionId)?.state === 'waiting_human'
       )
         break

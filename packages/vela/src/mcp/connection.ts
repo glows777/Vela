@@ -146,15 +146,17 @@ export class McpConnection implements McpToolCaller {
     const isHttp = 'url' in this.entry.config
     for (let attempt = 0; ; attempt++) {
       try {
-        const client = await this.openOnce()
+        const opened = await this.openOnce()
         if (this.shutdown.signal.aborted || generation !== this.generation) {
-          await client.close().catch(() => {})
+          await opened.client.close().catch(() => {})
           throw new Error('shut down')
         }
-        this.client = client
+        this.client = opened.client
+        this.instructions = opened.instructions
+        this.tools = opened.tools
         this.setState('connected')
         this.options.onTools(this)
-        return client
+        return opened.client
       } catch (error) {
         const delay = CONNECT_RETRY_DELAYS_MS[attempt]
         if (
@@ -190,7 +192,11 @@ export class McpConnection implements McpToolCaller {
     return message
   }
 
-  private async openOnce(): Promise<Client> {
+  private async openOnce(): Promise<{
+    client: Client
+    instructions: string | undefined
+    tools: McpTool[]
+  }> {
     const [
       { Client },
       { ToolListChangedNotificationSchema },
@@ -236,17 +242,21 @@ export class McpConnection implements McpToolCaller {
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
       void this.refreshTools(client).catch(() => {})
     })
+    let instructions: string | undefined
+    let tools: McpTool[]
     try {
       await client.connect(transport, { timeout: this.timeoutMs })
-      this.instructions = client.getInstructions()?.trim() || undefined
-      this.tools = await this.listTools(client)
+      instructions = client.getInstructions()?.trim() || undefined
+      tools = await this.listTools(client)
     } catch (error) {
       await client.close().catch(() => {})
       throw error
     } finally {
-      this.connecting = undefined
+      if (this.connecting === transport) {
+        this.connecting = undefined
+      }
     }
-    return client
+    return { client, instructions, tools }
   }
 
   private async createTransport(

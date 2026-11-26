@@ -149,26 +149,31 @@ export function createRuntimeMcpAdapter(
         },
       })
 
-      if (lease.hasWork) {
-        lease.start()
-        const extraServers = new Set<string>()
-        for (const entry of entries) {
-          if (entry.config.enabled === false) continue
-          const prefix = `${namespaceName(entry.name)}__`
-          if (discoveredTools.some((t) => t.startsWith(prefix))) {
-            extraServers.add(entry.name)
+      try {
+        if (lease.hasWork) {
+          lease.start()
+          const extraServers = new Set<string>()
+          for (const entry of entries) {
+            if (entry.config.enabled === false) continue
+            const prefix = `${namespaceName(entry.name)}__`
+            if (discoveredTools.some((t) => t.startsWith(prefix))) {
+              extraServers.add(entry.name)
+            }
           }
+          await lease.waitForDirect(
+            waitMs,
+            extraServers.size > 0 ? extraServers : undefined,
+            signal,
+          )
         }
-        await lease.waitForDirect(
-          waitMs,
-          extraServers.size > 0 ? extraServers : undefined,
-          signal,
-        )
-      }
 
-      return {
-        waitForAll: (waitSignal) => lease.waitForAll(waitSignal ?? signal),
-        release: () => lease.release(),
+        return {
+          waitForAll: (waitSignal) => lease.waitForAll(waitSignal ?? signal),
+          release: () => lease.release(),
+        }
+      } catch (error) {
+        await lease.release().catch(() => {})
+        throw error
       }
     },
     async dispose() {

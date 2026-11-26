@@ -37,7 +37,7 @@ test('#591: checkDocsConsistency catches retired APIs, legacy migration claims, 
     )
     writeFileSync(
       join(root, 'docs/upgrading.md'),
-      'A pre-existing .dream/ directory is imported automatically.',
+      'A pre-existing .dream/ directory is imported automatically.\n`trusted_paths` is stored in `<dataDir>/vela.db`?',
     )
     writeFileSync(join(root, 'docs/sessions.md'), 'No DB note here.')
     writeFileSync(
@@ -51,7 +51,9 @@ test('#591: checkDocsConsistency catches retired APIs, legacy migration claims, 
     expect(joined).toContain('@glows777\\/vela-')
     expect(joined).toContain('pre-existing')
     expect(joined).toContain('nonExistentOption')
+    expect(joined).toContain('public VelaOptions property "model" is missing')
     expect(joined).toContain('trusted_paths')
+    expect(joined).toContain('rather than <dataDir>/vela.db')
     expect(joined).toContain('env:<encodedOwnerDataDir>')
     expect(joined).toContain('createVela({ dataDir })')
   } finally {

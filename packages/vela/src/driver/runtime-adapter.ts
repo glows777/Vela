@@ -525,7 +525,7 @@ export function createVelaAgentDriver(
       }
 
       committedInTx = false
-      let recordedDreamInTx = false
+      let attemptedDreamInTx = false
       const driver = new VelaDriver({
         sessionId: request.sessionId,
         db: options.db,
@@ -625,7 +625,6 @@ export function createVelaAgentDriver(
               if (live?.length) deferredSteering.push(...live)
               activeSteering.delete(request.sessionId)
               lastAssistant = assistant
-              committedInTx = true
               if (memoryActive && !isSilent && !disposed) {
                 recordRuntimeDreamTurn({
                   db: options.db,
@@ -636,7 +635,7 @@ export function createVelaAgentDriver(
                   userEntryId: turnUserMsg.userEntryId,
                   hasHumanText: turnUserMsg.hasHumanText,
                 })
-                recordedDreamInTx = true
+                attemptedDreamInTx = true
               }
               request.onTerminalCommitInTx?.({
                 status: 'completed',
@@ -646,6 +645,8 @@ export function createVelaAgentDriver(
             }
           : undefined,
       })
+      committedInTx = Boolean(result.committedInTx)
+      const recordedDreamInTx = committedInTx && attemptedDreamInTx
       const waitingApproval = options.db.get<{ id: string }>(
         "SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1",
         request.runId,

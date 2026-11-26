@@ -19,10 +19,26 @@ export interface EnvironmentRegistryOptions {
   hostEnv?: Record<string, string | undefined>
   guestPath?: string
   dockerHost?: string
-  /** @internal */
+}
+
+interface EnvironmentRegistryTestHooks {
   openDocker?: typeof openDockerEnvironment
-  /** @internal */
   probeAlive?: (containerId: string, env: ExecutionEnv) => Promise<boolean>
+}
+
+let pendingTestHooks: EnvironmentRegistryTestHooks | undefined
+
+/** Internal-only helper for injecting mock Docker adapters without exposing hooks in the public `.d.ts` constructor. */
+export function createEnvironmentRegistryForTest(
+  options: EnvironmentRegistryOptions & EnvironmentRegistryTestHooks,
+): EnvironmentRegistry {
+  const { openDocker, probeAlive, ...publicOptions } = options
+  pendingTestHooks = { openDocker, probeAlive }
+  try {
+    return new EnvironmentRegistry(publicOptions)
+  } finally {
+    pendingTestHooks = undefined
+  }
 }
 
 function parseDockerDefinition(
@@ -82,14 +98,16 @@ export class EnvironmentRegistry {
   private disposed = false
 
   constructor(options: EnvironmentRegistryOptions) {
+    const hooks = pendingTestHooks
+    pendingTestHooks = undefined
     this.dataDir = options.dataDir
     this.hostEnv = options.hostEnv ?? {}
     this.guestPath = options.guestPath
     this.dockerHost = options.dockerHost
-    this.openDocker = options.openDocker ?? openDockerEnvironment
+    this.openDocker = hooks?.openDocker ?? openDockerEnvironment
     const docker = createDockerRunner(this.dockerHost, this.hostEnv)
     this.probeAlive =
-      options.probeAlive ??
+      hooks?.probeAlive ??
       (async (containerId) => {
         try {
           const state = await docker([
@@ -149,9 +167,10 @@ export class EnvironmentRegistry {
   }
 
   private normalizeCwd(cwd: string): string {
-    return posix.isAbsolute(cwd) && !cwd.includes('\0')
-      ? posix.resolve('/', cwd)
-      : cwd
+    if (!posix.isAbsolute(cwd) || cwd.includes('\0')) {
+      throw Error('An absolute Docker working directory is required')
+    }
+    return posix.resolve('/', cwd)
   }
 
   private scopeToCwd(baseEnv: ExecutionEnv, targetCwd: string): ExecutionEnv {
