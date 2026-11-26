@@ -102,6 +102,7 @@ export class McpConnection implements McpToolCaller {
   /** Aborted by close(): cancels a connect in progress, including the wait between retries */
   private readonly shutdown = new AbortController()
   private stderrTail = ''
+  private generation = 0
 
   constructor(private readonly options: McpConnectionOptions) {
     this.entry = options.entry
@@ -128,19 +129,25 @@ export class McpConnection implements McpToolCaller {
       return Promise.reject(
         new Error(`MCP server "${this.name}" has been shut down`),
       )
-    this.opening ??= this.open().finally(() => {
-      this.opening = undefined
-    })
+    if (!this.opening) {
+      const generation = this.generation
+      const attempt = this.open(generation).finally(() => {
+        if (this.opening === attempt) {
+          this.opening = undefined
+        }
+      })
+      this.opening = attempt
+    }
     return this.opening
   }
 
-  private async open(): Promise<Client> {
+  private async open(generation: number): Promise<Client> {
     this.setState('connecting')
     const isHttp = 'url' in this.entry.config
     for (let attempt = 0; ; attempt++) {
       try {
         const client = await this.openOnce()
-        if (this.shutdown.signal.aborted) {
+        if (this.shutdown.signal.aborted || generation !== this.generation) {
           await client.close().catch(() => {})
           throw new Error('shut down')
         }
@@ -154,15 +161,18 @@ export class McpConnection implements McpToolCaller {
           isHttp &&
           delay !== undefined &&
           isTransient(error) &&
-          !this.shutdown.signal.aborted
+          !this.shutdown.signal.aborted &&
+          generation === this.generation
         ) {
           await sleep(delay, undefined, { signal: this.shutdown.signal }).catch(
             () => {},
           )
-          if (!this.shutdown.signal.aborted) continue
+          if (!this.shutdown.signal.aborted && generation === this.generation)
+            continue
         }
         const message = this.describeConnectError(error)
-        if (this.state !== 'closed') this.setState('failed', message)
+        if (this.state !== 'closed' && generation === this.generation)
+          this.setState('failed', message)
         throw new Error(message)
       }
     }
@@ -303,21 +313,37 @@ export class McpConnection implements McpToolCaller {
 
   /** Closes the connection (stdio: close stdin, then SIGTERM, then SIGKILL, as the SDK does). */
   async close(): Promise<void> {
+    this.generation++
     this.shutdown.abort()
     this.setState('closed')
     const client = this.client
     this.client = undefined
+    void this.opening?.catch(() => {})
+    this.opening = undefined
+    const connecting = this.connecting
+    this.connecting = undefined
     await Promise.all([
       client?.close().catch(() => {}),
-      this.connecting?.close().catch(() => {}),
+      connecting?.close().catch(() => {}),
     ])
   }
 
   /** Drops the connection and connects again (`/mcp reconnect`). */
   async reconnect(): Promise<void> {
+    if (this.state === 'closed') {
+      throw new Error(`MCP server "${this.name}" has been shut down`)
+    }
+    this.generation++
     const client = this.client
     this.client = undefined
-    await client?.close().catch(() => {})
+    void this.opening?.catch(() => {})
+    this.opening = undefined
+    const connecting = this.connecting
+    this.connecting = undefined
+    await Promise.all([
+      client?.close().catch(() => {}),
+      connecting?.close().catch(() => {}),
+    ])
     await this.connect()
   }
 }

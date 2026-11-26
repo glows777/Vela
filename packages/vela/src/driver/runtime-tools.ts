@@ -11,10 +11,22 @@ import {
 } from '../runtime/control-ops.ts'
 import type { RuntimeEventBus } from '../runtime/event-bus.ts'
 import type { BlobStore } from '../runtime/index.ts'
+import type { MemoryStore } from '../runtime/memory/index.ts'
 import type { SubscriptionManager } from '../runtime/subscriptions.ts'
 import type { TimerScheduler } from '../runtime/timers.ts'
+import type { VelaLogger } from '../shared/logger.ts'
 import { localRoutineInstant, routineTimezone } from '../shared/routine-time.ts'
-import type { ToolContext, ToolDefinition } from './tools/registry.ts'
+import { createBackgroundTools } from './extensions/background/tool.ts'
+import { createMemoryTool } from './extensions/memory/tool.ts'
+import { createTodoTool } from './extensions/todo/tool.ts'
+import { createRuntimeWebTools } from './runtime-resources.ts'
+import { createCoreTools } from './tools/index.ts'
+import {
+  type ToolContext,
+  type ToolDefinition,
+  ToolRegistry,
+} from './tools/registry.ts'
+import { registerToolSearchTool } from './tools/tool-search.ts'
 
 export interface RuntimeToolDeps {
   db: VelaDatabase
@@ -95,7 +107,7 @@ function requireRun(deps: RuntimeToolDeps, ctx?: ToolContext) {
  * Creates the platform-agnostic Runtime control-plane tools (`session_*`, `timers`,
  * `subscriptions`, `wait_for_input`, `send_file`) plus channel-only `skip_reply`.
  */
-export function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
+function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
   const controlCtx = {
     db: deps.db,
     blobs: deps.blobs,
@@ -466,4 +478,44 @@ export function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
       },
     },
   ]
+}
+
+export function createRuntimeSessionToolRegistry(options: {
+  spillDir: string
+  cwd: string
+  logger: VelaLogger
+  memoryGlobal: MemoryStore
+  memoryLocal: () => MemoryStore
+  webConfig?: Record<string, unknown>
+  hostEnv?: Record<string, string | undefined>
+  offline?: boolean
+  runtimeToolDeps?: RuntimeToolDeps
+  extraTools?: readonly ToolDefinition[]
+}): ToolRegistry {
+  const registry = new ToolRegistry(options.spillDir)
+  registry.setLogger(options.logger)
+  registry.register(
+    ...createCoreTools({ cwd: options.cwd }),
+    ...createBackgroundTools((ctx) => {
+      if (!ctx?.background) {
+        throw new Error('Background commands require an open session')
+      }
+      return ctx.background
+    }).map((tool) => ({ ...tool, name: `background_${tool.name}` })),
+    createTodoTool(),
+    createMemoryTool(options.memoryGlobal, options.memoryLocal),
+    ...createRuntimeWebTools({
+      webConfig: options.webConfig,
+      hostEnv: options.hostEnv,
+      offline: options.offline,
+    }),
+  )
+  if (options.runtimeToolDeps) {
+    registry.register(...createRuntimeTools(options.runtimeToolDeps))
+  }
+  registerToolSearchTool(registry)
+  if (options.extraTools?.length) {
+    registry.register(...options.extraTools)
+  }
+  return registry
 }

@@ -94,6 +94,7 @@ export function runtimeToolModifiers(options: {
   const modifiers: string[] = []
   if (!options.projectId) {
     modifiers.push(
+      '+send_file',
       '-session_start',
       '-session_forward',
       '-session_list',

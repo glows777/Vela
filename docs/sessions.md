@@ -12,13 +12,13 @@ Every session has an id (`sessions.id`). Ids use letters, digits, `.`, `_` and `
 - Channel sessions get `<channel>-<conversationId>`, one shared session per chat (hashed when the ids have other characters). See [Channels](channels.md).
 - In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
 
-In the CLI, Vela persists active sessions in SQLite at `$VELA_DIR/vela.db` (`~/.vela/vela.db`: `sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`), while spilled long tool outputs for a session live under `<dataDir>/sessions/<id>/tool-results/` inside the [project data directory](settings.md#data-directory). Opening and closing an empty session leaves no rows in `vela.db`; `--no-session` (`ephemeralSessions: true`) uses an in-memory SQLite database (`:memory:`) and a temporary spill directory removed when the session closes. Memory and the knowledge base are unchanged.
+In the CLI, Vela persists active sessions in SQLite at `$VELA_DIR/vela.db` (`~/.vela/vela.db`: `sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`), while spilled long tool outputs for a session live under `<dataDir>/sessions/<id>/tool-results/` inside the [project data directory](settings.md#data-directory). Opening and closing an empty session leaves no rows in `vela.db`; `--no-session` (`ephemeralSessions: true`) uses an in-memory SQLite database (`:memory:`) and a temporary spill directory removed when the session closes. Memory is unchanged.
 
 Persistent session deletion is manual. Before deleting a session's rows from `vela.db` or removing `<dataDir>/sessions/<id>/`, record the exact session ID and the environments in its saved `location` metadata and branch entries. For each Docker environment the session used, match the container to that environment name and the same owner data directory. Inside that container, `~/.vela/uploads/<id>/` under the guest user's home is the cache for this session. A fork or clone has its own ID and cache.
 
 The owner can retain or remove each matching guest directory as part of the same retention decision. Deleting the host session alone leaves these container caches in place. The canonical downloads belong to the chat's private `files/` directory and can be shared across topics. Archiving and closing a persistent session preserve its files.
 
-In the SDK, `createRuntime()` stores sessions in `<agentDir>/vela.db` (`~/.vela/vela.db` by default, or `:memory:` with `ephemeral: true`). With `createVela()`, sessions are stored in `<agentDir>/vela.db` when `agentDir` is passed, in `<dataDir>/vela.db` when only `dataDir` is passed, or in memory (`:memory:`) when neither is provided (or when `ephemeralSessions: true`). See [SDK](sdk.md#session-storage).
+In the SDK, `createRuntime()` stores sessions in `<agentDir>/vela.db` (`~/.vela/vela.db` by default, or `:memory:` with `ephemeral: true`). With `createVela()`, sessions are stored in `<agentDir>/vela.db` when `agentDir` is passed, fall back to `<dataDir>/vela.db` when `createVela({ dataDir })` is called without `agentDir`, or stay in memory (`:memory:`) when neither is provided (or when `ephemeralSessions: true`). See [SDK](sdk.md#session-storage).
 
 ## Continue or switch sessions
 
@@ -80,7 +80,7 @@ Review an export before you share it: it can contain your prompts, the model's a
 
 ## Multiple sessions
 
-One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory, the knowledge base and channels; each keeps its own history, queues, compaction, usage, tool results and run lock. This is a difference from pi, where one process holds one active session. A channel like Lark needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
+One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory and channels; each keeps its own history, queues, compaction, usage, tool results and run lock. This is a difference from pi, where one process holds one active session. A channel like Lark needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
 
 The CLI shows one session at a time; `vela serve` runs the channel sessions in its process instead. In the SDK, open as many as you need with `vela.session(id)`; see [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
 

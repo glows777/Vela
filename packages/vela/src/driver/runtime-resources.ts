@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
 import { savedTrust } from '../db/trust.ts'
 import type {
@@ -7,6 +8,7 @@ import type {
 } from '../runtime/memory/index.ts'
 import { resolveMemoryDirs } from '../runtime/memory/index.ts'
 import { loadProjectSettings } from './config/project-settings.ts'
+import { readLocalSystemFile } from './config/runtime-resources.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import {
   serperSearchTool,
@@ -14,15 +16,23 @@ import {
   webFetchTool,
 } from './extensions/web/tools.ts'
 import type { ModelMessage } from './messages.ts'
-import type { ContextFile } from './prompt/context-files.ts'
+import {
+  type ContextFile,
+  loadAgentContextFile,
+} from './prompt/context-files.ts'
 import { loadEnvironmentContextFiles } from './prompt/environment-context-files.ts'
 import { loadEnvironmentTemplates } from './prompt/environment-templates.ts'
-import type { PromptTemplate } from './prompt/templates.ts'
+import { loadPromptTemplates, type PromptTemplate } from './prompt/templates.ts'
 import type { SessionStore } from './session/index.ts'
 import { messageText } from './session/message-queue.ts'
 import { canonicalEnvironmentPath } from './session/project-config.ts'
+import { sessionSystemFile } from './session/resources.ts'
+import {
+  type InventoryEnv,
+  workspaceDiscovery,
+} from './session/workspace-discovery.ts'
 import { loadEnvironmentSkills } from './skills/environment-skills.ts'
-import type { SkillDefinition } from './skills/loader.ts'
+import { type SkillDefinition, SkillLoader } from './skills/loader.ts'
 import type { ToolDefinition } from './tools/registry.ts'
 
 const EMPTY_MEMORY_MESSAGE =
@@ -30,6 +40,8 @@ const EMPTY_MEMORY_MESSAGE =
 
 export interface TrustedRuntimeResources {
   trusted: boolean
+  systemPrompt?: string
+  appendSystemPrompt?: string
   contextFiles: ContextFile[]
   skills: SkillDefinition[]
   promptTemplates: PromptTemplate[]
@@ -42,23 +54,43 @@ export interface TrustedRuntimeResources {
 export async function loadTrustedRuntimeResources(options: {
   db: VelaDatabase
   agentDir: string
+  trustDataDir?: string
   location: ExecutionLocation
   resolveEnv: () => Promise<ExecutionEnv>
   signal: AbortSignal
+  systemPrompt?: string
+  appendSystemPrompt?: string
   hostContextFiles?: readonly ContextFile[]
   hostSkills?: readonly SkillDefinition[]
   hostPromptTemplates?: readonly PromptTemplate[]
   hostEnv?: Record<string, string | undefined>
   trustOverride?: boolean
 }): Promise<TrustedRuntimeResources> {
-  const contextFiles: ContextFile[] = [...(options.hostContextFiles ?? [])]
+  const isLocal = options.location.environment === 'local'
+  const trustScopeDir = options.trustDataDir ?? options.agentDir
+  const contextFiles: ContextFile[] = []
   const skillsByName = new Map<string, SkillDefinition>()
-  for (const skill of options.hostSkills ?? []) {
-    skillsByName.set(skill.name, skill)
-  }
   const templatesByName = new Map<string, PromptTemplate>()
-  for (const tpl of options.hostPromptTemplates ?? []) {
-    templatesByName.set(tpl.name, tpl)
+
+  if (isLocal) {
+    if (options.hostContextFiles !== undefined) {
+      contextFiles.push(...options.hostContextFiles)
+    } else {
+      const userContext = loadAgentContextFile(options.agentDir)
+      if (userContext) contextFiles.push(userContext)
+    }
+    const userSkills =
+      options.hostSkills ??
+      new SkillLoader([join(options.agentDir, 'skills')]).load()
+    for (const skill of userSkills) {
+      skillsByName.set(skill.name, skill)
+    }
+    const userTemplates =
+      options.hostPromptTemplates ??
+      loadPromptTemplates([join(options.agentDir, 'prompts')]).templates
+    for (const tpl of userTemplates) {
+      templatesByName.set(tpl.name, tpl)
+    }
   }
 
   let env: ExecutionEnv | undefined
@@ -66,9 +98,8 @@ export async function loadTrustedRuntimeResources(options: {
   let trusted: boolean
   if (options.trustOverride !== undefined) {
     trusted = options.trustOverride
-  } else if (options.location.environment === 'local') {
-    trusted =
-      savedTrust(options.db, options.location, options.agentDir) === true
+  } else if (isLocal) {
+    trusted = savedTrust(options.db, options.location, trustScopeDir) === true
   } else {
     env = await options.resolveEnv()
     targetCwd = await canonicalEnvironmentPath(
@@ -80,13 +111,21 @@ export async function loadTrustedRuntimeResources(options: {
       savedTrust(
         options.db,
         { environment: options.location.environment, cwd: targetCwd },
-        options.agentDir,
+        trustScopeDir,
       ) === true
   }
 
   if (!trusted) {
+    const systemPrompt =
+      options.systemPrompt ??
+      readLocalSystemFile([options.agentDir], 'SYSTEM.md')
+    const appendSystemPrompt =
+      options.appendSystemPrompt ??
+      readLocalSystemFile([options.agentDir], 'APPEND_SYSTEM.md')
     return {
       trusted: false,
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      ...(appendSystemPrompt !== undefined ? { appendSystemPrompt } : {}),
       contextFiles,
       skills: [...skillsByName.values()],
       promptTemplates: [...templatesByName.values()],
@@ -94,28 +133,45 @@ export async function loadTrustedRuntimeResources(options: {
   }
 
   env ??= await options.resolveEnv()
-  if (
-    options.location.environment !== 'local' &&
-    targetCwd === options.location.cwd
-  ) {
+  if (!isLocal && targetCwd === options.location.cwd) {
     targetCwd = await canonicalEnvironmentPath(
       env,
       options.location.cwd,
       options.signal,
     )
   }
+  const systemPrompt =
+    options.systemPrompt ??
+    (await sessionSystemFile(
+      env,
+      'SYSTEM.md',
+      true,
+      options.agentDir,
+      options.signal,
+    ))
+  const appendSystemPrompt =
+    options.appendSystemPrompt ??
+    (await sessionSystemFile(
+      env,
+      'APPEND_SYSTEM.md',
+      true,
+      options.agentDir,
+      options.signal,
+    ))
   const project = await loadProjectSettings(env, {
     cwd: targetCwd,
     trusted: true,
     agentDir: options.agentDir,
-    env: options.hostEnv ?? {},
+    env: isLocal ? (options.hostEnv ?? {}) : {},
     signal: options.signal,
   })
-  const loadedContext = await loadEnvironmentContextFiles(
-    env,
-    targetCwd,
-    options.signal,
-  )
+  const batch = !isLocal ? (env as InventoryEnv)[workspaceDiscovery] : undefined
+  const discovered = batch
+    ? await batch(true, options.signal, project.skillDirs, project.promptDirs)
+    : undefined
+  const loadedContext = discovered
+    ? discovered.contextFiles
+    : await loadEnvironmentContextFiles(env, targetCwd, options.signal)
   const seenPaths = new Set(contextFiles.map((f) => f.path))
   for (const file of loadedContext) {
     if (!seenPaths.has(file.path)) {
@@ -124,30 +180,36 @@ export async function loadTrustedRuntimeResources(options: {
     }
   }
 
-  const loadedSkills = await loadEnvironmentSkills(
-    env,
-    targetCwd,
-    options.signal,
-    false,
-    () => {},
-    project.skillDirs,
-  )
+  const loadedSkills = discovered
+    ? discovered.skills
+    : await loadEnvironmentSkills(
+        env,
+        targetCwd,
+        options.signal,
+        false,
+        () => {},
+        project.skillDirs,
+      )
   for (const skill of loadedSkills) {
     skillsByName.set(skill.name, skill)
   }
 
-  const loadedTemplates = await loadEnvironmentTemplates(
-    env,
-    targetCwd,
-    options.signal,
-    project.promptDirs,
-  )
+  const loadedTemplates = discovered
+    ? discovered.promptTemplates
+    : await loadEnvironmentTemplates(
+        env,
+        targetCwd,
+        options.signal,
+        project.promptDirs,
+      )
   for (const tpl of loadedTemplates) {
     templatesByName.set(tpl.name, tpl)
   }
 
   return {
     trusted: true,
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(appendSystemPrompt !== undefined ? { appendSystemPrompt } : {}),
     contextFiles,
     skills: [...skillsByName.values()],
     promptTemplates: [...templatesByName.values()],

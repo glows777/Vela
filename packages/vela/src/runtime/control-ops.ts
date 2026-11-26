@@ -1,4 +1,4 @@
-import { basename, isAbsolute, relative, sep, win32 } from 'node:path'
+import { basename, isAbsolute, posix, relative, win32 } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
 import type { ExecutionEnv } from '../shared/execution.ts'
 import {
@@ -15,10 +15,7 @@ import {
 import type { RuntimeEventBus } from './event-bus.ts'
 import { enqueueInboxEvent } from './inbox.ts'
 import { enqueueOutboxInTx } from './outbox.ts'
-import {
-  recordChildStatusNoteForHubInTx,
-  resolveOutboxTargetInDb,
-} from './worker.ts'
+import { resolveOutboxTargetInDb } from './worker.ts'
 
 const MAX_HANDOFF_DEPTH = 3
 
@@ -176,6 +173,7 @@ export async function startProjectSession(
     title: string
     brief: string
     replyToMessageId?: string
+    currentHandoffDepth?: number
     attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
   },
 ): Promise<{ sessionId: string; kind: 'topic' | 'work'; title: string }> {
@@ -183,6 +181,12 @@ export async function startProjectSession(
   const brief = input.brief.trim()
   if (!title) throw new Error('title must not be empty')
   if (!brief) throw new Error('brief must not be empty')
+  const nextDepth = (input.currentHandoffDepth ?? 0) + 1
+  if (nextDepth > MAX_HANDOFF_DEPTH) {
+    throw new Error(
+      'Hand-off chain limit reached: tell the requester in your reply instead',
+    )
+  }
 
   const { sessions, caller, project } = requireProjectSession(
     ctx.db,
@@ -248,6 +252,7 @@ export async function startProjectSession(
           title,
           text: brief,
           callerSessionId: caller.id,
+          handoffDepth: nextDepth,
           ...(clonedAttachments.length
             ? { attachments: clonedAttachments }
             : {}),
@@ -289,11 +294,18 @@ export function forwardToProjectSession(
     targetSessionId: string
     text: string
     replyToMessageId?: string
+    currentHandoffDepth?: number
     humanProvenance?: { inboxEventId: string; senderName?: string }
   },
 ): { sessionId: string; forwarded: true } {
   const text = input.text.trim()
   if (!text) throw new Error('text must not be empty')
+  const nextDepth = (input.currentHandoffDepth ?? 0) + 1
+  if (nextDepth > MAX_HANDOFF_DEPTH) {
+    throw new Error(
+      'Hand-off chain limit reached: tell the requester in your reply instead',
+    )
+  }
 
   const { sessions, caller, project } = requireProjectSession(
     ctx.db,
@@ -315,6 +327,18 @@ export function forwardToProjectSession(
     )
   }
 
+  const verifiedHuman =
+    input.humanProvenance &&
+    Boolean(
+      ctx.db.get<{ id: string }>(
+        `SELECT id FROM inbox_events
+         WHERE id = ? AND session_id = ? AND source IN ('user', 'channel') AND passive = 0
+         LIMIT 1`,
+        input.humanProvenance.inboxEventId,
+        caller.id,
+      ),
+    )
+
   const targetBinding = ctx.db.get<{
     channel: string
     external_id: string
@@ -329,17 +353,6 @@ export function forwardToProjectSession(
   ctx.db.transaction(() => {
     if (target.state === 'waiting_human') {
       const pending = listRuntimePendingApprovals(ctx.db, target.id)
-      const verifiedHuman =
-        input.humanProvenance &&
-        Boolean(
-          ctx.db.get<{ id: string }>(
-            `SELECT id FROM inbox_events
-             WHERE id = ? AND session_id = ? AND source IN ('user', 'channel') AND passive = 0
-             LIMIT 1`,
-            input.humanProvenance.inboxEventId,
-            caller.id,
-          ),
-        )
       if (
         !verifiedHuman ||
         pending.some((a) => a.toolName !== 'wait_for_input')
@@ -348,11 +361,20 @@ export function forwardToProjectSession(
           `Session ${target.id} is waiting for human input or tool approval and cannot accept a forwarded message`,
         )
       }
-      resolveWaitForInputOnUserReplyInTx(ctx.db, ctx.eventBus, {
-        sessionId: target.id,
-        replyText: text,
-        decidedBy: input.humanProvenance?.senderName,
-      })
+      const resolvedWait = resolveWaitForInputOnUserReplyInTx(
+        ctx.db,
+        ctx.eventBus,
+        {
+          sessionId: target.id,
+          replyText: text,
+          decidedBy: input.humanProvenance?.senderName,
+        },
+      )
+      if (!resolvedWait) {
+        throw new Error(
+          `Session ${target.id} is waiting for human input or tool approval and cannot accept a forwarded message`,
+        )
+      }
     }
 
     enqueueInboxEvent(ctx.db, {
@@ -364,6 +386,10 @@ export function forwardToProjectSession(
         type: 'session_forward',
         text,
         callerSessionId: caller.id,
+        handoffDepth: nextDepth,
+        ...(verifiedHuman && input.humanProvenance?.senderName
+          ? { senderName: input.humanProvenance.senderName }
+          : {}),
         ...(targetBinding
           ? {
               channel: targetBinding.channel,
@@ -389,6 +415,9 @@ export function forwardToProjectSession(
     }
   })
 
+  if (targetBinding?.thread_id && ctx.flushOutbox) {
+    ctx.flushOutbox()
+  }
   ctx.scheduleSession(target.id)
   return { sessionId: target.id, forwarded: true }
 }
@@ -449,12 +478,12 @@ export function readProjectSessionMessages(
         content_json: string
         created_at: string
       }>(
-        `WITH RECURSIVE branch(id, parent_id, seq, kind, role, content_json, created_at, path) AS (
-           SELECT id, parent_id, seq, kind, role, content_json, created_at, ',' || id || ','
+        `WITH RECURSIVE branch(id, parent_id, seq, kind, role, stop_reason, content_json, created_at, path) AS (
+           SELECT id, parent_id, seq, kind, role, stop_reason, content_json, created_at, ',' || id || ','
            FROM vela_messages
            WHERE session_id = ? AND id = ?
            UNION ALL
-           SELECT m.id, m.parent_id, m.seq, m.kind, m.role, m.content_json, m.created_at, b.path || m.id || ','
+           SELECT m.id, m.parent_id, m.seq, m.kind, m.role, m.stop_reason, m.content_json, m.created_at, b.path || m.id || ','
            FROM vela_messages m
            JOIN branch b ON m.id = b.parent_id
            WHERE m.session_id = ? AND instr(b.path, ',' || m.id || ',') = 0
@@ -462,23 +491,26 @@ export function readProjectSessionMessages(
          SELECT id, role, content_json, created_at
          FROM branch
          WHERE kind = 'message' AND role IN ('user', 'assistant')
+           AND (role = 'user' OR stop_reason IS NULL OR stop_reason NOT IN ('error', 'aborted'))
          ORDER BY seq ASC`,
         target.id,
         target.leafMessageId,
         target.id,
       )
     : []
-  const sliced = rows.slice(-limit)
-  return {
-    sessionId: target.id,
-    name: target.name,
-    state: target.state,
-    messages: sliced.map((row) => ({
+  const messages = rows
+    .map((row) => ({
       id: row.id,
       role: row.role ?? 'user',
       text: extractMessageText(row.content_json),
       createdAt: row.created_at,
-    })),
+    }))
+    .filter((m) => m.text.trim().length > 0)
+  return {
+    sessionId: target.id,
+    name: target.name,
+    state: target.state,
+    messages: messages.slice(-limit),
   }
 }
 
@@ -610,7 +642,10 @@ export async function sendSessionFile(
   const filePath = input.path
   if (
     !filePath ||
+    filePath === '.' ||
+    filePath.trim() === '' ||
     isAbsolute(filePath) ||
+    posix.isAbsolute(filePath) ||
     win32.isAbsolute(filePath) ||
     filePath.split(/[\\/]/).includes('..') ||
     /\p{Cc}/u.test(filePath)
@@ -635,8 +670,19 @@ export async function sendSessionFile(
     }
     throw resolvedRes.error
   }
-  const within = relative(rootRes.value, resolvedRes.value)
-  if (within === '..' || within.startsWith(`..${sep}`) || isAbsolute(within)) {
+  const within = posix.isAbsolute(rootRes.value)
+    ? posix.relative(rootRes.value, resolvedRes.value)
+    : relative(rootRes.value, resolvedRes.value)
+  if (
+    !within ||
+    within === '.' ||
+    within === '..' ||
+    within.startsWith('../') ||
+    within.startsWith('..\\') ||
+    isAbsolute(within) ||
+    posix.isAbsolute(within) ||
+    win32.isAbsolute(within)
+  ) {
     throw new Error(OUTSIDE_WORKSPACE_MSG)
   }
 
@@ -656,86 +702,44 @@ export async function sendSessionFile(
     throw new Error(`${blob.filename} is empty. Choose a nonempty file.`)
   }
 
-  const outboxTarget = resolveOutboxTargetInDb(ctx.db, session, [], input.runId)
-  if (outboxTarget) {
-    enqueueOutboxInTx(ctx.db, {
-      sessionId: session.id,
-      runId: input.runId ?? null,
-      channel: outboxTarget.channel,
-      externalChatId: outboxTarget.externalChatId,
-      threadId: outboxTarget.threadId,
-      replyToMessageId: outboxTarget.replyToMessageId,
-      kind: 'file',
-      text: '',
-      files: [
-        {
-          path: blob.storagePath,
-          name: blob.filename,
-          ...(blob.mimeType ? { mimeType: blob.mimeType } : {}),
-        },
-      ],
+  let deliveredViaOutbox = false
+  try {
+    deliveredViaOutbox = ctx.db.transaction(() => {
+      const outboxTarget = resolveOutboxTargetInDb(
+        ctx.db,
+        session,
+        [],
+        input.runId,
+      )
+      if (!outboxTarget) return false
+      enqueueOutboxInTx(ctx.db, {
+        sessionId: session.id,
+        runId: input.runId ?? null,
+        channel: outboxTarget.channel,
+        externalChatId: outboxTarget.externalChatId,
+        threadId: outboxTarget.threadId,
+        replyToMessageId: outboxTarget.replyToMessageId,
+        kind: 'file',
+        text: '',
+        files: [
+          {
+            path: blob.storagePath,
+            name: blob.filename,
+            ...(blob.mimeType ? { mimeType: blob.mimeType } : {}),
+          },
+        ],
+      })
+      return true
     })
+  } catch (error) {
+    await ctx.blobs.deleteBlob(blob.id).catch(() => {})
+    throw error
   }
 
   return {
     blobId: blob.id,
     filename: blob.filename,
     sizeBytes: blob.sizeBytes,
-    deliveredViaOutbox: Boolean(outboxTarget),
+    deliveredViaOutbox,
   }
-}
-
-export function stopSessionRunsInDb(
-  db: VelaDatabase,
-  session: SessionRecord | undefined,
-  sessionId: string,
-  reason: string,
-): boolean {
-  const now = new Date().toISOString()
-  return db.transaction(() => {
-    const rows = db.all<{ id: string }>(
-      `SELECT id FROM runs
-       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
-      sessionId,
-    )
-    const updated = db.run(
-      `UPDATE runs SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
-       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
-      now,
-      now,
-      sessionId,
-    )
-    for (const r of rows) {
-      db.run(
-        `UPDATE vela_tool_calls SET status = 'interrupted', updated_at = ?
-         WHERE run_id = ? AND status IN ('pending', 'running', 'awaiting_approval')`,
-        now,
-        r.id,
-      )
-      db.run(
-        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
-        `run_target:${r.id}`,
-        `stop_requested:${r.id}`,
-        `run_silent:${r.id}`,
-        `run_handoff_depth:${r.id}`,
-        `run_input_meta:${r.id}`,
-      )
-    }
-    db.run(
-      `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
-       WHERE id = ? AND state IN ('running', 'waiting_human')`,
-      now,
-      sessionId,
-    )
-    const latestStoppedRun = rows.at(-1)
-    if (session && latestStoppedRun) {
-      recordChildStatusNoteForHubInTx(
-        db,
-        { session, runId: latestStoppedRun.id, inputs: [] },
-        'stopped',
-        reason,
-      )
-    }
-    return updated.changes > 0
-  })
 }

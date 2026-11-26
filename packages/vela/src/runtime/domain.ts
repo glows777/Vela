@@ -4,9 +4,14 @@ import type { ExecutionLocation } from '../shared/execution.ts'
 import { hasLiveSessionJobs } from './background-jobs.ts'
 import type { ChannelBinding, ChannelBindingKind } from './channels.ts'
 import { assertSafePathSegment, isOwnerLive } from './driver.ts'
+import {
+  cleanupProjectTimerTargetsInTx,
+  cleanupSessionMetadataInTx,
+  unlinkOrphanedBlobPaths,
+} from './session-cleanup.ts'
 
-type SessionKind = 'chat' | 'hub' | 'topic' | 'work'
-type SessionState = 'idle' | 'running' | 'waiting_human' | 'stopped'
+export type SessionKind = 'chat' | 'hub' | 'topic' | 'work'
+export type SessionState = 'idle' | 'running' | 'waiting_human' | 'stopped'
 
 export interface ProjectRecord {
   id: string
@@ -229,7 +234,10 @@ function rowToBinding(row: ChannelBindingRow): ChannelBinding {
 
 /** Manages `projects` rows without touching user directories on disk. */
 export class ProjectStore {
-  constructor(private readonly db: VelaDatabase) {}
+  constructor(
+    private readonly db: VelaDatabase,
+    private readonly onScheduleChanged?: () => void,
+  ) {}
 
   create(input: CreateProjectInput): ProjectRecord {
     const id = input.id ?? randomUUID()
@@ -298,7 +306,7 @@ export class ProjectStore {
 
   getByCwd(cwd: string): ProjectRecord | undefined {
     const row = this.db.get<Record<string, unknown>>(
-      'SELECT * FROM projects WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1',
+      'SELECT * FROM projects WHERE cwd = ? AND archived = 0 ORDER BY updated_at DESC LIMIT 1',
       cwd,
     ) as ProjectRow | undefined
     return row ? rowToProject(row) : undefined
@@ -384,8 +392,11 @@ export class ProjectStore {
     }
   }
 
-  private cleanupSessionRowsInTx(sessionId: string): void {
-    cleanupSessionMetadataInTx(this.db, sessionId)
+  private cleanupSessionRowsInTx(sessionId: string): {
+    blobPaths: string[]
+    hadTimers: boolean
+  } {
+    return cleanupSessionMetadataInTx(this.db, sessionId)
   }
 
   /**
@@ -394,31 +405,46 @@ export class ProjectStore {
    * Never deletes user project folders on disk.
    */
   remove(id: string, options: { deleteSessions?: boolean } = {}): boolean {
-    return this.db.transaction(() => {
+    const { removed, blobPaths, hadTimers } = this.db.transaction(() => {
       const exists = this.get(id)
-      if (!exists) return false
+      if (!exists) {
+        return { removed: false, blobPaths: [] as string[], hadTimers: false }
+      }
+      const sessionIds = this.db
+        .all<{ id: string }>('SELECT id FROM sessions WHERE project_id = ?', id)
+        .map((row) => row.id)
+      this.assertDeletableSessions(sessionIds)
+      let hadTimers = cleanupProjectTimerTargetsInTx(this.db, id)
+      const collectedPaths: string[] = []
       if (options.deleteSessions) {
-        const sessionIds = this.db
-          .all<{ id: string }>(
-            'SELECT id FROM sessions WHERE project_id = ?',
-            id,
-          )
-          .map((row) => row.id)
-        this.assertDeletableSessions(sessionIds)
         for (const sid of sessionIds) {
-          this.cleanupSessionRowsInTx(sid)
+          const cleaned = this.cleanupSessionRowsInTx(sid)
+          collectedPaths.push(...cleaned.blobPaths)
+          if (cleaned.hadTimers) hadTimers = true
         }
         this.db.run('DELETE FROM sessions WHERE project_id = ?', id)
       }
       const res = this.db.run('DELETE FROM projects WHERE id = ?', id)
-      return res.changes > 0
+      return {
+        removed: res.changes > 0,
+        blobPaths: collectedPaths,
+        hadTimers,
+      }
     })
+    unlinkOrphanedBlobPaths(this.db, blobPaths)
+    if (removed && hadTimers) {
+      this.onScheduleChanged?.()
+    }
+    return removed
   }
 }
 
 /** Control-plane CRUD & status queries for `sessions`. */
 export class SessionStoreControl {
-  constructor(private readonly db: VelaDatabase) {}
+  constructor(
+    private readonly db: VelaDatabase,
+    private readonly onScheduleChanged?: () => void,
+  ) {}
 
   create(input: CreateSessionInput = {}): SessionRecord {
     const id = input.id ?? randomUUID()
@@ -507,9 +533,11 @@ export class SessionStoreControl {
   }
 
   delete(id: string): boolean {
-    return this.db.transaction(() => {
+    const { deleted, blobPaths, hadTimers } = this.db.transaction(() => {
       const existing = this.get(id)
-      if (!existing) return false
+      if (!existing) {
+        return { deleted: false, blobPaths: [] as string[], hadTimers: false }
+      }
       const activeRuns = this.db.all<{
         id: string
         owner_token: string | null
@@ -525,10 +553,19 @@ export class SessionStoreControl {
           `Cannot delete session ${id} while a run or background job is actively executing; stop it first`,
         )
       }
-      cleanupSessionMetadataInTx(this.db, id)
+      const cleaned = cleanupSessionMetadataInTx(this.db, id)
       const res = this.db.run('DELETE FROM sessions WHERE id = ?', id)
-      return res.changes > 0
+      return {
+        deleted: res.changes > 0,
+        blobPaths: cleaned.blobPaths,
+        hadTimers: cleaned.hadTimers,
+      }
     })
+    unlinkOrphanedBlobPaths(this.db, blobPaths)
+    if (deleted && hadTimers) {
+      this.onScheduleChanged?.()
+    }
+    return deleted
   }
 
   reset(id: string): SessionRecord {
@@ -613,55 +650,57 @@ export class ChannelBindingStore {
   constructor(private readonly db: VelaDatabase) {}
 
   upsert(input: UpsertChannelBindingInput): ChannelBinding {
-    const now = new Date().toISOString()
-    const threadId = input.threadId ?? null
-    const existing = this.findByExternal(
-      input.channel,
-      input.externalId,
-      threadId ?? undefined,
-    )
-    const id = existing?.id ?? input.id ?? randomUUID()
-    const enabled = input.enabled ?? existing?.enabled ?? true
-    const configJson =
-      input.config !== undefined
-        ? JSON.stringify(input.config)
-        : existing?.config
-          ? JSON.stringify(existing.config)
-          : null
-
-    if (existing) {
-      this.db.run(
-        `UPDATE channel_bindings
-         SET kind = ?, project_id = ?, session_id = ?, enabled = ?, config_json = ?, updated_at = ?
-         WHERE id = ?`,
-        input.kind,
-        input.projectId !== undefined ? input.projectId : existing.projectId,
-        input.sessionId !== undefined ? input.sessionId : existing.sessionId,
-        enabled ? 1 : 0,
-        configJson,
-        now,
-        id,
-      )
-    } else {
-      this.db.run(
-        `INSERT INTO channel_bindings (
-           id, channel, external_id, thread_id, kind, project_id, session_id,
-           enabled, config_json, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        id,
+    return this.db.transaction(() => {
+      const now = new Date().toISOString()
+      const threadId = input.threadId ?? null
+      const existing = this.findByExternal(
         input.channel,
         input.externalId,
-        threadId,
-        input.kind,
-        input.projectId ?? null,
-        input.sessionId ?? null,
-        enabled ? 1 : 0,
-        configJson,
-        now,
-        now,
+        threadId ?? undefined,
       )
-    }
-    return this.get(id)!
+      const id = existing?.id ?? input.id ?? randomUUID()
+      const enabled = input.enabled ?? existing?.enabled ?? true
+      const configJson =
+        input.config !== undefined
+          ? JSON.stringify(input.config)
+          : existing?.config
+            ? JSON.stringify(existing.config)
+            : null
+
+      if (existing) {
+        this.db.run(
+          `UPDATE channel_bindings
+           SET kind = ?, project_id = ?, session_id = ?, enabled = ?, config_json = ?, updated_at = ?
+           WHERE id = ?`,
+          input.kind,
+          input.projectId !== undefined ? input.projectId : existing.projectId,
+          input.sessionId !== undefined ? input.sessionId : existing.sessionId,
+          enabled ? 1 : 0,
+          configJson,
+          now,
+          id,
+        )
+      } else {
+        this.db.run(
+          `INSERT INTO channel_bindings (
+             id, channel, external_id, thread_id, kind, project_id, session_id,
+             enabled, config_json, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id,
+          input.channel,
+          input.externalId,
+          threadId,
+          input.kind,
+          input.projectId ?? null,
+          input.sessionId ?? null,
+          enabled ? 1 : 0,
+          configJson,
+          now,
+          now,
+        )
+      }
+      return this.get(id)!
+    })
   }
 
   get(id: string): ChannelBinding | undefined {
@@ -733,38 +772,5 @@ export class ChannelBindingStore {
   remove(id: string): boolean {
     const res = this.db.run('DELETE FROM channel_bindings WHERE id = ?', id)
     return res.changes > 0
-  }
-}
-
-function cleanupSessionMetadataInTx(db: VelaDatabase, sessionId: string): void {
-  const runIds = db
-    .all<{ id: string }>('SELECT id FROM runs WHERE session_id = ?', sessionId)
-    .map((r) => r.id)
-  db.run('DELETE FROM channel_bindings WHERE session_id = ?', sessionId)
-  const uploadPrefix = `channel_upload:${sessionId}:`
-  const runTargetPrefix = `run_target:${sessionId}:`
-  const shortcutPrefix = 'channel_shortcut:'
-  db.run(
-    `DELETE FROM kv_meta
-      WHERE key = ?
-         OR substr(key, 1, length(?)) = ?
-         OR substr(key, 1, length(?)) = ?
-         OR (
-           substr(key, 1, length(?)) = ?
-           AND json_valid(value_json)
-           AND json_extract(value_json, '$.sessionId') = ?
-         )`,
-    `legacy_session_channel:${sessionId}`,
-    uploadPrefix,
-    uploadPrefix,
-    runTargetPrefix,
-    runTargetPrefix,
-    shortcutPrefix,
-    shortcutPrefix,
-    sessionId,
-  )
-  for (const runId of runIds) {
-    db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${runId}`)
-    db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${runId}`)
   }
 }

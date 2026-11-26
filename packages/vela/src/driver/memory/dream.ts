@@ -498,6 +498,18 @@ export class MemoryDream {
     }
     try {
       signal.throwIfAborted()
+      if (
+        turns.length === 0 &&
+        snapshotPending.maxSeq > initialState.cursorSeq
+      ) {
+        const report =
+          '[dream] No readable turns remain; advanced cursor past deleted sessions.'
+        this.recordAudit(
+          { ...attempt, report, changes: 0 },
+          snapshotPending.maxSeq,
+        )
+        return report
+      }
       const entries = this.store
         .list()
         .sort((a, b) => a.filePath.localeCompare(b.filePath))
@@ -607,6 +619,12 @@ export class MemoryDream {
       this.recordAudit({ ...attempt, report, changes }, snapshotPending.maxSeq)
       return report
     } catch (error) {
+      if (
+        signal.aborted ||
+        (error instanceof Error && error.name === 'AbortError')
+      ) {
+        throw error
+      }
       const failed = formatDreamReplyError(error)
       const tail = responseText.trim().slice(-500)
       this.recordAudit({

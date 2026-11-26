@@ -34,10 +34,16 @@ function rowToEvent(row: EventRow): RuntimeEvent {
  * - Structural state transitions are persisted to SQLite `events(seq)` with post-commit delivery.
  * - High-frequency streaming deltas are held/broadcast strictly in memory per active run.
  */
+const MAX_DELTA_BUFFER_EVENTS = 2000
+const MAX_DELTA_BUFFER_CHARS = 512 * 1024
+
 export class RuntimeEventBus {
   private readonly eventListeners = new Set<RuntimeEventListener>()
   private readonly deltaListeners = new Set<StreamDeltaListener>()
-  private readonly activeDeltaBuffer = new Map<string, StreamDeltaEvent[]>()
+  private readonly activeDeltaBuffer = new Map<
+    string,
+    { events: StreamDeltaEvent[]; chars: number }
+  >()
 
   constructor(private readonly db: VelaDatabase) {}
 
@@ -72,6 +78,12 @@ export class RuntimeEventBus {
       timestamp: createdAt,
     }
     this.db.afterCommit(() => {
+      if (
+        input.payload.type === 'message_committed' ||
+        input.payload.type === 'tool_finished'
+      ) {
+        this.activeDeltaBuffer.delete(input.sessionId)
+      }
       for (const listener of this.eventListeners) {
         try {
           const maybePromise = listener(event) as unknown
@@ -109,10 +121,14 @@ export class RuntimeEventBus {
       where.push('seq > ?')
       params.push(options.afterSeq)
     }
-    const limitClause =
-      options.limit !== undefined
-        ? `LIMIT ${Math.max(1, Math.trunc(options.limit))}`
-        : ''
+    let limitClause = ''
+    if (options.limit !== undefined) {
+      if (!Number.isFinite(options.limit) || options.limit < 1) {
+        throw new Error(`Invalid events limit: "${options.limit}"`)
+      }
+      limitClause = 'LIMIT ?'
+      params.push(Math.max(1, Math.trunc(options.limit)))
+    }
     const sql = `SELECT * FROM events ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY seq ASC ${limitClause}`
     const rows = this.db.all<Record<string, unknown>>(
       sql,
@@ -122,12 +138,20 @@ export class RuntimeEventBus {
   }
 
   emitDelta(delta: StreamDeltaEvent): void {
-    let buffer = this.activeDeltaBuffer.get(delta.sessionId)
-    if (!buffer) {
-      buffer = []
-      this.activeDeltaBuffer.set(delta.sessionId, buffer)
+    let entry = this.activeDeltaBuffer.get(delta.sessionId)
+    if (!entry) {
+      entry = { events: [], chars: 0 }
+      this.activeDeltaBuffer.set(delta.sessionId, entry)
     }
-    buffer.push(delta)
+    entry.events.push(delta)
+    entry.chars += delta.delta.length
+    while (
+      entry.events.length > MAX_DELTA_BUFFER_EVENTS ||
+      (entry.chars > MAX_DELTA_BUFFER_CHARS && entry.events.length > 1)
+    ) {
+      const removed = entry.events.shift()!
+      entry.chars -= removed.delta.length
+    }
     for (const listener of this.deltaListeners) {
       try {
         const maybePromise = listener(delta) as unknown
@@ -142,7 +166,7 @@ export class RuntimeEventBus {
   }
 
   bufferedDeltas(sessionId: string): StreamDeltaEvent[] {
-    return [...(this.activeDeltaBuffer.get(sessionId) ?? [])]
+    return [...(this.activeDeltaBuffer.get(sessionId)?.events ?? [])]
   }
 
   clearDeltas(sessionId: string): void {

@@ -151,154 +151,167 @@ function bytes(
     : result
 }
 
+export const withDockerCwd = Symbol.for('vela.private.withDockerCwd')
+
+type ScopedDockerExecutionEnv = InternalExecutionEnv & {
+  [withDockerCwd]?: (cwd: string) => ExecutionEnv
+}
+
 export function dockerOperations(
   id: string,
   cwd: string,
   spawnGuest: (op: string, cwd: string) => ChildProcessWithoutNullStreams,
 ): ExecutionEnv {
   const active = new Set<Exchange>()
-  function start(op: string) {
-    const channel = new Exchange(spawnGuest(op, env.cwd), () =>
-      active.delete(channel),
-    )
-    active.add(channel)
-    return channel
-  }
-  async function file<T>(
-    op: string,
-    args: unknown[],
-    signal?: AbortSignal,
-  ): Promise<Result<T, FileError>> {
-    if (signal?.aborted) return failure('aborted', 'Operation aborted')
-    let channel: Exchange | undefined
-    try {
-      channel = start(op)
-      return await channel.request<T, FileError>(args, signal)
-    } catch (e) {
-      return failure('unavailable', String(e))
-    } finally {
-      await channel?.stop()
-    }
-  }
-  const env: InternalExecutionEnv = {
-    [executionEnvOs]: 'linux',
-    async [checkGitRepo](path, signal) {
-      const result = await file<boolean>('insideGitRepo', [path], signal)
-      if (!result.ok) throw result.error
-      return result.value
-    },
-    async [workspaceDiscovery](
-      contextEnabled,
-      signal,
-      declaredSkills = [],
-      declaredPrompts = [],
-    ) {
-      const result = await file<WorkspaceInventorySnapshot>(
-        'discoverWorkspace',
-        [contextEnabled, [...declaredSkills], [...declaredPrompts]],
-        signal,
+  function createEnv(viewCwd: string, ownsCleanup: boolean): ExecutionEnv {
+    function start(op: string) {
+      const channel = new Exchange(spawnGuest(op, viewCwd), () =>
+        active.delete(channel),
       )
-      if (!result.ok) throw result.error
-      return result.value
-    },
-    id,
-    cwd,
-    absolutePath: (p, s) => file('absolutePath', [p], s),
-    joinPath: (p, s) => file('joinPath', [p], s),
-    canonicalPath: (p, s) => file('canonicalPath', [p], s),
-    exists: (p, s) => file('exists', [p], s),
-    readTextFile: (p, s) => file('readTextFile', [p], s),
-    readBinaryFile: async (p, s) => bytes(await file('readBinaryFile', [p], s)),
-    writeFile: (p, data, s) =>
-      file('writeFile', [p, Buffer.from(data).toString('base64')], s),
-    renameFile: (a, b, s) => file('renameFile', [a, b], s),
-    fileInfo: (p, s) => file('fileInfo', [p], s),
-    listDir: (p, s) => file('listDir', [p], s),
-    createDir: (p, o, s) => file('createDir', [p, o ?? {}], s),
-    createTempFile: (o, s) => file('createTempFile', [o ?? {}], s),
-    remove: (p, o, s) => file('remove', [p, o ?? {}], s),
-    async openBinaryReader(p, o, s) {
-      if (s?.aborted) return failure('aborted', 'Operation aborted')
-      let channel: Exchange
-      try {
-        channel = start('openBinaryReader')
-      } catch (e) {
-        return failure('unavailable', String(e))
-      }
-      const opened = await channel.request<null, FileError>([p, o], s)
-      if (!opened.ok) {
-        await channel.stop()
-        return opened
-      }
-      let closed = false
-      let queue = Promise.resolve()
-      function call<T>(
-        args: unknown[],
-        signal?: AbortSignal,
-      ): Promise<Result<T, FileError>> {
-        const task = queue.then(() =>
-          closed
-            ? failure('invalid', 'Binary reader closed')
-            : channel.request<T, FileError>(args, signal),
-        )
-        queue = task.then(() => {})
-        return task
-      }
-      return {
-        ok: true,
-        value: {
-          info: (signal) => call(['info'], signal),
-          read: async (offset, length, signal) =>
-            bytes(await call(['read', offset, length], signal)),
-          scanLines: (opts, signal) =>
-            call(
-              [
-                'scanLines',
-                opts.endLine === Infinity
-                  ? { startLine: opts.startLine }
-                  : opts,
-              ],
-              signal,
-            ),
-          async close() {
-            closed = true
-            await channel.stop()
-          },
-        },
-      }
-    },
-    async exec(command, options = {}, signal) {
+      active.add(channel)
+      return channel
+    }
+    async function file<T>(
+      op: string,
+      args: unknown[],
+      signal?: AbortSignal,
+    ): Promise<Result<T, FileError>> {
       if (signal?.aborted) return failure('aborted', 'Operation aborted')
-      let channel: Exchange
+      let channel: Exchange | undefined
       try {
-        channel = start('exec')
+        channel = start(op)
+        return await channel.request<T, FileError>(args, signal)
       } catch (e) {
         return failure('unavailable', String(e))
-      }
-      const { onOutput, ...settings } = options
-      let result: Awaited<ReturnType<Exchange['request']>>
-      try {
-        result = await channel.request([command, settings], signal, onOutput)
       } finally {
-        await channel.stop()
+        await channel?.stop()
       }
-      if (result.ok) {
-        const teardown = channel.teardownError()
-        if (teardown) return failure('unavailable', teardown)
-      }
-      return result as Result<
-        Awaited<ReturnType<ExecutionEnv['exec']>> extends Result<
-          infer T,
-          unknown
+    }
+    const env: ScopedDockerExecutionEnv = {
+      [executionEnvOs]: 'linux',
+      async [checkGitRepo](path, signal) {
+        const result = await file<boolean>('insideGitRepo', [path], signal)
+        if (!result.ok) throw result.error
+        return result.value
+      },
+      async [workspaceDiscovery](
+        contextEnabled,
+        signal,
+        declaredSkills = [],
+        declaredPrompts = [],
+      ) {
+        const result = await file<WorkspaceInventorySnapshot>(
+          'discoverWorkspace',
+          [contextEnabled, [...declaredSkills], [...declaredPrompts]],
+          signal,
+        )
+        if (!result.ok) throw result.error
+        return result.value
+      },
+      [withDockerCwd]: (nextCwd: string) =>
+        nextCwd === viewCwd ? env : createEnv(nextCwd, false),
+      id,
+      cwd: viewCwd,
+      absolutePath: (p, s) => file('absolutePath', [p], s),
+      joinPath: (p, s) => file('joinPath', [p], s),
+      canonicalPath: (p, s) => file('canonicalPath', [p], s),
+      exists: (p, s) => file('exists', [p], s),
+      readTextFile: (p, s) => file('readTextFile', [p], s),
+      readBinaryFile: async (p, s) =>
+        bytes(await file('readBinaryFile', [p], s)),
+      writeFile: (p, data, s) =>
+        file('writeFile', [p, Buffer.from(data).toString('base64')], s),
+      renameFile: (a, b, s) => file('renameFile', [a, b], s),
+      fileInfo: (p, s) => file('fileInfo', [p], s),
+      listDir: (p, s) => file('listDir', [p], s),
+      createDir: (p, o, s) => file('createDir', [p, o ?? {}], s),
+      createTempFile: (o, s) => file('createTempFile', [o ?? {}], s),
+      remove: (p, o, s) => file('remove', [p, o ?? {}], s),
+      async openBinaryReader(p, o, s) {
+        if (s?.aborted) return failure('aborted', 'Operation aborted')
+        let channel: Exchange
+        try {
+          channel = start('openBinaryReader')
+        } catch (e) {
+          return failure('unavailable', String(e))
+        }
+        const opened = await channel.request<null, FileError>([p, o], s)
+        if (!opened.ok) {
+          await channel.stop()
+          return opened
+        }
+        let closed = false
+        let queue = Promise.resolve()
+        function call<T>(
+          args: unknown[],
+          signal?: AbortSignal,
+        ): Promise<Result<T, FileError>> {
+          const task = queue.then(() =>
+            closed
+              ? failure('invalid', 'Binary reader closed')
+              : channel.request<T, FileError>(args, signal),
+          )
+          queue = task.then(() => {})
+          return task
+        }
+        return {
+          ok: true,
+          value: {
+            info: (signal) => call(['info'], signal),
+            read: async (offset, length, signal) =>
+              bytes(await call(['read', offset, length], signal)),
+            scanLines: (opts, signal) =>
+              call(
+                [
+                  'scanLines',
+                  opts.endLine === Infinity
+                    ? { startLine: opts.startLine }
+                    : opts,
+                ],
+                signal,
+              ),
+            async close() {
+              closed = true
+              await channel.stop()
+            },
+          },
+        }
+      },
+      async exec(command, options = {}, signal) {
+        if (signal?.aborted) return failure('aborted', 'Operation aborted')
+        let channel: Exchange
+        try {
+          channel = start('exec')
+        } catch (e) {
+          return failure('unavailable', String(e))
+        }
+        const { onOutput, ...settings } = options
+        let result: Awaited<ReturnType<Exchange['request']>>
+        try {
+          result = await channel.request([command, settings], signal, onOutput)
+        } finally {
+          await channel.stop()
+        }
+        if (result.ok) {
+          const teardown = channel.teardownError()
+          if (teardown) return failure('unavailable', teardown)
+        }
+        return result as Result<
+          Awaited<ReturnType<ExecutionEnv['exec']>> extends Result<
+            infer T,
+            unknown
+          >
+            ? T
+            : never,
+          ExecutionError
         >
-          ? T
-          : never,
-        ExecutionError
-      >
-    },
-    async cleanup() {
-      await Promise.all([...active].map((channel) => channel.cleanup()))
-    },
+      },
+      async cleanup() {
+        if (!ownsCleanup) return
+        await Promise.all([...active].map((channel) => channel.cleanup()))
+      },
+    }
+    return env
   }
-  return env
+  return createEnv(cwd, true)
 }

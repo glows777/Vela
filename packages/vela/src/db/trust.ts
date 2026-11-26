@@ -5,7 +5,7 @@ import { openDatabase, type VelaDatabase } from './sqlite.ts'
 
 const ENV_KEY_PREFIX = 'env:'
 
-function canonicalLocalPath(dir: string): string {
+export function canonicalLocalPath(dir: string): string {
   const resolved = resolve(dir)
   const missing: string[] = []
   let cur = resolved
@@ -58,6 +58,40 @@ export function trustLocationKey(
   return canonicalLocalPath(cwd)
 }
 
+/**
+ * Reads an existing SQLite database in read-only mode, falling back to `mustExist`
+ * when WAL-mode SQLite databases lack `-wal`/`-shm` sidecars after a clean close.
+ */
+export function withReadonlyDb<T>(
+  dbPath: string,
+  fn: (db: VelaDatabase) => T,
+): T | undefined {
+  if (!existsSync(dbPath)) return undefined
+  try {
+    const roDb = openDatabase({ path: dbPath, readonly: true })
+    try {
+      return fn(roDb)
+    } finally {
+      roDb.close()
+    }
+  } catch (error) {
+    if (!isReadonlyWalOpenError(error)) throw error
+    if (!existsSync(dbPath)) return undefined
+    // WAL-mode SQLite databases fail SQLITE_OPEN_READONLY when -wal/-shm were removed after close.
+  }
+  try {
+    const existingDb = openDatabase({ path: dbPath, mustExist: true })
+    try {
+      return fn(existingDb)
+    } finally {
+      existingDb.close()
+    }
+  } catch (error) {
+    if (isMissingFileError(error)) return undefined
+    throw error
+  }
+}
+
 function withTrustDb<T>(
   source: string | VelaDatabase,
   readonly: boolean,
@@ -65,32 +99,7 @@ function withTrustDb<T>(
 ): T | undefined {
   if (typeof source !== 'string') return fn(source)
   const dbPath = join(source, 'vela.db')
-  if (readonly && !existsSync(dbPath)) return undefined
-  if (readonly) {
-    try {
-      const roDb = openDatabase({ path: dbPath, readonly: true })
-      try {
-        return fn(roDb)
-      } finally {
-        roDb.close()
-      }
-    } catch (error) {
-      if (!isReadonlyWalOpenError(error)) throw error
-      if (!existsSync(dbPath)) return undefined
-      // WAL-mode SQLite databases fail SQLITE_OPEN_READONLY when -wal/-shm were removed after close.
-    }
-    try {
-      const existingDb = openDatabase({ path: dbPath, mustExist: true })
-      try {
-        return fn(existingDb)
-      } finally {
-        existingDb.close()
-      }
-    } catch (error) {
-      if (isMissingFileError(error)) return undefined
-      throw error
-    }
-  }
+  if (readonly) return withReadonlyDb(dbPath, fn)
   const db = openDatabase({ path: dbPath })
   try {
     return fn(db)

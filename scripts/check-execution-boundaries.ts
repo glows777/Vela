@@ -24,6 +24,7 @@ export async function checkExecutionBoundaries(
     'packages/vela/src/driver/prompt/**/*.ts',
     'packages/vela/src/driver/skills/**/*.ts',
     'packages/vela/src/driver/extensions/background/**/*.ts',
+    'packages/vela/src/driver/runtime-*.ts',
     'packages/vela/src/driver/session/user-bash.ts',
     'packages/vela/src/driver/context/compressor.ts',
     'packages/vela/src/legacy-channels/attachments.ts',

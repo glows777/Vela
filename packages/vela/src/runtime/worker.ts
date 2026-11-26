@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { VelaDatabase } from '../db/index.ts'
-import type { BackgroundJobManager } from './background-jobs.ts'
 import type { SessionRecord, SessionStoreControl } from './domain.ts'
 import {
+  abortLiveProcessOwner,
   type DriverInboxItem,
   type DriverTerminalOutcome,
   type DriverTurnResult,
@@ -21,11 +21,11 @@ import {
   type InboxEventRecord,
   isTopicAwaitingBindingInDb,
   listProcessingInboxForRun,
-  listSessionsWithPendingWake,
   requeueProcessingForRunInTx,
 } from './inbox.ts'
-import { enqueueOutboxInTx, type OutboxDispatcher } from './outbox.ts'
-import type { TimerScheduler } from './timers.ts'
+import { enqueueOutboxInTx } from './outbox.ts'
+
+export { recoverRuntimeState } from './recovery.ts'
 
 export interface ClaimedTurn {
   runId: string
@@ -65,177 +65,6 @@ function triggerFromInbox(inputs: readonly InboxEventRecord[]): RunTrigger {
     default:
       return 'session'
   }
-}
-
-export function recoverRuntimeState(params: {
-  db: VelaDatabase
-  backgroundJobs: BackgroundJobManager
-  outbox: OutboxDispatcher
-  timers: TimerScheduler
-  activeOwners: ReadonlySet<string>
-  nowMs: number
-}): {
-  interruptedJobs: string[]
-  recoveredRuns: string[]
-  requeuedInboxRuns: string[]
-  sessionsToWake: Set<string>
-} {
-  const { db, backgroundJobs, outbox, timers, activeOwners, nowMs } = params
-  const nowIso = new Date(nowMs).toISOString()
-  const interruptedJobs = backgroundJobs.recoverInterrupted(nowIso)
-  outbox.recoverStaleSending()
-
-  const recoveredRuns: string[] = []
-  const requeuedInboxRuns: string[] = []
-  const sessionsToWake = new Set<string>()
-
-  db.transaction(() => {
-    const staleRuns = db.all<{
-      id: string
-      session_id: string
-      owner_token: string | null
-    }>(
-      `SELECT id, session_id, owner_token FROM runs
-       WHERE status IN ('queued', 'running')
-       ORDER BY started_at ASC`,
-    )
-    for (const run of staleRuns) {
-      if (isOwnerLive(run.owner_token, activeOwners)) continue
-      const hasProgress = Boolean(
-        db.get<{ ok: number }>(
-          `SELECT 1 AS ok FROM vela_messages WHERE session_id = ? AND run_id = ? LIMIT 1`,
-          run.session_id,
-          run.id,
-        ) ??
-          db.get<{ ok: number }>(
-            `SELECT 1 AS ok FROM vela_tool_calls WHERE session_id = ? AND run_id = ? LIMIT 1`,
-            run.session_id,
-            run.id,
-          ),
-      )
-      if (hasProgress) {
-        db.run(
-          `UPDATE runs SET owner_token = NULL, updated_at = ? WHERE id = ?`,
-          nowIso,
-          run.id,
-        )
-        db.run(
-          `UPDATE sessions SET state = 'running', updated_at = ? WHERE id = ?`,
-          nowIso,
-          run.session_id,
-        )
-        recoveredRuns.push(run.id)
-        if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
-          sessionsToWake.add(run.session_id)
-        }
-      } else {
-        db.run(
-          `UPDATE runs
-           SET status = 'interrupted', owner_token = NULL, finished_at = COALESCE(finished_at, ?), updated_at = ?
-           WHERE id = ?`,
-          nowIso,
-          nowIso,
-          run.id,
-        )
-        db.run(
-          `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ? WHERE id = ? AND state = 'running'`,
-          nowIso,
-          run.session_id,
-        )
-        requeueProcessingForRunInTx(db, run.id)
-        db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${run.id}`)
-        db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${run.id}`)
-        requeuedInboxRuns.push(run.id)
-        if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
-          sessionsToWake.add(run.session_id)
-        }
-      }
-    }
-
-    const waitingRuns = db.all<{
-      id: string
-      session_id: string
-      project_id: string | null
-    }>(
-      `SELECT id, session_id, project_id FROM runs WHERE status = 'waiting_human' ORDER BY started_at ASC`,
-    )
-    for (const run of waitingRuns) {
-      const pendingApproval = db.get<{ id: string }>(
-        `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1`,
-        run.id,
-      )
-      if (pendingApproval) continue
-      enqueueInboxEvent(db, {
-        sessionId: run.session_id,
-        projectId: run.project_id,
-        source: 'approval',
-        dedupeKey: `approval-resume:${run.id}`,
-        wake: true,
-        payload: { type: 'approval_resolved', runId: run.id },
-      })
-      if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
-        sessionsToWake.add(run.session_id)
-      }
-    }
-
-    const orphanedProcessing = db.all<{
-      id: string
-      session_id: string | null
-      run_id: string | null
-    }>(
-      `SELECT id, session_id, run_id FROM inbox_events WHERE status = 'processing'`,
-    )
-    for (const row of orphanedProcessing) {
-      const liveRun = row.run_id
-        ? db.get<{ status: string; owner_token: string | null }>(
-            'SELECT status, owner_token FROM runs WHERE id = ?',
-            row.run_id,
-          )
-        : undefined
-      if (
-        liveRun &&
-        liveRun.status === 'running' &&
-        (!liveRun.owner_token || isOwnerLive(liveRun.owner_token, activeOwners))
-      ) {
-        continue
-      }
-      if (liveRun && liveRun.status === 'waiting_human' && row.session_id) {
-        const hasProgress = Boolean(
-          db.get<{ ok: number }>(
-            `SELECT 1 AS ok FROM vela_messages WHERE session_id = ? AND run_id = ? LIMIT 1`,
-            row.session_id,
-            row.run_id,
-          ) ??
-            db.get<{ ok: number }>(
-              `SELECT 1 AS ok FROM vela_tool_calls WHERE session_id = ? AND run_id = ? LIMIT 1`,
-              row.session_id,
-              row.run_id,
-            ),
-        )
-        if (hasProgress) {
-          db.run(
-            `UPDATE inbox_events SET status = 'done', processed_at = COALESCE(processed_at, ?) WHERE id = ?`,
-            nowIso,
-            row.id,
-          )
-          continue
-        }
-      }
-      db.run(
-        `UPDATE inbox_events SET status = 'pending', run_id = NULL WHERE id = ?`,
-        row.id,
-      )
-      if (row.session_id && !isTopicAwaitingBindingInDb(db, row.session_id)) {
-        sessionsToWake.add(row.session_id)
-      }
-    }
-  })
-
-  timers.tick(nowMs)
-  for (const sessionId of listSessionsWithPendingWake(db)) {
-    sessionsToWake.add(sessionId)
-  }
-  return { interruptedJobs, recoveredRuns, requeuedInboxRuns, sessionsToWake }
 }
 
 export function claimNextTurnInDb(params: {
@@ -320,7 +149,35 @@ export function claimNextTurnInDb(params: {
       )
       if (!waitingRun) return undefined
       const batch = claimApprovalInboxBatchInTx(db, sessionId, waitingRun.id)
-      if (!batch.length) return undefined
+      const hasResolvedToolResume =
+        batch.length > 0 ||
+        Boolean(
+          db.get<{ id: string }>(
+            `SELECT id FROM approvals WHERE run_id = ? AND status != 'pending' LIMIT 1`,
+            waitingRun.id,
+          ),
+        )
+      if (!hasResolvedToolResume) return undefined
+      const inputs =
+        batch.length > 0
+          ? batch.map((item) => ({
+              id: item.id,
+              source: item.source,
+              wake: item.wake,
+              passive: item.passive,
+              payload: item.payload,
+              createdAt: item.createdAt,
+            }))
+          : [
+              {
+                id: `resume-${waitingRun.id}`,
+                source: 'approval',
+                wake: true,
+                passive: false,
+                payload: { type: 'approval_resolved', runId: waitingRun.id },
+                createdAt: now,
+              },
+            ]
 
       db.run(
         `UPDATE runs SET status = 'running', owner_token = ?, updated_at = ? WHERE id = ?`,
@@ -348,14 +205,7 @@ export function claimNextTurnInDb(params: {
         ownerToken,
         session: { ...session, state: 'running', waitingReason: null },
         trigger: 'approval',
-        inputs: batch.map((item) => ({
-          id: item.id,
-          source: item.source,
-          wake: item.wake,
-          passive: item.passive,
-          payload: item.payload,
-          createdAt: item.createdAt,
-        })),
+        inputs,
         recoverPending: true,
         allowWaitingHuman: true,
       }
@@ -452,8 +302,13 @@ export function commitCompletedTurnInTx(params: {
       : 'completed'
   const updatedRun = db.run(
     `UPDATE runs
-     SET status = ?, error = NULL, finished_at = ?, updated_at = ?
+     SET status = ?,
+         error = NULL,
+         owner_token = CASE WHEN ? = 'waiting_human' THEN owner_token ELSE NULL END,
+         finished_at = ?,
+         updated_at = ?
      WHERE id = ? AND owner_token = ?`,
+    finalStatus,
     finalStatus,
     finalStatus === 'waiting_human' ? null : now,
     now,
@@ -530,23 +385,48 @@ export function finalizeTurnInDb(params: {
   const { db, eventBus, claimed, result, outboxTarget } = params
   const now = new Date().toISOString()
   db.transaction(() => {
-    const pendingApproval = db.get<{ id: string; summary: string }>(
-      `SELECT id, summary FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
-      claimed.runId,
+    const stopRequested = Boolean(
+      db.get<{ key: string }>(
+        'SELECT key FROM kv_meta WHERE key = ?',
+        `stop_requested:${claimed.runId}`,
+      ),
     )
-    const status: RunEndStatus =
-      result.status === 'waiting_human' || pendingApproval
-        ? 'waiting_human'
+    const pendingApproval = !stopRequested
+      ? db.get<{ id: string; summary: string }>(
+          `SELECT id, summary FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+          claimed.runId,
+        )
+      : undefined
+    const awaitingToolCall = !stopRequested
+      ? db.get<{ id: string }>(
+          `SELECT id FROM vela_tool_calls WHERE run_id = ? AND status = 'awaiting_approval' LIMIT 1`,
+          claimed.runId,
+        )
+      : undefined
+    const canWaitForHuman =
+      !stopRequested &&
+      (result.status === 'waiting_human' ||
+        (result.status === 'completed' &&
+          Boolean(pendingApproval || awaitingToolCall)))
+    const status: RunEndStatus = canWaitForHuman
+      ? 'waiting_human'
+      : stopRequested
+        ? 'stopped'
         : result.status
     const nextSessionState =
       status === 'waiting_human' ? 'waiting_human' : 'idle'
 
     const updatedRun = db.run(
       `UPDATE runs
-       SET status = ?, error = ?, finished_at = ?, updated_at = ?
+       SET status = ?,
+           error = ?,
+           owner_token = CASE WHEN ? = 'waiting_human' THEN owner_token ELSE NULL END,
+           finished_at = ?,
+           updated_at = ?
        WHERE id = ? AND owner_token = ?`,
       status,
-      result.error ?? null,
+      status === 'waiting_human' ? null : (result.error ?? null),
+      status,
       status === 'waiting_human' ? null : now,
       now,
       claimed.runId,
@@ -556,6 +436,32 @@ export function finalizeTurnInDb(params: {
       throw new LostRunOwnershipError(claimed.runId)
     }
     if (status !== 'waiting_human') {
+      const orphanedApprovals = db.all<{ id: string }>(
+        `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending'`,
+        claimed.runId,
+      )
+      for (const app of orphanedApprovals) {
+        db.run(
+          `UPDATE approvals
+           SET status = 'cancelled', decision_reason = COALESCE(decision_reason, ?), resolved_at = COALESCE(resolved_at, ?)
+           WHERE id = ? AND status = 'pending'`,
+          result.error ?? 'Run terminated before human reply',
+          now,
+          app.id,
+        )
+        eventBus.append({
+          sessionId: claimed.session.id,
+          projectId: claimed.session.projectId,
+          runId: claimed.runId,
+          payload: {
+            type: 'approval_resolved',
+            runId: claimed.runId,
+            approvalId: app.id,
+            decision: 'cancelled',
+            reason: result.error ?? 'Run terminated before human reply',
+          },
+        })
+      }
       db.run(
         'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
         `run_target:${claimed.runId}`,
@@ -576,7 +482,9 @@ export function finalizeTurnInDb(params: {
       now,
       claimed.session.id,
     )
-    if (status !== 'interrupted') {
+    if (status === 'interrupted') {
+      requeueProcessingForRunInTx(db, claimed.runId)
+    } else {
       completeInboxBatchInTx(db, claimed.runId, now)
     }
     eventBus.append({
@@ -618,7 +526,7 @@ export function finalizeTurnInDb(params: {
   })
 }
 
-export function recordChildStatusNoteForHubInTx(
+function recordChildStatusNoteForHubInTx(
   db: VelaDatabase,
   claimed: {
     session: SessionRecord
@@ -768,4 +676,123 @@ export function resolveOutboxTargetInDb(
     }
   }
   return undefined
+}
+
+export async function stopExternalSessionRuns(params: {
+  db: VelaDatabase
+  activeOwners: ReadonlySet<string>
+  sessionId: string
+  reason: string
+  isStopped: () => boolean
+}): Promise<{ cancelled: boolean; stillOwnedRemotely: boolean }> {
+  const { db, activeOwners, sessionId, reason, isStopped } = params
+  const otherLiveRuns = db.all<{
+    id: string
+    owner_token: string | null
+  }>(
+    `SELECT id, owner_token FROM runs
+     WHERE session_id = ? AND status IN ('queued', 'running')`,
+    sessionId,
+  )
+  let cancelled = false
+  const externalRunIds: string[] = []
+  for (const run of otherLiveRuns) {
+    if (!run.owner_token || !isOwnerLive(run.owner_token, activeOwners)) {
+      continue
+    }
+    const abortedLocal = await abortLiveProcessOwner(run.owner_token, reason)
+    if (abortedLocal) {
+      cancelled = true
+    } else {
+      externalRunIds.push(run.id)
+      db.run(
+        `INSERT INTO kv_meta (key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+        `stop_requested:${run.id}`,
+        JSON.stringify({ reason }),
+        new Date().toISOString(),
+      )
+    }
+  }
+  if (externalRunIds.length > 0) {
+    const deadline = Date.now() + 2000
+    while (Date.now() < deadline && db.open && !isStopped()) {
+      const placeholders = externalRunIds.map(() => '?').join(', ')
+      const stillLive = db.get<{ id: string }>(
+        `SELECT id FROM runs WHERE id IN (${placeholders}) AND status IN ('queued', 'running') LIMIT 1`,
+        ...externalRunIds,
+      )
+      if (!stillLive) break
+      await new Promise((r) => setTimeout(r, 25))
+    }
+    const placeholders = externalRunIds.map(() => '?').join(', ')
+    const remaining = db.all<{
+      id: string
+      owner_token: string | null
+    }>(
+      `SELECT id, owner_token FROM runs WHERE id IN (${placeholders}) AND status IN ('queued', 'running')`,
+      ...externalRunIds,
+    )
+    if (remaining.some((r) => isOwnerLive(r.owner_token, activeOwners))) {
+      return { cancelled, stillOwnedRemotely: true }
+    }
+    cancelled = true
+  }
+  return { cancelled, stillOwnedRemotely: false }
+}
+
+export function stopSessionRunsInDb(
+  db: VelaDatabase,
+  session: SessionRecord | undefined,
+  sessionId: string,
+  reason: string,
+): boolean {
+  const now = new Date().toISOString()
+  return db.transaction(() => {
+    const rows = db.all<{ id: string }>(
+      `SELECT id FROM runs
+       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+      sessionId,
+    )
+    const updated = db.run(
+      `UPDATE runs SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
+       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+      now,
+      now,
+      sessionId,
+    )
+    for (const r of rows) {
+      db.run(
+        `UPDATE vela_tool_calls SET status = 'interrupted', updated_at = ?
+         WHERE run_id = ? AND status IN ('pending', 'running', 'awaiting_approval')`,
+        now,
+        r.id,
+      )
+      db.run(
+        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
+        `run_target:${r.id}`,
+        `stop_requested:${r.id}`,
+        `run_silent:${r.id}`,
+        `run_handoff_depth:${r.id}`,
+        `run_input_meta:${r.id}`,
+      )
+    }
+    db.run(
+      `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+       WHERE id = ? AND state IN ('running', 'waiting_human')`,
+      now,
+      sessionId,
+    )
+    const latestStoppedRun = rows.at(-1)
+    if (session && latestStoppedRun) {
+      recordChildStatusNoteForHubInTx(
+        db,
+        { session, runId: latestStoppedRun.id, inputs: [] },
+        'stopped',
+        reason,
+      )
+    }
+    return updated.changes > 0
+  })
 }

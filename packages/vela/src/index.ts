@@ -12,7 +12,9 @@ export type {
 export { LocalError, local } from './legacy-channels/index.ts'
 export type {
   AgentDriver,
+  AgentDriverCapabilities,
   ApprovalRecord,
+  ApprovalStatus,
   BlobDirection,
   BlobRecord,
   ChannelAdapter,
@@ -25,14 +27,22 @@ export type {
   ChannelOutboundMessage,
   CreateProjectInput,
   CreateSessionInput,
+  DriverInboxItem,
+  DriverTerminalOutcome,
+  DriverTurnRequest,
+  DriverTurnResult,
+  EnvironmentRegistryOptions,
   ProjectRecord,
   RunEndStatus,
+  RunTrigger,
   RuntimeEvent,
   RuntimeEventListener,
   RuntimeEventPayload,
   RuntimeMessagePage,
   RuntimeMessageRecord,
+  SessionKind,
   SessionRecord,
+  SessionState,
   SessionStatusInfo,
   StreamDeltaEvent,
   StreamDeltaListener,
@@ -43,6 +53,7 @@ export type {
   UpdateProjectInput,
   UpsertChannelBindingInput,
 } from './runtime/index.ts'
+export { EnvironmentRegistry } from './runtime/index.ts'
 export {
   type CreateRuntimeOptions,
   createRuntime,

@@ -610,7 +610,9 @@ export class SessionStore {
     options: { runId?: string; messageId?: string } = {},
   ): void {
     if (!this.db.open) return
-    this.ensureSessionRow()
+    if (record.kind !== 'dream') {
+      this.ensureSessionRow()
+    }
     insertUsageRecord(this.db, this.sessionId, record, options)
   }
 

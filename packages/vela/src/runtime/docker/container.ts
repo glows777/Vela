@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { GuestCredentialConfig } from '../../shared/docker-guest-credentials.ts'
 import type { ExecutionEnv } from '../../shared/execution.ts'
-import { dockerOperations } from './operations.ts'
+import { dockerOperations, withDockerCwd } from './operations.ts'
 
 const DEFAULT_DOCKER_SOCKET = 'unix:///var/run/docker.sock'
 
@@ -79,7 +79,7 @@ export function containerOperations(
       HOME: '/var/empty/vela-docker-client',
     },
   }
-  const env: DockerContainerEnv = dockerOperations(name, cwd, (op, workdir) =>
+  const base = dockerOperations(name, cwd, (op, workdir) =>
     spawn(
       'docker',
       [
@@ -101,6 +101,19 @@ export function containerOperations(
       { ...options, stdio: 'pipe' },
     ),
   )
-  env[dockerContainerId] = id
-  return env
+  const attachContainerId = (
+    target: DockerContainerEnv,
+  ): DockerContainerEnv => {
+    target[dockerContainerId] = id
+    const derive = (
+      target as { [withDockerCwd]?: (nextCwd: string) => DockerContainerEnv }
+    )[withDockerCwd]
+    if (derive) {
+      ;(
+        target as { [withDockerCwd]?: (nextCwd: string) => DockerContainerEnv }
+      )[withDockerCwd] = (nextCwd: string) => attachContainerId(derive(nextCwd))
+    }
+    return target
+  }
+  return attachContainerId(base)
 }

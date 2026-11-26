@@ -582,6 +582,12 @@ export function insertUsageRecord(
   record: StepRecord,
   options: { runId?: string; messageId?: string },
 ): void {
+  const persistedSessionId = db.get<{ id: string }>(
+    'SELECT id FROM sessions WHERE id = ? LIMIT 1',
+    sessionId,
+  )
+    ? sessionId
+    : null
   db.run(
     `INSERT INTO usage_records (
        id, session_id, project_id, run_id, message_id, kind, model,
@@ -589,7 +595,7 @@ export function insertUsageRecord(
        cost_usd, duration_ms, raw_json, created_at
      ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     crypto.randomUUID(),
-    sessionId,
+    persistedSessionId,
     options.runId ?? null,
     options.messageId ?? null,
     record.kind ?? 'main',

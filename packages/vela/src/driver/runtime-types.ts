@@ -1,0 +1,97 @@
+import type { VelaDatabase } from '../db/index.ts'
+import type { CredentialStore } from '../providers/auth/types.ts'
+import type {
+  ModelRegistry,
+  ProviderDefinition,
+  ThinkingLevel,
+} from '../providers/models/index.ts'
+import type { RuntimeEventBus } from '../runtime/event-bus.ts'
+import type {
+  BlobStore,
+  EnvironmentRegistry,
+  MemoryRegistry,
+} from '../runtime/index.ts'
+import type { SubscriptionManager } from '../runtime/subscriptions.ts'
+import type { TimerScheduler } from '../runtime/timers.ts'
+import type { VelaLimits } from '../shared/limits.ts'
+import type { VelaLogger } from '../shared/logger.ts'
+import type { ModelInput } from '../shared/provider-types.ts'
+import type { ExecutionLocation } from './execution/types.ts'
+import type { ContextFile } from './prompt/context-files.ts'
+import type { DocsPaths } from './prompt/index.ts'
+import type { PromptTemplate } from './prompt/templates.ts'
+import type { SkillDefinition } from './skills/loader.ts'
+import type { ToolDefinition, ToolRegistry } from './tools/registry.ts'
+
+export interface RuntimeMcpLease {
+  waitForAll: (signal?: AbortSignal) => Promise<void>
+  release: () => Promise<void>
+}
+
+export interface RuntimeMcpAdapter {
+  attach: (options: {
+    registry: ToolRegistry
+    agentDir: string
+    cwd: string
+    environment: string
+    trusted: boolean
+    env?: Record<string, string | undefined>
+    waitMs?: number
+    discoveredTools?: readonly string[]
+    signal?: AbortSignal
+  }) => Promise<RuntimeMcpLease>
+  dispose?: () => Promise<void>
+}
+
+export interface VelaAgentDriverOptions {
+  db: VelaDatabase
+  agentDir: string
+  blobs: BlobStore
+  environments: EnvironmentRegistry
+  timers?: TimerScheduler
+  subscriptions?: SubscriptionManager
+  eventBus?: RuntimeEventBus
+  wakeSession?: (sessionId: string) => void
+  flushOutbox?: () => void
+  mcp?: RuntimeMcpAdapter
+  memoryRegistry?: MemoryRegistry
+  defaultModel?: ModelInput
+  defaultThinkingLevel?: ThinkingLevel
+  providers?: Record<string, ProviderDefinition>
+  credentials?: CredentialStore
+  /** @internal Shared ModelRegistry (for live OAuth registrations & planLabel consistency). */
+  models?: ModelRegistry
+  limits?: Partial<VelaLimits>
+  tools?: ToolDefinition[]
+  extensionConfig?: Record<string, Record<string, unknown>>
+  hostEnv?: Record<string, string | undefined>
+  docsPaths?: DocsPaths | false
+  systemPrompt?: string
+  appendSystemPrompt?: string
+  contextFiles?: readonly ContextFile[]
+  skills?: readonly SkillDefinition[]
+  promptTemplates?: readonly PromptTemplate[]
+  offline?: boolean
+  dreamEnabled?: boolean
+  trustOverride?: (location: ExecutionLocation) => boolean | Promise<boolean>
+  toolApprovalCheck?: (
+    toolName: string,
+    input: unknown,
+    sessionId: string,
+  ) =>
+    | Promise<{ requireApproval?: boolean; summary?: string } | undefined>
+    | { requireApproval?: boolean; summary?: string }
+    | undefined
+  logger?: VelaLogger
+}
+
+export interface ActiveRunMeta {
+  runId: string
+  projectId: string | null
+  replyToMessageId?: string
+  handoffDepth?: number
+  channelTarget?: { channel: string; externalChatId: string; threadId?: string }
+  humanProvenance?: { inboxEventId: string; senderName?: string }
+  attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
+  markSilent: () => void
+}

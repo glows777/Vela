@@ -30,7 +30,9 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  createRuntime,
   createVela,
+  EnvironmentRegistry,
   importExtension,
   inspectSession,
   inspectVela,
@@ -40,17 +42,24 @@ import {
   memory,
   SpilledToolOutput,
   ToolExecutionResult,
+  type AgentDriverCapabilities,
   type ApprovalDecision,
+  type ApprovalStatus,
+  type CreateRuntimeOptions,
   type ImageContent,
   type LarkMessageEvent,
   type LarkOptions,
   type LarkTransport,
+  type LocalVelaRuntime,
   type McpOptions,
   type PendingApprovalInfo,
   type ResolvedApprovalInfo,
+  type SessionKind,
+  type SessionState,
   type ToolContent,
   type VelaEvent,
   type VelaExtension,
+  type VelaRuntime,
 } from '@glows777/vela'
 import { defineJsonSchemaTool } from '@glows777/vela/extension-api'
 import {
@@ -255,6 +264,33 @@ try {
 
 if (typeof vela.publishEvent !== 'function')
   throw new Error('publishEvent missing')
+
+const _runtimeTypeCheck = (
+  _rt?: VelaRuntime,
+  _opts?: CreateRuntimeOptions,
+  _cap?: AgentDriverCapabilities,
+  _kind?: SessionKind,
+  _state?: SessionState,
+  _ap?: ApprovalStatus,
+  _env?: EnvironmentRegistry,
+) => void [_rt, _opts, _cap, _kind, _state, _ap, _env]
+void _runtimeTypeCheck
+
+const runtimeOpts: CreateRuntimeOptions = {
+  ephemeral: true,
+  defaultModel: createFauxModel({ responses: [fauxText('runtime ok')] }),
+}
+const rt: LocalVelaRuntime = createRuntime(runtimeOpts)
+try {
+  const rtSession = await rt.sessions.create({ name: 'smoke' })
+  await rt.prompt(rtSession.id, { text: 'hello runtime' })
+  await rt.waitForIdle(rtSession.id)
+  const page = await rt.sessions.messages({ sessionId: rtSession.id })
+  assert(page.messages.some((msg) => msg.text.includes('runtime ok')))
+  console.log('createRuntime ephemeral ok')
+} finally {
+  await rt.dispose()
+}
 
 await cleanupTestVelas()
 console.log('sdk ok')

@@ -3,7 +3,7 @@ import type { VelaDatabase } from '../db/index.ts'
 import type { RuntimeEventBus } from './event-bus.ts'
 import { enqueueInboxEvent } from './inbox.ts'
 
-type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'cancelled'
+export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'cancelled'
 
 export interface ApprovalRecord {
   id: string
@@ -231,6 +231,20 @@ export function resolveRuntimeApproval(
         `Approval ${input.approvalId} is already ${row.status} and cannot be resolved again`,
       )
     }
+    const runRow = db.get<{ status: string }>(
+      'SELECT status FROM runs WHERE id = ?',
+      row.run_id,
+    )
+    if (
+      input.enqueueWake !== false &&
+      runRow &&
+      runRow.status !== 'running' &&
+      runRow.status !== 'waiting_human'
+    ) {
+      throw new Error(
+        `Run ${row.run_id} is already ${runRow.status} and can no longer accept approval ${input.approvalId}`,
+      )
+    }
 
     db.run(
       `UPDATE approvals
@@ -285,6 +299,14 @@ export function resolveRuntimeApproval(
         row.run_id,
       ),
     )
+    if (input.decision !== 'cancelled') {
+      db.run(
+        'UPDATE sessions SET followup_streak = 0, updated_at = ? WHERE id = ?',
+        now,
+        row.session_id,
+      )
+    }
+    let closedWaitingRun = false
     let originTarget:
       | {
           channel: string
@@ -293,12 +315,7 @@ export function resolveRuntimeApproval(
           replyToMessageId?: string
         }
       | undefined
-    if (
-      isWaitForInput &&
-      input.decision !== 'cancelled' &&
-      !remaining &&
-      !hasPendingToolCalls
-    ) {
+    if (isWaitForInput && !remaining && !hasPendingToolCalls) {
       const targetRow = db.get<{ value_json: string }>(
         'SELECT value_json FROM kv_meta WHERE key = ?',
         `run_target:${row.run_id}`,
@@ -330,30 +347,43 @@ export function resolveRuntimeApproval(
           /* ignore malformed run_target */
         }
       }
-      db.run(
+      const nextRunStatus =
+        input.decision === 'cancelled' ? 'stopped' : 'completed'
+      const updatedRun = db.run(
         `UPDATE runs
-         SET status = 'completed', finished_at = COALESCE(finished_at, ?), updated_at = ?
+         SET status = ?, owner_token = NULL, finished_at = COALESCE(finished_at, ?), updated_at = ?
          WHERE id = ? AND status = 'waiting_human'`,
+        nextRunStatus,
         now,
         now,
         row.run_id,
       )
-      db.run(
-        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
-         WHERE id = ? AND state = 'waiting_human'`,
-        now,
-        row.session_id,
-      )
-      db.run(
-        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
-        `run_target:${row.run_id}`,
-        `stop_requested:${row.run_id}`,
-        `run_silent:${row.run_id}`,
-        `run_handoff_depth:${row.run_id}`,
-        `run_input_meta:${row.run_id}`,
-      )
+      closedWaitingRun = updatedRun.changes === 1
+      if (closedWaitingRun) {
+        db.run(
+          `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+           WHERE id = ? AND state = 'waiting_human'`,
+          now,
+          row.session_id,
+        )
+        db.run(
+          'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
+          `run_target:${row.run_id}`,
+          `stop_requested:${row.run_id}`,
+          `run_silent:${row.run_id}`,
+          `run_handoff_depth:${row.run_id}`,
+          `run_input_meta:${row.run_id}`,
+        )
+      }
     }
-    const shouldWake = !remaining && input.enqueueWake !== false
+    const shouldWake =
+      !remaining &&
+      input.enqueueWake !== false &&
+      !(
+        isWaitForInput &&
+        input.decision === 'cancelled' &&
+        !hasPendingToolCalls
+      )
     if (shouldWake) {
       enqueueInboxEvent(db, {
         sessionId: row.session_id,

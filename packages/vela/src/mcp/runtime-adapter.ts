@@ -21,6 +21,7 @@ export interface CreateRuntimeMcpAdapterOptions {
   pool?: McpPool
   idleTtlMs?: number
   hostEnv?: Record<string, string | undefined>
+  skipUserConfig?: boolean
   createTransport?: (entry: McpServerEntry, cwd: string) => Promise<Transport>
   logger?: VelaLogger
 }
@@ -33,7 +34,10 @@ export function createRuntimeMcpAdapter(
 ): RuntimeMcpAdapter {
   const ownsPool = !options.pool
   const pool =
-    options.pool ?? new McpPool({ idleTtlMs: options.idleTtlMs ?? 0 })
+    options.pool ??
+    new McpPool(
+      options.idleTtlMs !== undefined ? { idleTtlMs: options.idleTtlMs } : {},
+    )
 
   return {
     async attach({
@@ -45,6 +49,7 @@ export function createRuntimeMcpAdapter(
       env,
       waitMs = DIRECT_WAIT_MS,
       discoveredTools = [],
+      signal,
     }): Promise<RuntimeMcpLease> {
       if (environment !== 'local') {
         return {
@@ -58,6 +63,7 @@ export function createRuntimeMcpAdapter(
         projectDir: join(cwd, '.vela'),
         trusted,
         env: mergedEnv,
+        skipUserConfig: options.skipUserConfig,
       })
       const { entries, errors } = parseServers(loaded.servers, loaded.sources)
       errors.unshift(...loaded.errors)
@@ -78,9 +84,13 @@ export function createRuntimeMcpAdapter(
         )
       }
 
+      const preservedDiscovered = new Set(discoveredTools)
       const syncTools = (connection: McpConnection) => {
         const { name: server, config } = connection.entry
         for (const toolName of registered.get(server) ?? []) {
+          if (registry.discoveredTools.has(toolName)) {
+            preservedDiscovered.add(toolName)
+          }
           registry.unregister(toolName)
           owners.delete(toolName)
         }
@@ -110,6 +120,9 @@ export function createRuntimeMcpAdapter(
                 caller: connection,
               }),
             )
+            if (preservedDiscovered.has(name)) {
+              registry.discoveredTools.add(name)
+            }
             names.push(name)
             owners.set(name, owner)
           } catch (error) {
@@ -149,11 +162,12 @@ export function createRuntimeMcpAdapter(
         await lease.waitForDirect(
           waitMs,
           extraServers.size > 0 ? extraServers : undefined,
+          signal,
         )
       }
 
       return {
-        waitForAll: () => lease.waitForAll(),
+        waitForAll: (waitSignal) => lease.waitForAll(waitSignal ?? signal),
         release: () => lease.release(),
       }
     },

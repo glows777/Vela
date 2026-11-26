@@ -192,6 +192,7 @@ export type VelaEvent =
       toolCallId: string
       toolName: string
       summary: string
+      input?: Record<string, unknown>
     }
   /**
    * All work from prompt() is done (including loops run for steer queued after it)

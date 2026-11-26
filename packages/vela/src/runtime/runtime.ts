@@ -16,7 +16,6 @@ import { BackgroundJobManager } from './background-jobs.ts'
 import { BlobStore } from './blobs.ts'
 import { ingestChannelMessageInRuntime } from './channel-ingress.ts'
 import type { ChannelAdapter } from './channels.ts'
-import { stopSessionRunsInDb } from './control-ops.ts'
 import {
   ChannelBindingStore,
   ProjectStore,
@@ -25,7 +24,6 @@ import {
 } from './domain.ts'
 import {
   type AgentDriver,
-  abortLiveProcessOwner,
   type DriverTurnResult,
   isOwnerLive,
   LostRunOwnershipError,
@@ -55,6 +53,8 @@ import {
   finalizeTurnInDb,
   recoverRuntimeState,
   resolveOutboxTargetInDb,
+  stopExternalSessionRuns,
+  stopSessionRunsInDb,
 } from './worker.ts'
 
 export interface VelaRuntimeEngineOptions {
@@ -96,6 +96,8 @@ export class VelaRuntimeEngine {
   private readonly drivers = new Map<string, AgentDriver>()
   private readonly channels = new Map<string, ChannelAdapter>()
   private readonly activeWorkers = new Map<string, ActiveWorker>()
+  private readonly stoppingSessions = new Set<string>()
+  private readonly inFlightDeliveries = new Set<string>()
   private readonly activeOwners = new Set<string>()
   private readonly transientBlobDir?: string
   private nextWakeTimer: ReturnType<typeof setTimeout> | undefined
@@ -114,8 +116,8 @@ export class VelaRuntimeEngine {
     this.environments =
       options.environments ??
       new EnvironmentRegistry({ dataDir: this.agentDir })
-    this.projects = new ProjectStore(this.db)
-    this.sessions = new SessionStoreControl(this.db)
+    this.projects = new ProjectStore(this.db, () => this.syncWakeTimer())
+    this.sessions = new SessionStoreControl(this.db, () => this.syncWakeTimer())
     this.bindings = new ChannelBindingStore(this.db)
     this.eventBus = new RuntimeEventBus(this.db)
     this.outbox = new OutboxDispatcher(
@@ -164,6 +166,7 @@ export class VelaRuntimeEngine {
           sessions: this.sessions,
           bindings: this.bindings,
           eventBus: this.eventBus,
+          inFlightDeliveries: this.inFlightDeliveries,
           adapter,
           msg: message,
           executeShortcut: (shortcutInput) =>
@@ -171,17 +174,13 @@ export class VelaRuntimeEngine {
           scheduleSession: (sid) => this.scheduleSession(sid),
         }),
     })
-    void this.outbox
-      .flushOnce()
-      .catch((error) =>
-        this.logger.error(`[runtime] outbox flush failed: ${error}`),
-      )
-      .finally(() => this.syncWakeTimer())
+    void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
   }
 
   async unregisterChannel(name: string): Promise<void> {
     const existing = this.channels.get(name)
     if (!existing) return
+    await this.outbox.drain().catch(() => {})
     this.channels.delete(name)
     await existing.stop()
   }
@@ -242,6 +241,11 @@ export class VelaRuntimeEngine {
     if (this.disposed) throw new Error('Runtime has been disposed')
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
+    this.db.run(
+      `UPDATE sessions SET followup_streak = 0, updated_at = ? WHERE id = ?`,
+      new Date().toISOString(),
+      sessionId,
+    )
     const driver = this.drivers.get(session.driver)
     if (
       this.activeWorkers.has(sessionId) &&
@@ -292,94 +296,54 @@ export class VelaRuntimeEngine {
     sessionId: string,
     reason = 'Stopped by user',
   ): Promise<boolean> {
-    let cancelledRun = false
-    const active = this.activeWorkers.get(sessionId)
-    if (active) {
-      cancelledRun = true
-      active.controller.abort(new DOMException(reason, 'AbortError'))
-      const session = this.sessions.get(sessionId)
-      const driver = session ? this.drivers.get(session.driver) : undefined
-      await driver?.abort?.(sessionId)
-      await active.promise.catch(() => {})
-    }
-
-    const otherLiveRuns = this.db.all<{
-      id: string
-      owner_token: string | null
-    }>(
-      `SELECT id, owner_token FROM runs
-       WHERE session_id = ? AND status IN ('queued', 'running')`,
-      sessionId,
-    )
-    const externalRunIds: string[] = []
-    for (const run of otherLiveRuns) {
-      if (
-        !run.owner_token ||
-        !isOwnerLive(run.owner_token, this.activeOwners)
-      ) {
-        continue
-      }
-      const abortedLocal = await abortLiveProcessOwner(run.owner_token, reason)
-      if (abortedLocal) {
+    this.stoppingSessions.add(sessionId)
+    try {
+      let cancelledRun = false
+      const active = this.activeWorkers.get(sessionId)
+      if (active) {
         cancelledRun = true
-      } else {
-        externalRunIds.push(run.id)
-        this.db.run(
-          `INSERT INTO kv_meta (key, value_json, updated_at)
-           VALUES (?, ?, ?)
-           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
-          `stop_requested:${run.id}`,
-          JSON.stringify({ reason }),
-          new Date().toISOString(),
-        )
+        active.controller.abort(new DOMException(reason, 'AbortError'))
+        const session = this.sessions.get(sessionId)
+        const driver = session ? this.drivers.get(session.driver) : undefined
+        await driver?.abort?.(sessionId)
+        await active.promise.catch(() => {})
       }
-    }
-    if (externalRunIds.length > 0) {
-      const deadline = Date.now() + 2000
-      while (Date.now() < deadline && this.db.open && !this.disposed) {
-        const placeholders = externalRunIds.map(() => '?').join(', ')
-        const stillLive = this.db.get<{ id: string }>(
-          `SELECT id FROM runs WHERE id IN (${placeholders}) AND status IN ('queued', 'running') LIMIT 1`,
-          ...externalRunIds,
-        )
-        if (!stillLive) break
-        await new Promise((r) => setTimeout(r, 25))
-      }
-      const placeholders = externalRunIds.map(() => '?').join(', ')
-      const remaining = this.db.all<{
-        id: string
-        owner_token: string | null
-      }>(
-        `SELECT id, owner_token FROM runs WHERE id IN (${placeholders}) AND status IN ('queued', 'running')`,
-        ...externalRunIds,
-      )
-      const stillOwnedRemotely = remaining.some((r) =>
-        isOwnerLive(r.owner_token, this.activeOwners),
-      )
-      if (stillOwnedRemotely) {
+
+      const external = await stopExternalSessionRuns({
+        db: this.db,
+        activeOwners: this.activeOwners,
+        sessionId,
+        reason,
+        isStopped: () => this.disposed,
+      })
+      if (external.stillOwnedRemotely) {
         return false
       }
-      cancelledRun = true
-    }
+      if (external.cancelled) {
+        cancelledRun = true
+      }
 
-    const cancelledApprovals = cancelPendingApprovalsForSession(
-      this.db,
-      this.eventBus,
-      sessionId,
-      reason,
-    )
-    const stoppedJobs = this.backgroundJobs.stopSessionJobs(sessionId)
-    if (
-      stopSessionRunsInDb(
+      const cancelledApprovals = cancelPendingApprovalsForSession(
         this.db,
-        this.sessions.get(sessionId),
+        this.eventBus,
         sessionId,
         reason,
       )
-    ) {
-      cancelledRun = true
+      const stoppedJobs = this.backgroundJobs.stopSessionJobs(sessionId)
+      if (
+        stopSessionRunsInDb(
+          this.db,
+          this.sessions.get(sessionId),
+          sessionId,
+          reason,
+        )
+      ) {
+        cancelledRun = true
+      }
+      return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
+    } finally {
+      this.stoppingSessions.delete(sessionId)
     }
-    return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
   }
 
   async restartSession(sessionId: string): Promise<SessionRecord> {
@@ -393,6 +357,7 @@ export class VelaRuntimeEngine {
         `Cannot restart session ${sessionId} while another live worker owns an active run`,
       )
     }
+    this.timers.cancelFollowupsForSession(sessionId)
     return this.sessions.reset(sessionId)
   }
 
@@ -472,7 +437,13 @@ export class VelaRuntimeEngine {
   }
 
   scheduleSession(sessionId: string): void {
-    if (this.disposed || this.activeWorkers.has(sessionId)) return
+    if (
+      this.disposed ||
+      this.activeWorkers.has(sessionId) ||
+      this.stoppingSessions.has(sessionId)
+    ) {
+      return
+    }
     const controller = new AbortController()
     const worker: ActiveWorker = {
       runId: '',
@@ -481,14 +452,25 @@ export class VelaRuntimeEngine {
       promise: Promise.resolve(),
     }
     this.activeWorkers.set(sessionId, worker)
-    worker.promise = this.runSessionLoop(sessionId, worker).finally(() => {
-      if (this.activeWorkers.get(sessionId) === worker) {
-        this.activeWorkers.delete(sessionId)
-      }
-      if (!this.disposed && this.canWakeSessionNow(sessionId)) {
-        this.scheduleSession(sessionId)
-      }
-    })
+    worker.promise = this.runSessionLoop(sessionId, worker)
+      .catch((error) => {
+        this.logger.error(
+          `[runtime] session loop error for ${sessionId}: ${error}`,
+        )
+      })
+      .finally(() => {
+        if (this.activeWorkers.get(sessionId) === worker) {
+          this.activeWorkers.delete(sessionId)
+        }
+        if (
+          !this.disposed &&
+          !worker.controller.signal.aborted &&
+          !this.stoppingSessions.has(sessionId) &&
+          this.canWakeSessionNow(sessionId)
+        ) {
+          this.scheduleSession(sessionId)
+        }
+      })
   }
 
   private canWakeSessionNow(sessionId: string): boolean {
@@ -525,10 +507,9 @@ export class VelaRuntimeEngine {
     const outboxDue =
       registeredChannels.length > 0
         ? this.db.get<{ next_at: string | null }>(
-            `SELECT min(next_retry_at) AS next_at
+            `SELECT min(COALESCE(next_retry_at, created_at)) AS next_at
              FROM outbox
              WHERE status = 'pending'
-               AND next_retry_at IS NOT NULL
                AND channel IN (${registeredChannels.map(() => '?').join(', ')})`,
             ...registeredChannels,
           )?.next_at
@@ -570,10 +551,20 @@ export class VelaRuntimeEngine {
       }
       return
     }
-    while (this.activeWorkers.size > 0) {
-      await Promise.allSettled(
-        [...this.activeWorkers.values()].map((w) => w.promise),
-      )
+    for (;;) {
+      while (this.activeWorkers.size > 0) {
+        await Promise.allSettled(
+          [...this.activeWorkers.values()].map((w) => w.promise),
+        )
+      }
+      let waitedBackground = false
+      for (const driver of this.drivers.values()) {
+        if (driver.waitForBackground) {
+          waitedBackground = true
+          await driver.waitForBackground()
+        }
+      }
+      if (!waitedBackground || this.activeWorkers.size === 0) break
     }
   }
 
@@ -589,26 +580,45 @@ export class VelaRuntimeEngine {
         new DOMException('Runtime disposed', 'AbortError'),
       )
     }
-    await Promise.allSettled(
-      [...this.activeWorkers.values()].map((w) => w.promise),
-    )
-    for (const [name, adapter] of this.channels) {
-      await adapter
-        .stop()
+    try {
+      await Promise.allSettled(
+        [...this.activeWorkers.values()].map((w) => w.promise),
+      )
+      await this.outbox
+        .drain()
         .catch((error) =>
-          this.logger.error(
-            `[runtime] failed stopping channel ${name}: ${error}`,
-          ),
+          this.logger.error(`[runtime] outbox drain failed: ${error}`),
         )
+      for (const [name, adapter] of this.channels) {
+        await adapter
+          .stop()
+          .catch((error) =>
+            this.logger.error(
+              `[runtime] failed stopping channel ${name}: ${error}`,
+            ),
+          )
+      }
+      this.channels.clear()
+      for (const driver of this.drivers.values()) {
+        await Promise.resolve(driver.dispose?.()).catch((error) =>
+          this.logger.error(`[runtime] driver dispose failed: ${error}`),
+        )
+      }
+      await this.environments.dispose()
+    } finally {
+      if (this.transientBlobDir) {
+        rmSync(this.transientBlobDir, { recursive: true, force: true })
+      }
     }
-    this.channels.clear()
-    for (const driver of this.drivers.values()) {
-      await driver.dispose?.()
-    }
-    await this.environments.dispose()
-    if (this.transientBlobDir) {
-      rmSync(this.transientBlobDir, { recursive: true, force: true })
-    }
+  }
+
+  private flushOutboxBestEffort(): Promise<void> {
+    return this.outbox
+      .flushOnce()
+      .catch((error) =>
+        this.logger.error(`[runtime] outbox flush failed: ${error}`),
+      )
+      .then(() => {})
   }
 
   private async runSessionLoop(
@@ -727,13 +737,7 @@ export class VelaRuntimeEngine {
           },
           wakeSession: (sid) => this.scheduleSession(sid),
           flushOutbox: () => {
-            if (this.channels.size > 0) {
-              void this.outbox
-                .flushOnce()
-                .catch((error) =>
-                  this.logger.error(`[runtime] outbox flush failed: ${error}`),
-                )
-            }
+            if (this.channels.size > 0) void this.flushOutboxBestEffort()
           },
           onTerminalCommitInTx: (outcome) =>
             commitCompletedTurnInTx({
@@ -781,11 +785,7 @@ export class VelaRuntimeEngine {
       }
 
       if (this.channels.size > 0) {
-        await this.outbox
-          .flushOnce()
-          .catch((error) =>
-            this.logger.error(`[runtime] outbox flush failed: ${error}`),
-          )
+        await this.flushOutboxBestEffort()
       }
       this.syncWakeTimer()
       if (

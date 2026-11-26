@@ -1,7 +1,13 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { assertNoLegacyConfigFiles, parseConfig } from './config/index.ts'
+import {
+  assertNoLegacyConfigFiles,
+  interpolateConfigLayer,
+  parseConfig,
+  toExtensionConfigView,
+  type VelaSettings,
+} from './config/index.ts'
 import { openDatabase, type VelaDatabase } from './db/index.ts'
 import { defaultAgentDir } from './driver/config/paths.ts'
 import type { ExecutionLocation } from './driver/execution/types.ts'
@@ -296,11 +302,12 @@ export interface CreateRuntimeOptions {
 function createLazyRuntimeMcpAdapter(
   hostEnv: Record<string, string | undefined> | undefined,
   logger: VelaLogger,
+  skipUserConfig = false,
 ): RuntimeMcpAdapter {
   let adapterPromise: Promise<RuntimeMcpAdapter> | undefined
   const loadAdapter = (): Promise<RuntimeMcpAdapter> => {
     adapterPromise ??= import('./mcp/runtime-adapter.ts').then((mod) =>
-      mod.createRuntimeMcpAdapter({ hostEnv, logger }),
+      mod.createRuntimeMcpAdapter({ hostEnv, logger, skipUserConfig }),
     )
     return adapterPromise
   }
@@ -317,11 +324,30 @@ function createLazyRuntimeMcpAdapter(
   }
 }
 
-function loadConfiguredEnvironments(agentDir: string): unknown {
+function loadOwnerRuntimeConfig(
+  agentDir: string,
+  hostEnv: Record<string, string | undefined>,
+): VelaSettings {
   assertNoLegacyConfigFiles(agentDir)
   const file = join(agentDir, 'config.json')
-  if (!existsSync(file)) return undefined
-  return parseConfig(readFileSync(file, 'utf8'), file).environments
+  if (!existsSync(file)) return {}
+  return interpolateConfigLayer(
+    parseConfig(readFileSync(file, 'utf8'), file),
+    hostEnv,
+  )
+}
+
+function mergeExtensionConfig(
+  base: Record<string, Record<string, unknown>>,
+  override: Record<string, Record<string, unknown>> | undefined,
+): Record<string, Record<string, unknown>> | undefined {
+  const keys = new Set([...Object.keys(base), ...Object.keys(override ?? {})])
+  if (keys.size === 0) return undefined
+  const merged: Record<string, Record<string, unknown>> = {}
+  for (const key of keys) {
+    merged[key] = { ...(base[key] ?? {}), ...(override?.[key] ?? {}) }
+  }
+  return merged
 }
 
 /**
@@ -332,33 +358,37 @@ export function createRuntime(
   options: CreateRuntimeOptions = {},
 ): LocalVelaRuntime {
   const logger = options.logger ?? silentLogger
+  const isEphemeral = options.ephemeral === true
+  const hostEnv = options.hostEnv ?? {}
   const transientAgentDir =
-    options.ephemeral && !options.agentDir
+    isEphemeral && !options.agentDir
       ? mkdtempSync(join(tmpdir(), 'vela-runtime-'))
       : undefined
   const agentDir = resolve(
-    options.agentDir ??
-      transientAgentDir ??
-      defaultAgentDir(options.hostEnv ?? {}),
+    options.agentDir ?? transientAgentDir ?? defaultAgentDir(hostEnv),
   )
   const ownsDb = !options.db
   const db =
     options.db ??
     openDatabase({
-      path: options.ephemeral ? ':memory:' : join(agentDir, 'vela.db'),
+      path: isEphemeral ? ':memory:' : join(agentDir, 'vela.db'),
     })
 
   try {
+    const ownerConfig: VelaSettings = isEphemeral
+      ? {}
+      : loadOwnerRuntimeConfig(agentDir, hostEnv)
     const credentials =
       options.credentials ??
-      (options.ephemeral
+      (isEphemeral
         ? memoryCredentialStore()
         : fileCredentialStore(join(agentDir, 'auth.json')))
     const providers =
       options.providers ??
       loadModels({
         agentDir,
-        env: options.hostEnv ?? {},
+        env: hostEnv,
+        providers: isEphemeral ? {} : (ownerConfig.providers ?? {}),
       })
     const registrations = new SqliteOAuthRegistrationStore(db)
     const models = new ModelRegistry(providers, credentials, registrations)
@@ -369,15 +399,13 @@ export function createRuntime(
             dataDir: agentDir,
             environments:
               options.environments ??
-              (options.ephemeral
-                ? undefined
-                : loadConfiguredEnvironments(agentDir)),
-            hostEnv: options.hostEnv,
+              (isEphemeral ? undefined : ownerConfig.environments),
+            hostEnv,
           })
     const mcpAdapter =
       options.mcp === false
         ? undefined
-        : createLazyRuntimeMcpAdapter(options.hostEnv, logger)
+        : createLazyRuntimeMcpAdapter(hostEnv, logger, isEphemeral)
 
     const engine = new VelaRuntimeEngine({
       db,
@@ -386,6 +414,23 @@ export function createRuntime(
       drivers: options.drivers,
       logger,
     })
+
+    const ownerExtensionConfig = isEphemeral
+      ? {}
+      : toExtensionConfigView(ownerConfig)
+    const extensionConfig = mergeExtensionConfig(
+      ownerExtensionConfig,
+      options.extensionConfig,
+    )
+    const limits =
+      ownerConfig.limits || options.limits
+        ? { ...ownerConfig.limits, ...options.limits }
+        : undefined
+    const dreamEnabled =
+      options.dreamEnabled ??
+      (typeof ownerConfig.memory?.dream === 'boolean'
+        ? ownerConfig.memory.dream
+        : undefined)
 
     const velaDriver = createVelaAgentDriver({
       db,
@@ -400,20 +445,21 @@ export function createRuntime(
         void engine.outbox.flushOnce().catch(() => {})
       },
       mcp: mcpAdapter,
-      defaultModel: options.defaultModel,
-      defaultThinkingLevel: options.defaultThinkingLevel,
+      defaultModel: options.defaultModel ?? ownerConfig.model,
+      defaultThinkingLevel:
+        options.defaultThinkingLevel ?? ownerConfig.thinkingLevel,
       providers,
       credentials,
       models,
-      limits: options.limits,
+      limits,
       tools: options.tools,
-      extensionConfig: options.extensionConfig,
-      hostEnv: options.hostEnv,
+      extensionConfig,
+      hostEnv,
       contextFiles: options.contextFiles,
       skills: options.skills,
       promptTemplates: options.promptTemplates,
       offline: options.offline,
-      dreamEnabled: options.dreamEnabled,
+      dreamEnabled,
       trustOverride: options.trustOverride,
       toolApprovalCheck: options.toolApprovalCheck,
       logger,

@@ -201,6 +201,7 @@ export function enqueueOutboxInTx(
  */
 export class OutboxDispatcher {
   private flushing: Promise<{ delivered: number; failed: number }> | undefined
+  private flushAgain = false
 
   constructor(
     private readonly db: VelaDatabase,
@@ -270,39 +271,70 @@ export class OutboxDispatcher {
   }
 
   async flushOnce(
-    nowMs = Date.now(),
+    nowMs?: number,
   ): Promise<{ delivered: number; failed: number }> {
-    if (this.flushing) return this.flushing
-    this.flushing = this.runFlush(nowMs).finally(() => {
+    if (this.flushing) {
+      this.flushAgain = true
+      return this.flushing
+    }
+    this.flushAgain = false
+    this.flushing = (async () => {
+      let delivered = 0
+      let failed = 0
+      do {
+        this.flushAgain = false
+        const pass = await this.runFlush(nowMs)
+        delivered += pass.delivered
+        failed += pass.failed
+      } while (this.flushAgain)
+      return { delivered, failed }
+    })().finally(() => {
       this.flushing = undefined
     })
     return this.flushing
   }
 
+  async drain(): Promise<void> {
+    while (this.flushing) {
+      await this.flushing.catch(() => {})
+    }
+  }
+
   private async runFlush(
-    nowMs: number,
+    fixedNowMs?: number,
   ): Promise<{ delivered: number; failed: number }> {
-    const nowIso = new Date(nowMs).toISOString()
+    const clock = () => fixedNowMs ?? Date.now()
     let delivered = 0
     let failed = 0
 
     let retryScheduled = false
     for (;;) {
+      const stepNowMs = clock()
+      const stepNowIso = new Date(stepNowMs).toISOString()
       const candidate = this.db.transaction(() => {
         const rows = this.db.all<Record<string, unknown>>(
           `SELECT * FROM outbox
-           WHERE status = 'pending'
-             AND (next_retry_at IS NULL OR next_retry_at <= ?)
+           WHERE status IN ('pending', 'sending')
            ORDER BY created_at ASC, rowid ASC`,
-          nowIso,
         ) as unknown as OutboxRow[]
+        const blockedSessionChannels = new Set<string>()
         for (const row of rows) {
+          const fifoKey = `${row.session_id}:${row.channel}`
+          if (row.status === 'sending') {
+            blockedSessionChannels.add(fifoKey)
+            continue
+          }
+          if (blockedSessionChannels.has(fifoKey)) continue
+          if (row.next_retry_at !== null && row.next_retry_at > stepNowIso) {
+            blockedSessionChannels.add(fifoKey)
+            continue
+          }
           const adapter = this.getAdapter(row.channel)
           if (!adapter) continue
           const leaseToken = `${PROCESS_OWNER_PREFIX}:${process.pid}:${randomUUID()}`
           const claimed = this.db.run(
             `UPDATE outbox SET status = 'sending', updated_at = ? WHERE id = ? AND status = 'pending'`,
-            nowIso,
+            stepNowIso,
             row.id,
           )
           if (claimed.changes !== 1) continue
@@ -312,7 +344,7 @@ export class OutboxDispatcher {
              ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
             leaseKey(row.id),
             JSON.stringify(leaseToken),
-            nowIso,
+            stepNowIso,
           )
           LIVE_OUTBOX_LEASES.set(row.id, leaseToken)
           return { row: rowToOutbox(row), adapter, leaseToken }
@@ -470,7 +502,7 @@ export class OutboxDispatcher {
             }
           } else {
             const delayMs = BASE_RETRY_MS * 2 ** (attempt - 1)
-            const nextRetryAt = new Date(nowMs + delayMs).toISOString()
+            const nextRetryAt = new Date(clock() + delayMs).toISOString()
             ok =
               this.db.run(
                 `UPDATE outbox

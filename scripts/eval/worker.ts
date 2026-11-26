@@ -390,7 +390,14 @@ export async function runAttempt(
     // Restore normal backoff: the helper otherwise defaults retryBaseMs to zero. Keep product retries.
     limits: { retryBaseMs: 500 },
     session:
-      config.scenario === 'C5' ? { tools: ['read', 'write', 'ls'] } : undefined,
+      config.scenario === 'C5'
+        ? {
+            tools:
+              config.arm === 'old'
+                ? ['read', 'write', 'ls']
+                : ['read_file', 'write_file', 'list_directory'],
+          }
+        : undefined,
   })
   let phase = 0
   const recallScenario = config.scenario === 'G7' || config.scenario === 'G8'

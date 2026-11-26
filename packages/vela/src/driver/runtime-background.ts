@@ -44,6 +44,7 @@ export interface RuntimeBackgroundController extends BackgroundCommands {
   setRunContext(ctx: {
     runId: string
     wakeSession?: (sessionId: string) => void
+    location?: ExecutionLocation
   }): void
 }
 
@@ -58,9 +59,10 @@ export function createRuntimeBackgroundController(params: {
   wakeSession?: (sessionId: string) => void
   location: ExecutionLocation
 }): RuntimeBackgroundController {
-  const { db, sessionId, location } = params
+  const { db, sessionId } = params
   let currentRunId = params.runId
   let currentWake = params.wakeSession
+  let currentLocation = params.location
   const manager = new BackgroundJobManager(db, (sid) => currentWake?.(sid))
   const jobs = new Map<string, LiveRuntimeJob>()
   let seq = 0
@@ -83,9 +85,11 @@ export function createRuntimeBackgroundController(params: {
     setRunContext(ctx: {
       runId: string
       wakeSession?: (sessionId: string) => void
+      location?: ExecutionLocation
     }) {
       currentRunId = ctx.runId
       currentWake = ctx.wakeSession
+      if (ctx.location) currentLocation = ctx.location
     },
 
     async adopt({ command, start, signal }): Promise<BackgroundAdmission> {
@@ -122,7 +126,7 @@ export function createRuntimeBackgroundController(params: {
             runId: currentRunId,
             command,
             commandHead: headOf(command),
-            location,
+            location: currentLocation,
             abort: () => {
               job.stopped = true
               controller.abort(new DOMException('Stopped', 'AbortError'))

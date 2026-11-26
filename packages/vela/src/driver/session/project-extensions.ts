@@ -70,10 +70,21 @@ export class ProjectExtensions {
       pending = this.acquire(id, env, environment)
       this.sessions.set(id, pending)
     }
-    const shared = await pending
-    const scope = await shared.ready
-    if (this.sessions.get(id) !== pending)
+    let shared: SharedScope
+    let scope: Scope
+    try {
+      shared = await pending
+      scope = await shared.ready
+    } catch (error) {
+      if (this.sessions.get(id) === pending) {
+        this.sessions.delete(id)
+      }
+      throw error
+    }
+    if (this.sessions.get(id) !== pending) {
+      shared.sessions.delete(id)
       throw new Error('Session is closed or relocated')
+    }
     this.bound.set(id, scope)
   }
 
@@ -83,7 +94,12 @@ export class ProjectExtensions {
     environment = 'local',
   ): Promise<SharedScope> {
     const { split, config, host, registry, models, dataDir, logger } = this.deps
-    const trusted = config.mode(env.cwd, environment) === 'all'
+    let canonicalCwd = env.cwd
+    if (environment !== 'local') {
+      const resolved = await env.canonicalPath(env.cwd)
+      if (resolved.ok) canonicalCwd = resolved.value
+    }
+    const trusted = config.mode(canonicalCwd, environment) === 'all'
     const settings = await config.get(id, env, environment)
     const projectSettings = await config.project(id, env, environment)
     const discovered = await loadProjectExtensionEntries(env, {
@@ -93,7 +109,7 @@ export class ProjectExtensions {
     })
     for (const message of discovered.diagnostics) logger.warn(message)
     const selected = await split!.projectExtensions?.({
-      cwd: env.cwd,
+      cwd: canonicalCwd,
       environmentId: env.id,
       trusted,
       settings,
@@ -104,7 +120,7 @@ export class ProjectExtensions {
       selected?.extensionConfig ?? toExtensionConfigView(settings)
     const key = JSON.stringify([
       env.id,
-      env.cwd,
+      canonicalCwd,
       trusted,
       settings,
       discovered.entries,

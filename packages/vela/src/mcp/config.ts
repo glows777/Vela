@@ -5,7 +5,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { formatJsonParseError } from '../config/index.ts'
 import type { ExtensionConfigDefinition } from '../extension-api.ts'
 
@@ -265,13 +265,20 @@ export function loadMcpServers(options: {
   projectDir: string
   trusted: boolean
   env: Env
+  skipUserConfig?: boolean
 }): McpServersFile {
   const result: McpServersFile = { servers: {}, sources: {}, errors: [] }
   const failedUserServers = new Set<string>()
   const rawDisabledServers = new Map<string, Record<string, unknown>>()
   const userFile = join(options.agentDir, 'config.json')
-  const files = [userFile]
-  if (options.trusted) files.push(join(options.projectDir, 'config.json'))
+  const projectFile = join(options.projectDir, 'config.json')
+  const files = options.skipUserConfig ? [] : [userFile]
+  if (
+    options.trusted &&
+    (options.skipUserConfig || resolve(projectFile) !== resolve(userFile))
+  ) {
+    files.push(projectFile)
+  }
   for (const file of files) {
     if (!existsSync(file)) continue
     let servers: unknown

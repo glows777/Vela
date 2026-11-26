@@ -120,7 +120,7 @@ export async function openHost(
         directModel,
         larkLoaded: loadLark,
         larkStartupError,
-        hasAvailableModel: vela.models().length > 0,
+        hasAvailableModel: vela.models({ channel: 'local' }).length > 0,
       })
     } catch {
       throw new Error(

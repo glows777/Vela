@@ -361,11 +361,21 @@ export function buildSessionHosts<Session>(
       contextManager: access.contextManager,
       defaults: access.defaults,
       options: access.options,
-      location: access.getLocation(),
-      name: access.getName(),
-      channel: access.getChannel(),
-      parentSession: access.getParentSession(),
-      autoCompaction: access.getAutoCompaction(),
+      get location() {
+        return access.getLocation()
+      },
+      get name() {
+        return access.getName()
+      },
+      get channel() {
+        return access.getChannel()
+      },
+      get parentSession() {
+        return access.getParentSession()
+      },
+      get autoCompaction() {
+        return access.getAutoCompaction()
+      },
       getModel: access.getModel,
       getMaxTokens: access.getMaxTokens,
       exclusive: access.exclusive,

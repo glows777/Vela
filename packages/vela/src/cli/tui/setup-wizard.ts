@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SelectItem } from '@earendil-works/pi-tui'
 import { formatJsonParseError } from '../../config/index.ts'
-import { openDatabase } from '../../db/index.ts'
+import { openDatabase, withReadonlyDb } from '../../db/index.ts'
 import { THINKING_LEVELS } from '../../driver/diagnostics.ts'
 import {
   type AuthInteraction,
@@ -22,7 +22,7 @@ import { saveModelSetup } from '../../settings.ts'
 import type { OAuthRegistration } from '../../shared/oauth-registration.ts'
 import type { Vela } from '../../vela.ts'
 import { createVela } from '../../vela.ts'
-import { openBrowser } from '../login.ts'
+import { openBrowser, readValidInstallationId } from '../login.ts'
 import { larkSetup } from './lark-setup.ts'
 
 interface Host {
@@ -163,17 +163,12 @@ export async function setupWizard(host: Host): Promise<boolean> {
   const stored = diskCredentials.get(provider)
   const memory = memoryCredentialStore(stored ? { [provider]: stored } : {})
   const dbPath = join(agentDir, 'vela.db')
-  const readDiskRegistration = (
-    name: string,
-  ): OAuthRegistration | undefined => {
-    if (!existsSync(dbPath)) return undefined
-    const db = openDatabase({ path: dbPath, readonly: true })
-    try {
-      return new SqliteOAuthRegistrationStore(db).get(name)
-    } finally {
-      db.close()
-    }
-  }
+  const readDiskRegistration = (name: string): OAuthRegistration | undefined =>
+    existsSync(dbPath)
+      ? withReadonlyDb(dbPath, (db) =>
+          new SqliteOAuthRegistrationStore(db).get(name),
+        )
+      : undefined
   const stagedRegistrations = new Map<string, OAuthRegistration | null>()
   const stagingRegistrations: OAuthRegistrationStore = {
     get: (name) =>
@@ -271,10 +266,10 @@ export async function setupWizard(host: Host): Promise<boolean> {
             } else host.addNotice(event.message, 'dim')
           },
         }
-        const idPath = join(agentDir, 'installation-id')
         await temporary.login(provider, method, interaction, {
           getDeviceId: () => {
-            if (existsSync(idPath)) return readFileSync(idPath, 'utf8').trim()
+            const valid = readValidInstallationId(agentDir)
+            if (valid) return valid
             newInstallationId ??= randomUUID()
             return newInstallationId
           },
@@ -463,8 +458,12 @@ export async function setupWizard(host: Host): Promise<boolean> {
         })
       } catch (error) {
         const authPath = join(agentDir, 'auth.json')
-        const wroteAuth =
-          error instanceof Error && error.message.includes(authPath)
+        const writtenFiles = (
+          error as { writtenFiles?: readonly string[] } | null
+        )?.writtenFiles
+        const wroteAuth = writtenFiles
+          ? writtenFiles.includes(authPath)
+          : error instanceof Error && error.message.includes(authPath)
         if (registrationUpdated && hasPrevRegistration && !wroteAuth) {
           try {
             applyStagedRegistration('rollback')

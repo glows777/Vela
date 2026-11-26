@@ -53,34 +53,35 @@ export class SubscriptionManager {
     creatorId?: string | null
     creatorName?: string | null
   }): SubscriptionRecord {
-    const existing = this.db.get<Record<string, unknown>>(
-      `SELECT * FROM subscriptions WHERE source = ? AND event_key = ? AND session_id = ? LIMIT 1`,
-      input.source,
-      input.eventKey,
-      input.sessionId,
-    ) as SubscriptionRow | undefined
-    if (existing) return rowToSubscription(existing)
-
     const id = input.id ?? randomUUID()
     const now = new Date().toISOString()
-    this.db.run(
-      `INSERT INTO subscriptions (
-         id, source, event_key, project_id, session_id, creator_id, creator_name, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      input.source,
-      input.eventKey,
-      input.projectId ?? null,
-      input.sessionId,
-      input.creatorId ?? null,
-      input.creatorName ?? null,
-      now,
-    )
-    const created = this.db.get<SubscriptionRow>(
-      'SELECT * FROM subscriptions WHERE id = ?',
-      id,
-    )!
-    return rowToSubscription(created)
+    return this.db.transaction(() => {
+      this.db.run(
+        `INSERT OR IGNORE INTO subscriptions (
+           id, source, event_key, project_id, session_id, creator_id, creator_name, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        input.source,
+        input.eventKey,
+        input.projectId ?? null,
+        input.sessionId,
+        input.creatorId ?? null,
+        input.creatorName ?? null,
+        now,
+      )
+      const row = this.db.get<Record<string, unknown>>(
+        `SELECT * FROM subscriptions WHERE source = ? AND event_key = ? AND session_id = ? LIMIT 1`,
+        input.source,
+        input.eventKey,
+        input.sessionId,
+      ) as SubscriptionRow | undefined
+      if (!row) {
+        throw new Error(
+          `Failed to create subscription for ${input.source}:${input.eventKey}`,
+        )
+      }
+      return rowToSubscription(row)
+    })
   }
 
   remove(id: string): boolean {
@@ -169,7 +170,7 @@ export class SubscriptionManager {
       }
       if (input.final && subs.length > 0 && insertedSessions.size > 0) {
         for (const sub of subs) {
-          if (insertedSessions.has(sub.sessionId)) {
+          if (sub.eventKey !== '*' && insertedSessions.has(sub.sessionId)) {
             this.db.run('DELETE FROM subscriptions WHERE id = ?', sub.id)
           }
         }
