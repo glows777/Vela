@@ -5,10 +5,10 @@ import { resolveProviderTools } from '../providers/index.ts'
 import { clampThinkingLevel } from '../providers/models/catalog.ts'
 import {
   DEFAULT_THINKING_LEVEL,
-  describeModel,
   ModelRegistry,
   type ProviderDefinition,
   reasoningOption,
+  resolveModelInput,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../providers/models/index.ts'
@@ -170,9 +170,10 @@ export function createVelaAgentDriver(
       approval: true,
     },
     steer(sessionId, text) {
-      const list = activeSteering.get(sessionId) ?? []
+      const list = activeSteering.get(sessionId)
+      if (!list) return false
       list.push({ role: 'user', content: text })
-      activeSteering.set(sessionId, list)
+      return true
     },
     abort(sessionId) {
       activeAbort
@@ -260,14 +261,11 @@ export function createVelaAgentDriver(
       )
       const hasChannelBinding = Boolean(boundChannel)
       const modelInput =
-        saved?.model ?? options.defaultModel ?? models.defaultRef()
+        saved?.model ?? options.defaultModel ?? models.defaultRef(boundChannel)
       if (!modelInput) {
         throw new Error(`No model configured for session ${request.sessionId}`)
       }
-      const resolved =
-        typeof modelInput === 'string'
-          ? models.resolve(modelInput, { channel: () => boundChannel })
-          : { model: modelInput, info: describeModel(modelInput) }
+      const resolved = resolveModelInput(models, modelInput, () => boundChannel)
       const thinkingLevel =
         saved?.thinkingLevel ??
         options.defaultThinkingLevel ??
@@ -688,6 +686,7 @@ export function createVelaAgentDriver(
         },
         onTerminalCommitInTx: request.onTerminalCommitInTx
           ? ({ assistant }) => {
+              activeSteering.delete(request.sessionId)
               lastAssistant = assistant
               committedInTx = true
               if (memoryActive && !isSilent && !disposed) {
@@ -710,6 +709,7 @@ export function createVelaAgentDriver(
             }
           : undefined,
       })
+      activeSteering.delete(request.sessionId)
 
       const waitingApproval = options.db.get<{ id: string }>(
         "SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1",

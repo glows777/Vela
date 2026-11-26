@@ -130,21 +130,42 @@ export async function logoutCommand(
   const forget = tokens.includes('--forget')
   const requested = tokens.find((token) => token !== '--forget')
   const providers = host.vela.loginProviders()
-  const stored = providers.filter(
-    (p) => p.source === 'auth.json' || p.source === 'OAuth (auth.json)',
-  )
-  const candidates =
-    stored.length > 0 ? stored : forget ? providers.filter((p) => p.oauth) : []
+  const isStoredCredential = (p: (typeof providers)[number]) =>
+    p.source === 'auth.json' || p.source === 'OAuth (auth.json)'
+  const stored = providers.filter(isStoredCredential)
+  const candidates = forget
+    ? providers.filter(
+        (p) =>
+          isStoredCredential(p) ||
+          p.hasRegistration ||
+          (stored.length === 0 && Boolean(p.oauth)),
+      )
+    : stored
   const provider =
     requested ||
     (candidates.length
       ? await host.select(
           forget ? 'Sign out and forget registration of' : 'Sign out of',
-          candidates.map((p) => ({ value: p.provider, label: p.provider })),
+          candidates.map((p) => ({
+            value: p.provider,
+            label: p.provider,
+            ...(!isStoredCredential(p) && p.hasRegistration
+              ? { description: 'saved OAuth registration' }
+              : p.source
+                ? { description: p.source }
+                : {}),
+          })),
         )
       : undefined)
   if (!provider) {
-    if (!candidates.length) host.addNotice('No stored credentials', 'dim')
+    if (!candidates.length) {
+      host.addNotice(
+        forget
+          ? 'No stored credentials or saved registrations'
+          : 'No stored credentials',
+        'dim',
+      )
+    }
     return
   }
   try {

@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { assertNoLegacyConfigFiles, parseConfig } from './config/index.ts'
 import { openDatabase, type VelaDatabase } from './db/index.ts'
 import { defaultAgentDir } from './driver/config/paths.ts'
 import type { ExecutionLocation } from './driver/execution/types.ts'
@@ -82,8 +83,11 @@ export interface RuntimeRecoverySummary {
 }
 
 /**
- * Isomorphic Runtime SDK contract implemented identically by in-process `createRuntime()`
- * and S4a's daemon IPC `connectRuntime()`. Every method is async and JSON-serializable.
+ * Transport-compatible Runtime SDK contract implemented by in-process `createRuntime()`
+ * and S4a's daemon IPC `connectRuntime()`. Domain records, cursors, events, and results
+ * are plain JSON-serializable objects; `blobs.read`/`storeInbound` pass `Uint8Array`
+ * buffers (base64 on the wire), `events.subscribe`/`subscribeDeltas` return sync
+ * unsubscribe functions over the daemon stream, and `logout` supports `AbortSignal`.
  */
 export interface VelaRuntime {
   readonly agentDir: string
@@ -274,7 +278,8 @@ export interface CreateRuntimeOptions {
   mcp?: boolean
   offline?: boolean
   dreamEnabled?: boolean
-  environments?: EnvironmentRegistry
+  /** Owner Docker environment definitions or a pre-constructed `EnvironmentRegistry`. Defaults to `<agentDir>/config.json` unless `ephemeral`. */
+  environments?: Record<string, unknown> | EnvironmentRegistry
   drivers?: AgentDriver[]
   trustOverride?: (location: ExecutionLocation) => boolean | Promise<boolean>
   toolApprovalCheck?: (
@@ -310,6 +315,13 @@ function createLazyRuntimeMcpAdapter(
       await adapter.dispose?.()
     },
   }
+}
+
+function loadConfiguredEnvironments(agentDir: string): unknown {
+  assertNoLegacyConfigFiles(agentDir)
+  const file = join(agentDir, 'config.json')
+  if (!existsSync(file)) return undefined
+  return parseConfig(readFileSync(file, 'utf8'), file).environments
 }
 
 /**
@@ -351,11 +363,17 @@ export function createRuntime(
     const registrations = new SqliteOAuthRegistrationStore(db)
     const models = new ModelRegistry(providers, credentials, registrations)
     const environments =
-      options.environments ??
-      new EnvironmentRegistry({
-        dataDir: agentDir,
-        hostEnv: options.hostEnv,
-      })
+      options.environments instanceof EnvironmentRegistry
+        ? options.environments
+        : new EnvironmentRegistry({
+            dataDir: agentDir,
+            environments:
+              options.environments ??
+              (options.ephemeral
+                ? undefined
+                : loadConfiguredEnvironments(agentDir)),
+            hostEnv: options.hostEnv,
+          })
     const mcpAdapter =
       options.mcp === false
         ? undefined
@@ -425,7 +443,7 @@ export function createRuntime(
         messages: async (input) => listRuntimeSessionMessages(db, input),
       },
       prompt: async (sessionId, input) => {
-        const res = engine.submitPrompt({ sessionId, ...input })
+        const res = engine.submitPrompt({ ...input, sessionId })
         return { eventId: res.event.id, inserted: res.inserted }
       },
       steer: (sessionId, text) => engine.steerSession(sessionId, text),

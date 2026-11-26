@@ -1,9 +1,12 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { openDatabase } from '../db/index.ts'
+import type { OAuthRegistrationStore } from '../providers/auth/types.ts'
 import {
   DEFAULT_THINKING_LEVEL,
-  describeModel,
   ModelRegistry,
   type ResolvedModel,
+  resolveModelInput,
   type ThinkingLevel,
 } from '../providers/models/index.ts'
 import { SqliteOAuthRegistrationStore } from '../runtime/index.ts'
@@ -78,6 +81,37 @@ export function createVela(options: VelaOptions = {}): Vela {
   }
 }
 
+function lazyFileRegistrationStore(dbPath: string): OAuthRegistrationStore {
+  return {
+    get(provider) {
+      if (!existsSync(dbPath)) return undefined
+      const db = openDatabase({ path: dbPath, readonly: true })
+      try {
+        return new SqliteOAuthRegistrationStore(db).get(provider)
+      } finally {
+        db.close()
+      }
+    },
+    set(provider, registration) {
+      const db = openDatabase({ path: dbPath })
+      try {
+        new SqliteOAuthRegistrationStore(db).set(provider, registration)
+      } finally {
+        db.close()
+      }
+    },
+    delete(provider) {
+      if (!existsSync(dbPath)) return false
+      const db = openDatabase({ path: dbPath })
+      try {
+        return new SqliteOAuthRegistrationStore(db).delete(provider)
+      } finally {
+        db.close()
+      }
+    },
+  }
+}
+
 function initVelaInstance(
   options: VelaOptions,
   storage: ReturnType<typeof openVelaStorage>,
@@ -95,24 +129,27 @@ function initVelaInstance(
   let { model } = options
   let defaultsChanged = false
   let defaultThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL
+  const registrations =
+    options.registrations ??
+    (agentDir && ephemeralSessions && !options.db
+      ? lazyFileRegistrationStore(join(agentDir, 'vela.db'))
+      : new SqliteOAuthRegistrationStore(db))
   const models = new ModelRegistry(
     options.providers,
     options.credentials,
-    new SqliteOAuthRegistrationStore(db),
+    registrations,
   )
   const resolveModel = (
     requested: ModelInput | undefined,
     from?: VelaSession,
   ): ResolvedModel => {
     // Like pi: without a chosen model, the first provider with a credential supplies its default model
-    const choice = requested ?? models.defaultRef()
+    const choice = requested ?? models.defaultRef(from?.channel)
     if (choice === undefined)
       throw new Error(
         'No model selected: pass model to createVela(), or call session.setModel()',
       )
-    return typeof choice === 'string'
-      ? models.resolve(choice, { channel: () => from?.channel })
-      : { model: choice, info: describeModel(choice) }
+    return resolveModelInput(models, choice, () => from?.channel)
   }
   const limits = resolveLimits(options.limits)
   const logger = options.logger ?? silentLogger

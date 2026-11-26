@@ -4,7 +4,6 @@ import type { ToolInputSchema } from '../../shared/tool-schema.ts'
 import { getRetiredToolError } from '../../shared/tool-selection.ts'
 import type { VelaEvent, VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
-import type { SessionScope } from '../session/scope.ts'
 import type { BackgroundCommands } from './background.ts'
 import { validateToolDefinition } from './definition-validation.ts'
 import { ActiveCalls, ExecutionGate } from './execution-gate.ts'
@@ -29,8 +28,6 @@ export interface ToolContext {
   /** @internal */ execution?: ExecutionEnv
   /** @internal */ background?: BackgroundCommands
   sessionId?: string
-  /** @internal */
-  scope?: Readonly<SessionScope>
   toolCallId?: string
   /** Resolve the session's execution environment on demand (file, search, bash tools only). */
   requireEnv?: (signal?: AbortSignal) => Promise<ExecutionEnv>
@@ -103,9 +100,8 @@ export class ToolRegistry {
   private shared: SharedToolState
   /** @internal The `background` extension's job table; `bash` reaches it through `ToolContext`. */
   background?: BackgroundCommands
-  private onEvent?: VelaEventListener
-  private sessionId?: string
-  private scope?: () => Readonly<SessionScope> | undefined
+  /** @internal */ private onEvent?: VelaEventListener
+  /** @internal */ private sessionId?: string
 
   constructor(
     readonly spillDir?: string,
@@ -127,7 +123,6 @@ export class ToolRegistry {
     const forked = new ToolRegistry(spillDir, this.shared, this.parent)
     forked.onEvent = options.onEvent
     forked.sessionId = options.sessionId
-    forked.scope = options.scope
     return forked
   }
 
@@ -176,10 +171,6 @@ export class ToolRegistry {
 
   currentSessionId(): string | undefined {
     return this.sessionId
-  }
-
-  currentScope(): Readonly<SessionScope> | undefined {
-    return this.scope?.()
   }
 
   private get tools(): Map<string, ToolDefinition> {

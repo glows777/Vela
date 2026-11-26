@@ -539,7 +539,8 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
           call.success &&
           !inB(call) &&
           (call.args.root_id === 'g6_b' ||
-            String(call.args.session_id ?? '').endsWith('-g6_b')) &&
+            call.args.target === 'g6_b' ||
+            String(call.args.target ?? '').endsWith('-g6_b')) &&
           fact(String(call.args.text ?? '')),
       )
       check(

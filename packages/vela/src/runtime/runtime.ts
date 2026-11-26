@@ -248,8 +248,8 @@ export class VelaRuntimeEngine {
       driver?.capabilities.steer &&
       driver.steer
     ) {
-      await driver.steer(sessionId, text)
-      return
+      const accepted = await driver.steer(sessionId, text)
+      if (accepted !== false) return
     }
     this.submitPrompt({ sessionId, text, source: 'user', wake: true })
   }

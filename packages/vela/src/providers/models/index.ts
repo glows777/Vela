@@ -66,10 +66,28 @@ export interface ProviderContext {
 }
 
 const localOnlyOAuthChecks = new WeakMap<ProviderContext, () => boolean>()
+const managedModelRefs = new WeakMap<ModelHandle, string>()
+const localOnlyManagedHandles = new WeakSet<ModelHandle>()
 
 /** @internal True when this request's channel session withheld a `localOnly` OAuth token. */
 export function isLocalOnlyOAuthBlocked(ctx: ProviderContext): boolean {
   return localOnlyOAuthChecks.get(ctx)?.() ?? false
+}
+
+/** Returns `provider/id` when `model` was resolved by a `ModelRegistry`. */
+function managedModelRef(model: ModelInput): string | undefined {
+  return typeof model === 'object' && model !== null
+    ? managedModelRefs.get(model)
+    : undefined
+}
+
+/** True when `model` is a resolved handle for a provider with `oauth.localOnly`. */
+function isLocalOnlyManagedHandle(model: ModelInput): boolean {
+  return (
+    typeof model === 'object' &&
+    model !== null &&
+    localOnlyManagedHandles.has(model)
+  )
 }
 
 /** Optional provider-hosted equivalents for Vela tools, resolved for each request. */
@@ -109,6 +127,8 @@ export interface LoginProvider {
   apiKey: boolean
   /** Current credential source, when configured */
   source?: string
+  /** Whether non-token OAuth client registration metadata is saved in `vela.db`. */
+  hasRegistration?: boolean
 }
 
 /** Default model of each built-in provider, in pi's preference order */
@@ -127,6 +147,7 @@ const PROVIDER_NAME = /^[A-Za-z0-9][\w.-]*$/
  */
 export class ModelRegistry {
   private readonly providers = new Map<string, ProviderDefinition>()
+  private readonly authQueues = new Map<string, Promise<unknown>>()
   readonly credentials: CredentialStore
 
   constructor(
@@ -137,6 +158,28 @@ export class ModelRegistry {
     this.credentials = credentials
     for (const [name, provider] of Object.entries(providers))
       this.register(name, provider)
+  }
+
+  private serializeAuth<T>(
+    provider: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const run = (this.authQueues.get(provider) ?? Promise.resolve()).then(
+      task,
+      task,
+    )
+    const tail = run.catch(() => {})
+    this.authQueues.set(provider, tail)
+    void tail.then(() => {
+      if (this.authQueues.get(provider) === tail) {
+        this.authQueues.delete(provider)
+      }
+    })
+    return run
+  }
+
+  hasProvider(name: string): boolean {
+    return this.providers.has(name)
   }
 
   register(name: string, provider: ProviderDefinition): void {
@@ -155,11 +198,15 @@ export class ModelRegistry {
   }
 
   /** Where a provider's credential comes from, or undefined when it has none */
-  authSource(name: string): string | undefined {
+  authSource(name: string, channel?: string): string | undefined {
     const def = this.providers.get(name)
     if (!def) return
     if (!def.authSource) return 'configured'
-    return def.authSource(this.credentials.get(name))
+    const stored = this.credentials.get(name)
+    if (channel && def.oauth?.localOnly && stored?.type === 'oauth') {
+      return def.authSource(undefined)
+    }
+    return def.authSource(stored)
   }
 
   /**
@@ -183,12 +230,12 @@ export class ModelRegistry {
     const stored = this.credentials.get(provider)
     if (stored?.type === 'oauth') {
       if (def?.oauth?.localOnly && channel) {
-        return this.authSource(provider) ? 'api_key' : undefined
+        return this.authSource(provider, channel) ? 'api_key' : undefined
       }
       return 'oauth'
     }
     if (stored?.type === 'api_key') return 'api_key'
-    return this.authSource(provider) ? 'api_key' : undefined
+    return this.authSource(provider, channel) ? 'api_key' : undefined
   }
 
   /** Models listed by all providers, configured or not, with live `planLabel`. */
@@ -207,7 +254,7 @@ export class ModelRegistry {
   /** Models of providers that have a credential (what `/model` and `--list-models` show, like pi) */
   available(channel?: string): ModelInfo[] {
     return this.list(channel).filter(
-      (m) => this.authSource(m.provider) !== undefined,
+      (m) => this.authSource(m.provider, channel) !== undefined,
     )
   }
 
@@ -215,8 +262,8 @@ export class ModelRegistry {
    * The model to use when none is chosen (pi's initial model): the default model of the first built-in provider
    * with a credential, else the first available model.
    */
-  defaultRef(): string | undefined {
-    const available = this.available()
+  defaultRef(channel?: string): string | undefined {
+    const available = this.available(channel)
     for (const provider of DEFAULT_PROVIDER_ORDER) {
       const id = this.providers.get(provider)?.defaultModel
       const found = available.find(
@@ -238,6 +285,7 @@ export class ModelRegistry {
         ...(this.authSource(provider)
           ? { source: this.authSource(provider) }
           : {}),
+        ...(this.registrations?.get(provider) ? { hasRegistration: true } : {}),
       }))
   }
 
@@ -253,6 +301,7 @@ export class ModelRegistry {
   ): Promise<void> {
     const def = this.providers.get(provider)
     if (!def) throw new Error(`No provider named ${provider}`)
+    const deviceId = options.getDeviceId?.()
     let credential: Credential
     if (method === 'oauth') {
       if (!def.oauth)
@@ -260,6 +309,7 @@ export class ModelRegistry {
       const registration = this.registrations?.get(provider)
       credential = await def.oauth.login(interaction, {
         ...options,
+        ...(deviceId !== undefined ? { getDeviceId: () => deviceId } : {}),
         previous: this.credentials.get(provider),
         ...(registration ? { registration } : {}),
       })
@@ -276,21 +326,47 @@ export class ModelRegistry {
       credential = { type: 'api_key', key }
     }
     interaction.signal.throwIfAborted()
-    await this.credentials.modify(provider, async () => credential)
-    if (
-      credential.type === 'oauth' &&
-      typeof credential.clientId === 'string' &&
-      credential.clientId
-    ) {
-      this.registrations?.set(provider, {
-        clientId: credential.clientId,
-        hostId: options.getDeviceId?.(),
-        subject:
-          typeof credential.subject === 'string' && credential.subject
-            ? credential.subject
-            : undefined,
-      })
-    }
+    await this.serializeAuth(provider, async () => {
+      const nextRegistration =
+        credential.type === 'oauth' &&
+        typeof credential.clientId === 'string' &&
+        credential.clientId
+          ? {
+              clientId: credential.clientId,
+              ...(deviceId ? { hostId: deviceId } : {}),
+              ...(typeof credential.subject === 'string' && credential.subject
+                ? { subject: credential.subject }
+                : {}),
+            }
+          : undefined
+      const prevRegistration =
+        nextRegistration && this.registrations
+          ? this.registrations.get(provider)
+          : undefined
+      let wroteRegistration = false
+      try {
+        await this.credentials.modify(provider, async () => {
+          if (nextRegistration && this.registrations) {
+            this.registrations.set(provider, nextRegistration)
+            wroteRegistration = true
+          }
+          return credential
+        })
+      } catch (error) {
+        if (wroteRegistration && this.registrations) {
+          try {
+            if (prevRegistration) {
+              this.registrations.set(provider, prevRegistration)
+            } else {
+              this.registrations.delete(provider)
+            }
+          } catch {
+            /* preserve original error */
+          }
+        }
+        throw error
+      }
+    })
   }
 
   /**
@@ -304,44 +380,68 @@ export class ModelRegistry {
     options: LogoutOptions = {},
   ): Promise<LogoutResult> {
     options.signal?.throwIfAborted()
-    const credential = this.credentials.get(provider)
-    if (!credential) {
-      const forgotten = options.forget
-        ? Boolean(this.registrations?.delete(provider))
-        : false
+    return this.serializeAuth(provider, async () => {
+      options.signal?.throwIfAborted()
+      const credential = this.credentials.get(provider)
+      if (!credential) {
+        const forgotten = options.forget
+          ? Boolean(this.registrations?.delete(provider))
+          : false
+        return {
+          removed: false,
+          ...(forgotten ? { forgotten: true } : {}),
+        }
+      }
+      if (!this.credentials.deleteIf) {
+        return {
+          removed: false,
+          notice: `Could not log out ${provider}: credential store does not support atomic conditional deletion.`,
+        }
+      }
+      let notice: string | undefined
+      const revoke = this.providers.get(provider)?.oauth?.logout
+      if (credential.type === 'oauth' && revoke) {
+        try {
+          await revoke(
+            credential,
+            options.signal ?? new AbortController().signal,
+          )
+        } catch (error) {
+          if (options.signal?.aborted) throw options.signal.reason ?? error
+          notice = `Could not confirm that ${provider} revoked this sign-in at the provider; the credential is removed locally.`
+        }
+      }
+      const removed = await this.credentials.deleteIf(provider, (current) =>
+        sameCredential(credential, current),
+      )
+      let forgotten = false
+      if (options.forget) {
+        if (removed || !this.credentials.get(provider)) {
+          forgotten = Boolean(this.registrations?.delete(provider))
+        }
+      } else if (
+        removed &&
+        credential.type === 'oauth' &&
+        typeof credential.clientId === 'string' &&
+        credential.clientId &&
+        !this.registrations?.get(provider)
+      ) {
+        this.registrations?.set(provider, {
+          clientId: credential.clientId,
+          ...(typeof credential.hostId === 'string' && credential.hostId
+            ? { hostId: credential.hostId }
+            : {}),
+          ...(typeof credential.subject === 'string' && credential.subject
+            ? { subject: credential.subject }
+            : {}),
+        })
+      }
       return {
-        removed: false,
+        removed,
         ...(forgotten ? { forgotten: true } : {}),
+        ...(notice ? { notice } : {}),
       }
-    }
-    if (!this.credentials.deleteIf) {
-      return {
-        removed: false,
-        notice: `Could not log out ${provider}: credential store does not support atomic conditional deletion.`,
-      }
-    }
-    let notice: string | undefined
-    const revoke = this.providers.get(provider)?.oauth?.logout
-    if (credential.type === 'oauth' && revoke) {
-      try {
-        await revoke(credential, options.signal ?? new AbortController().signal)
-      } catch (error) {
-        if (options.signal?.aborted) throw options.signal.reason ?? error
-        notice = `Could not confirm that ${provider} revoked this sign-in at the provider; the credential is removed locally.`
-      }
-    }
-    const removed = await this.credentials.deleteIf(provider, (current) =>
-      sameCredential(credential, current),
-    )
-    const forgotten =
-      options.forget && (removed || !this.credentials.get(provider))
-        ? Boolean(this.registrations?.delete(provider))
-        : false
-    return {
-      removed,
-      ...(forgotten ? { forgotten: true } : {}),
-      ...(notice ? { notice } : {}),
-    }
+    })
   }
 
   /** `provider/id` → model; the id may contain more `/` (e.g. `openrouter/anthropic/claude`). */
@@ -380,8 +480,15 @@ export class ModelRegistry {
         this.credentials.get(provider)?.type === 'oauth',
     )
     const planLabel = this.planLabel(provider, options.channel?.())
+    const model = def.createModel(id, ctx)
+    if (typeof model === 'object' && model !== null) {
+      managedModelRefs.set(model, `${provider}/${id}`)
+      if (def.oauth?.localOnly) {
+        localOnlyManagedHandles.add(model)
+      }
+    }
     return {
-      model: def.createModel(id, ctx),
+      model,
       info: {
         ...spec,
         provider,
@@ -390,6 +497,36 @@ export class ModelRegistry {
       },
     }
   }
+}
+
+/**
+ * Resolves a string ref or pre-resolved `ModelHandle`, re-resolving managed handles
+ * against `channel` when channel-scoped so `localOnly` OAuth rules cannot be bypassed.
+ */
+export function resolveModelInput(
+  registry: ModelRegistry,
+  input: ModelInput,
+  channel?: () => string | undefined,
+): ResolvedModel {
+  if (typeof input === 'string') {
+    return registry.resolve(input, { channel })
+  }
+  const activeChannel = channel?.()
+  if (activeChannel) {
+    const ref = managedModelRef(input)
+    if (ref) {
+      const provider = ref.slice(0, ref.indexOf('/'))
+      if (registry.hasProvider(provider)) {
+        return registry.resolve(ref, { channel })
+      }
+      if (isLocalOnlyManagedHandle(input)) {
+        throw new Error(
+          `Sign in with ChatGPT is only for local sessions, not ${activeChannel}`,
+        )
+      }
+    }
+  }
+  return { model: input, info: describeModel(input) }
 }
 
 function sameCredential(a: Credential, b: Credential): boolean {

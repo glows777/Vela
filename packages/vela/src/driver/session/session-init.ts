@@ -24,7 +24,7 @@ import type { InternalSessionOptions, PromptOptions } from './options.ts'
 import { pendingToolCalls } from './recovery.ts'
 import { busyLocationError } from './relocation.ts'
 import * as routing from './routing.ts'
-import type { SessionScope } from './scope.ts'
+import { type SessionScope, setRegistryScope } from './scope.ts'
 import type { SessionBranchHost } from './session-branch.ts'
 import type { SessionInputHost } from './session-input.ts'
 import type { SessionLocationHost } from './session-location.ts'
@@ -74,9 +74,9 @@ export function createSessionComponents<
     {
       onEvent: emit,
       sessionId: id,
-      scope: params.getScope,
     },
   )
+  setRegistryScope(registry, params.getScope)
   registry.isDraining = () => params.isDraining() || params.isMoving()
   const toolListError = options.tools
     ? getToolListError(options.tools)
@@ -366,8 +366,8 @@ export function buildSessionHosts<Session>(
       channel: access.getChannel(),
       parentSession: access.getParentSession(),
       autoCompaction: access.getAutoCompaction(),
-      model: access.getModel(),
-      maxTokens: access.getMaxTokens(),
+      getModel: access.getModel,
+      getMaxTokens: access.getMaxTokens,
       exclusive: access.exclusive,
       start: access.start,
       buildSystem: access.buildSystem,

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SelectItem } from '@earendil-works/pi-tui'
 import { formatJsonParseError } from '../../config/index.ts'
+import { openDatabase } from '../../db/index.ts'
 import { THINKING_LEVELS } from '../../driver/diagnostics.ts'
 import {
   type AuthInteraction,
@@ -15,7 +16,10 @@ import {
   type VelaSession,
   verifyProviderModel,
 } from '../../driver/index.ts'
+import type { OAuthRegistrationStore } from '../../providers/auth/types.ts'
+import { SqliteOAuthRegistrationStore } from '../../runtime/index.ts'
 import { saveModelSetup } from '../../settings.ts'
+import type { OAuthRegistration } from '../../shared/oauth-registration.ts'
 import type { Vela } from '../../vela.ts'
 import { createVela } from '../../vela.ts'
 import { openBrowser } from '../login.ts'
@@ -158,10 +162,38 @@ export async function setupWizard(host: Host): Promise<boolean> {
   ).fileCredentialStore(authPath)
   const stored = diskCredentials.get(provider)
   const memory = memoryCredentialStore(stored ? { [provider]: stored } : {})
+  const dbPath = join(agentDir, 'vela.db')
+  const readDiskRegistration = (
+    name: string,
+  ): OAuthRegistration | undefined => {
+    if (!existsSync(dbPath)) return undefined
+    const db = openDatabase({ path: dbPath, readonly: true })
+    try {
+      return new SqliteOAuthRegistrationStore(db).get(name)
+    } finally {
+      db.close()
+    }
+  }
+  const stagedRegistrations = new Map<string, OAuthRegistration | null>()
+  const stagingRegistrations: OAuthRegistrationStore = {
+    get: (name) =>
+      stagedRegistrations.has(name)
+        ? (stagedRegistrations.get(name) ?? undefined)
+        : readDiskRegistration(name),
+    set: (name, registration) => {
+      stagedRegistrations.set(name, registration)
+    },
+    delete: (name) => {
+      const existed = stagingRegistrations.get(name) !== undefined
+      stagedRegistrations.set(name, null)
+      return existed
+    },
+  }
   const temporary = createVela({
     providers,
     credentials: memory,
     cwd: host.vela.cwd,
+    registrations: stagingRegistrations,
   })
   let newCredential = false
   let newInstallationId: string | undefined
@@ -403,6 +435,19 @@ export async function setupWizard(host: Host): Promise<boolean> {
         ...(finalOverride ? { preset: finalOverride } : {}),
         thinkingLevel: thinking as ThinkingLevel,
       })
+      if (stagedRegistrations.has(provider)) {
+        const staged = stagedRegistrations.get(provider)
+        if (staged || existsSync(dbPath)) {
+          const db = openDatabase({ path: dbPath })
+          try {
+            const regStore = new SqliteOAuthRegistrationStore(db)
+            if (staged) regStore.set(provider, staged)
+            else regStore.delete(provider)
+          } finally {
+            db.close()
+          }
+        }
+      }
       written.push(...saved.written)
       host.vela.configureProvider(provider, saved.definition)
       host.vela.setDefaults(ref, thinking as ThinkingLevel)

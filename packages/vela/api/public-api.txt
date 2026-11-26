@@ -9,7 +9,7 @@
     readonly capabilities: AgentDriverCapabilities
     readonly name: string
     runTurn: (request: DriverTurnRequest) => Promise<DriverTurnResult>
-    steer?: ((sessionId: string, text: string) => void | Promise<void>) | undefined
+    steer?: ((sessionId: string, text: string) => boolean | Promise<boolean>) | undefined
   function agentErrorHint: (kind: AgentErrorKind | undefined) => string | undefined
   type AgentErrorKind = | 'auth'
       | 'billing'
@@ -258,7 +258,7 @@
     defaultThinkingLevel?: ThinkingLevel | undefined
     dreamEnabled?: boolean | undefined
     drivers?: AgentDriver[] | undefined
-    environments?: EnvironmentRegistry | undefined
+    environments?: Record<string, unknown> | EnvironmentRegistry | undefined
     ephemeral?: boolean | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     hostEnv?: Record<string, string | undefined> | undefined
@@ -702,6 +702,7 @@
     getDeviceId?: (() => string) | undefined
   interface LoginProvider
     apiKey: boolean
+    hasRegistration?: boolean | undefined
     oauth?: string | undefined
     provider: string
     source?: string | undefined
@@ -993,7 +994,9 @@
   interface RuntimeMessageRecord
     content: unknown
     createdAt: string
+    customType?: string | undefined
     details?: unknown
+    display?: boolean | undefined
     id: string
     kind: string
     producedBy?: string | undefined

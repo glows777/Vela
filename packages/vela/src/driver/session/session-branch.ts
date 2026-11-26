@@ -42,8 +42,8 @@ export interface SessionBranchHost<Session> {
   channel: string | undefined
   parentSession: string | undefined
   autoCompaction: boolean
-  model: ModelInput
-  maxTokens: number | undefined
+  getModel: () => ModelInput
+  getMaxTokens: () => number | undefined
   exclusive: <T>(
     what: string,
     task: (signal: AbortSignal) => Promise<T>,
@@ -83,11 +83,11 @@ export async function navigateSessionTree<Session>(
         if (!branchMessages.length) return undefined
         return summarizeEntriesForTree(
           host.contextManager,
-          host.model,
+          host.getModel(),
           host.buildSystem(),
           host.registry.toProviderTools(),
           branchMessages,
-          host.maxTokens,
+          host.getMaxTokens(),
           focus,
           sig,
         )
@@ -136,7 +136,9 @@ export async function forkSessionBranch<Session extends BranchSession<Session>>(
   })
 }
 
-export function cloneSessionBranch<Session extends BranchSession<Session>>(
+export async function cloneSessionBranch<
+  Session extends BranchSession<Session>,
+>(
   host: SessionBranchHost<Session>,
   options: Omit<ForkOptions, 'position'> = {},
 ): Promise<ForkResult<Session>> {

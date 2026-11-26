@@ -12,8 +12,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { openDatabase } from '../../src/db/sqlite.ts'
+import { createVela } from '../../src/driver/index.ts'
 import {
   createRuntime,
+  fileCredentialStore,
   type RuntimeEvent,
   type StreamDeltaEvent,
 } from '../../src/index.ts'
@@ -653,4 +655,417 @@ test('oauth_registrations persists client registration across logout, supports r
   } finally {
     db.close()
   }
+})
+
+test('Round 1 regressions: prompt routing, run_finished steer fallback, and active-branch message queries', async () => {
+  const root = tempRoot('vela-s3c2-reg1-')
+  const agentDir = join(root, 'agent')
+  mkdirSync(agentDir, { recursive: true })
+  const db = openDatabase({ path: join(agentDir, 'vela.db') })
+
+  let steerableTurnReady!: () => void
+  const canSteer = new Promise<void>((r) => {
+    steerableTurnReady = r
+  })
+  let releaseTool!: () => void
+  const toolDone = new Promise<void>((r) => {
+    releaseTool = r
+  })
+
+  const runtime = createRuntime({
+    db,
+    agentDir,
+    mcp: false,
+    tools: [
+      {
+        name: 'slow_probe',
+        description: 'Waits for release',
+        inputSchema: z.object({}),
+        execute: async () => {
+          steerableTurnReady()
+          await toolDone
+          return 'probe-ok'
+        },
+      },
+    ],
+    defaultModel: createFauxModel({
+      responses: [
+        fauxToolCall('slow_probe', {}),
+        fauxText('turn1-after-steer'),
+        fauxText('run-finished-followup'),
+      ],
+    }),
+  })
+
+  let followupDone!: () => void
+  const followupPromise = new Promise<void>((r) => {
+    followupDone = r
+  })
+  let finishedCount = 0
+  let sentOnFinished = false
+  const off = runtime.events.subscribe((ev) => {
+    if (ev.type === 'run_finished' && ev.sessionId === 'sess-a') {
+      finishedCount += 1
+      if (!sentOnFinished) {
+        sentOnFinished = true
+        void runtime.steer('sess-a', 'late-steer-becomes-prompt')
+      } else if (finishedCount >= 2) {
+        followupDone()
+      }
+    }
+  })
+
+  try {
+    await runtime.sessions.create({ id: 'sess-a', projectId: null })
+    await runtime.sessions.create({ id: 'sess-b', projectId: null })
+
+    // P1-1: extra sessionId inside input must not reroute prompt('sess-a', ...) to 'sess-b'
+    const bogusPayload = {
+      text: 'Trigger slow tool',
+      sessionId: 'sess-b',
+    } as unknown as Parameters<typeof runtime.prompt>[1]
+    await runtime.prompt('sess-a', bogusPayload)
+    expect(
+      (await runtime.sessions.messages({ sessionId: 'sess-b' })).messages,
+    ).toEqual([])
+
+    // P1-2: in-turn steer AND run_finished listener steer fallback both deliver cleanly
+    await canSteer
+    await runtime.steer('sess-a', 'mid-turn-steer')
+    releaseTool()
+    await followupPromise
+    await runtime.waitForIdle('sess-a')
+
+    const msgs = (await runtime.sessions.messages({ sessionId: 'sess-a' }))
+      .messages
+    expect(msgs.some((m) => m.text.includes('turn1-after-steer'))).toBe(true)
+    expect(msgs.some((m) => m.text.includes('run-finished-followup'))).toBe(
+      true,
+    )
+
+    // P1-7: custom_message preserves customType/display, abandoned branches are ignored, reset clears messages()
+    const parentId = msgs[0]!.id
+    db.run(
+      `INSERT INTO vela_messages (session_id, id, parent_id, seq, kind, role, content_json, created_at)
+       VALUES (?, ?, ?, ?, 'custom_message', 'user', ?, ?)`,
+      'sess-a',
+      'abandoned-branch-leaf',
+      parentId,
+      999,
+      JSON.stringify({
+        customType: 'memory',
+        display: false,
+        content: 'hidden-secret',
+      }),
+      new Date().toISOString(),
+    )
+    const afterBranch = (
+      await runtime.sessions.messages({ sessionId: 'sess-a' })
+    ).messages
+    expect(afterBranch.some((m) => m.id === 'abandoned-branch-leaf')).toBe(
+      false,
+    )
+
+    // Point leaf_message_id at custom_message to verify customType/display metadata preservation
+    db.run(
+      'UPDATE sessions SET leaf_message_id = ? WHERE id = ?',
+      'abandoned-branch-leaf',
+      'sess-a',
+    )
+    const onCustomBranch = (
+      await runtime.sessions.messages({ sessionId: 'sess-a' })
+    ).messages
+    const customMsg = onCustomBranch.find(
+      (m) => m.id === 'abandoned-branch-leaf',
+    )
+    expect(customMsg).toMatchObject({
+      kind: 'custom_message',
+      customType: 'memory',
+      display: false,
+      text: 'hidden-secret',
+    })
+
+    await runtime.sessions.reset('sess-a')
+    expect(
+      (await runtime.sessions.messages({ sessionId: 'sess-a' })).messages,
+    ).toEqual([])
+  } finally {
+    off()
+    await runtime.dispose()
+    db.close()
+  }
+})
+
+test('Round 1 regressions: resume restores saved location on failure, offline export/tree works, async rejections, and channel/handle enforcement', async () => {
+  const root = tempRoot('vela-s3c2-reg2-')
+  const agentDir = join(root, 'agent')
+  const projectDir = join(root, 'proj')
+  mkdirSync(agentDir, { recursive: true })
+  mkdirSync(projectDir, { recursive: true })
+
+  // P2-1 & P2-2: offline navigateTree / exportHtml without model; async rejections for continueInterrupted & clone
+  const vOffline = createVela({ cwd: projectDir, providers: {} })
+  try {
+    const offSession = vOffline.session('offline')
+    await expect(offSession.continueInterrupted()).rejects.toThrow(
+      /No saved turn/,
+    )
+    await expect(offSession.clone()).rejects.toThrow(/Nothing to clone yet/)
+    offSession.append({ role: 'user', content: 'first' })
+    const leaf1 = offSession.getLeafId()!
+    offSession.append({ role: 'user', content: 'second' })
+    const nav = await offSession.navigateTree(leaf1, { summarize: false })
+    expect(nav.cancelled).toBe(false)
+    const htmlPath = join(root, 'out.html')
+    await offSession.exportHtml(htmlPath)
+    expect(existsSync(htmlPath)).toBe(true)
+  } finally {
+    await vOffline.dispose()
+  }
+
+  // P1-3: resume() restores saved location authoritatively even when remote environment fails to prepare
+  const sharedDb = openDatabase({ path: ':memory:' })
+  const vWrite = createVela({
+    db: sharedDb,
+    cwd: projectDir,
+    model: createFauxModel(),
+  })
+  const sWrite = vWrite.session('relocate-fail')
+  sWrite.append({ role: 'user', content: 'hi' })
+  await sWrite.store.persistLocation({
+    environment: 'container-a',
+    cwd: '/workspace',
+  })
+  await sWrite.save()
+  await vWrite.dispose()
+
+  const vFail = createVela({
+    db: sharedDb,
+    cwd: projectDir,
+    model: createFauxModel(),
+    env: () => undefined,
+  })
+  const sFail = vFail.session('relocate-fail')
+  try {
+    await expect(sFail.resume()).rejects.toThrow(/unavailable/)
+    expect(sFail.location).toEqual({
+      environment: 'container-a',
+      cwd: '/workspace',
+    })
+  } finally {
+    await vFail.dispose()
+    sharedDb.close()
+  }
+
+  // P1-4 & P2-8 & P2-6: channel available()/defaultRef() filter localOnly OAuth, pre-resolved handle cannot bypass on channel, environments load cleanly
+  const creds = memoryCredentialStore()
+  await creds.modify('openai', async () => ({
+    type: 'oauth',
+    access: 'at',
+    refresh: 'rt',
+    expires: Date.now() + 3_600_000,
+    clientId: 'oaiapp_1',
+    subject: 'user-1',
+  }))
+  const providers: Record<string, ProviderDefinition> = {
+    openai: {
+      oauth: openaiChatGPTLogin,
+      authSource: (c) =>
+        c?.type === 'oauth' ? 'OAuth (auth.json)' : undefined,
+      models: [{ id: 'gpt-5.2', name: 'GPT-5.2' }],
+      createModel: (_id, ctx) => {
+        const base = createFauxModel({ responses: [fauxText('ok')] })
+        return {
+          ...base,
+          doStream: async (params: Parameters<typeof base.doStream>[0]) => {
+            if (!(await ctx.credential())) {
+              throw new Error('Credential withheld on channel')
+            }
+            return base.doStream(params)
+          },
+        }
+      },
+    },
+  }
+  const localVela = createVela({
+    providers,
+    credentials: creds,
+    model: 'openai/gpt-5.2',
+  })
+  try {
+    expect(localVela.models({ channel: 'lark' })).toEqual([])
+    const preResolvedHandle = localVela.model
+    const chanSess = localVela.session('chan-sess', {
+      channel: 'lark',
+      model: preResolvedHandle,
+    })
+    // Re-resolved channel session blocks localOnly OAuth instead of reusing local handle's credential context
+    await expect(chanSess.prompt('hi')).rejects.toThrow(
+      /Credential withheld on channel/,
+    )
+
+    // P2-6: createRuntime accepts declarative environments map cleanly without EnvironmentRegistry import
+    const runtime = createRuntime({
+      ephemeral: true,
+      mcp: false,
+      providers,
+      credentials: creds,
+      defaultModel: preResolvedHandle,
+      environments: {
+        sandbox: { image: 'alpine:3.20', network: 'off' },
+      },
+    })
+    try {
+      const chat = await runtime.sessions.create({
+        id: 'chan-rt',
+        projectId: null,
+      })
+      await runtime.bindings.upsert({
+        channel: 'lark',
+        externalId: 'c1',
+        kind: 'group',
+        sessionId: chat.id,
+      })
+      await runtime.prompt(chat.id, { text: 'test channel block' })
+      await runtime.waitForIdle(chat.id)
+      expect((await runtime.sessions.status(chat.id)).session.state).not.toBe(
+        'running',
+      )
+    } finally {
+      await runtime.dispose()
+    }
+  } finally {
+    await localVela.dispose()
+  }
+})
+
+test('Round 1 regressions: --no-session --forget clears persistent vela.db registration, atomic rollback, backfill, and hostId check', async () => {
+  const root = tempRoot('vela-s3c2-reg3-')
+  const agentDir = join(root, 'agent')
+  mkdirSync(agentDir, { recursive: true })
+  const dbPath = join(agentDir, 'vela.db')
+  const authPath = join(agentDir, 'auth.json')
+
+  // Seed persistent installation vela.db + legacy OAuth credential without registration row
+  const seedDb = openDatabase({ path: dbPath })
+  seedDb.close()
+  const diskCreds = fileCredentialStore(authPath)
+  await diskCreds.modify('openai', async () => ({
+    type: 'oauth',
+    access: 'at-legacy',
+    refresh: 'rt-legacy',
+    expires: Date.now() + 3_600_000,
+    clientId: 'oaiapp_legacy',
+    subject: 'sub-legacy',
+  }))
+
+  // P1-5 & P2-7: --no-session ordinary logout backfills registration into persistent <agentDir>/vela.db; --forget removes it
+  const cliNoSess = createVela({
+    agentDir,
+    ephemeralSessions: true,
+    credentials: diskCreds,
+    providers: {
+      openai: {
+        oauth: openaiChatGPTLogin,
+        authSource: (c) => c?.type,
+        models: [{ id: 'gpt-5.2' }],
+        createModel: () => createFauxModel(),
+      },
+    },
+  })
+  fakeOpenAIOAuth({ issuedClientId: 'oaiapp_legacy', subject: 'sub-legacy' })
+  try {
+    expect(await cliNoSess.logout('openai')).toEqual({ removed: true })
+    expect(cliNoSess.loginProviders()[0]?.hasRegistration).toBe(true)
+
+    const verifyDb = openDatabase({ path: dbPath, readonly: true })
+    try {
+      expect(
+        new SqliteOAuthRegistrationStore(verifyDb).get('openai'),
+      ).toMatchObject({
+        clientId: 'oaiapp_legacy',
+        subject: 'sub-legacy',
+      })
+    } finally {
+      verifyDb.close()
+    }
+
+    expect(await cliNoSess.logout('openai', { forget: true })).toEqual({
+      removed: false,
+      forgotten: true,
+    })
+    expect(cliNoSess.loginProviders()[0]?.hasRegistration).toBeUndefined()
+  } finally {
+    await cliNoSess.dispose()
+  }
+
+  // P1-6 & P2-7: getDeviceId called once, failed registration write keeps credential unwritten, mismatched hostId skips reuse
+  let deviceCalls = 0
+  const memCreds = memoryCredentialStore()
+  const throwingRegStore = {
+    get: () => ({
+      clientId: 'oaiapp_other_host',
+      hostId: '11111111-1111-4111-8111-111111111111',
+      subject: 'sub-a',
+    }),
+    set: () => {
+      throw new Error('sqlite read-only failure')
+    },
+    delete: () => false,
+  }
+  const failRegRegistry = new ModelRegistry(
+    {
+      openai: {
+        oauth: openaiChatGPTLogin,
+        authSource: (c) => c?.type,
+        models: [{ id: 'gpt-5.2' }],
+        createModel: () => createFauxModel(),
+      },
+    },
+    memCreds,
+    throwingRegStore,
+  )
+  const freshFlow = fakeOpenAIOAuth({
+    issuedClientId: 'oaiapp_new',
+    subject: 'sub-new',
+  })
+  const ui = freshFlow.interactionFor()
+  await expect(
+    failRegRegistry.login('openai', 'oauth', ui.interaction, {
+      getDeviceId: () => {
+        deviceCalls += 1
+        return DEVICE
+      },
+    }),
+  ).rejects.toThrow('sqlite read-only failure')
+  expect(deviceCalls).toBe(1)
+  expect(memCreds.get('openai')).toBeUndefined()
+  expect(freshFlow.authorizeCalls[0]?.searchParams.get('client_id')).toBe(
+    'dynamic_agent_client',
+  )
+})
+
+test('Round 1 regressions: emitted package declarations expose zero SessionScope or .scope surface', async () => {
+  const distRoot = join(import.meta.dir, '../../dist')
+  for (const rel of [
+    'index.d.ts',
+    'extension-api.d.ts',
+    'driver/vela-session.d.ts',
+    'driver/tools/registry.d.ts',
+    'driver/tools/types.d.ts',
+  ]) {
+    const text = await Bun.file(join(distRoot, rel)).text()
+    expect(text).not.toContain('SessionScope')
+    expect(text).not.toMatch(/\bscope\s*[?:]/)
+    expect(text).not.toMatch(/\bget scope\s*\(/)
+  }
+  const optionsDts = await Bun.file(
+    join(distRoot, 'driver/session/options.d.ts'),
+  ).text()
+  const sessionOptionsBlock = optionsDts.match(
+    /export interface SessionOptions \{[\s\S]*?\n\}/,
+  )?.[0]
+  expect(sessionOptionsBlock).toBeDefined()
+  expect(sessionOptionsBlock).not.toContain('SessionScope')
+  expect(sessionOptionsBlock).not.toMatch(/\bscope\s*[?:]/)
 })

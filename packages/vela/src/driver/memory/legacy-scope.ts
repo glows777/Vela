@@ -1,11 +1,15 @@
-import type { SessionScope } from '../session/scope.ts'
+import { sessionScope } from '../session/routing.ts'
+import { getToolContextScope } from '../session/scope.ts'
 
 /**
  * @internal Transitional helper bridging `memory()` extension to legacy `SessionScope`
- * without violating the light-builtin internal-access boundary until S4b deletes `legacy-channels`.
+ * without exposing `.scope` on public types until S4b deletes `legacy-channels`.
  */
 export function sharedScopeDataDir(
-  target: { scope?: Readonly<SessionScope> } | undefined,
+  target: object | undefined,
 ): string | undefined {
-  return target?.scope?.kind === 'shared' ? target.scope.dataDir : undefined
+  const scope = target
+    ? (sessionScope(target) ?? getToolContextScope(target))
+    : undefined
+  return scope?.kind === 'shared' ? scope.dataDir : undefined
 }

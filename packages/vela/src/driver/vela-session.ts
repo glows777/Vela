@@ -58,7 +58,6 @@ import {
 import { assertInterruptedTurn } from './session/recovery.ts'
 import type { SessionResources } from './session/resources.ts'
 import * as routing from './session/routing.ts'
-import type { SessionScope } from './session/scope.ts'
 import {
   cloneSessionBranch,
   exportSessionBranch,
@@ -191,7 +190,7 @@ export class VelaSession {
       save: () => this.save(),
       prepare: (signal) => this.execEnv(signal),
       start: (signal) => this.start(signal),
-      getScope: () => this.scope,
+      getScope: () => routing.sessionScope(this),
       isClosed: () => this.closed,
       isDraining: () => this.draining,
       isMoving: () => this.moving,
@@ -392,10 +391,6 @@ export class VelaSession {
     const after = this.thinkingLevel
     if (after !== before) this.store.setThinkingLevelChoice(after)
   }
-  /** @internal Transient host-supplied sharing identity; transitional until S4b removes legacy-channels. */
-  get scope(): Readonly<SessionScope> | undefined {
-    return routing.sessionScope(this)
-  }
   /** @internal The host's queue for results produced outside a turn (channels bind it at open). */
   get host(): SessionHost | undefined {
     return routing.sessionHost(this)
@@ -568,7 +563,9 @@ export class VelaSession {
     return forkSessionBranch(this.hosts.branch(), entryId, options)
   }
 
-  clone(options: Omit<ForkOptions, 'position'> = {}): Promise<ForkResult> {
+  async clone(
+    options: Omit<ForkOptions, 'position'> = {},
+  ): Promise<ForkResult> {
     return cloneSessionBranch(this.hosts.branch(), options)
   }
 
@@ -591,12 +588,11 @@ export class VelaSession {
     )
   }
 
-  continueInterrupted(): Promise<void> {
-    if (this.draining) return Promise.reject(this.drainError())
-    if (this.closed)
-      return Promise.reject(new Error(`Session ${this.id} is closed`))
+  async continueInterrupted(): Promise<void> {
+    if (this.draining) throw this.drainError()
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
     if (this.busy.locked)
-      return Promise.reject(new Error(`Session ${this.id} is already running`))
+      throw new Error(`Session ${this.id} is already running`)
     assertInterruptedTurn(this.messages)
     return this.trackRun(runSessionQueue(this.hosts.runner(), undefined, {}))
   }

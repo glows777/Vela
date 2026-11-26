@@ -59,7 +59,7 @@ export async function restoreSessionHistory<Session extends LocationSession>(
   const saved = await host.store.loadSaved()
   if (!saved) return false
   const target = restoredLocation(saved.location, host.options, host.deps.cwd)
-  await switchSessionLocation(host, target, signal)
+  await switchSessionLocation(host, target)
   host.setDisplayName(saved.name)
   await host.loadBranch(saved)
   if (saved.channel !== undefined) {

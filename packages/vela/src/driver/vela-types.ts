@@ -5,6 +5,7 @@ import type {
   LoginOptions,
   LogoutOptions,
   LogoutResult,
+  OAuthRegistrationStore,
 } from '../providers/auth/types.ts'
 import type {
   LoginProvider,
@@ -84,6 +85,8 @@ export interface VelaOptions {
    * @internal Pre-opened SQLite database to share across sessions (defaults to `<dataDir>/vela.db` or `:memory:` when ephemeral).
    */
   db?: VelaDatabase
+  /** @internal Custom OAuth client registration store override (CLI `--no-session` or setup staging). */
+  registrations?: OAuthRegistrationStore
   /** Force in-memory SQLite session persistence even when `dataDir` is set (`--no-session`). */
   ephemeralSessions?: boolean
   /**
