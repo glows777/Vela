@@ -274,6 +274,7 @@
     drivers?: AgentDriver[] | undefined
     environments?: Record<string, unknown> | EnvironmentRegistry | undefined
     ephemeral?: boolean | undefined
+    ephemeralSessions?: boolean | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     hostEnv?: Record<string, string | undefined> | undefined
     limits?: Partial<VelaLimits> | undefined

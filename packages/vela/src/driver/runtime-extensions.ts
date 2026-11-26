@@ -320,11 +320,58 @@ function resolveNonBuiltinExtensionEntries(
   return { entries, disabledBuiltins, errors }
 }
 
+export function resolveEffectiveDisabledBuiltins(options: {
+  hostDisabled: ReadonlySet<string>
+  projectExtensions?: readonly string[]
+  extraExtensions?: readonly string[]
+  noExtensions?: boolean
+}): ReadonlySet<string> {
+  const disabled = options.noExtensions
+    ? new Set(BUILTIN_NATIVE_EXTENSIONS)
+    : new Set(options.hostDisabled)
+
+  const applyList = (list: readonly string[] | undefined) => {
+    if (!list) return
+    for (const raw of list) {
+      const m = /^([+-]?)builtin:(.+)$/.exec(raw)
+      if (!m) continue
+      const name = m[2]!
+      if (m[1] === '-') {
+        disabled.add(name)
+      } else {
+        disabled.delete(name)
+      }
+    }
+  }
+
+  if (!options.noExtensions) {
+    applyList(options.projectExtensions)
+  }
+  applyList(options.extraExtensions)
+  return disabled
+}
+
+export interface HostExtensionSnapshot {
+  readonly generation: number
+  readonly registry: ToolRegistry
+  readonly errors: readonly string[]
+  readonly disabledBuiltins: ReadonlySet<string>
+  readonly runner?: ExtensionRunner
+  refs: number
+  superseded: boolean
+}
+
 export class RuntimeExtensionHost {
-  readonly hostRegistry = new ToolRegistry(undefined)
-  private hostRunner?: ExtensionRunner
-  private hostErrors: string[] = []
-  private disabledBuiltins = new Set<string>()
+  private generation = 0
+  private current: HostExtensionSnapshot = {
+    generation: 0,
+    registry: new ToolRegistry(undefined),
+    errors: [],
+    disabledBuiltins: new Set(),
+    refs: 0,
+    superseded: false,
+  }
+  private readonly retiredSnapshots = new Set<HostExtensionSnapshot>()
   private loadPromise: Promise<void> = Promise.resolve()
 
   constructor(
@@ -340,49 +387,60 @@ export class RuntimeExtensionHost {
     configured?: readonly string[]
     extensionConfig: Record<string, Record<string, unknown>>
   }): Promise<void> {
-    const previous = this.hostRunner
-    this.hostErrors = []
-    this.disabledBuiltins = new Set()
+    const errors: string[] = []
     const resolved = resolveNonBuiltinExtensionEntries(
       options.configured ?? [],
       join(this.deps.agentDir, 'extensions'),
     )
-    this.disabledBuiltins = resolved.disabledBuiltins
     for (const err of resolved.errors) {
-      this.hostErrors.push(err)
+      errors.push(err)
       this.deps.logger.error(err)
     }
 
-    const runLoad = (async () => {
-      if (previous) {
-        await previous.shutdown().catch(() => {})
-      }
-      // Clear previous host-registered tools before reloading
-      for (const tool of this.hostRegistry.getAllTools()) {
-        this.hostRegistry.unregister(tool.name)
-      }
-      const factories = await loadExtensionEntries({
-        entries: resolved.entries,
-        onBeforeImport: this.deps.onBeforeImport,
-        onError: (msg) => {
-          this.hostErrors.push(msg)
-          this.deps.logger.error(msg)
-        },
+    const prevLoad = this.loadPromise
+    const runLoad = prevLoad
+      .catch(() => {})
+      .then(async () => {
+        const nextRegistry = new ToolRegistry(undefined)
+        const factories = await loadExtensionEntries({
+          entries: resolved.entries,
+          onBeforeImport: this.deps.onBeforeImport,
+          onError: (msg) => {
+            errors.push(msg)
+            this.deps.logger.error(msg)
+          },
+        })
+        const runner = new ExtensionRunner(
+          {
+            cwd: this.deps.agentDir,
+            dataDir: this.deps.agentDir,
+            extensionConfig: options.extensionConfig,
+            logger: this.deps.logger,
+            registry: nextRegistry,
+            models: this.deps.models,
+          },
+          factories,
+        )
+        await runner.ready.catch(() => {})
+        const previous = this.current
+        previous.superseded = true
+        this.current = {
+          generation: ++this.generation,
+          registry: nextRegistry,
+          runner,
+          errors,
+          disabledBuiltins: resolved.disabledBuiltins,
+          refs: 0,
+          superseded: false,
+        }
+        if (previous.runner) {
+          if (previous.refs === 0) {
+            await previous.runner.shutdown().catch(() => {})
+          } else {
+            this.retiredSnapshots.add(previous)
+          }
+        }
       })
-      const runner = new ExtensionRunner(
-        {
-          cwd: this.deps.agentDir,
-          dataDir: this.deps.agentDir,
-          extensionConfig: options.extensionConfig,
-          logger: this.deps.logger,
-          registry: this.hostRegistry,
-          models: this.deps.models,
-        },
-        factories,
-      )
-      this.hostRunner = runner
-      await runner.ready.catch(() => {})
-    })()
 
     this.loadPromise = runLoad
     return runLoad
@@ -393,26 +451,49 @@ export class RuntimeExtensionHost {
   }
 
   get errors(): string[] {
-    return [...this.hostErrors]
+    return [...this.current.errors]
   }
 
   getDisabledBuiltins(): ReadonlySet<string> {
-    return this.disabledBuiltins
+    return this.current.disabledBuiltins
+  }
+
+  async acquireHostSnapshot(): Promise<{
+    snapshot: HostExtensionSnapshot
+    release: () => void
+  }> {
+    await this.ready()
+    const snapshot = this.current
+    snapshot.refs += 1
+    let released = false
+    return {
+      snapshot,
+      release: () => {
+        if (released) return
+        released = true
+        snapshot.refs = Math.max(0, snapshot.refs - 1)
+        if (snapshot.superseded && snapshot.refs === 0) {
+          this.retiredSnapshots.delete(snapshot)
+          void snapshot.runner?.shutdown().catch(() => {})
+        }
+      },
+    }
   }
 
   async createSessionRunner(options: {
     cwd: string
     trusted: boolean
+    isLocalLocation: boolean
     projectExtensions: readonly string[]
     extraExtensions: readonly string[]
     noExtensions: boolean
     extensionConfig: Record<string, Record<string, unknown>>
     registry: ToolRegistry
+    hostSnapshot: HostExtensionSnapshot
   }): Promise<{
     runner: ExtensionRunner
     errors: string[]
   }> {
-    await this.ready()
     const sessionErrors: string[] = []
     const entries: ExtensionEntry[] = []
     const recordError = (msg: string) => {
@@ -423,6 +504,7 @@ export class RuntimeExtensionHost {
       const projectDir = join(options.cwd, '.vela')
       if (
         options.trusted &&
+        options.isLocalLocation &&
         resolve(projectDir) !== resolve(this.deps.agentDir)
       ) {
         const res = resolveNonBuiltinExtensionEntries(
@@ -434,11 +516,15 @@ export class RuntimeExtensionHost {
       }
     }
     for (const source of options.extraExtensions) {
-      const builtin = /^builtin:(.+)$/.exec(source)?.[1]
+      const builtin = /^([+-]?)builtin:(.+)$/.exec(source)
       if (builtin) {
-        if (!BUILTIN_NATIVE_EXTENSIONS.has(builtin)) {
+        const name = builtin[2]!
+        if (
+          !BUILTIN_NATIVE_EXTENSIONS.has(name) &&
+          !(builtin[1] === '-' && name === 'rag')
+        ) {
           recordError(
-            `[extensions] Failed to load builtin:${builtin}: Unknown built-in extension builtin:${builtin}`,
+            `[extensions] Failed to load ${source}: Unknown built-in extension builtin:${name}`,
           )
         }
         continue
@@ -466,7 +552,7 @@ export class RuntimeExtensionHost {
         logger: this.deps.logger,
         registry: options.registry,
         models: this.deps.models,
-        parent: options.noExtensions ? undefined : this.hostRunner,
+        parent: options.noExtensions ? undefined : options.hostSnapshot.runner,
       },
       factories.concat(auditLog),
     )
@@ -475,18 +561,29 @@ export class RuntimeExtensionHost {
       runner,
       errors: options.noExtensions
         ? sessionErrors
-        : [...this.hostErrors, ...sessionErrors],
+        : [...options.hostSnapshot.errors, ...sessionErrors],
     }
   }
 
   loadedHost(): LoadedExtension[] {
-    return this.hostRunner?.loaded() ?? []
+    return this.current.runner?.loaded() ?? []
   }
 
   async shutdown(): Promise<void> {
     await this.loadPromise.catch(() => {})
-    await this.hostRunner?.shutdown().catch(() => {})
-    this.hostRunner = undefined
+    await this.current.runner?.shutdown().catch(() => {})
+    this.current = {
+      generation: this.generation,
+      registry: new ToolRegistry(undefined),
+      errors: [],
+      disabledBuiltins: new Set(),
+      refs: 0,
+      superseded: true,
+    }
+    for (const retired of this.retiredSnapshots) {
+      await retired.runner?.shutdown().catch(() => {})
+    }
+    this.retiredSnapshots.clear()
   }
 }
 

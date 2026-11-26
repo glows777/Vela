@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { connectRuntime } from '../daemon/index.ts'
 import type { ImageContent } from '../driver/index.ts'
 import type { RuntimeSessionOverride } from '../driver/runtime-types.ts'
@@ -48,6 +49,15 @@ export function buildCliSessionOverride(
     (env.VELA_MODEL === 'mock' || env.VELA_MODEL?.startsWith('faux:')
       ? env.VELA_MODEL
       : undefined)
+  const resolvedApprove =
+    trusted !== undefined
+      ? trusted
+      : args.approve !== undefined
+        ? args.approve
+        : undefined
+  const resolvedExtensions = args.extensions.map((ext) =>
+    /^[+-]?builtin:/.test(ext) ? ext : resolve(cwd, ext),
+  )
   return {
     cwd,
     ...(Object.keys(overlayEnv).length > 0 ? { env: overlayEnv } : {}),
@@ -73,12 +83,10 @@ export function buildCliSessionOverride(
     ...(args.noContextFiles
       ? { noContextFiles: true }
       : { loadUntrustedContextFiles: true }),
-    ...(trusted !== undefined
-      ? { approve: trusted }
-      : args.approve !== undefined
-        ? { approve: args.approve }
-        : {}),
-    ...(args.extensions.length ? { extensions: args.extensions } : {}),
+    ...(resolvedApprove !== undefined
+      ? { approve: resolvedApprove, approveLocation: resolve(cwd) }
+      : {}),
+    ...(resolvedExtensions.length ? { extensions: resolvedExtensions } : {}),
     ...(args.noExtensions ? { noExtensions: true } : {}),
     ...(env.VELA_RECORD ? { recordPath: env.VELA_RECORD } : {}),
   }
@@ -94,7 +102,8 @@ export async function openCliRuntime(options: {
   if (options.noSession) {
     const { createRuntime } = await import('../runtime-sdk.ts')
     return createRuntime({
-      ephemeral: true,
+      agentDir: options.agentDir,
+      ephemeralSessions: true,
       hostEnv: options.hostEnv,
       logger: options.logger,
     })

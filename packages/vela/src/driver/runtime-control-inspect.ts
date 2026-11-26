@@ -293,6 +293,19 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
           })
           state.sessionBackgrounds.set(sessionId, bg)
         }
+        const extView = createExtensionSessionView({
+          sessionId,
+          cwd: prepared.location.cwd,
+          name: prepared.sessionName,
+          channel: prepared.boundChannel,
+          messages: [...(saved?.messages ?? [])],
+          registry: prepared.registry,
+          store,
+          eventBus: state.options.eventBus,
+          projectId: row.project_id,
+          signal: controller.signal,
+        })
+        await prepared.ensureSessionStarted(extView)
         const output = new OutputTail()
         const start = (signal: AbortSignal) =>
           runBash(command, {
@@ -312,18 +325,23 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
           signal: controller.signal,
           output,
           start,
+          excludeFromContext: options.excludeFromContext,
           exit: (settled) => ({
             exitCode: settled.exitCode,
             spillPath: settled.fullOutputPath,
           }),
         })
-        const outcome = await Promise.race([
+        const runPromise = Promise.race([
           fg.result.then((value) => ({ type: 'result' as const, value })),
           fg.detached.then((admission) => ({
             type: 'detached' as const,
             admission,
           })),
         ])
+        state.activeBashPromises.add(runPromise)
+        const outcome = await runPromise.finally(() => {
+          state.activeBashPromises.delete(runPromise)
+        })
         const result: BashResult =
           outcome.type === 'result'
             ? outcome.value
@@ -412,6 +430,32 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
         projectId: row.project_id,
       })
 
+      let bg = state.sessionBackgrounds.get(sessionId)
+      if (!bg) {
+        bg = createRuntimeBackgroundController({
+          db: state.db,
+          sessionId,
+          runId: randomUUID(),
+          wakeSession: state.options.wakeSession,
+          location: prepared.location,
+        })
+        state.sessionBackgrounds.set(sessionId, bg)
+      }
+
+      const extView = createExtensionSessionView({
+        sessionId,
+        cwd: prepared.location.cwd,
+        name: prepared.sessionName,
+        channel: prepared.boundChannel,
+        messages,
+        registry: prepared.registry,
+        store,
+        eventBus: state.options.eventBus,
+        projectId: row.project_id,
+        signal: controller.signal,
+      })
+      await prepared.ensureSessionStarted(extView)
+
       const handledNative = await runNativeRuntimeCommand({
         name: cmdName,
         args: cmdArgs,
@@ -429,26 +473,13 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
           : undefined,
         tracker,
         resolveEnv: prepared.resolveEnv,
-        background: state.sessionBackgrounds.get(sessionId),
+        background: bg,
         setCacheEnabled: prepared.specialModel?.setCacheEnabled,
         signal: controller.signal,
         notify: (msg, level) =>
           emitNotify(sessionId, row.project_id, msg, level),
       })
       if (handledNative) return { handled: true }
-
-      const extView = createExtensionSessionView({
-        sessionId,
-        cwd: prepared.location.cwd,
-        name: prepared.sessionName,
-        channel: prepared.boundChannel,
-        messages,
-        registry: prepared.registry,
-        store,
-        eventBus: state.options.eventBus,
-        projectId: row.project_id,
-        signal: controller.signal,
-      })
       const handledExt = await prepared.extensionRunner.runCommand(
         extView,
         trimmed,

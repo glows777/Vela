@@ -1,6 +1,10 @@
-# Deploy `vela daemon`
+# Deploy `vela daemon` and channel gateways
 
-`vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, so a service stays running after the shell closes and after a reboot. It has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
+`vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, serving CLI clients and SDK `connectRuntime()` callers over `<VELA_DIR>/vela.sock`.
+
+> **Channel gateway transition note (S4a -> S4b):** `vela serve` is retired, and `vela daemon run` does not yet start `lark` or `local` channel listeners (channel migration lands in S4b). If your deployment serves **Lark or Local HTTP/SSE channels**, run a small Node.js host script calling `createVela()` + `startChannels()` (see [Serving channels during the transition](#serving-channels-during-the-transition) below) instead of pointing systemd at `vela daemon run`.
+
+The daemon has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
 
 The steps below are for a Debian or Ubuntu host with systemd; adjust the package commands for other distributions. They use `vela` as the account name.
 
@@ -105,6 +109,33 @@ systemctl status --no-pager vela
 ```
 
 The running process keeps the old code until the restart. A run in progress is stopped: SIGTERM saves and closes the sessions. Conversations are stored on disk, so they are still there after the restart.
+
+## Serving channels during the transition
+
+Until S4b wires `lark` and `local` directly onto `vela daemon`, deploy a lightweight host script (`gateway.mjs`) alongside your workspace and run `ExecStart=/usr/bin/node /home/vela/gateway.mjs` under the same `vela` systemd user:
+
+```js
+import { createVela, lark, loadConfig } from '@glows777/vela'
+
+const config = loadConfig({ cwd: process.cwd(), agentDir: process.env.VELA_DIR, env: process.env })
+const extensions = config.settings.lark ? [lark(config.settings.lark)] : []
+const vela = createVela({
+  cwd: config.cwd,
+  agentDir: config.agentDir,
+  dataDir: config.dataDir,
+  model: config.settings.model,
+  thinkingLevel: config.settings.thinkingLevel,
+  providers: config.providers,
+  credentials: config.credentials,
+  limits: config.settings.limits,
+  extensions,
+  extensionConfig: config.extensionConfig,
+})
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => void vela.dispose().finally(() => process.exit(0)))
+}
+await vela.startChannels()
+```
 
 ## 7. Data and backups
 

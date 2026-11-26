@@ -1,10 +1,16 @@
+import { randomUUID } from 'node:crypto'
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
   mkdirSync,
+  openSync,
+  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs'
 import { createConnection, createServer, type Socket } from 'node:net'
 import { dirname } from 'node:path'
@@ -17,7 +23,12 @@ import type {
 } from '../providers/auth/types.ts'
 import { createRuntime, type LocalVelaRuntime } from '../runtime-sdk.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
-import { resolveDaemonPaths } from './paths.ts'
+import {
+  assertSocketOrMissing,
+  daemonOwnerLockPath,
+  removeStaleSocketFile,
+  resolveDaemonPaths,
+} from './paths.ts'
 import {
   createNdjsonParser,
   DAEMON_PROTOCOL_VERSION,
@@ -28,6 +39,82 @@ import {
   getAppVersion,
   serializeError,
 } from './protocol.ts'
+
+const MAX_CLIENT_BUFFER_BYTES = 64 * 1024 * 1024
+const ACTIVE_OWNER_IDS = new Set<string>()
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+function readOwnerRecord(
+  lockPath: string,
+): { pid?: number; instanceId?: string } | undefined {
+  if (!existsSync(lockPath)) return undefined
+  try {
+    const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as {
+      pid?: unknown
+      instanceId?: unknown
+    }
+    return {
+      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
+      ...(typeof parsed.instanceId === 'string'
+        ? { instanceId: parsed.instanceId }
+        : {}),
+    }
+  } catch {
+    return undefined
+  }
+}
+
+function acquireOwnerLock(
+  lockPath: string,
+  instanceId: string,
+  socketPath: string,
+): () => void {
+  mkdirSync(dirname(lockPath), { recursive: true })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(
+        lockPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      )
+      try {
+        writeSync(fd, JSON.stringify({ pid: process.pid, instanceId }))
+      } finally {
+        closeSync(fd)
+      }
+      ACTIVE_OWNER_IDS.add(instanceId)
+      return () => {
+        ACTIVE_OWNER_IDS.delete(instanceId)
+        const current = readOwnerRecord(lockPath)
+        if (!current || current.instanceId === instanceId) {
+          rmSync(lockPath, { force: true })
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      const owner = readOwnerRecord(lockPath)
+      const ownerAlive =
+        owner?.pid !== undefined &&
+        (owner.pid === process.pid
+          ? Boolean(owner.instanceId && ACTIVE_OWNER_IDS.has(owner.instanceId))
+          : isPidAlive(owner.pid))
+      if (ownerAlive) {
+        throw new DaemonAlreadyRunningError(socketPath)
+      }
+      rmSync(lockPath, { force: true })
+    }
+  }
+  throw new DaemonAlreadyRunningError(socketPath)
+}
 
 export class DaemonAlreadyRunningError extends Error {
   constructor(socketPath: string) {
@@ -61,7 +148,11 @@ interface PendingLoginClient {
   controller: AbortController
   prompts: Map<
     number,
-    { resolve: (value: string) => void; reject: (err: Error) => void }
+    {
+      resolve: (value: string) => void
+      reject: (err: Error) => void
+      cleanup?: () => void
+    }
   >
 }
 
@@ -70,6 +161,7 @@ interface ConnectedClient {
   subEvents: boolean
   subDeltas: boolean
   activeLogins: Map<number, PendingLoginClient>
+  activeLogouts: Map<number, AbortController>
 }
 
 async function probeSocketAlive(socketPath: string): Promise<boolean> {
@@ -92,9 +184,15 @@ async function probeSocketAlive(socketPath: string): Promise<boolean> {
 
 function safeWrite(socket: Socket, msg: DaemonWireMessage): void {
   if (socket.destroyed || !socket.writable) return
+  if (socket.writableLength > MAX_CLIENT_BUFFER_BYTES) {
+    socket.destroy()
+    return
+  }
   try {
     socket.write(encodeWireLine(msg))
-  } catch {}
+  } catch {
+    socket.destroy()
+  }
 }
 
 /**
@@ -107,18 +205,37 @@ export async function startDaemonServer(
   const hostEnv = options.hostEnv ?? {}
   const logger = options.logger ?? silentLogger
   const rawAgentDir = options.agentDir ?? defaultAgentDir(hostEnv)
-  const paths = resolveDaemonPaths(
-    rawAgentDir,
-    options.socketPath ?? hostEnv.VELA_DAEMON_SOCKET,
-  )
+  const paths = resolveDaemonPaths(rawAgentDir, options.socketPath, hostEnv)
 
   mkdirSync(paths.agentDir, { recursive: true })
-  if (process.platform !== 'win32') {
-    mkdirSync(dirname(paths.socketPath), { recursive: true })
-    if (await probeSocketAlive(paths.socketPath)) {
-      throw new DaemonAlreadyRunningError(paths.socketPath)
+  assertSocketOrMissing(paths.socketPath)
+  const instanceId = randomUUID()
+  const ownerLockPath = daemonOwnerLockPath(paths.agentDir)
+  const releaseOwner = acquireOwnerLock(
+    ownerLockPath,
+    instanceId,
+    paths.socketPath,
+  )
+
+  let runtime: LocalVelaRuntime
+  try {
+    if (process.platform !== 'win32') {
+      mkdirSync(dirname(paths.socketPath), { recursive: true })
+      if (await probeSocketAlive(paths.socketPath)) {
+        throw new DaemonAlreadyRunningError(paths.socketPath)
+      }
+      removeStaleSocketFile(paths.socketPath)
     }
-    rmSync(paths.socketPath, { force: true })
+
+    runtime = createRuntime({
+      agentDir: paths.agentDir,
+      hostEnv,
+      logger,
+    })
+    await runtime.recover()
+  } catch (error) {
+    releaseOwner()
+    throw error
   }
 
   const startedAt = new Date().toISOString()
@@ -129,17 +246,11 @@ export async function startDaemonServer(
     protocolVersion,
     appVersion,
     pid: process.pid,
+    instanceId,
     agentDir: paths.agentDir,
     startedAt,
     socketPath: paths.socketPath,
   }
-
-  const runtime = createRuntime({
-    agentDir: paths.agentDir,
-    hostEnv,
-    logger,
-  })
-  await runtime.recover()
 
   const clients = new Set<ConnectedClient>()
   let nextPromptId = 1
@@ -273,21 +384,47 @@ export async function startDaemonServer(
     },
     'runtime.models': (p) => runtime.models(p),
     'runtime.loginProviders': () => runtime.loginProviders(),
-    'runtime.logout': (p) => runtime.logout(p.provider, p.options),
+    'runtime.logout': async (
+      p: {
+        provider: string
+        logoutId?: number
+        options?: { forget?: boolean }
+      },
+      client: ConnectedClient,
+    ) => {
+      const controller = new AbortController()
+      if (typeof p.logoutId === 'number') {
+        client.activeLogouts.set(p.logoutId, controller)
+      }
+      try {
+        return await runtime.logout(p.provider, {
+          ...p.options,
+          signal: controller.signal,
+        })
+      } finally {
+        if (typeof p.logoutId === 'number') {
+          client.activeLogouts.delete(p.logoutId)
+        }
+      }
+    },
     'runtime.recover': () => runtime.recover(),
     'auth.login': async (
       p: {
         loginId: number
         provider: string
         method: 'oauth' | 'api_key'
-        options?: Omit<LoginOptions, 'signal'>
+        options?: Omit<LoginOptions, 'getDeviceId'> & { deviceId?: string }
       },
       client: ConnectedClient,
     ) => {
       const controller = new AbortController()
       const prompts = new Map<
         number,
-        { resolve: (value: string) => void; reject: (err: Error) => void }
+        {
+          resolve: (value: string) => void
+          reject: (err: Error) => void
+          cleanup?: () => void
+        }
       >()
       client.activeLogins.set(p.loginId, { controller, prompts })
       const interaction: AuthInteraction = {
@@ -302,30 +439,76 @@ export async function startDaemonServer(
         prompt: (prompt: AuthPrompt) => {
           const promptId = nextPromptId++
           return new Promise<string>((resolve, reject) => {
-            prompts.set(promptId, { resolve, reject })
-            const onAbort = () => {
+            const { signal: promptSignal, ...wirePrompt } = prompt
+            let settled = false
+            const cleanup = () => {
+              controller.signal.removeEventListener('abort', onLoginAbort)
+              promptSignal?.removeEventListener('abort', onPromptAbort)
+            }
+            const settle = (err: Error | undefined, value?: string) => {
+              if (settled) return
+              settled = true
               prompts.delete(promptId)
-              reject(new DOMException('Login cancelled', 'AbortError'))
+              cleanup()
+              if (err !== undefined) reject(err)
+              else resolve(value ?? '')
+            }
+            const onLoginAbort = () => {
+              settle(new DOMException('Login cancelled', 'AbortError'))
+            }
+            const onPromptAbort = () => {
+              safeWrite(client.socket, {
+                type: 'auth_prompt_cancel',
+                loginId: p.loginId,
+                promptId,
+              })
+              settle(new DOMException('Prompt cancelled', 'AbortError'))
             }
             if (controller.signal.aborted) {
-              onAbort()
+              onLoginAbort()
               return
             }
-            controller.signal.addEventListener('abort', onAbort, { once: true })
+            if (promptSignal?.aborted) {
+              onPromptAbort()
+              return
+            }
+            prompts.set(promptId, {
+              resolve: (value) => settle(undefined, value),
+              reject: (err) => settle(err),
+              cleanup,
+            })
+            controller.signal.addEventListener('abort', onLoginAbort, {
+              once: true,
+            })
+            promptSignal?.addEventListener('abort', onPromptAbort, {
+              once: true,
+            })
             safeWrite(client.socket, {
               type: 'auth_prompt',
               loginId: p.loginId,
               promptId,
-              prompt,
+              prompt: wirePrompt,
             })
           })
         },
       }
+      const { deviceId, ...restOptions } = p.options ?? {}
+      const resolvedLoginOptions: LoginOptions = {
+        ...restOptions,
+        ...(typeof deviceId === 'string' && deviceId.length > 0
+          ? { getDeviceId: () => deviceId }
+          : {}),
+      }
       try {
-        await runtime.login(p.provider, p.method, interaction, p.options)
+        await runtime.login(
+          p.provider,
+          p.method,
+          interaction,
+          resolvedLoginOptions,
+        )
         return { ok: true }
       } finally {
-        for (const pending of prompts.values()) {
+        for (const pending of [...prompts.values()]) {
           pending.reject(new DOMException('Login finished', 'AbortError'))
         }
         prompts.clear()
@@ -340,49 +523,78 @@ export async function startDaemonServer(
       subEvents: false,
       subDeltas: false,
       activeLogins: new Map(),
+      activeLogouts: new Map(),
     }
     clients.add(client)
 
-    const parse = createNdjsonParser((msg) => {
-      if (msg.type === 'auth_prompt_reply') {
-        const active = client.activeLogins.get(msg.loginId)
-        const pending = active?.prompts.get(msg.promptId)
-        if (!pending) return
-        active!.prompts.delete(msg.promptId)
-        if (msg.error) pending.reject(new Error(msg.error))
-        else pending.resolve(msg.value ?? '')
-        return
-      }
-      if (msg.type === 'auth_cancel') {
-        const active = client.activeLogins.get(msg.loginId)
-        active?.controller.abort(new DOMException('Cancelled', 'AbortError'))
-        return
-      }
-      if (msg.type !== 'req') return
-      const handler = handlers[msg.method]
-      if (!handler) {
-        safeWrite(socket, {
-          type: 'res',
-          id: msg.id,
-          ok: false,
-          error: { message: `Unknown daemon RPC method: ${msg.method}` },
-        })
-        return
-      }
-      Promise.resolve(handler(msg.params, client)).then(
-        (result) => {
-          safeWrite(socket, { type: 'res', id: msg.id, ok: true, result })
-        },
-        (error) => {
+    const parse = createNdjsonParser(
+      (msg) => {
+        if (msg.type === 'auth_prompt_reply') {
+          const active = client.activeLogins.get(msg.loginId)
+          const pending = active?.prompts.get(msg.promptId)
+          if (!pending) return
+          if (msg.error) pending.reject(new Error(msg.error))
+          else pending.resolve(msg.value ?? '')
+          return
+        }
+        if (msg.type === 'auth_cancel') {
+          const active = client.activeLogins.get(msg.loginId)
+          active?.controller.abort(new DOMException('Cancelled', 'AbortError'))
+          return
+        }
+        if (msg.type === 'logout_cancel') {
+          const ctrl = client.activeLogouts.get(msg.logoutId)
+          ctrl?.abort(new DOMException('Logout cancelled', 'AbortError'))
+          return
+        }
+        if (msg.type !== 'req') return
+        const handler = handlers[msg.method]
+        if (!handler) {
           safeWrite(socket, {
             type: 'res',
             id: msg.id,
             ok: false,
-            error: serializeError(error),
+            error: { message: `Unknown daemon RPC method: ${msg.method}` },
           })
-        },
-      )
-    })
+          return
+        }
+        Promise.resolve()
+          .then(() => handler(msg.params, client))
+          .then(
+            (result) => {
+              safeWrite(socket, { type: 'res', id: msg.id, ok: true, result })
+            },
+            (error) => {
+              safeWrite(socket, {
+                type: 'res',
+                id: msg.id,
+                ok: false,
+                error: serializeError(error),
+              })
+            },
+          )
+      },
+      (error, rawLine) => {
+        if (rawLine) {
+          try {
+            const partial = JSON.parse(rawLine) as { id?: unknown }
+            if (typeof partial.id === 'number') {
+              safeWrite(socket, {
+                type: 'res',
+                id: partial.id,
+                ok: false,
+                error: serializeError(error),
+              })
+              return
+            }
+          } catch {}
+        }
+        logger.warn(
+          `[daemon] Closing IPC client after frame error: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        socket.destroy()
+      },
+    )
 
     socket.on('data', parse)
     socket.on('error', () => {})
@@ -392,12 +604,16 @@ export async function startDaemonServer(
         active.controller.abort(
           new DOMException('Client disconnected', 'AbortError'),
         )
-        for (const pending of active.prompts.values()) {
+        for (const pending of [...active.prompts.values()]) {
           pending.reject(new Error('Client disconnected'))
         }
         active.prompts.clear()
       }
       client.activeLogins.clear()
+      for (const ctrl of client.activeLogouts.values()) {
+        ctrl.abort(new DOMException('Client disconnected', 'AbortError'))
+      }
+      client.activeLogouts.clear()
     })
   })
 
@@ -414,6 +630,7 @@ export async function startDaemonServer(
     unsubEvents()
     unsubDeltas()
     await runtime.dispose().catch(() => {})
+    releaseOwner()
     throw error
   }
 
@@ -461,6 +678,9 @@ export async function startDaemonServer(
             new DOMException('Daemon closing', 'AbortError'),
           )
         }
+        for (const ctrl of client.activeLogouts.values()) {
+          ctrl.abort(new DOMException('Daemon closing', 'AbortError'))
+        }
         client.socket.end()
         client.socket.destroy()
       }
@@ -488,10 +708,14 @@ export async function startDaemonServer(
         )
         await runtime.dispose()
       } finally {
-        if (process.platform !== 'win32') {
-          rmSync(paths.socketPath, { force: true })
+        const pidInfo = readOwnerRecord(paths.pidPath)
+        const stillOwnsFiles =
+          !pidInfo?.instanceId || pidInfo.instanceId === instanceId
+        if (stillOwnsFiles) {
+          removeStaleSocketFile(paths.socketPath)
+          rmSync(paths.pidPath, { force: true })
         }
-        rmSync(paths.pidPath, { force: true })
+        releaseOwner()
         options.onClosed?.(reason)
       }
     })()

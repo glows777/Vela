@@ -36,6 +36,7 @@ import {
 } from './runtime-extensions.ts'
 import {
   type DriverSharedState,
+  disposeDriverSharedState,
   type PreparedSessionEnv,
   prepareSessionSetup,
   resolveSessionModels,
@@ -121,12 +122,15 @@ export function createVelaAgentDriver(
     },
     sessionOverrides: new Map(),
     specialModels: new Map(),
+    sessionRunners: new Map(),
+    sessionResourceSnapshots: new Map(),
     activeAbort: new Map(),
     activeSteering: new Map(),
     activeRunMeta: new Map(),
     sessionBackgrounds: new Map(),
     pendingBashBySession: new Map(),
     activeBash: new Map(),
+    activeBashPromises: new Set(),
     activeDreams: new Map(),
     pendingDreamTasks: new Set(),
     activeMcpLeases: new Set(),
@@ -167,38 +171,8 @@ export function createVelaAgentDriver(
         await Promise.allSettled([...state.pendingDreamTasks])
       }
     },
-    async dispose() {
-      if (state.disposed) return
-      state.disposed = true
-      state.disposeController.abort(
-        new DOMException('Driver disposed', 'AbortError'),
-      )
-      for (const controller of state.activeAbort.values()) {
-        controller.abort(new DOMException('Driver disposed', 'AbortError'))
-      }
-      for (const controller of state.activeBash.values()) {
-        controller.abort(new DOMException('Driver disposed', 'AbortError'))
-      }
-      await Promise.allSettled([...state.activeTurns])
-      await Promise.allSettled(
-        [...state.activeDreams.values()].map((d) => d.stop()),
-      )
-      await Promise.allSettled([...state.pendingDreamTasks])
-      state.activeDreams.clear()
-      await Promise.allSettled(
-        [...state.sessionBackgrounds.values()].map((bg) => bg.stopAll()),
-      )
-      state.sessionBackgrounds.clear()
-      await Promise.allSettled(
-        [...state.activeMcpLeases].map((lease) => lease.release()),
-      )
-      state.activeMcpLeases.clear()
-      await Promise.allSettled(
-        [...state.specialModels.values()].map((s) => s.flush?.()),
-      )
-      state.specialModels.clear()
-      await options.mcp?.dispose?.()
-      await state.extHost.shutdown().catch(() => {})
+    dispose() {
+      return disposeDriverSharedState(state)
     },
     runTurn(request: DriverTurnRequest): Promise<DriverTurnResult> {
       const promise = runSingleTurn(request)
@@ -408,6 +382,7 @@ export function createVelaAgentDriver(
             extensionSections: sections ?? prepared!.runtimeSections,
           }),
       })
+      await prepared.ensureSessionStarted(extView)
 
       wireRuntimeToolInterception({
         registry,

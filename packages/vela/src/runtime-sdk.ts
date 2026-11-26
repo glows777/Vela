@@ -166,9 +166,10 @@ export function createRuntime(
 ): LocalVelaRuntime {
   const logger = options.logger ?? silentLogger
   const isEphemeral = options.ephemeral === true
+  const isEphemeralDb = isEphemeral || options.ephemeralSessions === true
   const hostEnv = options.hostEnv ?? {}
   const transientAgentDir =
-    isEphemeral && !options.agentDir
+    isEphemeralDb && !options.agentDir
       ? mkdtempSync(join(tmpdir(), 'vela-runtime-'))
       : undefined
   const agentDir = resolve(
@@ -178,7 +179,7 @@ export function createRuntime(
   const db =
     options.db ??
     openDatabase({
-      path: isEphemeral ? ':memory:' : join(agentDir, 'vela.db'),
+      path: isEphemeralDb ? ':memory:' : join(agentDir, 'vela.db'),
     })
 
   try {
@@ -397,8 +398,14 @@ export function createRuntime(
         get: async (id) => engine.sessions.get(id),
         create: async (input) => engine.sessions.create(input),
         rename: async (id, name) => engine.sessions.rename(id, name),
-        delete: async (id) => engine.sessions.delete(id),
-        reset: (id) => engine.restartSession(id),
+        delete: async (id) => {
+          await velaDriver.control.closeSession(id).catch(() => {})
+          return engine.sessions.delete(id)
+        },
+        reset: async (id) => {
+          await velaDriver.control.closeSession(id).catch(() => {})
+          return engine.restartSession(id)
+        },
         status: async (id) => engine.sessions.status(id),
         messages: async (input) => listRuntimeSessionMessages(db, input),
         configure: async (sessionId, override) => {

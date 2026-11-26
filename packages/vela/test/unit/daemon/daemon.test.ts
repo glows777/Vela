@@ -101,10 +101,34 @@ test('protocol NDJSON codec preserves Uint8Array bytes and splits incremental ch
   expect(Array.from(parsedParams.bytes)).toEqual(Array.from(payloadBytes))
 })
 
-test('startDaemonServer enforces 0600 socket perms, heals stale .sock, and rejects double bind', async () => {
+test('startDaemonServer enforces 0600 socket perms, heals stale .sock, rejects non-sockets and double bind', async () => {
   const agentDir = makeShortTempDir('vd-sock-')
   const { socketPath } = resolveDaemonPaths(agentDir)
-  writeFileSync(socketPath, 'stale')
+
+  // Refuse to overwrite or delete ordinary non-socket files (e.g. config.json)
+  const regularFile = join(agentDir, 'config.json')
+  writeFileSync(regularFile, '{}\n')
+  await expect(
+    startDaemonServer({
+      agentDir,
+      socketPath: regularFile,
+      registerSignalHandlers: false,
+    }),
+  ).rejects.toThrow(/non-socket/)
+  expect(existsSync(regularFile)).toBe(true)
+
+  // Create a real stale POSIX socket inode from a short child that exits without unlinking
+  if (process.platform !== 'win32') {
+    const child = Bun.spawnSync(
+      [
+        process.execPath,
+        '-e',
+        `const net=require('node:net');const s=net.createServer().listen(${JSON.stringify(socketPath)},()=>process.exit(0))`,
+      ],
+      { stdout: 'ignore', stderr: 'ignore' },
+    )
+    expect(child.exitCode).toBe(0)
+  }
 
   const handle = await startDaemonServer({
     agentDir,
@@ -376,4 +400,131 @@ test('graceful daemon close reaps active background jobs', async () => {
 
   await handle.close('shutdown')
   expect(existsSync(handle.socketPath)).toBe(false)
+})
+
+test('protocol NDJSON parser decodes split multi-byte UTF-8 and rejects oversized frames', () => {
+  const line = `${JSON.stringify({ type: 'req', id: 9, method: 'runtime.prompt', params: { text: '你好🎉世界' } })}\n`
+  const bytes = Buffer.from(line, 'utf8')
+  const emojiOffset = bytes.indexOf(Buffer.from('🎉', 'utf8'))
+  expect(emojiOffset).toBeGreaterThan(0)
+  const received: DaemonWireMessage[] = []
+  const parse = createNdjsonParser((m) => received.push(m))
+  parse(bytes.subarray(0, emojiOffset + 2))
+  parse(bytes.subarray(emojiOffset + 2))
+  expect(received).toHaveLength(1)
+  expect((received[0] as { params: { text: string } }).params.text).toBe(
+    '你好🎉世界',
+  )
+
+  const parseErrors: string[] = []
+  const bounded = createNdjsonParser(
+    () => {},
+    (err) => parseErrors.push(err instanceof Error ? err.message : String(err)),
+    32,
+  )
+  bounded(Buffer.from(`${'x'.repeat(40)}\n`))
+  expect(parseErrors.some((m) => m.includes('exceeded'))).toBe(true)
+})
+
+test('VELA_DAEMON_SOCKET is honored consistently and cold start isolates caller env', async () => {
+  const agentDir = makeShortTempDir('vd-env-')
+  const sockDir = makeShortTempDir('vd-sockdir-')
+  const customSock = join(sockDir, 'custom.sock')
+  const hostEnv = {
+    ...process.env,
+    VELA_DAEMON_SOCKET: customSock,
+    OPENAI_API_BASE_URL: 'http://127.0.0.1:9999/v1',
+    OPENAI_API_KEY: 'caller-1-secret',
+  }
+  const client = await connectRuntime({ agentDir, hostEnv })
+  cleanupTasks.push(async () => {
+    await client.dispose()
+    await stopDaemon({ agentDir, hostEnv }).catch(() => {})
+  })
+
+  const status = await getDaemonStatus({ agentDir, hostEnv })
+  expect(status.running).toBe(true)
+  expect(status.socketPath).toBe(customSock)
+
+  // Caller 1's OPENAI_API_BASE_URL/KEY must NOT leak into the auto-started daemon defaults
+  const models = await client.models()
+  expect(models.some((m) => m.provider === 'openai')).toBe(false)
+})
+
+test('IPC transports login deviceId, auth_prompt AbortSignal, and logout AbortSignal', async () => {
+  const agentDir = makeShortTempDir('vd-auth-')
+  const workDir = makeShortTempDir('vd-auth-work-')
+  let observedDeviceId: string | undefined
+  let observedPromptAborted = false
+  let logoutSignal: AbortSignal | undefined
+
+  const handle = await startDaemonServer({
+    agentDir,
+    registerSignalHandlers: false,
+  })
+  cleanupTasks.push(() => handle.close('test-cleanup'))
+
+  // Exercise server-side logout cancellation + login deviceId/prompt-signal via a fake runtime on socket
+  handle.runtime.models = async () => []
+  const origLogout = handle.runtime.logout
+  handle.runtime.logout = async (_provider, opts) => {
+    logoutSignal = opts?.signal
+    return new Promise((_resolve, reject) => {
+      opts?.signal?.addEventListener(
+        'abort',
+        () => reject(new DOMException('Cancelled', 'AbortError')),
+        { once: true },
+      )
+    })
+  }
+  const origLogin = handle.runtime.login
+  handle.runtime.login = async (_p, _m, interaction, opts) => {
+    observedDeviceId = opts?.getDeviceId?.()
+    const promptCtrl = new AbortController()
+    const p = interaction.prompt({
+      type: 'manual_code',
+      message: 'Paste code',
+      signal: promptCtrl.signal,
+    })
+    setTimeout(() => promptCtrl.abort(), 30)
+    await expect(p).rejects.toThrow()
+  }
+
+  const client = await connectRuntime({ agentDir, autoStart: false })
+  cleanupTasks.push(() => client.dispose())
+
+  await client.login(
+    'openai',
+    'oauth',
+    {
+      signal: new AbortController().signal,
+      notify: () => {},
+      prompt: (p) =>
+        new Promise((_resolve, reject) => {
+          p.signal?.addEventListener(
+            'abort',
+            () => {
+              observedPromptAborted = true
+              reject(new DOMException('Prompt cancelled', 'AbortError'))
+            },
+            { once: true },
+          )
+        }),
+    },
+    { getDeviceId: () => 'dev-uuid-123' },
+  )
+  expect(observedDeviceId).toBe('dev-uuid-123')
+  expect(observedPromptAborted).toBe(true)
+
+  const logoutCtrl = new AbortController()
+  const logoutPromise = client.logout('openai', { signal: logoutCtrl.signal })
+  setTimeout(() => logoutCtrl.abort(), 20)
+  await expect(logoutPromise).rejects.toThrow()
+  for (let i = 0; i < 20 && !logoutSignal?.aborted; i++) {
+    await new Promise((r) => setTimeout(r, 15))
+  }
+  expect(logoutSignal?.aborted).toBe(true)
+  void workDir
+  handle.runtime.login = origLogin
+  handle.runtime.logout = origLogout
 })

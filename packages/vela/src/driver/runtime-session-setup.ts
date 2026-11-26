@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
+import { canonicalLocalPath } from '../db/trust.ts'
 import type { OAuthRegistrationStore } from '../providers/auth/types.ts'
 import {
   DEFAULT_THINKING_LEVEL,
@@ -20,8 +21,11 @@ import {
 } from '../runtime/memory/index.ts'
 import type { VelaLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
-import { selectTools } from '../shared/tool-selection.ts'
-import { loadProjectSettings } from './config/project-settings.ts'
+import { mergeDefaultTools, selectTools } from '../shared/tool-selection.ts'
+import {
+  loadProjectSettings,
+  type ProjectSettings,
+} from './config/project-settings.ts'
 import { createSessionLocalExecutionEnv } from './execution/local.ts'
 import { resolveLocation } from './execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
@@ -31,7 +35,10 @@ import type { ModelMessage } from './messages.ts'
 import { localDateString } from './prompt/environment.ts'
 import type { SystemPromptBuilder } from './prompt/index.ts'
 import type { RuntimeBackgroundController } from './runtime-background.ts'
-import type { RuntimeExtensionHost } from './runtime-extensions.ts'
+import {
+  type RuntimeExtensionHost,
+  resolveEffectiveDisabledBuiltins,
+} from './runtime-extensions.ts'
 import {
   buildRuntimePromptSections,
   runtimeToolModifiers,
@@ -54,7 +61,74 @@ import type {
 import type { BashExecutionEntry } from './session/entries.ts'
 import type { SessionStore } from './session/index.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
-import type { ToolRegistry } from './tools/registry.ts'
+import { ToolRegistry } from './tools/registry.ts'
+import type { VelaSession } from './vela-session.ts'
+
+export interface CachedSessionRunner {
+  key: string
+  runner: ExtensionRunner
+  registry: ToolRegistry
+  errors: string[]
+  releaseHost: () => void
+  started: boolean
+  lastView?: VelaSession
+}
+
+export async function disposeCachedSessionRunner(
+  entry: CachedSessionRunner,
+): Promise<void> {
+  try {
+    if (entry.started && entry.lastView) {
+      await entry.runner.sessionShutdown(entry.lastView).catch(() => {})
+    }
+    await entry.runner.shutdown().catch(() => {})
+  } finally {
+    entry.releaseHost()
+  }
+}
+
+export async function disposeDriverSharedState(
+  state: DriverSharedState,
+): Promise<void> {
+  if (state.disposed) return
+  state.disposed = true
+  state.disposeController.abort(
+    new DOMException('Driver disposed', 'AbortError'),
+  )
+  for (const controller of state.activeAbort.values()) {
+    controller.abort(new DOMException('Driver disposed', 'AbortError'))
+  }
+  for (const controller of state.activeBash.values()) {
+    controller.abort(new DOMException('Driver disposed', 'AbortError'))
+  }
+  await Promise.allSettled([...state.activeTurns])
+  await Promise.allSettled([...state.activeBashPromises])
+  await Promise.allSettled(
+    [...state.activeDreams.values()].map((d) => d.stop()),
+  )
+  await Promise.allSettled([...state.pendingDreamTasks])
+  state.activeDreams.clear()
+  await Promise.allSettled(
+    [...state.sessionBackgrounds.values()].map((bg) => bg.stopAll()),
+  )
+  state.sessionBackgrounds.clear()
+  await Promise.allSettled(
+    [...state.activeMcpLeases].map((lease) => lease.release()),
+  )
+  state.activeMcpLeases.clear()
+  await Promise.allSettled(
+    [...state.specialModels.values()].map((s) => s.flush?.()),
+  )
+  state.specialModels.clear()
+  const runners = [...state.sessionRunners.values()]
+  state.sessionRunners.clear()
+  state.sessionResourceSnapshots.clear()
+  await Promise.allSettled(
+    runners.map((entry) => disposeCachedSessionRunner(entry)),
+  )
+  await state.options.mcp?.dispose?.()
+  await state.extHost.shutdown().catch(() => {})
+}
 
 export interface DriverSharedState {
   options: VelaAgentDriverOptions
@@ -69,12 +143,22 @@ export interface DriverSharedState {
     Omit<RuntimeReloadableConfig, 'offline'>
   sessionOverrides: Map<string, RuntimeSessionOverride>
   specialModels: Map<string, RuntimeSpecialModelHandle>
+  sessionRunners: Map<string, CachedSessionRunner>
+  sessionResourceSnapshots: Map<
+    string,
+    {
+      key: string
+      resources: TrustedRuntimeResources
+      projectSettings?: ProjectSettings
+    }
+  >
   activeAbort: Map<string, AbortController>
   activeSteering: Map<string, ModelMessage[]>
   activeRunMeta: Map<string, ActiveRunMeta>
   sessionBackgrounds: Map<string, RuntimeBackgroundController>
   pendingBashBySession: Map<string, BashExecutionEntry[]>
   activeBash: Map<string, AbortController>
+  activeBashPromises: Set<Promise<unknown>>
   activeDreams: Map<string, MemoryDream>
   pendingDreamTasks: Set<Promise<void>>
   activeMcpLeases: Set<RuntimeMcpLease>
@@ -106,6 +190,7 @@ export interface PreparedSessionEnv {
   projectDefaultTools?: string[]
   registry: ToolRegistry
   extensionRunner: ExtensionRunner
+  ensureSessionStarted: (extView: VelaSession) => Promise<void>
   extensionErrors: string[]
   mcpLease?: RuntimeMcpLease
   memoryStores: { local: MemoryStore; global: MemoryStore; dirs: MemoryDirs }
@@ -222,11 +307,86 @@ export async function prepareSessionSetup(params: {
     return resolvedEnv
   }
 
+  const memoryStores = resolveRuntimeMemoryStores({
+    registry: state.memoryRegistry,
+    agentDir: state.options.agentDir,
+    projectId,
+    cwd: location.cwd,
+  })
+
+  const approveApplies =
+    override?.approve === false ||
+    (override?.approve === true &&
+      (!override.approveLocation ||
+        (location.environment === 'local' &&
+          canonicalLocalPath(location.cwd) ===
+            canonicalLocalPath(override.approveLocation))))
+  const trustOverride = approveApplies
+    ? override!.approve
+    : state.options.trustOverride
+      ? await state.options.trustOverride(location)
+      : undefined
+  const resourceSnapshotKey = JSON.stringify([
+    location.environment,
+    location.cwd,
+    trustOverride ?? null,
+    override?.systemPrompt ?? state.options.systemPrompt ?? null,
+    override?.appendSystemPrompt ?? state.options.appendSystemPrompt ?? null,
+    Boolean(override?.noContextFiles),
+    Boolean(override?.loadUntrustedContextFiles),
+    effectiveEnv,
+  ])
+  let cachedSnapshot = state.sessionResourceSnapshots.get(sessionId)
+  if (!cachedSnapshot || cachedSnapshot.key !== resourceSnapshotKey) {
+    const resources = await loadTrustedRuntimeResources({
+      db: state.db,
+      agentDir: state.options.agentDir,
+      trustDataDir: state.options.environments.dataDir,
+      location,
+      resolveEnv,
+      signal,
+      systemPrompt: override?.systemPrompt ?? state.options.systemPrompt,
+      appendSystemPrompt:
+        override?.appendSystemPrompt ?? state.options.appendSystemPrompt,
+      hostContextFiles: override?.noContextFiles
+        ? []
+        : state.options.contextFiles,
+      hostSkills: state.options.skills,
+      hostPromptTemplates: state.options.promptTemplates,
+      hostEnv: effectiveEnv,
+      trustOverride,
+      loadUntrustedContextFiles: override?.loadUntrustedContextFiles,
+    })
+    if (override?.noContextFiles) {
+      resources.contextFiles = []
+    }
+
+    let projectSettings: ProjectSettings | undefined
+    if (resources.trusted) {
+      const env = await resolveEnv()
+      projectSettings = await loadProjectSettings(env, {
+        cwd: location.cwd,
+        trusted: true,
+        agentDir: state.options.agentDir,
+        env: location.environment === 'local' ? effectiveEnv : {},
+        signal,
+      })
+    }
+    cachedSnapshot = {
+      key: resourceSnapshotKey,
+      resources,
+      projectSettings,
+    }
+    state.sessionResourceSnapshots.set(sessionId, cachedSnapshot)
+  }
+  const { resources, projectSettings } = cachedSnapshot
+
   const specialModel = state.specialModels.get(sessionId)
   const modelInput: ModelInput | undefined =
     specialModel?.model ??
     override?.model ??
     saved?.model ??
+    projectSettings?.settings.model ??
     state.reloadable.defaultModel ??
     activeModels.defaultRef(boundChannel)
 
@@ -249,60 +409,82 @@ export async function prepareSessionSetup(params: {
   const thinkingLevel =
     override?.thinkingLevel ??
     saved?.thinkingLevel ??
+    projectSettings?.settings.thinkingLevel ??
     state.reloadable.defaultThinkingLevel ??
     DEFAULT_THINKING_LEVEL
 
-  const memoryStores = resolveRuntimeMemoryStores({
-    registry: state.memoryRegistry,
-    agentDir: state.options.agentDir,
-    projectId,
-    cwd: location.cwd,
-  })
-
-  const trustOverride =
-    override?.approve !== undefined
-      ? override.approve
-      : state.options.trustOverride
-        ? await state.options.trustOverride(location)
-        : undefined
-  const resources = await loadTrustedRuntimeResources({
-    db: state.db,
-    agentDir: state.options.agentDir,
-    trustDataDir: state.options.environments.dataDir,
-    location,
-    resolveEnv,
-    signal,
-    systemPrompt: override?.systemPrompt ?? state.options.systemPrompt,
-    appendSystemPrompt:
-      override?.appendSystemPrompt ?? state.options.appendSystemPrompt,
-    hostContextFiles: override?.noContextFiles
-      ? []
-      : state.options.contextFiles,
-    hostSkills: state.options.skills,
-    hostPromptTemplates: state.options.promptTemplates,
-    hostEnv: effectiveEnv,
-    trustOverride,
-    loadUntrustedContextFiles: override?.loadUntrustedContextFiles,
-  })
-  if (override?.noContextFiles) {
-    resources.contextFiles = []
-  }
-
-  let projectSettings:
-    | Awaited<ReturnType<typeof loadProjectSettings>>
-    | undefined
-  if (resources.trusted) {
-    const env = await resolveEnv()
-    projectSettings = await loadProjectSettings(env, {
-      cwd: location.cwd,
-      trusted: true,
-      agentDir: state.options.agentDir,
-      env: location.environment === 'local' ? effectiveEnv : {},
-      signal,
-    })
-  }
-
   const extensionConfig = state.reloadable.extensionConfig ?? {}
+  const hostLease = await state.extHost.acquireHostSnapshot()
+  const projectExtensions = projectSettings?.settings.extensions ?? []
+  const extraExtensions = override?.extensions ?? []
+  const noExtensions = Boolean(override?.noExtensions)
+  const effectiveDisabledBuiltins = resolveEffectiveDisabledBuiltins({
+    hostDisabled: hostLease.snapshot.disabledBuiltins,
+    projectExtensions,
+    extraExtensions,
+    noExtensions,
+  })
+  const runnerKey = JSON.stringify([
+    location.environment,
+    location.cwd,
+    resources.trusted,
+    projectExtensions,
+    extraExtensions,
+    noExtensions,
+    hostLease.snapshot.generation,
+    extensionConfig,
+  ])
+  let cachedRunner = state.sessionRunners.get(sessionId)
+  if (cachedRunner && cachedRunner.key === runnerKey) {
+    hostLease.release()
+  } else {
+    if (cachedRunner) {
+      state.sessionRunners.delete(sessionId)
+      await disposeCachedSessionRunner(cachedRunner)
+    }
+    const sessionExtRegistry = new ToolRegistry(
+      undefined,
+      undefined,
+      noExtensions ? undefined : hostLease.snapshot.registry,
+    )
+    let created:
+      | Awaited<ReturnType<RuntimeExtensionHost['createSessionRunner']>>
+      | undefined
+    try {
+      created = await state.extHost.createSessionRunner({
+        cwd: location.cwd,
+        trusted: resources.trusted,
+        isLocalLocation: location.environment === 'local',
+        projectExtensions,
+        extraExtensions,
+        noExtensions,
+        extensionConfig,
+        registry: sessionExtRegistry,
+        hostSnapshot: hostLease.snapshot,
+      })
+    } catch (error) {
+      hostLease.release()
+      throw error
+    }
+    cachedRunner = {
+      key: runnerKey,
+      runner: created.runner,
+      registry: sessionExtRegistry,
+      errors: created.errors,
+      releaseHost: hostLease.release,
+      started: false,
+    }
+    state.sessionRunners.set(sessionId, cachedRunner)
+  }
+  const extensionRunner = cachedRunner.runner
+  const extensionErrors = cachedRunner.errors
+  const ensureSessionStarted = async (extView: VelaSession): Promise<void> => {
+    cachedRunner!.lastView = extView
+    if (cachedRunner!.started) return
+    cachedRunner!.started = true
+    await cachedRunner!.runner.sessionStart(extView)
+  }
+
   const registry = createRuntimeSessionToolRegistry({
     spillDir,
     cwd: location.cwd,
@@ -312,7 +494,7 @@ export async function prepareSessionSetup(params: {
     webConfig: extensionConfig.web,
     hostEnv: effectiveEnv,
     offline: effectiveOffline,
-    disabledBuiltins: state.extHost.getDisabledBuiltins(),
+    disabledBuiltins: effectiveDisabledBuiltins,
     ...(state.options.timers &&
     state.options.subscriptions &&
     state.options.eventBus
@@ -331,24 +513,11 @@ export async function prepareSessionSetup(params: {
         }
       : {}),
     extraTools: state.options.tools,
-    parentRegistry: override?.noExtensions
-      ? undefined
-      : state.extHost.hostRegistry,
+    parentRegistry: cachedRunner.registry,
   })
 
-  const { runner: extensionRunner, errors: extensionErrors } =
-    await state.extHost.createSessionRunner({
-      cwd: location.cwd,
-      trusted: resources.trusted,
-      projectExtensions: projectSettings?.settings.extensions ?? [],
-      extraExtensions: override?.extensions ?? [],
-      noExtensions: Boolean(override?.noExtensions),
-      extensionConfig,
-      registry,
-    })
-
   let mcpLease: RuntimeMcpLease | undefined
-  if (attachMcp && state.options.mcp) {
+  if (attachMcp && state.options.mcp && !effectiveDisabledBuiltins.has('mcp')) {
     mcpLease = await state.options.mcp.attach({
       registry,
       agentDir: state.options.agentDir,
@@ -375,11 +544,10 @@ export async function prepareSessionSetup(params: {
   applyRuntimeProjectToolSelection(state.db, registry, projectId, baseModifiers)
 
   const ownerTools = state.reloadable.defaultTools
+    ? [...state.reloadable.defaultTools]
+    : undefined
   const projectDefaultTools = projectSettings?.settings.tools
-  const mergedDefaultTools =
-    ownerTools !== undefined || projectDefaultTools !== undefined
-      ? [...(ownerTools ?? []), ...(projectDefaultTools ?? [])]
-      : undefined
+  const mergedDefaultTools = mergeDefaultTools(ownerTools, projectDefaultTools)
   if (
     override?.tools !== undefined ||
     override?.noTools ||
@@ -463,6 +631,7 @@ export async function prepareSessionSetup(params: {
     projectDefaultTools,
     registry,
     extensionRunner,
+    ensureSessionStarted,
     extensionErrors,
     mcpLease,
     memoryStores,

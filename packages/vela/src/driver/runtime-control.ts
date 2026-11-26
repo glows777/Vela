@@ -17,6 +17,7 @@ import { createInspectAndBashControl } from './runtime-control-inspect.ts'
 import { createTreeControl } from './runtime-control-tree.ts'
 import {
   type DriverSharedState,
+  disposeCachedSessionRunner,
   type PreparedSessionEnv,
   prepareSessionSetup,
   resolveSessionModels,
@@ -109,6 +110,7 @@ export interface RuntimeControlHandle {
     messages: ModelMessage[],
     tracker: TokenTracker,
   ): Promise<boolean>
+  closeSession(sessionId: string): Promise<void>
 }
 
 export function createRuntimeControl(
@@ -313,6 +315,7 @@ export function createRuntimeControl(
       if ('defaultThinkingLevel' in next) {
         state.reloadable.defaultThinkingLevel = next.defaultThinkingLevel
       }
+      state.sessionResourceSnapshots.clear()
       await state.extHost.reload({
         configured: state.reloadable.extensions,
         extensionConfig: state.reloadable.extensionConfig ?? {},
@@ -341,6 +344,7 @@ export function createRuntimeControl(
         }
       }
       state.sessionOverrides.set(sessionId, { ...override })
+      state.sessionResourceSnapshots.delete(sessionId)
 
       let changedRow = false
       if (
@@ -374,6 +378,11 @@ export function createRuntimeControl(
         if (!state.options.resolveSpecialModel) {
           throw new Error('Special test/record models are unavailable here')
         }
+        const existingSpecial = state.specialModels.get(sessionId)
+        if (existingSpecial) {
+          state.specialModels.delete(sessionId)
+          await existingSpecial.flush?.().catch(() => {})
+        }
         const activeModels = resolveSessionModels(state, override)
         let fallbackModel: ReturnType<typeof resolveModel> | undefined
         if (
@@ -402,6 +411,12 @@ export function createRuntimeControl(
         })
         if (special) {
           state.specialModels.set(sessionId, special)
+        }
+      } else if (override.model) {
+        const existingSpecial = state.specialModels.get(sessionId)
+        if (existingSpecial) {
+          state.specialModels.delete(sessionId)
+          await existingSpecial.flush?.().catch(() => {})
         }
       }
 
@@ -667,6 +682,31 @@ export function createRuntimeControl(
       }
       await store.flush()
       return true
+    },
+
+    async closeSession(sessionId: string): Promise<void> {
+      const cachedRunner = state.sessionRunners.get(sessionId)
+      if (cachedRunner) {
+        state.sessionRunners.delete(sessionId)
+        await disposeCachedSessionRunner(cachedRunner)
+      }
+      state.sessionResourceSnapshots.delete(sessionId)
+      state.sessionOverrides.delete(sessionId)
+      const special = state.specialModels.get(sessionId)
+      if (special) {
+        state.specialModels.delete(sessionId)
+        await special.flush?.().catch(() => {})
+      }
+      const bg = state.sessionBackgrounds.get(sessionId)
+      if (bg) {
+        state.sessionBackgrounds.delete(sessionId)
+        await bg.stopAll().catch(() => {})
+      }
+      const dream = state.activeDreams.get(sessionId)
+      if (dream) {
+        state.activeDreams.delete(sessionId)
+        await dream.stop().catch(() => {})
+      }
     },
   }
 }

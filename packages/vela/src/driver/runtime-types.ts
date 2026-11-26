@@ -66,6 +66,7 @@ export interface RuntimeSessionOverride {
   extensions?: string[]
   noExtensions?: boolean
   approve?: boolean
+  approveLocation?: string
   env?: Record<string, string | undefined>
   recordPath?: string
 }

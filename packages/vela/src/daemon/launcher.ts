@@ -14,7 +14,11 @@ import { createConnection } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defaultAgentDir } from '../driver/config/paths.ts'
-import { resolveDaemonPaths } from './paths.ts'
+import {
+  assertSocketOrMissing,
+  removeStaleSocketFile,
+  resolveDaemonPaths,
+} from './paths.ts'
 import {
   createNdjsonParser,
   DAEMON_PROTOCOL_VERSION,
@@ -27,6 +31,28 @@ import {
 
 const STALE_LOCK_MS = 30_000
 const DEFAULT_START_TIMEOUT_MS = 15_000
+
+const TRANSIENT_CALLER_ENV_KEYS = [
+  'OPENAI_API_KEY',
+  'OPENAI_API_BASE_URL',
+  'OPENAI_API_MODEL_NAME',
+  'ANTHROPIC_API_KEY',
+  'OPENROUTER_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'VELA_MODEL',
+  'VELA_OFFLINE',
+  'VELA_RECORD',
+] as const
+
+export function stripTransientDaemonEnv(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const out = { ...env }
+  for (const key of TRANSIENT_CALLER_ENV_KEYS) {
+    delete out[key]
+  }
+  return out
+}
 
 interface DaemonLifecycleOptions {
   agentDir?: string
@@ -207,13 +233,21 @@ function readLogTail(logPath: string, maxLines = 20): string {
   }
 }
 
-function readPidFile(pidPath: string): number | undefined {
+function readPidRecord(
+  pidPath: string,
+): { pid?: number; instanceId?: string } | undefined {
   if (!existsSync(pidPath)) return undefined
   try {
     const parsed = JSON.parse(readFileSync(pidPath, 'utf8')) as {
       pid?: unknown
+      instanceId?: unknown
     }
-    return typeof parsed.pid === 'number' ? parsed.pid : undefined
+    return {
+      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
+      ...(typeof parsed.instanceId === 'string'
+        ? { instanceId: parsed.instanceId }
+        : {}),
+    }
   } catch {
     return undefined
   }
@@ -221,20 +255,54 @@ function readPidFile(pidPath: string): number | undefined {
 
 async function waitForDaemonExit(
   socketPath: string,
-  pid: number | undefined,
+  pidPath: string,
+  expected: { pid?: number; instanceId?: string } | undefined,
   timeoutMs: number,
-): Promise<void> {
+): Promise<boolean> {
+  const pid = expected?.pid
+  const expectedInstanceId = expected?.instanceId
   const sameProcess = pid === process.pid
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
+    const currentHello = await probeDaemonHello(socketPath, 200)
+    if (
+      currentHello &&
+      expectedInstanceId &&
+      currentHello.instanceId &&
+      currentHello.instanceId !== expectedInstanceId
+    ) {
+      // A newer daemon instance has already replaced the target.
+      return true
+    }
+    const currentPidRecord = readPidRecord(pidPath)
+    if (
+      currentPidRecord?.instanceId &&
+      expectedInstanceId &&
+      currentPidRecord.instanceId !== expectedInstanceId
+    ) {
+      return true
+    }
+    const pidMatchesExpected =
+      pid !== undefined &&
+      isPidAlive(pid) &&
+      (!expectedInstanceId ||
+        !currentPidRecord?.instanceId ||
+        currentPidRecord.instanceId === expectedInstanceId)
     const alive = sameProcess
-      ? (await probeDaemonHello(socketPath, 200)) !== undefined
-      : (pid !== undefined && isPidAlive(pid)) ||
-        (await probeDaemonHello(socketPath, 200)) !== undefined
-    if (!alive) return
+      ? currentHello !== undefined
+      : Boolean(currentHello) || pidMatchesExpected
+    if (!alive) return true
     await sleep(50)
   }
-  if (!sameProcess && pid !== undefined && isPidAlive(pid)) {
+  const currentPidRecord = readPidRecord(pidPath)
+  const safeToSignal =
+    !sameProcess &&
+    pid !== undefined &&
+    isPidAlive(pid) &&
+    (!expectedInstanceId ||
+      !currentPidRecord?.instanceId ||
+      currentPidRecord.instanceId === expectedInstanceId)
+  if (safeToSignal) {
     try {
       process.kill(pid, 'SIGTERM')
     } catch {}
@@ -242,7 +310,9 @@ async function waitForDaemonExit(
     while (Date.now() < killDeadline && isPidAlive(pid)) {
       await sleep(50)
     }
+    return !isPidAlive(pid)
   }
+  return (await probeDaemonHello(socketPath, 200)) === undefined
 }
 
 /**
@@ -254,7 +324,8 @@ export async function ensureDaemonRunning(
 ): Promise<DaemonHello> {
   const hostEnv = options.hostEnv ?? {}
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
-  const paths = resolveDaemonPaths(agentDir, options.socketPath)
+  const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
+  assertSocketOrMissing(paths.socketPath)
   const expectedProto = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION
   const expectedApp = options.appVersion ?? getAppVersion()
   const timeoutMs = options.timeoutMs ?? DEFAULT_START_TIMEOUT_MS
@@ -275,16 +346,28 @@ export async function ensureDaemonRunning(
     if (secondCheck && matches(secondCheck)) return secondCheck
 
     if (secondCheck) {
-      const pid = secondCheck.pid ?? readPidFile(paths.pidPath)
+      const pidRecord = readPidRecord(paths.pidPath)
+      const target = {
+        pid: secondCheck.pid ?? pidRecord?.pid,
+        instanceId: secondCheck.instanceId ?? pidRecord?.instanceId,
+      }
       try {
         await rpcOnce(paths.socketPath, 'daemon.stop', undefined, 3000)
       } catch {}
-      await waitForDaemonExit(paths.socketPath, pid, 5000)
+      const exited = await waitForDaemonExit(
+        paths.socketPath,
+        paths.pidPath,
+        target,
+        5000,
+      )
+      if (!exited) {
+        throw new Error(
+          `Timed out stopping mismatched Vela daemon (pid ${target.pid ?? 'unknown'})`,
+        )
+      }
     }
 
-    if (process.platform !== 'win32' && existsSync(paths.socketPath)) {
-      rmSync(paths.socketPath, { force: true })
-    }
+    removeStaleSocketFile(paths.socketPath)
     mkdirSync(paths.agentDir, { recursive: true })
     const logFd = openSync(paths.logPath, 'a', 0o600)
     const { command, args } = resolveDaemonSpawnCommand(paths.agentDir)
@@ -336,13 +419,14 @@ export async function stopDaemon(
 ): Promise<boolean> {
   const hostEnv = options.hostEnv ?? {}
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
-  const paths = resolveDaemonPaths(agentDir, options.socketPath)
+  const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
+  assertSocketOrMissing(paths.socketPath)
   const hello = await probeDaemonHello(paths.socketPath, 500)
-  const pid = hello?.pid ?? readPidFile(paths.pidPath)
+  const pidRecord = readPidRecord(paths.pidPath)
+  const pid = hello?.pid ?? pidRecord?.pid
+  const instanceId = hello?.instanceId ?? pidRecord?.instanceId
   if (!hello && (!pid || !isPidAlive(pid))) {
-    if (process.platform !== 'win32' && existsSync(paths.socketPath)) {
-      rmSync(paths.socketPath, { force: true })
-    }
+    removeStaleSocketFile(paths.socketPath)
     if (existsSync(paths.pidPath)) {
       rmSync(paths.pidPath, { force: true })
     }
@@ -353,11 +437,28 @@ export async function stopDaemon(
       await rpcOnce(paths.socketPath, 'daemon.stop', undefined, 5000)
     } catch {}
   }
-  await waitForDaemonExit(paths.socketPath, pid, options.timeoutMs ?? 5000)
-  if (process.platform !== 'win32' && existsSync(paths.socketPath)) {
-    rmSync(paths.socketPath, { force: true })
+  const exited = await waitForDaemonExit(
+    paths.socketPath,
+    paths.pidPath,
+    { pid, instanceId },
+    options.timeoutMs ?? 5000,
+  )
+  if (!exited) {
+    throw new Error(
+      `Failed to stop Vela daemon (pid ${pid ?? 'unknown'}, socket: ${paths.socketPath})`,
+    )
   }
-  if (existsSync(paths.pidPath)) {
+  const latestHello = await probeDaemonHello(paths.socketPath, 150)
+  if (!latestHello || (instanceId && latestHello.instanceId === instanceId)) {
+    removeStaleSocketFile(paths.socketPath)
+  }
+  const latestPid = readPidRecord(paths.pidPath)
+  if (
+    existsSync(paths.pidPath) &&
+    (!instanceId ||
+      !latestPid?.instanceId ||
+      latestPid.instanceId === instanceId)
+  ) {
     rmSync(paths.pidPath, { force: true })
   }
   return true
@@ -368,7 +469,7 @@ export async function getDaemonStatus(
 ): Promise<DaemonStatus> {
   const hostEnv = options.hostEnv ?? {}
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
-  const paths = resolveDaemonPaths(agentDir, options.socketPath)
+  const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
   const hello = await probeDaemonHello(paths.socketPath, 500)
   if (!hello) {
     return {

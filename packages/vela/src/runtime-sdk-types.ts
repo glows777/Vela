@@ -356,8 +356,10 @@ export interface LocalVelaRuntime extends VelaRuntime {
 export interface CreateRuntimeOptions {
   /** Root agent directory (`~/.vela`), owning `<agentDir>/vela.db` and `<agentDir>/blobs/`. */
   agentDir?: string
-  /** Use an in-memory `:memory:` SQLite database instead of `<agentDir>/vela.db`. */
+  /** Use an in-memory `:memory:` SQLite database and isolate from on-disk `config.json`, `auth.json`, and user MCP. */
   ephemeral?: boolean
+  /** Use an in-memory `:memory:` SQLite database while keeping owner config, credentials, and memory at `agentDir`. */
+  ephemeralSessions?: boolean
   /** @internal Pre-opened SQLite database for tests or daemon hosting. */
   db?: VelaDatabase
   /** Environment variables used for `$VAR` provider interpolation and default `VELA_DIR`. */

@@ -1,15 +1,18 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 import type { AuthEvent, AuthPrompt } from '../providers/auth/types.ts'
 import type { RuntimeEvent, StreamDeltaEvent } from '../runtime/events.ts'
 
 export const DAEMON_PROTOCOL_VERSION = 1
+const MAX_WIRE_FRAME_BYTES = 32 * 1024 * 1024
 
 export interface DaemonHello {
   protocolVersion: number
   appVersion: string
   pid: number
+  instanceId?: string
   agentDir: string
   startedAt: string
   socketPath: string
@@ -30,6 +33,7 @@ export interface SerializedError {
   message: string
   name?: string
   code?: string
+  cause?: SerializedError | string
 }
 
 type DaemonRequest = {
@@ -53,6 +57,11 @@ type DaemonPushMessage =
       promptId: number
       prompt: AuthPrompt
     }
+  | {
+      type: 'auth_prompt_cancel'
+      loginId: number
+      promptId: number
+    }
 
 type DaemonClientControlMessage =
   | {
@@ -63,6 +72,7 @@ type DaemonClientControlMessage =
       error?: string
     }
   | { type: 'auth_cancel'; loginId: number }
+  | { type: 'logout_cancel'; logoutId: number }
 
 export type DaemonWireMessage =
   | DaemonRequest
@@ -147,20 +157,49 @@ export function decodeIpcValue(value: unknown): unknown {
   return value
 }
 
+function serializeCause(
+  cause: unknown,
+  depth: number,
+): SerializedError | string | undefined {
+  if (cause === undefined || depth >= 3) return undefined
+  if (cause instanceof Error) {
+    const code = (cause as NodeJS.ErrnoException).code
+    const nested = serializeCause(cause.cause, depth + 1)
+    return {
+      message: cause.message,
+      name: cause.name,
+      ...(typeof code === 'string' ? { code } : {}),
+      ...(nested !== undefined ? { cause: nested } : {}),
+    }
+  }
+  return String(cause)
+}
+
 export function serializeError(error: unknown): SerializedError {
   if (error instanceof Error) {
     const code = (error as NodeJS.ErrnoException).code
+    const cause = serializeCause(error.cause, 0)
     return {
       message: error.message,
       name: error.name,
       ...(typeof code === 'string' ? { code } : {}),
+      ...(cause !== undefined ? { cause } : {}),
     }
   }
   return { message: String(error) }
 }
 
 export function deserializeError(err: SerializedError): Error {
-  const out = new Error(err.message)
+  const causeOption =
+    err.cause !== undefined
+      ? {
+          cause:
+            typeof err.cause === 'string'
+              ? err.cause
+              : deserializeError(err.cause),
+        }
+      : undefined
+  const out = new Error(err.message, causeOption)
   if (err.name) out.name = err.name
   if (err.code) {
     ;(out as NodeJS.ErrnoException).code = err.code
@@ -172,27 +211,53 @@ export function encodeWireLine(message: DaemonWireMessage): string {
   return `${JSON.stringify(encodeIpcValue(message))}\n`
 }
 
-/** Incremental NDJSON line parser over a byte/string stream. */
+/** Incremental NDJSON line parser over a byte/string stream using streaming UTF-8 decoding and bounded frames. */
 export function createNdjsonParser(
   onMessage: (message: DaemonWireMessage) => void,
   onParseError?: (error: unknown, rawLine: string) => void,
+  maxFrameBytes = MAX_WIRE_FRAME_BYTES,
 ): (chunk: Buffer | string) => void {
+  const decoder = new StringDecoder('utf8')
   let buffer = ''
+  let oversized = false
   return (chunk) => {
-    buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
-    let newlineIdx = buffer.indexOf('\n')
-    while (newlineIdx !== -1) {
+    const text = typeof chunk === 'string' ? chunk : decoder.write(chunk)
+    buffer += text
+    for (;;) {
+      const newlineIdx = buffer.indexOf('\n')
+      if (newlineIdx === -1) {
+        if (Buffer.byteLength(buffer, 'utf8') > maxFrameBytes) {
+          oversized = true
+          buffer = ''
+          onParseError?.(
+            new Error(`IPC frame exceeded ${maxFrameBytes} byte limit`),
+            '',
+          )
+        }
+        break
+      }
       const line = buffer.slice(0, newlineIdx).trim()
       buffer = buffer.slice(newlineIdx + 1)
-      if (line.length > 0) {
-        try {
-          const parsed = decodeIpcValue(JSON.parse(line)) as DaemonWireMessage
-          onMessage(parsed)
-        } catch (error) {
-          onParseError?.(error, line)
-        }
+      if (oversized) {
+        oversized = false
+        continue
       }
-      newlineIdx = buffer.indexOf('\n')
+      if (!line.length) continue
+      if (Buffer.byteLength(line, 'utf8') > maxFrameBytes) {
+        onParseError?.(
+          new Error(`IPC frame exceeded ${maxFrameBytes} byte limit`),
+          '',
+        )
+        continue
+      }
+      let parsed: DaemonWireMessage
+      try {
+        parsed = decodeIpcValue(JSON.parse(line)) as DaemonWireMessage
+      } catch (error) {
+        onParseError?.(error, line)
+        continue
+      }
+      onMessage(parsed)
     }
   }
 }

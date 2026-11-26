@@ -6,7 +6,7 @@ import type {
   StreamDeltaListener,
 } from '../runtime/index.ts'
 import type { VelaRuntime } from '../runtime-sdk-types.ts'
-import { ensureDaemonRunning } from './launcher.ts'
+import { ensureDaemonRunning, stripTransientDaemonEnv } from './launcher.ts'
 import { resolveDaemonPaths } from './paths.ts'
 import {
   createNdjsonParser,
@@ -41,6 +41,7 @@ interface ActiveClientLogin {
   interaction: AuthInteraction
   signal?: AbortSignal
   abortListener?: () => void
+  prompts: Map<number, AbortController>
 }
 
 /**
@@ -52,16 +53,13 @@ export async function connectRuntime(
 ): Promise<VelaRuntime> {
   const hostEnv = options.hostEnv ?? {}
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
-  const paths = resolveDaemonPaths(
-    agentDir,
-    options.socketPath ?? hostEnv.VELA_DAEMON_SOCKET,
-  )
+  const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
 
   if (options.autoStart !== false) {
     await ensureDaemonRunning({
       agentDir: paths.agentDir,
       socketPath: paths.socketPath,
-      hostEnv,
+      hostEnv: stripTransientDaemonEnv(hostEnv),
       appVersion: options.appVersion,
       protocolVersion: options.protocolVersion,
       timeoutMs: options.timeoutMs,
@@ -109,6 +107,7 @@ function createSocketRuntimeClient(
 ): VelaRuntime {
   let nextReqId = 1
   let nextLoginId = 1
+  let nextLogoutId = 1
   let closed = false
   const pending = new Map<number, PendingRpc>()
   const eventListeners = new Set<RuntimeEventListener>()
@@ -152,71 +151,111 @@ function createSocketRuntimeClient(
       if (login.abortListener && login.signal) {
         login.signal.removeEventListener('abort', login.abortListener)
       }
+      for (const ctrl of login.prompts.values()) {
+        ctrl.abort(err)
+      }
+      login.prompts.clear()
     }
     activeLogins.clear()
     eventListeners.clear()
     deltaListeners.clear()
   }
 
-  const parse = createNdjsonParser((msg) => {
-    if (msg.type === 'res') {
-      const entry = pending.get(msg.id)
-      if (!entry) return
-      pending.delete(msg.id)
-      if (msg.ok) entry.resolve(msg.result)
-      else entry.reject(deserializeError(msg.error))
-      return
-    }
-    if (msg.type === 'event') {
-      for (const listener of [...eventListeners]) {
-        try {
-          listener(msg.event)
-        } catch {}
+  const parse = createNdjsonParser(
+    (msg) => {
+      if (msg.type === 'res') {
+        const entry = pending.get(msg.id)
+        if (!entry) return
+        pending.delete(msg.id)
+        if (msg.ok) entry.resolve(msg.result)
+        else entry.reject(deserializeError(msg.error))
+        return
       }
-      return
-    }
-    if (msg.type === 'delta') {
-      for (const listener of [...deltaListeners]) {
-        try {
-          listener(msg.delta)
-        } catch {}
+      if (msg.type === 'event') {
+        for (const listener of [...eventListeners]) {
+          try {
+            listener(msg.event)
+          } catch {}
+        }
+        return
       }
-      return
-    }
-    if (msg.type === 'auth_event') {
-      const login = activeLogins.get(msg.loginId)
-      try {
-        login?.interaction.notify(msg.event)
-      } catch {}
-      return
-    }
-    if (msg.type === 'auth_prompt') {
-      const login = activeLogins.get(msg.loginId)
-      if (!login) return
-      Promise.resolve(login.interaction.prompt(msg.prompt)).then(
-        (value) => {
+      if (msg.type === 'delta') {
+        for (const listener of [...deltaListeners]) {
           try {
-            writeMsg({
-              type: 'auth_prompt_reply',
-              loginId: msg.loginId,
-              promptId: msg.promptId,
-              value,
-            })
+            listener(msg.delta)
           } catch {}
-        },
-        (err) => {
-          try {
-            writeMsg({
-              type: 'auth_prompt_reply',
-              loginId: msg.loginId,
-              promptId: msg.promptId,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          } catch {}
-        },
+        }
+        return
+      }
+      if (msg.type === 'auth_event') {
+        const login = activeLogins.get(msg.loginId)
+        try {
+          login?.interaction.notify(msg.event)
+        } catch {}
+        return
+      }
+      if (msg.type === 'auth_prompt_cancel') {
+        const login = activeLogins.get(msg.loginId)
+        const promptCtrl = login?.prompts.get(msg.promptId)
+        if (promptCtrl) {
+          login?.prompts.delete(msg.promptId)
+          promptCtrl.abort(new DOMException('Prompt cancelled', 'AbortError'))
+        }
+        return
+      }
+      if (msg.type === 'auth_prompt') {
+        const login = activeLogins.get(msg.loginId)
+        if (!login) return
+        const promptCtrl = new AbortController()
+        const onLoginAbort = () =>
+          promptCtrl.abort(new DOMException('Login cancelled', 'AbortError'))
+        if (login.signal?.aborted) onLoginAbort()
+        else
+          login.signal?.addEventListener('abort', onLoginAbort, { once: true })
+        login.prompts.set(msg.promptId, promptCtrl)
+        Promise.resolve(
+          login.interaction.prompt({
+            ...msg.prompt,
+            signal: promptCtrl.signal,
+          }),
+        )
+          .then(
+            (value) => {
+              try {
+                writeMsg({
+                  type: 'auth_prompt_reply',
+                  loginId: msg.loginId,
+                  promptId: msg.promptId,
+                  value,
+                })
+              } catch {}
+            },
+            (err) => {
+              try {
+                writeMsg({
+                  type: 'auth_prompt_reply',
+                  loginId: msg.loginId,
+                  promptId: msg.promptId,
+                  error: err instanceof Error ? err.message : String(err),
+                })
+              } catch {}
+            },
+          )
+          .finally(() => {
+            login.prompts.delete(msg.promptId)
+            login.signal?.removeEventListener('abort', onLoginAbort)
+          })
+      }
+    },
+    (err) => {
+      failAll(
+        err instanceof Error
+          ? err
+          : new Error(`Daemon IPC parse error: ${err}`),
       )
-    }
-  })
+      socket.destroy()
+    },
+  )
 
   socket.on('data', parse)
   socket.on('error', (err) => failAll(err))
@@ -375,24 +414,82 @@ function createSocketRuntimeClient(
           writeMsg({ type: 'auth_cancel', loginId })
         } catch {}
       }
-      activeLogins.set(loginId, { interaction, signal, abortListener })
+      activeLogins.set(loginId, {
+        interaction,
+        signal,
+        abortListener,
+        prompts: new Map(),
+      })
       if (signal.aborted) abortListener()
       else signal.addEventListener('abort', abortListener, { once: true })
+      const { getDeviceId, ...restLoginOptions } = loginOptions ?? {}
+      const deviceId = getDeviceId?.()
       try {
         await rpc('auth.login', {
           loginId,
           provider,
           method,
-          options: loginOptions,
+          options: {
+            ...restLoginOptions,
+            ...(deviceId ? { deviceId } : {}),
+          },
         })
       } finally {
         signal.removeEventListener('abort', abortListener)
+        for (const ctrl of activeLogins.get(loginId)?.prompts.values() ?? []) {
+          ctrl.abort(new DOMException('Login finished', 'AbortError'))
+        }
         activeLogins.delete(loginId)
       }
     },
     logout: async (provider, logoutOptions) => {
-      const { signal: _sig, ...restOpts } = logoutOptions ?? {}
-      return rpc('runtime.logout', { provider, options: restOpts })
+      const { signal, ...restOpts } = logoutOptions ?? {}
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new DOMException('Logout cancelled', 'AbortError')
+      }
+      const logoutId = nextLogoutId++
+      let abortListener: (() => void) | undefined
+      const rpcPromise = rpc<Awaited<ReturnType<VelaRuntime['logout']>>>(
+        'runtime.logout',
+        { provider, logoutId, options: restOpts },
+      )
+      if (!signal) return rpcPromise
+      return new Promise<Awaited<ReturnType<VelaRuntime['logout']>>>(
+        (resolve, reject) => {
+          let settled = false
+          abortListener = () => {
+            try {
+              writeMsg({ type: 'logout_cancel', logoutId })
+            } catch {}
+            if (settled) return
+            settled = true
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new DOMException('Logout cancelled', 'AbortError'),
+            )
+          }
+          signal.addEventListener('abort', abortListener, { once: true })
+          rpcPromise.then(
+            (res) => {
+              if (settled) return
+              settled = true
+              resolve(res)
+            },
+            (err) => {
+              if (settled) return
+              settled = true
+              reject(err)
+            },
+          )
+        },
+      ).finally(() => {
+        if (abortListener) {
+          signal.removeEventListener('abort', abortListener)
+        }
+      })
     },
     recover: () => rpc('runtime.recover'),
     dispose: async () => {

@@ -44,11 +44,20 @@ export async function runPrintMode(options: {
       }
     | undefined
 
+  let headerWritten = mode !== 'json'
+  const pendingJsonLines: string[] = []
+  const enqueueJsonLine = (line: string) => {
+    if (!headerWritten) {
+      pendingJsonLines.push(line)
+      return
+    }
+    writing = writing.then(() => writeStdout(line))
+  }
+
   const unsubEvents = runtime.events.subscribe((event) => {
     if (event.sessionId !== session.id) return
     if (mode === 'json') {
-      const line = jsonEvent(event)
-      writing = writing.then(() => writeStdout(line))
+      enqueueJsonLine(jsonEvent(event))
     }
     if (event.type === 'run_started' && event.trigger === 'user') {
       lastUserRunId = event.runId
@@ -82,8 +91,7 @@ export async function runPrintMode(options: {
     mode === 'json'
       ? runtime.events.subscribeDeltas((delta) => {
           if (delta.sessionId !== session.id) return
-          const line = jsonEvent(delta)
-          writing = writing.then(() => writeStdout(line))
+          enqueueJsonLine(jsonEvent(delta))
         })
       : () => {}
 
@@ -98,6 +106,15 @@ export async function runPrintMode(options: {
         thinkingLevel: snap.thinkingLevel,
       }),
     )
+    headerWritten = true
+    if (pendingJsonLines.length > 0) {
+      const flushed = pendingJsonLines.splice(0)
+      writing = writing.then(async () => {
+        for (const line of flushed) {
+          await writeStdout(line)
+        }
+      })
+    }
   }
 
   let exitCode = 0

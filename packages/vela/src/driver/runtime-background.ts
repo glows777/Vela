@@ -89,6 +89,16 @@ class LiveForeground {
 }
 
 export interface RuntimeBackgroundController extends BackgroundCommands {
+  watch<S>(options: {
+    command: string
+    toolCallId?: string
+    signal?: AbortSignal
+    output: OutputTail
+    start: (signal: AbortSignal) => Promise<S>
+    exit: (settled: S) => CommandExit
+    excludeFromContext?: boolean
+    suspendTimeout?: () => (() => void) | undefined
+  }): ForegroundCommand<S>
   setRunContext(ctx: {
     runId: string
     wakeSession?: (sessionId: string) => void
