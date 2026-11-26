@@ -681,19 +681,26 @@ const journeyOne = async (page: Page, app?: ElectronApplication) => {
 
   // A real rejected submission: Local refuses text over 100000 characters, so the
   // host rejects it before anything is recorded.
-  const projectComposer = page.getByLabel('Message Vela in this project')
+  const projectComposerLabel = 'Message Vela in this project'
+  const projectComposer = page.getByLabel(projectComposerLabel)
   const bubbles = await page.locator('[data-role="user"]').count()
   const tooLong = 'x'.repeat(100_001)
   await projectComposer.fill(tooLong)
   await page.getByRole('button', { name: 'Send' }).click()
   const tooLongAlert = page.getByRole('alert')
   await tooLongAlert.waitFor()
-  const tooLongReason = (await tooLongAlert.textContent()) ?? ''
-  assert.equal(tooLongReason, 'Message is too long (max 100000 characters)')
+  // The alert may render before the composer restores the rejected draft.
+  await page.waitForFunction(
+    ({ label, draft }) =>
+      document.querySelector<HTMLTextAreaElement>(
+        `textarea[aria-label="${label}"]`,
+      )?.value === draft,
+    { label: projectComposerLabel, draft: tooLong },
+    { timeout: 10_000 },
+  )
   assert.equal(
-    (await projectComposer.inputValue()).length,
-    tooLong.length,
-    'A rejected draft comes back',
+    await tooLongAlert.textContent(),
+    'Message is too long (max 100000 characters)',
   )
   assert.equal(
     await page.locator('[data-role="user"]').count(),
