@@ -8,14 +8,7 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
-import {
-  cliHostExtensionConfig,
-  cliProjectExtensions,
-} from '../../packages/vela/src/cli/project-extensions.ts'
-import {
-  loadCliExtensions,
-  parseArgs,
-} from '../../packages/vela/src/cli/setup.ts'
+import { parseArgs } from '../../packages/vela/src/cli/setup.ts'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
 import {
@@ -24,6 +17,11 @@ import {
   type VelaOptions,
 } from '../../packages/vela/src/driver/index.ts'
 import { loadConfig as loadCliConfig } from '../../packages/vela/src/load-config.ts'
+import {
+  cliHostExtensionConfig,
+  cliProjectExtensions,
+  loadCliExtensions,
+} from '../support/legacy-cli-helpers.ts'
 
 interface Record {
   kind: string
@@ -491,7 +489,7 @@ test('CLI memory and RAG stay host-owned across two projects and project idle cl
   const dir = tempDir()
   const aDir = join(dir.path, 'A')
   const bDir = join(dir.path, 'B')
-  const args = parseArgs(['serve'])
+  const args = parseArgs([])
   const agentDir = join(dir.path, 'user')
   mkdirSync(agentDir)
   writeFileSync(

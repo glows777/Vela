@@ -86,7 +86,7 @@ test.concurrent('fresh model-free CLI saves privately, creates once and updates 
   }
   expect(first.output + second.output).not.toContain(config.github.secret)
   for (const text of [
-    'vela serve',
+    'vela daemon',
     'channel',
     'Recent deliveries',
     'tunnel',

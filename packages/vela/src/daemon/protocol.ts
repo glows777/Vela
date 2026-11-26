@@ -1,0 +1,198 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { AuthEvent, AuthPrompt } from '../providers/auth/types.ts'
+import type { RuntimeEvent, StreamDeltaEvent } from '../runtime/events.ts'
+
+export const DAEMON_PROTOCOL_VERSION = 1
+
+export interface DaemonHello {
+  protocolVersion: number
+  appVersion: string
+  pid: number
+  agentDir: string
+  startedAt: string
+  socketPath: string
+}
+
+export interface DaemonStatus {
+  running: boolean
+  agentDir: string
+  socketPath: string
+  pid?: number
+  protocolVersion?: number
+  appVersion?: string
+  startedAt?: string
+  uptimeMs?: number
+}
+
+export interface SerializedError {
+  message: string
+  name?: string
+  code?: string
+}
+
+type DaemonRequest = {
+  type: 'req'
+  id: number
+  method: string
+  params?: unknown
+}
+
+type DaemonResponse =
+  | { type: 'res'; id: number; ok: true; result: unknown }
+  | { type: 'res'; id: number; ok: false; error: SerializedError }
+
+type DaemonPushMessage =
+  | { type: 'event'; event: RuntimeEvent }
+  | { type: 'delta'; delta: StreamDeltaEvent }
+  | { type: 'auth_event'; loginId: number; event: AuthEvent }
+  | {
+      type: 'auth_prompt'
+      loginId: number
+      promptId: number
+      prompt: AuthPrompt
+    }
+
+type DaemonClientControlMessage =
+  | {
+      type: 'auth_prompt_reply'
+      loginId: number
+      promptId: number
+      value?: string
+      error?: string
+    }
+  | { type: 'auth_cancel'; loginId: number }
+
+export type DaemonWireMessage =
+  | DaemonRequest
+  | DaemonResponse
+  | DaemonPushMessage
+  | DaemonClientControlMessage
+
+let cachedVersion: string | undefined
+
+/** Reads the Vela package version (cached), falling back gracefully for temp single-file bundles. */
+export function getAppVersion(): string {
+  if (cachedVersion !== undefined) return cachedVersion
+  let cur = dirname(fileURLToPath(import.meta.url))
+  for (let depth = 0; depth < 5; depth++) {
+    const pkgPath = join(cur, 'package.json')
+    if (existsSync(pkgPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+          name?: string
+          version?: string
+        }
+        if (
+          typeof parsed.version === 'string' &&
+          (parsed.name === '@glows777/vela' ||
+            parsed.name === 'vela-workspace' ||
+            depth >= 2)
+        ) {
+          cachedVersion = parsed.version
+          return cachedVersion
+        }
+      } catch {}
+    }
+    const parent = dirname(cur)
+    if (parent === cur) break
+    cur = parent
+  }
+  cachedVersion = '0.0.0'
+  return cachedVersion
+}
+
+/** Encodes `Uint8Array` instances inside plain JSON-compatible structures as base64 markers. */
+export function encodeIpcValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value
+  if (value instanceof Uint8Array) {
+    return { __velaBytes: Buffer.from(value).toString('base64') }
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => encodeIpcValue(item))
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) {
+      if (v !== undefined) {
+        out[k] = encodeIpcValue(v)
+      }
+    }
+    return out
+  }
+  return value
+}
+
+/** Decodes `__velaBytes` base64 markers back into `Uint8Array` instances. */
+export function decodeIpcValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value
+  if (Array.isArray(value)) {
+    return value.map((item) => decodeIpcValue(item))
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    if (
+      typeof record.__velaBytes === 'string' &&
+      Object.keys(record).length === 1
+    ) {
+      return new Uint8Array(Buffer.from(record.__velaBytes, 'base64'))
+    }
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(record)) {
+      out[k] = decodeIpcValue(v)
+    }
+    return out
+  }
+  return value
+}
+
+export function serializeError(error: unknown): SerializedError {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return {
+      message: error.message,
+      name: error.name,
+      ...(typeof code === 'string' ? { code } : {}),
+    }
+  }
+  return { message: String(error) }
+}
+
+export function deserializeError(err: SerializedError): Error {
+  const out = new Error(err.message)
+  if (err.name) out.name = err.name
+  if (err.code) {
+    ;(out as NodeJS.ErrnoException).code = err.code
+  }
+  return out
+}
+
+export function encodeWireLine(message: DaemonWireMessage): string {
+  return `${JSON.stringify(encodeIpcValue(message))}\n`
+}
+
+/** Incremental NDJSON line parser over a byte/string stream. */
+export function createNdjsonParser(
+  onMessage: (message: DaemonWireMessage) => void,
+  onParseError?: (error: unknown, rawLine: string) => void,
+): (chunk: Buffer | string) => void {
+  let buffer = ''
+  return (chunk) => {
+    buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+    let newlineIdx = buffer.indexOf('\n')
+    while (newlineIdx !== -1) {
+      const line = buffer.slice(0, newlineIdx).trim()
+      buffer = buffer.slice(newlineIdx + 1)
+      if (line.length > 0) {
+        try {
+          const parsed = decodeIpcValue(JSON.parse(line)) as DaemonWireMessage
+          onMessage(parsed)
+        } catch (error) {
+          onParseError?.(error, line)
+        }
+      }
+      newlineIdx = buffer.indexOf('\n')
+    }
+  }
+}

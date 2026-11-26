@@ -5,7 +5,7 @@ Vela is a self-hosted AI coworker for your team's group chats. You run it on you
 ## Run Vela in group chats
 
 - [Channels](channels.md): enabling chats, topics, schedules, costs and permissions.
-- [Deploy](deploy.md): run `vela serve` under a dedicated user.
+- [Deploy](deploy.md): run `vela daemon run` under a dedicated user.
 - [Security](security.md): what a chat member can make Vela do, and how to limit it.
 
 ## Use Vela in your terminal
@@ -22,8 +22,7 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 ## Automate or embed Vela
 
 - [JSON mode](json.md) streams the events of one run as JSON lines.
-- [RPC mode](rpc.md) controls a long-running Vela process over stdin and stdout.
-- The [SDK](sdk.md) runs Vela inside your application, with as many concurrent sessions as you need via `createRuntime()` or `createVela()`; [Packages](sdk.md#packages) describes the package exports.
+- The [SDK](sdk.md) runs Vela inside your application or connects over the local daemon socket with `connectRuntime()`, `createRuntime()`, or `createVela()`; [Packages](sdk.md#packages) describes the package exports.
 
 ## Extend Vela
 
@@ -38,4 +37,4 @@ Runnable examples are in [examples/](../examples/).
 
 ## Work safely
 
-Vela's tools and extensions run with your permissions and there is no sandbox. Read [Security](security.md) before running Vela on untrusted repositories, connecting a channel or leaving it unattended. For a chat bot, [deploy `vela serve`](deploy.md) under a dedicated user.
+Vela's tools and extensions run with your permissions and there is no sandbox. Read [Security](security.md) before running Vela on untrusted repositories, connecting a channel or leaving it unattended. For a background service, [deploy `vela daemon`](deploy.md) under a dedicated user.

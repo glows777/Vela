@@ -109,11 +109,7 @@ export async function inspectSession(
 
 export { THINKING_LEVELS } from '../providers/models/catalog.ts'
 export { resolveModel } from '../providers/models/index.ts'
-export {
-  getToolListError,
-  isToolModifier,
-} from '../shared/tool-selection.ts'
-export { defaultAgentDir } from './config/paths.ts'
+export { getToolListError } from '../shared/tool-selection.ts'
 export { extensionName, projectTrustRequired } from './config/settings.ts'
 export { isToolResultError } from './context/tool-result-output.ts'
 export { latestTodoList } from './extensions/todo/list.ts'
@@ -125,6 +121,4 @@ export {
   messageText as sessionContentText,
   summaryMessageText,
 } from './session/entries.ts'
-export { renderSessionHtml } from './session/export-html.ts'
-export { assertSessionId } from './session/options.ts'
 export { newSessionId } from './session/session-id.ts'

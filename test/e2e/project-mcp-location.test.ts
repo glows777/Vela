@@ -8,15 +8,13 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
+import { parseArgs } from '../../packages/vela/src/cli/setup.ts'
+import { loadConfig } from '../../packages/vela/src/load-config.ts'
 import {
   cliHostExtensionConfig,
   cliProjectExtensions,
-} from '../../packages/vela/src/cli/project-extensions.ts'
-import {
   loadCliExtensions,
-  parseArgs,
-} from '../../packages/vela/src/cli/setup.ts'
-import { loadConfig } from '../../packages/vela/src/load-config.ts'
+} from '../support/legacy-cli-helpers.ts'
 
 const alive = (pid: number) => {
   try {
@@ -65,7 +63,7 @@ test('CLI project MCP assembly isolates same-named stdio servers and shares each
     env: {},
     builtins: ['mcp'],
   })
-  const args = parseArgs(['serve'])
+  const args = parseArgs([])
   const errors: string[] = []
   const model = createFauxModel({
     responses: Array.from({ length: 3 }, () => [

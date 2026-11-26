@@ -1,63 +1,59 @@
-import { join } from 'node:path'
 import { clampThinkingLevel } from '../providers/models/catalog.ts'
 import {
-  DEFAULT_THINKING_LEVEL,
   limitsForModel,
   ModelRegistry,
   reasoningOption,
-  resolveModelInput,
+  resolveModel,
   THINKING_LEVELS,
 } from '../providers/models/index.ts'
-import { getActiveChannelForSession } from '../runtime/control-ops.ts'
-import type { SessionRecord } from '../runtime/domain.ts'
 import {
   type AgentDriver,
   assertSafePathSegment,
   type DriverTurnRequest,
   type DriverTurnResult,
 } from '../runtime/driver.ts'
-import { MEMORY_RULES, MemoryRegistry } from '../runtime/memory/index.ts'
-import { silentLogger } from '../shared/logger.ts'
+import { MemoryRegistry } from '../runtime/memory/index.ts'
+import { errorMessage, silentLogger } from '../shared/logger.ts'
+import type { ModelInput } from '../shared/provider-types.ts'
+import type { VelaEvent } from './agent/events.ts'
+import { classifyAgentError, failureHint } from './agent/retry.ts'
 import { ContextManager } from './context/manager.ts'
 import { resolveRequestSnapshot } from './context/request.ts'
-import { createSessionLocalExecutionEnv } from './execution/local.ts'
-import { resolveLocation } from './execution/location.ts'
-import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
-import type { MemoryDream } from './memory/dream.ts'
+import type { AssistantModelMessage, ModelMessage } from './messages.ts'
+import { createRuntimeBackgroundController } from './runtime-background.ts'
 import {
-  type AssistantModelMessage,
-  type ModelMessage,
-  withoutForeignReasoning,
-} from './messages.ts'
-import { localDateString } from './prompt/environment.ts'
-import {
-  createRuntimeBackgroundController,
-  type RuntimeBackgroundController,
-} from './runtime-background.ts'
+  createRuntimeControl,
+  type RuntimeControlHandle,
+} from './runtime-control.ts'
 import {
   recordRuntimeDreamTurn,
   scheduleRuntimeAutoDream,
 } from './runtime-dream.ts'
+import { createRuntimeEventForwarder } from './runtime-events.ts'
 import {
-  buildRuntimePromptSections,
-  runtimeToolModifiers,
-} from './runtime-prompt.ts'
+  createExtensionSessionView,
+  RuntimeExtensionHost,
+} from './runtime-extensions.ts'
 import {
-  loadTrustedRuntimeResources,
-  resolveRuntimeMemoryStores,
-} from './runtime-resources.ts'
-import { createRuntimeSessionToolRegistry } from './runtime-tools.ts'
+  type DriverSharedState,
+  type PreparedSessionEnv,
+  prepareSessionSetup,
+  resolveSessionModels,
+} from './runtime-session-setup.ts'
 import {
-  applyRuntimeProjectToolSelection,
   assistantText,
-  createRuntimeEventForwarder,
   flushUnconsumedSteering,
   prepareRuntimeTurnMessages,
   resolveRunInputMeta,
   resolveRunSilenceAndDepth,
 } from './runtime-turn.ts'
+import {
+  applyBeforeAgentStartHooks,
+  applyInputExtensionHooks,
+  wireRuntimeToolInterception,
+  wrapModelWithExtensionHooks,
+} from './runtime-turn-hooks.ts'
 import type {
-  ActiveRunMeta,
   RuntimeMcpAdapter,
   RuntimeMcpLease,
   VelaAgentDriverOptions,
@@ -67,39 +63,88 @@ import {
   runPostTurnCompaction,
 } from './session/defaults.ts'
 import { SessionStore } from './session/index.ts'
-import { createSessionPrompt } from './session/prompt-builder.ts'
 import { pendingToolCalls } from './session/recovery.ts'
 import { repairStoppedPendingToolStepInTx } from './step-recovery.ts'
-import type { ToolRegistry } from './tools/registry.ts'
 import { CONTEXT_WINDOW, TokenTracker } from './usage/tracker.ts'
 import { VelaDriver } from './vela-driver.ts'
 
 export type { RuntimeMcpAdapter, RuntimeMcpLease, VelaAgentDriverOptions }
 
+export type VelaAgentDriverHandle = AgentDriver & {
+  control: RuntimeControlHandle
+}
+
 /**
  * Bridges `Runtime`'s driver-agnostic `AgentDriver` contract onto `VelaDriver`
- * (step-durable SQLite transactions, `SessionStore`, `ToolRegistry`, and `EnvironmentRegistry`).
+ * (step-durable SQLite transactions, `SessionStore`, `ToolRegistry`, `ExtensionRunner`,
+ * and `EnvironmentRegistry`).
  */
 export function createVelaAgentDriver(
   options: VelaAgentDriverOptions,
-): AgentDriver {
+): VelaAgentDriverHandle {
   const logger = options.logger ?? silentLogger
   const models =
-    options.models ?? new ModelRegistry(options.providers, options.credentials)
+    options.models ??
+    new ModelRegistry(
+      options.providers,
+      options.credentials,
+      options.registrations,
+    )
   const memoryRegistry = options.memoryRegistry ?? new MemoryRegistry(logger)
-  const activeAbort = new Map<string, AbortController>()
-  const activeSteering = new Map<string, ModelMessage[]>()
-  const activeRunMeta = new Map<string, ActiveRunMeta>()
-  const sessionBackgrounds = new Map<string, RuntimeBackgroundController>()
-  const activeDreams = new Map<string, MemoryDream>()
-  const pendingDreamTasks = new Set<Promise<void>>()
-  const activeMcpLeases = new Set<RuntimeMcpLease>()
-  const activeTurns = new Set<Promise<DriverTurnResult>>()
-  const disposeController = new AbortController()
-  let disposed = false
+
+  const state: DriverSharedState = {
+    options,
+    db: options.db,
+    logger,
+    models,
+    registrations: options.registrations,
+    rawConfigProviders: options.rawConfigProviders,
+    memoryRegistry,
+    extHost: new RuntimeExtensionHost({
+      agentDir: options.agentDir,
+      models,
+      logger,
+      onBeforeImport: options.onBeforeExtensionImport,
+    }),
+    reloadable: {
+      defaultModel: options.defaultModel,
+      defaultThinkingLevel: options.defaultThinkingLevel,
+      providers: options.providers,
+      rawConfigProviders: options.rawConfigProviders,
+      limits: options.limits,
+      defaultTools: options.defaultTools,
+      extensionConfig: options.extensionConfig,
+      extensions: options.extensions,
+      enabledModels: options.enabledModels,
+      dreamEnabled: options.dreamEnabled,
+      offline: options.offline ?? false,
+    },
+    sessionOverrides: new Map(),
+    specialModels: new Map(),
+    activeAbort: new Map(),
+    activeSteering: new Map(),
+    activeRunMeta: new Map(),
+    sessionBackgrounds: new Map(),
+    pendingBashBySession: new Map(),
+    activeBash: new Map(),
+    activeDreams: new Map(),
+    pendingDreamTasks: new Set(),
+    activeMcpLeases: new Set(),
+    activeTurns: new Set(),
+    disposeController: new AbortController(),
+    disposed: false,
+  }
+
+  void state.extHost.reload({
+    configured: options.extensions,
+    extensionConfig: options.extensionConfig ?? {},
+  })
+
+  const control = createRuntimeControl(state)
 
   return {
     name: 'vela',
+    control,
     capabilities: {
       recovery: 'step',
       executionEnv: 'managed',
@@ -107,57 +152,107 @@ export function createVelaAgentDriver(
       approval: true,
     },
     steer(sessionId, text) {
-      const list = activeSteering.get(sessionId)
+      const list = state.activeSteering.get(sessionId)
       if (!list) return false
       list.push({ role: 'user', content: text })
       return true
     },
     abort(sessionId) {
-      activeAbort
+      state.activeAbort
         .get(sessionId)
         ?.abort(new DOMException('Stopped', 'AbortError'))
     },
     async waitForBackground() {
-      while (pendingDreamTasks.size > 0) {
-        await Promise.allSettled([...pendingDreamTasks])
+      while (state.pendingDreamTasks.size > 0) {
+        await Promise.allSettled([...state.pendingDreamTasks])
       }
     },
     async dispose() {
-      if (disposed) return
-      disposed = true
-      disposeController.abort(new DOMException('Driver disposed', 'AbortError'))
-      for (const controller of activeAbort.values()) {
+      if (state.disposed) return
+      state.disposed = true
+      state.disposeController.abort(
+        new DOMException('Driver disposed', 'AbortError'),
+      )
+      for (const controller of state.activeAbort.values()) {
         controller.abort(new DOMException('Driver disposed', 'AbortError'))
       }
-      await Promise.allSettled([...activeTurns])
-      await Promise.allSettled([...activeDreams.values()].map((d) => d.stop()))
-      await Promise.allSettled([...pendingDreamTasks])
-      activeDreams.clear()
+      for (const controller of state.activeBash.values()) {
+        controller.abort(new DOMException('Driver disposed', 'AbortError'))
+      }
+      await Promise.allSettled([...state.activeTurns])
       await Promise.allSettled(
-        [...sessionBackgrounds.values()].map((bg) => bg.stopAll()),
+        [...state.activeDreams.values()].map((d) => d.stop()),
       )
-      sessionBackgrounds.clear()
+      await Promise.allSettled([...state.pendingDreamTasks])
+      state.activeDreams.clear()
       await Promise.allSettled(
-        [...activeMcpLeases].map((lease) => lease.release()),
+        [...state.sessionBackgrounds.values()].map((bg) => bg.stopAll()),
       )
-      activeMcpLeases.clear()
+      state.sessionBackgrounds.clear()
+      await Promise.allSettled(
+        [...state.activeMcpLeases].map((lease) => lease.release()),
+      )
+      state.activeMcpLeases.clear()
+      await Promise.allSettled(
+        [...state.specialModels.values()].map((s) => s.flush?.()),
+      )
+      state.specialModels.clear()
       await options.mcp?.dispose?.()
+      await state.extHost.shutdown().catch(() => {})
     },
     runTurn(request: DriverTurnRequest): Promise<DriverTurnResult> {
       const promise = runSingleTurn(request)
-      activeTurns.add(promise)
+      state.activeTurns.add(promise)
       void promise.then(
-        () => activeTurns.delete(promise),
-        () => activeTurns.delete(promise),
+        () => state.activeTurns.delete(promise),
+        () => state.activeTurns.delete(promise),
       )
       return promise
     },
   }
 
+  async function maybeResolveImplicitSpecialModel(
+    sessionId: string,
+    savedModel?: string,
+  ): Promise<void> {
+    if (state.specialModels.has(sessionId) || !options.resolveSpecialModel) {
+      return
+    }
+    const override = state.sessionOverrides.get(sessionId)
+    const envRecord = override?.recordPath ?? options.hostEnv?.VELA_RECORD
+    const defaultModelStr =
+      typeof state.reloadable.defaultModel === 'string'
+        ? state.reloadable.defaultModel
+        : undefined
+    const envModel =
+      override?.model ?? defaultModelStr ?? options.hostEnv?.VELA_MODEL
+    if (!envRecord && envModel !== 'mock' && !envModel?.startsWith('faux:')) {
+      return
+    }
+    let fallbackModel: ModelInput | undefined
+    if (envRecord && envModel !== 'mock' && !envModel?.startsWith('faux:')) {
+      const activeModels = resolveSessionModels(state, override)
+      const candidate =
+        override?.model ?? savedModel ?? state.reloadable.defaultModel
+      fallbackModel = resolveModel(candidate, {
+        providers: activeModels.providerDefinitions(),
+        credentials: activeModels.credentials,
+      })
+    }
+    const special = await options.resolveSpecialModel({
+      modelRef: envModel,
+      recordPath: envRecord,
+      fallbackModel,
+    })
+    if (special) {
+      state.specialModels.set(sessionId, special)
+    }
+  }
+
   async function runSingleTurn(
     request: DriverTurnRequest,
   ): Promise<DriverTurnResult> {
-    if (disposed) {
+    if (state.disposed) {
       return { status: 'stopped' }
     }
     assertSafePathSegment(request.sessionId, 'sessionId')
@@ -170,20 +265,20 @@ export function createVelaAgentDriver(
         once: true,
       })
     }
-    activeAbort.set(request.sessionId, controller)
-    activeSteering.set(request.sessionId, [])
+    state.activeAbort.set(request.sessionId, controller)
+    state.activeSteering.set(request.sessionId, [])
     const deferredSteering: ModelMessage[] = []
     let waitingHuman = false
     const flushSteering = (wake: boolean): void => {
-      const live = activeSteering.get(request.sessionId)
-      activeSteering.delete(request.sessionId)
+      const live = state.activeSteering.get(request.sessionId)
+      state.activeSteering.delete(request.sessionId)
       flushUnconsumedSteering({
         db: options.db,
         sessionId: request.sessionId,
         projectId: request.projectId,
         unconsumed: [...deferredSteering.splice(0), ...(live ?? [])],
         wake,
-        shouldWakeSession: !waitingHuman && !disposed,
+        shouldWakeSession: !waitingHuman && !state.disposed,
         wakeSession: request.wakeSession ?? options.wakeSession,
       })
     }
@@ -198,11 +293,11 @@ export function createVelaAgentDriver(
         }
       | undefined
     let store: SessionStore | undefined
-    let registry: ToolRegistry | undefined
-    let mcpLease: RuntimeMcpLease | undefined
+    let prepared: PreparedSessionEnv | undefined
     let lastAssistant: AssistantModelMessage | undefined
     let committedInTx = false
     let isSilent = false
+    let systemPromptOverride: string | undefined
 
     try {
       const activeStore = new SessionStore(request.sessionId, options.db, {
@@ -211,49 +306,8 @@ export function createVelaAgentDriver(
       })
       store = activeStore
       const saved = await activeStore.loadSaved()
-      const location: ExecutionLocation = resolveLocation(saved?.location)
-      const boundChannel =
-        getActiveChannelForSession(
-          options.db,
-          request.sessionId,
-          request.runId,
-        ) ?? saved?.channel
-      const hasChannelBinding = Boolean(boundChannel)
-      const modelInput =
-        saved?.model ?? options.defaultModel ?? models.defaultRef(boundChannel)
-      if (!modelInput) {
-        throw new Error(`No model configured for session ${request.sessionId}`)
-      }
-      const resolved = resolveModelInput(models, modelInput, () => boundChannel)
-      const thinkingLevel =
-        saved?.thinkingLevel ??
-        options.defaultThinkingLevel ??
-        DEFAULT_THINKING_LEVEL
 
-      const spillDir = join(
-        options.agentDir,
-        'sessions',
-        request.sessionId,
-        'tool-results',
-      )
-      const resolveEnv = async (): Promise<ExecutionEnv> => {
-        if (location.environment === 'local') {
-          return createSessionLocalExecutionEnv({
-            cwd: location.cwd,
-            tempRoot: spillDir,
-          })
-        }
-        const resolvedEnv = await options.environments.resolve({
-          sessionId: request.sessionId,
-          location,
-        })
-        if (!resolvedEnv) {
-          throw new Error(
-            `Execution environment unavailable for ${location.environment}:${location.cwd}`,
-          )
-        }
-        return resolvedEnv
-      }
+      await maybeResolveImplicitSpecialModel(request.sessionId, saved?.model)
 
       const inputMeta = resolveRunInputMeta(options.db, request)
       const runState = resolveRunSilenceAndDepth(
@@ -262,7 +316,7 @@ export function createVelaAgentDriver(
         inputMeta.handoffDepth ?? 0,
       )
       isSilent = runState.isSilent
-      activeRunMeta.set(request.sessionId, {
+      state.activeRunMeta.set(request.sessionId, {
         runId: request.runId,
         projectId: request.projectId,
         replyToMessageId: inputMeta.replyToMessageId,
@@ -276,154 +330,106 @@ export function createVelaAgentDriver(
         },
       })
 
-      const sessionRow = options.db.get<{ kind: string; created_at: string }>(
-        'SELECT kind, created_at FROM sessions WHERE id = ?',
-        request.sessionId,
-      )
-      const sessionKind = (sessionRow?.kind ??
-        (request.projectId ? 'work' : 'chat')) as SessionRecord['kind']
-      const networkMode = options.environments.networkMode(location.environment)
+      const messages: ModelMessage[] = [...(saved?.messages ?? [])]
+      const buildSystemPrompt = () =>
+        systemPromptOverride ??
+        (prepared
+          ? prepared.builder.build({
+              sessionId: request.sessionId,
+              activeTools: prepared.registry.getActiveTools(),
+              deferredToolSummary: prepared.registry.getDeferredToolSummary(),
+              extensionSections: prepared.runtimeSections,
+            })
+          : '')
 
-      const memoryStores = resolveRuntimeMemoryStores({
-        registry: memoryRegistry,
-        agentDir: options.agentDir,
+      prepared = await prepareSessionSetup({
+        state,
+        sessionId: request.sessionId,
         projectId: request.projectId,
-        cwd: location.cwd,
-      })
-
-      const trustOverride = options.trustOverride
-        ? await options.trustOverride(location)
-        : undefined
-      const resources = await loadTrustedRuntimeResources({
-        db: options.db,
-        agentDir: options.agentDir,
-        trustDataDir: options.environments.dataDir,
-        location,
-        resolveEnv,
+        runId: request.runId,
+        saved,
+        store: activeStore,
+        messages,
         signal: controller.signal,
-        systemPrompt: options.systemPrompt,
-        appendSystemPrompt: options.appendSystemPrompt,
-        hostContextFiles: options.contextFiles,
-        hostSkills: options.skills,
-        hostPromptTemplates: options.promptTemplates,
-        hostEnv: options.hostEnv,
-        trustOverride,
+        attachMcp: true,
+        allowNoModel: false,
+        buildSystem: buildSystemPrompt,
+        wakeSession: request.wakeSession,
+        flushOutbox: request.flushOutbox,
       })
 
-      registry = createRuntimeSessionToolRegistry({
-        spillDir,
-        cwd: location.cwd,
-        logger,
-        memoryGlobal: memoryStores.global,
-        memoryLocal: () => memoryStores.local,
-        webConfig: options.extensionConfig?.web,
-        hostEnv: options.hostEnv,
-        offline: options.offline,
-        ...(options.timers && options.subscriptions && options.eventBus
-          ? {
-              runtimeToolDeps: {
-                db: options.db,
-                blobs: options.blobs,
-                eventBus: options.eventBus,
-                timers: options.timers,
-                subscriptions: options.subscriptions,
-                scheduleSession:
-                  request.wakeSession ?? options.wakeSession ?? (() => {}),
-                flushOutbox: request.flushOutbox ?? options.flushOutbox,
-                getRunContext: (sid) => activeRunMeta.get(sid),
-              },
-            }
-          : {}),
-        extraTools: options.tools,
-      })
-
-      if (options.mcp) {
-        mcpLease = await options.mcp.attach({
-          registry,
-          agentDir: options.agentDir,
-          cwd: location.cwd,
-          environment: location.environment,
-          trusted: resources.trusted,
-          env: options.hostEnv,
-          discoveredTools: saved?.discoveredTools,
-          signal: controller.signal,
-        })
-        activeMcpLeases.add(mcpLease)
+      if (!prepared.resolved) {
+        throw new Error(
+          prepared.modelError ??
+            `No model configured for session ${request.sessionId}`,
+        )
       }
+      const resolved = prepared.resolved
+      const registry = prepared.registry
+      const extensionRunner = prepared.extensionRunner
 
-      if (boundChannel) {
-        registry.setChannel(boundChannel)
-      }
-      registry.setRestrictedNetwork(networkMode !== 'on')
-      const baseModifiers = runtimeToolModifiers({
-        kind: sessionKind,
-        projectId: request.projectId,
-        hasChannelBinding,
-        networkMode,
-      })
-      applyRuntimeProjectToolSelection(
-        options.db,
-        registry,
-        request.projectId,
-        baseModifiers,
-      )
-      if (saved?.discoveredTools.length) {
-        registry.discoveredTools = new Set(saved.discoveredTools)
-      }
-
-      let bgController = sessionBackgrounds.get(request.sessionId)
+      let bgController = state.sessionBackgrounds.get(request.sessionId)
       if (!bgController) {
         bgController = createRuntimeBackgroundController({
           db: options.db,
           sessionId: request.sessionId,
           runId: request.runId,
           wakeSession: request.wakeSession ?? options.wakeSession,
-          location,
+          location: prepared.location,
         })
-        sessionBackgrounds.set(request.sessionId, bgController)
+        state.sessionBackgrounds.set(request.sessionId, bgController)
       } else {
         bgController.setRunContext({
           runId: request.runId,
           wakeSession: request.wakeSession ?? options.wakeSession,
-          location,
+          location: prepared.location,
         })
       }
       registry.background = bgController
-      registry.setInterception({
-        resolveEnv: () => resolveEnv(),
-        before: async (toolName, input, ctx) => {
-          if (toolName === 'tool_search' && mcpLease) {
-            await mcpLease.waitForAll(controller.signal)
-          }
-          if (!options.toolApprovalCheck) return { input }
-          const decision = await options.toolApprovalCheck(
-            toolName,
-            input,
-            ctx.sessionId ?? request.sessionId,
-          )
-          if (decision?.requireApproval) {
-            return {
-              input,
-              approval: {
-                required: true,
-                summary: decision.summary ?? `Approve ${toolName} execution`,
-              },
-            }
-          }
-          return { input }
-        },
+
+      const extView = createExtensionSessionView({
+        sessionId: request.sessionId,
+        cwd: prepared.location.cwd,
+        name: prepared.sessionName,
+        channel: prepared.boundChannel,
+        messages,
+        registry,
+        store: activeStore,
+        eventBus: options.eventBus,
+        runId: request.runId,
+        projectId: request.projectId,
+        signal: controller.signal,
+        buildSystem: (sections) =>
+          systemPromptOverride ??
+          prepared!.builder.build({
+            sessionId: request.sessionId,
+            activeTools: registry.getActiveTools(),
+            deferredToolSummary: registry.getDeferredToolSummary(),
+            extensionSections: sections ?? prepared!.runtimeSections,
+          }),
+      })
+
+      wireRuntimeToolInterception({
+        registry,
+        prepared,
+        extensionRunner,
+        extView,
+        sessionId: request.sessionId,
+        signal: controller.signal,
+        toolApprovalCheck: options.toolApprovalCheck,
       })
 
       const tracker = new TokenTracker((record) =>
-        activeStore.recordUsageRecord(record, { runId: request.runId }),
+        activeStore.recordUsageRecord(record),
       )
       tracker.setModel(
         resolved.info.contextWindow ?? CONTEXT_WINDOW,
         resolved.info.cost,
-        { keepCalibration: true },
+        {
+          keepCalibration: true,
+        },
       )
-      const messages: ModelMessage[] = [...(saved?.messages ?? [])]
-      for (const m of messages) tracker.addMessage(m)
+      for (const message of messages) tracker.addMessage(message)
       if (saved?.latestAssistantUsage) {
         tracker.restoreCalibration(
           saved.latestAssistantUsage.inputTokens,
@@ -431,10 +437,17 @@ export function createVelaAgentDriver(
           saved.latestAssistantUsage.trailingMessages,
         )
       }
-      const effectiveLimits = limitsForModel(resolved.info, options.limits)
-      const forwardEvent = createRuntimeEventForwarder(request, (msg) => {
+      const effectiveLimits = limitsForModel(
+        resolved.info,
+        state.reloadable.limits,
+      )
+      const forwardBase = createRuntimeEventForwarder(request, (msg) => {
         lastAssistant = msg
       })
+      const forwardEvent = (ev: VelaEvent) => {
+        forwardBase(ev)
+        extensionRunner.notify(ev, extView)
+      }
       const contextManager = new ContextManager(
         activeStore,
         tracker,
@@ -442,10 +455,6 @@ export function createVelaAgentDriver(
         forwardEvent,
         effectiveLimits,
       )
-
-      const activeTools = registry.getActiveTools()
-      const activeToolNames = new Set(activeTools.map((tool) => tool.name))
-      const memoryActive = activeToolNames.has('memory')
 
       const alreadyHasRunMessages = Boolean(
         options.db.get<{ ok: number }>(
@@ -472,6 +481,44 @@ export function createVelaAgentDriver(
         })
       }
 
+      if (!alreadyHasRunMessages) {
+        await control.flushPendingBash(
+          request.sessionId,
+          activeStore,
+          messages,
+          tracker,
+        )
+      }
+
+      let effectiveRequest = request
+      if (!alreadyHasRunMessages) {
+        const hookRes = await applyInputExtensionHooks({
+          extensionRunner,
+          extView,
+          request,
+        })
+        effectiveRequest = hookRes.request
+        if (hookRes.handledAll) {
+          return {
+            status: 'completed',
+            replyText: '',
+            silent: true,
+            committedInTx: false,
+          }
+        }
+      }
+
+      systemPromptOverride = await applyBeforeAgentStartHooks({
+        extensionRunner,
+        extView,
+        prepared,
+        request: effectiveRequest,
+        activeStore,
+        messages,
+        tracker,
+        alreadyHasRunMessages,
+      })
+
       const deferWaitForInput =
         alreadyHasRunMessages && pendingToolCalls(messages).length > 0
       const prepareTurnMessages = (defer: boolean) =>
@@ -480,46 +527,31 @@ export function createVelaAgentDriver(
           blobs: options.blobs,
           store: activeStore,
           tracker,
-          request,
+          request: effectiveRequest,
           messages,
-          memoryActive,
-          memoryStores,
-          resolveEnv,
+          memoryActive: prepared!.memoryActive,
+          memoryStores: prepared!.memoryStores,
+          resolveEnv: prepared!.resolveEnv,
           signal: controller.signal,
-          skills: resources.skills,
-          hostSkills: resources.hostSkills,
-          promptTemplates: resources.promptTemplates,
+          skills: prepared!.resources.skills,
+          hostSkills: prepared!.resources.hostSkills,
+          promptTemplates: prepared!.resources.promptTemplates,
           onlyWaitForInput: alreadyHasRunMessages,
           deferWaitForInput: defer,
         })
       let turnUserMsg = await prepareTurnMessages(deferWaitForInput)
 
-      const pinnedDate = localDateString(
-        new Date(sessionRow?.created_at ?? Date.now()),
-      )
-      const builder = createSessionPrompt(
-        () => ({
-          systemPrompt: resources.systemPrompt,
-          appendSystemPrompt: resources.appendSystemPrompt,
-          contextFiles: resources.contextFiles,
-          skills: resources.skills,
-          promptTemplates: resources.promptTemplates,
-        }),
-        () => location.cwd,
-        () => undefined,
-        location.environment === 'local' ? options.docsPaths : false,
-        () => location.environment === 'local',
-        () => options.environments.osFor(location.environment),
-        () => pinnedDate,
-      )
-      const runtimeSections = {
-        ...buildRuntimePromptSections({
-          kind: sessionKind,
-          projectId: request.projectId,
-          hasChannelBinding,
-          activeTools: activeToolNames,
-        }),
-        ...(memoryActive ? { memory: MEMORY_RULES } : {}),
+      if (prepared.specialModel?.addInput) {
+        const humanInput = effectiveRequest.inputs
+          .filter((i) => i.source === 'user' || i.source === 'channel')
+          .map((i) =>
+            typeof i.payload.text === 'string' ? i.payload.text : '',
+          )
+          .filter(Boolean)
+          .join('\n\n')
+        if (humanInput) {
+          prepared.specialModel.addInput(humanInput)
+        }
       }
 
       committedInTx = false
@@ -543,13 +575,6 @@ export function createVelaAgentDriver(
       }
 
       const activeRegistry = registry
-      const buildSystemPrompt = () =>
-        builder.build({
-          sessionId: request.sessionId,
-          activeTools: activeRegistry.getActiveTools(),
-          deferredToolSummary: activeRegistry.getDeferredToolSummary(),
-          extensionSections: runtimeSections,
-        })
       const buildSnapshot = (sig?: AbortSignal) =>
         resolveRequestSnapshot(
           resolved.model,
@@ -559,31 +584,40 @@ export function createVelaAgentDriver(
           sig,
           resolved.info.maxTokens,
         )
+
+      const turnModel = wrapModelWithExtensionHooks(
+        resolved.model,
+        extensionRunner,
+        extView,
+      )
+
       const result = await driver.run({
-        model: resolved.model,
+        model: turnModel,
         producer: () =>
           resolveRunProducer(
             resolved.model,
-            modelInput,
+            prepared!.modelInput!,
             resolved.info.provider,
-            boundChannel,
-            (provider, channel) => models.authMode(provider, channel),
+            prepared!.boundChannel,
+            (provider, channel) =>
+              prepared!.activeModels.authMode(provider, channel),
           ),
         systemPrompt: buildSystemPrompt,
         messages,
         prepareContext: (snapshot) => contextManager.prepare(snapshot),
-        transformContext: async (msgs, producerForAttempt) =>
-          withoutForeignReasoning(
-            msgs,
-            producerForAttempt,
-            activeStore.producers,
-          ),
+        transformContext: (msgs, producerForAttempt) =>
+          extensionRunner.transformContext(extView, msgs, producerForAttempt),
         trigger: request.trigger,
         claim,
+        skipFinishRun: true,
         supportsImages: resolved.info.input?.includes('image') ?? true,
         maxOutputTokens: resolved.info.maxTokens,
         reasoning: reasoningOption(
-          clampThinkingLevel(thinkingLevel, resolved.info, THINKING_LEVELS),
+          clampThinkingLevel(
+            prepared.thinkingLevel,
+            resolved.info,
+            THINKING_LEVELS,
+          ),
           resolved.info,
         ),
         limits: effectiveLimits,
@@ -603,10 +637,10 @@ export function createVelaAgentDriver(
           )
         },
         hasSteering: () =>
-          (activeSteering.get(request.sessionId)?.length ?? 0) > 0,
+          (state.activeSteering.get(request.sessionId)?.length ?? 0) > 0,
         takeSteering: () => {
-          const list = activeSteering.get(request.sessionId) ?? []
-          activeSteering.set(request.sessionId, [])
+          const list = state.activeSteering.get(request.sessionId) ?? []
+          state.activeSteering.set(request.sessionId, [])
           return list
         },
         onMessageCommittedInTx: (messageId, message) => {
@@ -619,15 +653,15 @@ export function createVelaAgentDriver(
         },
         onTerminalCommitInTx: request.onTerminalCommitInTx
           ? ({ assistant }) => {
-              const live = activeSteering.get(request.sessionId)
+              const live = state.activeSteering.get(request.sessionId)
               if (live?.length) deferredSteering.push(...live)
-              activeSteering.delete(request.sessionId)
+              state.activeSteering.delete(request.sessionId)
               lastAssistant = assistant
-              if (memoryActive && !isSilent && !disposed) {
+              if (prepared!.memoryActive && !isSilent && !state.disposed) {
                 recordRuntimeDreamTurn({
                   db: options.db,
-                  activeDreams,
-                  localStore: memoryStores.local,
+                  activeDreams: state.activeDreams,
+                  localStore: prepared!.memoryStores.local,
                   projectId: request.projectId,
                   sessionId: request.sessionId,
                   userEntryId: turnUserMsg.userEntryId,
@@ -643,6 +677,7 @@ export function createVelaAgentDriver(
             }
           : undefined,
       })
+
       committedInTx = Boolean(result.committedInTx)
       const recordedDreamInTx = committedInTx && attemptedDreamInTx
       const waitingApproval = options.db.get<{ id: string }>(
@@ -662,20 +697,20 @@ export function createVelaAgentDriver(
       flushSteering(!controller.signal.aborted)
 
       await runPostTurnCompaction({
-        enabled: contextManager.autoCompaction && !isSilent && !disposed,
+        enabled: contextManager.autoCompaction && !isSilent && !state.disposed,
         signal: controller.signal,
-        isDraining: () => disposed,
+        isDraining: () => state.disposed,
         buildSnapshot: () => buildSnapshot(controller.signal),
         compactIfNeeded: (req) => contextManager.compactIfNeeded(req),
         warn: (msg) => logger.warn(`[runtime] auto-compaction skipped: ${msg}`),
       })
 
-      if (memoryActive && !isSilent && !disposed) {
+      if (prepared.memoryActive && !isSilent && !state.disposed) {
         if (!recordedDreamInTx) {
           recordRuntimeDreamTurn({
             db: options.db,
-            activeDreams,
-            localStore: memoryStores.local,
+            activeDreams: state.activeDreams,
+            localStore: prepared.memoryStores.local,
             projectId: request.projectId,
             sessionId: request.sessionId,
             userEntryId: turnUserMsg.userEntryId,
@@ -684,16 +719,16 @@ export function createVelaAgentDriver(
         }
         scheduleRuntimeAutoDream({
           db: options.db,
-          activeDreams,
-          pendingDreamTasks,
-          localStore: memoryStores.local,
+          activeDreams: state.activeDreams,
+          pendingDreamTasks: state.pendingDreamTasks,
+          localStore: prepared.memoryStores.local,
           projectId: request.projectId,
           sessionId: request.sessionId,
-          dreamEnabled: options.dreamEnabled,
+          dreamEnabled: state.reloadable.dreamEnabled,
           resolved,
           tracker,
-          resolveEnv,
-          signal: disposeController.signal,
+          resolveEnv: prepared.resolveEnv,
+          signal: state.disposeController.signal,
           logger,
         })
       }
@@ -716,32 +751,42 @@ export function createVelaAgentDriver(
       if (controller.signal.aborted) {
         return { status: 'stopped' }
       }
+      const errorKind = classifyAgentError(error)
       return {
         status: 'failed',
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
+        errorKind,
+        errorHint: failureHint(errorKind, error),
       }
     } finally {
       try {
         flushSteering(!controller.signal.aborted)
       } catch (error) {
         logger.warn(
-          `[runtime] failed preserving unconsumed steer inputs for ${request.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          `[runtime] failed preserving unconsumed steer inputs for ${request.sessionId}: ${errorMessage(error)}`,
         )
       }
-      if (store && registry) {
-        store.setDiscoveredTools(registry.discoveredTools)
+      if (prepared?.specialModel?.flush) {
+        await prepared.specialModel.flush().catch((err) => {
+          logger.warn(
+            `[record] failed flushing recording: ${errorMessage(err)}`,
+          )
+        })
+      }
+      if (store && prepared?.registry) {
+        store.setDiscoveredTools(prepared.registry.discoveredTools)
       }
       if (claim && !releasedClaim) claim.release()
       request.abortSignal.removeEventListener('abort', forwardAbort)
-      activeAbort.delete(request.sessionId)
-      activeSteering.delete(request.sessionId)
-      activeRunMeta.delete(request.sessionId)
-      if (mcpLease) {
-        activeMcpLeases.delete(mcpLease)
-        await mcpLease.release().catch(() => {})
+      state.activeAbort.delete(request.sessionId)
+      state.activeSteering.delete(request.sessionId)
+      state.activeRunMeta.delete(request.sessionId)
+      if (prepared?.mcpLease) {
+        state.activeMcpLeases.delete(prepared.mcpLease)
+        await prepared.mcpLease.release().catch(() => {})
       }
-      if (registry) {
-        await registry.waitForIdle().catch(() => {})
+      if (prepared?.registry) {
+        await prepared.registry.waitForIdle().catch(() => {})
       }
     }
   }

@@ -3,19 +3,16 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
 import {
-  BUILTIN_EXTENSIONS,
-  extensionConfigFromEnv,
   formatModelList,
   HELP,
-  loadCliExtensions,
   packageVersion,
   parseArgs,
+  RetiredCommandError,
   resolveTrust,
   selectTools,
 } from '../../../src/cli/setup.ts'
+import { BUILTIN_NATIVE_EXTENSIONS } from '../../../src/driver/runtime-extensions.ts'
 import { loadConfig } from '../../../src/load-config.ts'
-import { createFauxModel, fauxText } from '../../../src/testing/core/index.ts'
-import { createVela } from '../../../src/vela.ts'
 
 const dirs: { cleanup(): void }[] = []
 afterEach(() => {
@@ -37,7 +34,6 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
       '--continue',
     ]),
   ).toEqual({
-    serve: false,
     print: true,
     messages: ['hi'],
     continue: true,
@@ -74,8 +70,16 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
   })
   expect(parseArgs(['-r']).resume).toBe(true)
   expect(parseArgs(['--session', 'abc']).session).toBe('abc')
+  expect(parseArgs(['--agent-dir', '/tmp/custom-vela']).agentDir).toBe(
+    '/tmp/custom-vela',
+  )
   expect(() => parseArgs(['--mode', 'xml'])).toThrow(
-    '--mode must be text, json or rpc',
+    '--mode must be text or json',
+  )
+  expect(() => parseArgs(['--mode', 'rpc'])).toThrow(RetiredCommandError)
+  expect(() => parseArgs(['serve'])).toThrow(RetiredCommandError)
+  expect(() => parseArgs(['serve', '--model', 'mock'])).toThrow(
+    RetiredCommandError,
   )
   expect(() => parseArgs(['-c', '--session', 'x'])).toThrow(
     'Use only one of -c, -r, --session and --fork',
@@ -86,27 +90,22 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
   expect(() => parseArgs(['--session', '.bad'])).toThrow(
     'Invalid session id ".bad"',
   )
-  // `serve` is a subcommand only as the first argument; later it stays a prompt
-  expect(parseArgs(['serve', '--model', 'mock'])).toMatchObject({
-    serve: true,
-    model: 'mock',
-    messages: [],
-  })
+  // `daemon` subcommands
+  expect(parseArgs(['daemon'])).toMatchObject({ daemon: 'status' })
+  for (const sub of ['start', 'stop', 'status', 'run'] as const) {
+    expect(parseArgs(['daemon', sub])).toMatchObject({ daemon: sub })
+  }
+  expect(parseArgs(['daemon', '--help'])).toMatchObject({ daemonHelp: true })
+  expect(() => parseArgs(['daemon', 'wat'])).toThrow(
+    'Unknown daemon subcommand "wat"',
+  )
+  expect(() => parseArgs(['daemon', 'status', 'hi'])).toThrow(
+    'vela daemon does not accept positional prompts',
+  )
+  expect(() => parseArgs(['serve'])).toThrow('`vela serve` was retired in v0.9')
   expect(parseArgs(['mock', 'serve'])).toMatchObject({
-    serve: false,
     messages: ['mock', 'serve'],
   })
-  for (const args of [
-    ['serve', '-p'],
-    ['serve', '--mode', 'json'],
-    ['serve', '--export', 'x'],
-    ['serve', '--list-models'],
-    ['serve', '-c'],
-    ['serve', '--fork', 'x'],
-    ['serve', '--tools', 'read'],
-    ['serve', 'hi'],
-  ])
-    expect(() => parseArgs(args)).toThrow('vela serve runs channels only')
 })
 
 test('the untrusted-project notice names the real vela.db under VELA_DIR', async () => {
@@ -178,7 +177,7 @@ test('USAGE lists every flag, the modes, examples and built-in provider keys', (
   ])
     expect(HELP).toContain(flag)
   expect(HELP).toContain('Examples:')
-  expect(HELP).toContain('rpc')
+  expect(HELP).toContain('daemon')
   for (const key of [
     'ANTHROPIC_API_KEY',
     'OPENAI_API_KEY',
@@ -198,21 +197,6 @@ test('packageVersion() is the package.json version', () => {
   expect(packageVersion()).toBe(pkg.version)
 })
 
-test('config.json extension config overrides the environment defaults key by key', () => {
-  const config = extensionConfigFromEnv(
-    {
-      TAVILY_API_KEY: 'env-tavily',
-      SERPER_API_KEY: 'env-serper',
-    },
-    {
-      web: { tavilyKey: 'file' },
-      mine: { a: 1 },
-    },
-  )
-  expect(config.web).toEqual({ tavilyKey: 'file', serperKey: 'env-serper' })
-  expect(config.mine).toEqual({ a: 1 })
-})
-
 test('legacy -builtin:rag opt-out is accepted while positive builtin:rag fails loudly', () => {
   const dir = tempDir()
   dirs.push(dir)
@@ -223,7 +207,7 @@ test('legacy -builtin:rag opt-out is accepted while positive builtin:rag fails l
   const ok = loadConfig({
     cwd: dir.path,
     agentDir: dir.path,
-    builtins: Object.keys(BUILTIN_EXTENSIONS),
+    builtins: [...BUILTIN_NATIVE_EXTENSIONS],
   })
   expect(ok.extensions.map((e) => e.name)).not.toContain('rag')
 
@@ -235,83 +219,25 @@ test('legacy -builtin:rag opt-out is accepted while positive builtin:rag fails l
     loadConfig({
       cwd: dir.path,
       agentDir: dir.path,
-      builtins: Object.keys(BUILTIN_EXTENSIONS),
+      builtins: [...BUILTIN_NATIVE_EXTENSIONS],
     }),
   ).toThrow('Unknown built-in extension builtin:rag')
 })
 
-test('an extension that throws or rejects while loading is reported and skipped, not fatal', async () => {
-  const dir = tempDir()
-  dirs.push(dir)
-  const file = (name: string, body: string) => {
-    const path = join(dir.path, name)
-    writeFileSync(path, body)
-    return path
-  }
-  const sync = file(
-    'boom.ts',
-    "export default () => { throw new Error('sync boom') }",
-  )
-  const async = file(
-    'later.ts',
-    "export default async () => { throw new Error('async boom') }",
-  )
-  const good = file(
-    'good.ts',
-    "export default (vela) => { vela.registerCommand('hi', { description: 'hi', handler: async () => {} }) }",
-  )
-  const errors: string[] = []
-  const config = loadConfig({ cwd: dir.path, agentDir: join(dir.path, 'home') })
-  const extensions = await loadCliExtensions(
-    config,
-    parseArgs(['-e', sync, '-e', async, '-e', good]),
-    (message) => errors.push(message),
-  )
-  expect(extensions.map((extension) => extension.name)).toEqual([
-    'boom',
-    'later',
-    'good',
-  ])
-  const vela = createVela({
-    model: createFauxModel({ responses: [fauxText('ok')] }),
-    extensions,
-  })
-  try {
-    await vela.ready()
-    await vela.session().prompt('hello')
-    expect(errors).toEqual([
-      `[extensions] Failed to load ${sync}: sync boom`,
-      `[extensions] Failed to load ${async}: async boom`,
-    ])
-  } finally {
-    await vela.dispose()
-  }
-})
-
 test('the removed supabase built-in is unknown, so an old -builtin:supabase fails loudly', async () => {
-  expect(Object.keys(BUILTIN_EXTENSIONS)).toEqual([
+  expect([...BUILTIN_NATIVE_EXTENSIONS]).toEqual([
     'background',
     'memory',
     'web',
-    'lark',
-    'mcp',
     'todo',
+    'mcp',
+    'lark',
   ])
-  for (const [name, factory] of Object.entries(BUILTIN_EXTENSIONS))
-    expect(factory({}).name).toBe(name)
   const bundled = await Bun.build({
     entrypoints: [join(import.meta.dir, '../../../src/cli/main.ts')],
     target: 'bun',
   })
   expect(bundled.success).toBe(true)
-  const text = await bundled.outputs[0]!.text()
-  for (const name of [...Object.keys(BUILTIN_EXTENSIONS), 'local'])
-    expect(text).toContain(
-      `Object.defineProperty(extension, "name", { value: "${name}" })`,
-    )
-  expect(extensionConfigFromEnv({ SUPABASE_URL: 'u' }, {})).not.toHaveProperty(
-    'supabase',
-  )
   const dir = tempDir()
   dirs.push(dir)
   mkdirSync(join(dir.path, 'home'), { recursive: true })
@@ -323,7 +249,7 @@ test('the removed supabase built-in is unknown, so an old -builtin:supabase fail
     loadConfig({
       cwd: dir.path,
       agentDir: join(dir.path, 'home'),
-      builtins: Object.keys(BUILTIN_EXTENSIONS),
+      builtins: [...BUILTIN_NATIVE_EXTENSIONS],
     }),
   ).toThrow('Unknown built-in extension builtin:supabase')
 })

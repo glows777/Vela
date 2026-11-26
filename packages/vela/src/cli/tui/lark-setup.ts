@@ -129,7 +129,7 @@ export async function larkSetup(host: Host): Promise<boolean> {
     try {
       await connection.send(
         group.chatId,
-        'Vela is connected to this group; run `vela serve` and @ me.',
+        'Vela is connected to this group; start `vela daemon start` and @ me.',
       )
     } catch (error) {
       const summary = `Configuration saved to ${path}, but sending the connection message failed: ${String(error).replaceAll(secret, '[redacted]')}. Check permissions at https://open.feishu.cn/app and retry.`
@@ -160,7 +160,7 @@ export async function larkSetup(host: Host): Promise<boolean> {
     const disabled = enabled
       ? ''
       : ' Lark is disabled by extensions settings; remove -builtin:lark or add +builtin:lark before starting.'
-    const summary = `Lark configured in ${path}. Connection message sent. Run vela serve, then mention the bot in the group. Card callback and other scopes were not checked.${disabled}${projectNote}`
+    const summary = `Lark configured in ${path}. Connection message sent. Start the daemon with \`vela daemon start\`, then mention the bot in the group. Card callback and other scopes were not checked.${disabled}${projectNote}`
     host.addNotice(summary)
     host.setSummary(summary)
     return true

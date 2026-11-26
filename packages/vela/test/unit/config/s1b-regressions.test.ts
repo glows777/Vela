@@ -12,7 +12,9 @@ import {
 import { join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
 import { githubSetup } from '../../../src/cli/github-setup.ts'
-import { BUILTIN_EXTENSIONS } from '../../../src/cli/setup.ts'
+
+const BUILTIN_NAMES = ['background', 'memory', 'web', 'lark', 'mcp', 'todo']
+
 import {
   PROJECT_PRIVILEGED_KEYS,
   parseConfig,
@@ -699,7 +701,7 @@ test('R1 #12, #13, #14: strict limits/models validation, strip-before-validate o
     'providers.p.models[0].contextWindow must be a positive number',
   )
 
-  for (const builtin of Object.keys(BUILTIN_EXTENSIONS)) {
+  for (const builtin of BUILTIN_NAMES) {
     expect(() =>
       parseConfig(
         JSON.stringify({ extensionConfig: { [builtin]: {} } }),

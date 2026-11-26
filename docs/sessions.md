@@ -74,7 +74,7 @@ In the SDK these are `session.navigateTree(entryId, { summarize, focus, label })
 
 ## Export
 
-`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`, or `vela --export <id> branch.jsonl`) writes the branch in the [session export format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
+`/export [path]` (`session.exportHtml(path)`, `runtime.sessions.export(id, 'html' | 'jsonl', path)`, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`, or `vela --export <id> branch.jsonl`) writes the branch in the [session export format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
 
 Review an export before you share it: it can contain your prompts, the model's answers, tool arguments, command output and file contents. Vela has no `/share` upload (pi's `/share` uploads to a gist).
 
@@ -82,7 +82,7 @@ Review an export before you share it: it can contain your prompts, the model's a
 
 One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory and channels; each keeps its own history, queues, compaction, usage, tool results and run lock. This is a difference from pi, where one process holds one active session. A channel like Lark needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
 
-The CLI shows one session at a time; `vela serve` runs the channel sessions in its process instead. In the SDK, open as many as you need with `vela.session(id)`; see [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
+The CLI opens one session at a time on the resident daemon; `connectRuntime()`, `createRuntime()`, and legacy `createVela()` can drive as many sessions concurrently as you need. See [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
 
 ## Queueing: steer
 
@@ -119,11 +119,11 @@ The summary request uses the same model and system prompt as the main request. I
 
 ### Manual compaction
 
-`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary what to preserve. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When the conversation fits within the recent-token keep budget (`canSummarize` is false, e.g. only the initial message), it fails with `Nothing to compact (session too small)`.
+`/compact [focus]` in interactive mode, `session.compact(focus)` and `runtime.sessions.compact(id, focus)` in the SDK summarize now, whatever the thresholds. `focus` tells the summary what to preserve. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When the conversation fits within the recent-token keep budget (`canSummarize` is false, e.g. only the initial message), it fails with `Nothing to compact (session too small)`.
 
 ### Turning automatic compaction off
 
-Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, set `session.autoCompaction = false`, or send the `set_auto_compaction` RPC command. Then nothing changes the context on its own: no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works.
+Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, or set `session.autoCompaction = false`. Then nothing changes the context on its own: no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works.
 
 ### Thresholds and context window
 

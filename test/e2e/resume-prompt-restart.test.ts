@@ -10,6 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { stopDaemon } from '../../packages/vela/src/daemon/index.ts'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 
 const roots: string[] = []
@@ -20,9 +21,14 @@ const fixture = new URL(
   import.meta.url,
 ).pathname
 const followup = 'What happened? Do not repeat the commands.'
-afterEach(() => {
-  for (const cwd of roots.splice(0))
+afterEach(async () => {
+  for (const cwd of roots.splice(0)) {
+    await stopDaemon({
+      agentDir: join(cwd, 'agent'),
+      hostEnv: process.env,
+    }).catch(() => {})
     rmSync(cwd, { recursive: true, force: true })
+  }
 })
 async function crash() {
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'vela-resume-prompt-')))
@@ -108,7 +114,7 @@ test('SIGKILL then SDK resume and normal prompt repairs the interrupted unsafe t
   verify(cwd)
 }, 30000)
 
-for (const mode of ['text', 'json', 'rpc']) {
+for (const mode of ['text', 'json']) {
   test(`SIGKILL then CLI ${mode} session resume accepts a normal follow-up without replay`, async () => {
     const cwd = await crash()
     mkdirSync(join(cwd, 'home'))
@@ -125,7 +131,7 @@ for (const mode of ['text', 'json', 'rpc']) {
         '--session',
         'resume-prompt',
         '--no-extensions',
-        ...(mode === 'rpc' ? [] : [followup]),
+        followup,
       ],
       {
         cwd,
@@ -136,7 +142,7 @@ for (const mode of ['text', 'json', 'rpc']) {
           VELA_DIR: join(cwd, 'agent'),
           VELA_MODEL: `faux:${join(cwd, 'scenario.json')}`,
         },
-        stdin: mode === 'rpc' ? 'pipe' : 'ignore',
+        stdin: 'ignore',
         stdout: 'pipe',
         stderr: 'pipe',
       },
@@ -145,19 +151,7 @@ for (const mode of ['text', 'json', 'rpc']) {
     const stderr = new Response(child.stderr).text()
     let stdout = ''
     try {
-      if (mode === 'rpc') {
-        child.stdin?.write(
-          `${JSON.stringify({ id: 'followup', type: 'prompt', message: followup })}\n`,
-        )
-        child.stdin?.flush()
-        for await (const chunk of child.stdout) {
-          stdout += new TextDecoder().decode(chunk)
-          if (stdout.includes('"type":"agent_settled"')) {
-            child.stdin?.end()
-            break
-          }
-        }
-      } else stdout = await new Response(child.stdout).text()
+      stdout = await new Response(child.stdout).text()
       const code = await child.exited
       const errors = await stderr
       expect(code, errors + stdout).toBe(0)

@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import type { UsageTotals, VelaSession } from '../../driver/index.ts'
+import type { UsageTotals } from '../../driver/index.ts'
 import { formatUsd } from '../format.ts'
 import { formatContextFileList, formatStatusPath } from '../status-display.ts'
 import { sanitize } from '../tui/components.ts'
@@ -12,28 +12,34 @@ export const statusCommands: CommandHandler[] = [
   (cmd, { print, session, agentDir }) => {
     if (cmd !== '/status') return false
     return (async () => {
-      let model: string
-      let windowTokens = session.usage.contextWindow
-      try {
-        const info = session.modelInfo
-        model = info.ref
-        windowTokens = info.contextWindow ?? windowTokens
-      } catch (error) {
-        model = `(unavailable: ${error instanceof Error ? error.message : error})`
-      }
-
-      const usage = session.usage
-      const name = session.name ? plain(session.name) : ''
+      const snap = await session.refresh()
+      const windowTokens =
+        snap.modelInfo?.contextWindow ?? snap.usage.contextWindow
+      const model = snap.modelInfo
+        ? snap.modelInfo.ref
+        : `(unavailable: ${snap.modelError ?? 'no model selected'})`
+      const usage = snap.usage
+      const name = snap.name ? plain(snap.name) : ''
+      const messageCount = snap.branch.filter(
+        (e) => e.type === 'message' || e.type === 'custom_message',
+      ).length
       const lines = [
         '\n[status]',
         `  Version: ${cliVersion()}`,
         `  Session: ${name ? `${name} (${session.id})` : session.id}`,
-        `  Path: ${sessionPath(session, agentDir)}`,
-        `  Cwd: ${plain(session.cwd)}`,
+        `  Path: ${plain(
+          formatStatusPath({
+            persistence: snap.persistence,
+            homeDir: homedir(),
+            agentDir,
+            isFile: (path) => snap.entries.length > 0 && isSessionFile(path),
+          }),
+        )}`,
+        `  Cwd: ${plain(snap.cwd)}`,
       ]
       const contextFiles = plain(
-        formatContextFileList((await session.resources()).contextFiles, {
-          cwd: session.cwd,
+        formatContextFileList(snap.resources.contextFiles, {
+          cwd: snap.cwd,
           homeDir: homedir(),
           agentDir,
         }),
@@ -41,14 +47,14 @@ export const statusCommands: CommandHandler[] = [
       if (contextFiles) lines.push(`  Context files: ${contextFiles}`)
       lines.push(
         `  Model: ${plain(model)}`,
-        `  Thinking: ${session.thinkingLevel}`,
+        `  Thinking: ${snap.thinkingLevel}`,
       )
-      const channel = session.channel ? plain(session.channel) : ''
-      if (channel) lines.push(`  Channel: ${channel}`)
-      const parent = session.parentSession ? plain(session.parentSession) : ''
-      if (parent) lines.push(`  Forked from: ${parent}`)
+      if (snap.channel) lines.push(`  Channel: ${plain(snap.channel)}`)
+      if (snap.parentSession) {
+        lines.push(`  Forked from: ${plain(snap.parentSession)}`)
+      }
       lines.push(
-        `  Messages: ${session.messages.length}`,
+        `  Messages: ${messageCount}`,
         `  Context: ${formatCount(usage.tokens)} tokens (${usage.percent}% of ${formatCount(windowTokens)})`,
       )
       if (usage.totals.steps) lines.push(usageLine(usage.totals))
@@ -57,26 +63,6 @@ export const statusCommands: CommandHandler[] = [
   },
 ]
 
-/**
- * Where history is kept, as one display line. Only a reported memory storage is "not saved".
- * A file storage that has not been written yet says so: the path is a destination, not a file.
- * A storage that does not say is custom: it may still be durable, and its path is unknown.
- */
-function sessionPath(
-  session: VelaSession,
-  agentDir: string | undefined,
-): string {
-  return plain(
-    formatStatusPath({
-      persistence: session.persistence,
-      homeDir: homedir(),
-      agentDir,
-      isFile: (path) => session.getEntries().length > 0 && isSessionFile(path),
-    }),
-  )
-}
-
-/** True when this path is a file. A missing file is not a saved session; other errors are not "missing". */
 function isSessionFile(path: string): boolean {
   try {
     return statSync(path).isFile()
@@ -85,15 +71,10 @@ function isSessionFile(path: string): boolean {
   }
 }
 
-/**
- * One line of external text for raw command output: terminal sequences and control bytes are
- * removed (the TUI prints this with `raw: true`), and line breaks cannot split the overview.
- */
 function plain(value: string): string {
   return sanitize(value).replace(/\n+/g, ' ').trim()
 }
 
-/** Same rounding as /usage: one decimal from 1k, and millions from 1M. */
 function formatCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`

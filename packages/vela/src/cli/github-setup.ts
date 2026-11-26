@@ -199,5 +199,5 @@ export async function githubSetup(
 }
 
 function nextSteps(): string {
-  return 'Restart vela serve after setup. An enabled, connected channel is required to receive routed events. Hook creation does not verify tunnel reachability or listener delivery; check Recent deliveries in GitHub. Hooks at an old URL are left unchanged; clean them up manually.'
+  return 'Restart the Vela daemon (`vela daemon stop && vela daemon start`) after setup. An enabled, connected channel is required to receive routed events. Hook creation does not verify tunnel reachability or listener delivery; check Recent deliveries in GitHub. Hooks at an old URL are left unchanged; clean them up manually.'
 }

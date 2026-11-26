@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { selectTools } from '../../packages/vela/src/cli/setup.ts'
+import { stopDaemon } from '../../packages/vela/src/daemon/index.ts'
 import { saveTrust } from '../../packages/vela/src/db/index.ts'
 import {
   loadConfig,
@@ -259,6 +260,7 @@ test('real CLI launched from A resumes B and uses B declared prompt and default 
       cwd: b,
     })
   } finally {
+    await stopDaemon({ agentDir: home }).catch(() => {})
     dir.cleanup()
   }
 }, 30000)
@@ -307,13 +309,16 @@ test('TUI rejects invalid project tools on resume without leaving the active ses
     writeFileSync(settings, JSON.stringify({ tools: ['stale_project_tool'] }))
     const tui = await startTui(t.vela, {
       sessionId: 'active-a',
-      configure: (session, options) => {
+      configure: async (session) => {
+        const snap = await session.refresh()
         const selected = selectTools(
-          session.registry.getAllTools().map((tool) => tool.name),
+          snap.allTools,
           { noTools: false, excludeTools: [] },
-          options?.defaultTools,
+          snap.resources.defaultTools,
         )
-        if (selected?.selection) session.setActiveTools(selected.selection)
+        if (selected?.selection) {
+          t.vela.session(session.id).setActiveTools(selected.selection)
+        }
         return true
       },
     })

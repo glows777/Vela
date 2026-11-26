@@ -9,7 +9,6 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
-import { runServe } from '../../../packages/vela/src/cli/serve.ts'
 import { openDatabase } from '../../../packages/vela/src/db/sqlite.ts'
 import { background } from '../../../packages/vela/src/driver/index.ts'
 import { lark } from '../../../packages/vela/src/lark/index.ts'
@@ -18,6 +17,7 @@ import {
   fauxToolCall,
 } from '../../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, larkEvent } from '../../support/lark.ts'
+import { runServe } from './serve-helper.ts'
 
 const [cwd, mode, scope] = process.argv.slice(2) as [string, string, string]
 const restart = mode.startsWith('restart')

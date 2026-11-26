@@ -3,27 +3,28 @@
 This page documents the `vela` command: its options, run modes, the interactive terminal UI, slash commands and environment variables.
 
 ```sh
-vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>]
+vela [prompt...] [-p | --mode text|json] [-c | -r | --session <id>]
      [-e <extension>]... [--no-extensions] [--no-session]
      [--approve | --no-approve] [--model provider/id] [--thinking <level>]
-     [-h | --help] [-v | --version]
-vela serve [options]
+     [--agent-dir <dir>] [-h | --help] [-v | --version]
+vela daemon [start | stop | status | run]
+vela setup [lark]
 vela setup github [owner/repo...] [--url https://public-origin]
 ```
 
-An unknown option or a bad value prints the usage line and exits with code 2. There is no `--` separator: every argument that starts with `-` (except a lone `-`) is read as an option. To send a prompt that starts with `-`, pipe it through stdin.
+An unknown option or a bad value prints the usage line and exits with code 2. Retired commands (`vela serve` and `--mode rpc`) also exit with code 2 and point to `vela daemon` and `connectRuntime()`. There is no `--` separator: every argument that starts with `-` (except a lone `-`) is read as an option. To send a prompt that starts with `-`, pipe it through stdin.
 
 ## Options
 
 | Option | Description |
 |---|---|
-| `serve` | As the first argument: run the configured channels without the TUI until SIGINT/SIGTERM. See [serve](#serve). |
+| `daemon [start\|stop\|status\|run]` | Manage the resident single-writer local daemon (`<VELA_DIR>/vela.sock`). Default subcommand is `status`. See [daemon](#daemon). |
 | `prompt...` | Every argument that is not an option is a prompt. Several prompts are sent one after another. |
 | `@file` | Attach a file to the first prompt: images are detected by header; text is inlined as `<file name="…">…</file>`. A missing or unreadable file exits 1. |
 | `-p`, `--print` | Run the prompts, write the last assistant answer to stdout, then exit. |
 | `--mode text` | Same as `-p`. |
-| `--mode json` | Run the prompts and write one JSON line per event to stdout, then exit. See [JSON mode](json.md). |
-| `--mode rpc` | Read JSON commands from stdin and write responses and events to stdout until stdin closes. Takes no prompt arguments. See [RPC mode](rpc.md). |
+| `--mode json` | Run the prompts and write one `RuntimeEvent` / `StreamDeltaEvent` JSON line per event to stdout, then exit. See [JSON mode](json.md). |
+| `--agent-dir <dir>` | Override `VELA_DIR` (owner configuration and database directory). |
 | `-c`, `--continue` | Continue the most recent saved session of this project, or start a new one if there is none. |
 | `-r`, `--resume` | Pick a saved session at startup. Interactive mode only. |
 | `--session <id>` | Open the session with this id, creating it if it does not exist. Ids use letters, digits, `.`, `_` and `-`, do not start with `.`, and are at most 128 characters; an invalid id is a usage error (exit code 2). |
@@ -62,8 +63,8 @@ An extension that fails to load is reported on stderr (or in the chat log) and s
 
 Vela picks the mode at startup:
 
-1. `serve` as the first argument selects serve mode.
-2. `--mode rpc` selects RPC mode and `--mode json` selects JSON mode.
+1. `daemon` manages the single-writer local daemon (`start`, `stop`, `status`, or foreground `run`).
+2. `--mode json` selects JSON mode.
 3. `-p`, `--mode text`, or a stdin or stdout that is not a terminal selects print mode.
 4. Otherwise Vela opens the interactive terminal UI.
 
@@ -72,19 +73,19 @@ vela                                         # interactive
 vela -p "Summarize this repository"          # print the answer and exit
 git diff | vela -p "Review this change"      # piped stdin
 vela --mode json "List the TODOs" > events.jsonl
-vela --mode rpc                              # driven by another program
-vela serve                                   # run the channels, no TUI
+vela daemon start                            # start the resident local daemon
+vela daemon status                           # inspect daemon PID & socket path
 ```
 
-### serve
+### daemon
 
-`vela serve` runs the registered channels (Lark and any that an extension registers) without a terminal UI, so it can run for days under a service manager. It starts nothing else: there is no prompt, no interactive session and no `/command`. See [Channels](channels.md) for configuration.
+Local CLI sessions connect over `<VELA_DIR>/vela.sock` to a resident single-writer daemon (`vela.db` is opened only in that process, auto-started on demand).
 
-- stdout stays empty. One line per channel event goes to **stderr**, with a local `YYYY-MM-DD HH:MM:SS` timestamp: `channel_message` (channel, sender name, text), `channel_reply` (channel, text) and `channel_error` (channel, sender, `Turn stopped: …`, `Feedback failed: …` when only a progress update failed, or `Turn aborted`). Text is cut to one line of 80 characters, so an operator log gets one event per line, and terminal escape sequences are stripped from chat text and sender names, as in the TUI. The gateway logs each channel's startup and start failures on the same stream.
-- SIGINT/SIGTERM stop the channels (sessions are saved and closed, the connection is closed, extension shutdown hooks run) and exit 0. A second signal exits right away with the signal's code. SIGHUP stops it the same way on POSIX.
-- If no channel started, `serve` says so on stderr and exits 1 instead of idling; that is also what happens when every channel's `start()` failed or returned `false` (not configured).
-- The flags that apply to a single session do not: `-p`, `--mode`, `--export`, `--list-models`, `-c`, `-r`, `--session`, `--fork`, `-t`/`--tools`, `-nt`, `-xt` and a prompt are rejected with exit code 2. `-e`, `--no-extensions`, `--model`, `--thinking`, `--no-session` and `--approve` / `--no-approve` still apply. A chat's own `tools` list in the channel config still picks the tools of that chat.
-- The log is not rotated by Vela; use the service manager's (systemd/journald, logrotate).
+- `vela daemon start`: ensures the daemon is running and prints its PID and socket path.
+- `vela daemon status`: prints whether the daemon is running, its PID, app version, and socket path.
+- `vela daemon stop`: stops the daemon cleanly and reaps any active background jobs.
+- `vela daemon run`: runs the daemon in the foreground (used by auto-launch and systemd units).
+- `vela serve` and `--mode rpc` were retired in v0.9 and exit with code 2 (`connectRuntime()` from `@glows777/vela` replaces `--mode rpc`).
 
 ### Print mode
 
@@ -92,15 +93,15 @@ Failed agent runs keep the original error visible and add one [next-step hint](s
 
 Print mode sends each prompt in turn and writes only the final assistant text of this run to stdout. Diagnostics, extension notifications and console output from extensions go to stderr, so stdout stays clean for pipes. When context files were loaded, stderr also has one `[context]` line with their paths. See [Context files](settings.md#context-files). If the reader closes the pipe early (`vela -p "..." | head -2`), Vela stops and exits quietly with code 0.
 
-If stdin is piped, its contents are prepended to the first prompt, separated by a blank line. If there is no prompt at all, Vela exits with code 2. If the turn fails or no model is available, the reason goes to stderr and the exit code is 1. Stopped by a signal, print, JSON and RPC modes abort the turn, kill the commands the model started, save the session and exit with 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP); a second signal exits right away.
+If stdin is piped, its contents are prepended to the first prompt, separated by a blank line. If there is no prompt at all, Vela exits with code 2. If the turn fails or no model is available, the reason goes to stderr and the exit code is 1. Stopped by a signal, print and JSON modes abort the turn, kill the commands the model started, save the session and exit with 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP); a second signal exits right away.
 
 After printing, Vela stays open for background commands and the turns that handle their results. Those turns do not replace the printed answer. JSON mode continues emitting their events. If a background result turn fails, the CLI exits 1; text mode keeps the original answer it already wrote. A background command that reaches its [unattended time limit](built-in-extensions.md#background) is stopped and reports why, so it cannot keep print mode open indefinitely on its own.
 
 Print mode has no UI: confirmation dialogs from extensions answer "no". Extension commands work (`vela -p /memory`), but the CLI's own slash commands such as `/context` or `/model` do not; they are sent to the model as plain text.
 
-### JSON and RPC modes
+### JSON mode
 
-`--mode json` writes a `session` header line followed by one JSON line per event of the session. `--mode rpc` keeps the process running and exchanges JSON lines on stdin and stdout. In both modes stdout carries only protocol records; logs go to stderr. See [JSON mode](json.md) and [RPC mode](rpc.md).
+`--mode json` writes a `session` header line followed by one v0.9 `RuntimeEvent` or `StreamDeltaEvent` JSON line per event of the session. Stdout carries only protocol records; diagnostics go to stderr. See [JSON mode](json.md). For long-lived bidirectional automation, use `connectRuntime()` from `@glows777/vela`.
 
 ## Sessions
 
@@ -125,9 +126,9 @@ A resumed session restores its history, name, thinking level and model (if the m
 
 ## Interactive mode
 
-The TUI does not start channels; run [`vela serve`](#serve) for those, in a separate process. It has no channel traffic in the chat log.
+Interactive TUI connects to the local daemon (without channel adapters, which stay separate from the interactive chat log).
 
-AI SDK warnings (for example a provider compatibility notice) appear in the chat log as notices instead of on the terminal, once per session even when the provider repeats them. Print, JSON and RPC modes keep them on stderr.
+AI SDK warnings (for example a provider compatibility notice) appear in the chat log as notices instead of on the terminal, once per session even when the provider repeats them. Print and JSON modes keep them on stderr.
 
 The fullscreen screen has, from top to bottom: a header with the CLI version, the session id and the key hints, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. In terminals that can draw it, the header opens with Vela's pixel portrait, drawn in darker colors when the terminal reports a light background, and the version, session and key hints sit in the column to its right; Apple Terminal and terminals narrower than 46 columns get the header as plain text. When context files were loaded, the chat log starts with a `[context]` line naming them. `/status` lists the same paths. `/extensions` lists the loaded extensions and the tools, commands and channels each registered. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, then the plan paying for the session when a subscription sign-in funds it (for example `ChatGPT plan`), followed by any extension status texts. The editor border color follows the thinking level.
 
@@ -135,7 +136,7 @@ The header, editor and footer stay in place while the transcript scrolls. The tr
 
 Text you send while the agent is running is a steering message: it is inserted after the current tool call. Slash commands run immediately even while the agent is running.
 
-`!command` runs a shell command yourself, like pi: the output streams into a green block, and the command and its output go to the model as part of your next message. `!!command` runs it without sending it to the model (the block is dim). Both are saved in the session and work while the agent runs (the result is recorded when the run ends, so it never lands between a tool call and its result). Esc cancels the command. These commands don't go through tool selection checks or hooks: they are yours. The editor border turns green while the input starts with `!`. RPC clients have the same through the `bash` command.
+`!command` runs a shell command yourself, like pi: the output streams into a green block, and the command and its output go to the model as part of your next message. `!!command` runs it without sending it to the model (the block is dim). Both are saved in the session and work while the agent runs (the result is recorded when the run ends, so it never lands between a tool call and its result). Esc cancels the command. These commands don't go through tool selection checks or hooks: they are yours. The editor border turns green while the input starts with `!`. `connectRuntime()` clients have the same via `runtime.sessions.execBash()`.
 
 When a project has untrusted configuration, Vela asks once at startup whether to trust it. See [Project trust](settings.md#project-trust).
 

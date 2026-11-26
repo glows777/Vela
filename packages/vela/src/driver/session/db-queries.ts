@@ -1,5 +1,5 @@
-import { resolve } from 'node:path'
 import type { VelaDatabase } from '../../db/index.ts'
+import { canonicalLocalPath } from '../../db/trust.ts'
 import type { ThinkingLevel } from '../../providers/models/index.ts'
 import { validateStoredLocation } from '../execution/location.ts'
 import type { ExecutionLocation } from '../execution/types.ts'
@@ -28,6 +28,7 @@ import { type SessionSearchHit, searchSessionText } from './search.ts'
 export interface SessionListFilter {
   projectId?: string
   cwd?: string
+  excludeChannels?: boolean
 }
 
 export function listSessionSummariesFromDb(
@@ -47,14 +48,14 @@ export function listSessionSummariesFromDb(
          ${includeArchived ? '' : 'WHERE archived = 0'}
          ORDER BY updated_at DESC`,
       )
-  const targetCwd = filter?.cwd ? resolve(filter.cwd) : undefined
+  const targetCwd = filter?.cwd ? canonicalLocalPath(filter.cwd) : undefined
   const matchingProjectIds = new Set<string>()
   if (targetCwd && !filter?.projectId) {
     const projects = db.all<{ id: string; cwd: string | null }>(
       'SELECT id, cwd FROM projects WHERE cwd IS NOT NULL',
     )
     for (const p of projects) {
-      if (p.cwd && resolve(p.cwd) === targetCwd) {
+      if (p.cwd && canonicalLocalPath(p.cwd) === targetCwd) {
         matchingProjectIds.add(p.id)
       }
     }
@@ -70,11 +71,13 @@ export function listSessionSummariesFromDb(
         if (!matchingProjectIds.has(session.project_id)) continue
       } else if (
         location?.cwd === undefined ||
-        resolve(location.cwd) !== targetCwd
+        canonicalLocalPath(location.cwd) !== targetCwd
       ) {
         continue
       }
     }
+    const channel = getSessionChannel(db, session.id)
+    if (filter?.excludeChannels && channel) continue
     const countRow = db.get<{ n: number }>(
       "SELECT count(*) AS n FROM vela_messages WHERE session_id = ? AND kind IN ('message', 'bash_execution')",
       session.id,
@@ -107,7 +110,6 @@ export function listSessionSummariesFromDb(
       }
     }
 
-    const channel = getSessionChannel(db, session.id)
     summaries.push({
       id: session.id,
       ...(session.name ? { name: session.name } : {}),

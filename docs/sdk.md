@@ -2,7 +2,7 @@
 
 `@glows777/vela` embeds Vela in a Node.js (>= 22.18) or Bun (>= 1.4) process. It gives TypeScript code the same agent the `vela` command runs: models, tools, system prompt, sessions, compaction and extensions.
 
-Use the SDK for in-process integration. For another language or a separate process, drive the CLI with [JSON mode](json.md) or [RPC mode](rpc.md).
+Use the SDK for in-process integration (`createRuntime()` or legacy `createVela()`) or connect to the local daemon via `connectRuntime()`. For one-shot scripting from another language or process, run `vela --mode json` (see [JSON mode](json.md)).
 
 ```typescript
 import { createVela } from '@glows777/vela'
@@ -290,12 +290,12 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `compaction_start` | `reason` (`threshold`, `manual`, `overflow`) | Summarizing earlier history starts (like pi): before a request that is too large, from `session.compact()`, or after the provider said the context is too long |
 | `compaction_end` | `reason`, `result?` (`summary`, `firstKeptEntryId`, `tokensBefore`, `tokensAfter`, `messages`), `aborted`, `willRetry`, `errorMessage?` | Summarizing ended (like pi). `result` is set when it succeeded, `aborted` when it was interrupted, otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again |
 | `audit` | `toolName`, `path` | Before `write` or `edit` writes `path` |
-| `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ctx.notify()`. See [Extension Notifications](rpc.md#extension-notifications). |
+| `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ctx.notify()`. |
 | `channel_message` | `channel`, `senderId`, `senderName`, `text` | A channel received a message for this session |
 | `channel_reply` | `channel`, `recipientId`, `text` | A channel sent a reply |
 | `channel_error` | `channel`, `senderId`, `error`, `aborted`, `source?` | A channel turn failed or was aborted. `source: 'feedback'` means only the progress presentation failed (the run still finishes); admission, preparation and command failures are not tagged |
 
-The types are `VelaEvent`, `AssistantMessageEvent`, `StopReason`, `VelaEventListener` and `VelaSessionEventListener`. Extension lifecycle events (`session_start`, `before_agent_start`, `tool_call` interception, ...) are a separate API, see [Extensions](extensions.md). The CLI's `--mode json` and `--mode rpc` write these same events as JSON lines, see [JSON mode](json.md).
+The legacy SDK types are `VelaEvent`, `AssistantMessageEvent`, `StopReason`, `VelaEventListener` and `VelaSessionEventListener`; v0.9 `VelaRuntime` subscribers use `RuntimeEvent` and `StreamDeltaEvent`. Extension lifecycle events (`session_start`, `before_agent_start`, `tool_call` interception, ...) are a separate API, see [Extensions](extensions.md). The CLI's `--mode json` writes `RuntimeEvent` and `StreamDeltaEvent` lines; see [JSON mode](json.md).
 
 See [02-events.ts](../examples/sdk/02-events.ts).
 
@@ -513,4 +513,4 @@ The umbrella `@glows777/vela` preserves its root and `./testing` entries and the
 
 `@glows777/vela` also exports the frontend inspection helpers (`inspectVela`, `inspectSession`, returning snapshots whose public shapes are recorded in `api/public-api.txt`). Internal frontend helpers for HTML/session views, session IDs, thinking choices, tool validation, and config trust/path decisions remain internal to the CLI/desktop package build.
 
-`vela serve` uses graceful disposal on its first shutdown signal, with a 30-second total cap. Bare SDK `dispose()` and explicit Stop retain immediate cancellation. A second signal exits immediately. See [channel shutdown](channels.md#shutdown-and-recovery).
+Graceful daemon shutdown runs `dispose()` on its first shutdown signal; bare SDK `dispose()` and explicit Stop retain immediate cancellation. See [channel shutdown](channels.md#shutdown-and-recovery).

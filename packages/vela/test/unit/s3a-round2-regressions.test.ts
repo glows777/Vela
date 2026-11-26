@@ -12,12 +12,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import z from 'zod'
+import { cliWorkspaceModeAt } from '../../../../test/support/legacy-cli-helpers.ts'
 import {
   cleanupTestVelas,
   createTestVela,
   tempDir,
 } from '../../../../test/support/vela.ts'
-import { cliWorkspaceModeAt } from '../../src/cli/setup.ts'
 import { openDatabase, savedTrust, saveTrust } from '../../src/db/index.ts'
 import { createLocalExecutionEnv } from '../../src/driver/execution/local.ts'
 import { loadConfig } from '../../src/driver/index.ts'

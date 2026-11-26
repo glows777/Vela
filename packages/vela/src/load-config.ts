@@ -9,7 +9,7 @@ import {
 } from './driver/index.ts'
 import { type McpServersFile, mcpConfig } from './mcp/index.ts'
 
-export { defaultAgentDir, extensionName } from './driver/diagnostics.ts'
+export { extensionName } from './driver/diagnostics.ts'
 export type {
   ExtensionEntry,
   LoadConfigOptions,

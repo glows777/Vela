@@ -8,9 +8,9 @@ import {
 } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
+import { stopDaemon } from '../../packages/vela/src/daemon/index.ts'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { saveTrust } from '../../packages/vela/src/db/trust.ts'
-import { projectDataDir } from '../../packages/vela/src/driver/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
@@ -33,68 +33,6 @@ test.concurrent('no configured model points print-mode users to setup', async ()
   const result = await cli(['-p', 'hello'], { model: '' })
   expect(result.code).toBe(1)
   expect(result.stderr).toContain('vela setup')
-})
-
-test('owner environments warn on stderr when the previously effective project dataDir changes', async () => {
-  const project = tempDir('vela-project-'),
-    owner = tempDir('vela-owner-')
-  dirs.push(project, owner)
-  const cwd = project.path,
-    agentDir = owner.path
-  const legacy = join(cwd, 'previous-store')
-  const args = [
-    '--approve',
-    '--no-extensions',
-    '-p',
-    '--session',
-    'check',
-    'hello',
-  ]
-  const options = { cwd, agentDir, model: 'mock' }
-  await Bun.write(
-    join(cwd, '.vela/config.json'),
-    JSON.stringify({ dataDir: 'previous-store' }),
-  )
-  const seed = await cli(args, options)
-  expect(seed.code).toBe(0)
-  expect(sessionFiles(agentDir)).toHaveLength(1)
-  const active = projectDataDir(agentDir, cwd)
-  const settings = join(agentDir, 'config.json')
-  await Bun.write(settings, JSON.stringify({ environments: {} }))
-  const changed = await cli(args, options)
-  expect(changed.code).toBe(0)
-  expect(changed.stderr).toContain(legacy)
-  expect(changed.stderr).toContain(active)
-  expect(changed.stderr).toMatch(/pin.*dataDir/i)
-  expect(changed.stdout).not.toContain(legacy)
-  expect(sessionFiles(agentDir)).toHaveLength(1)
-  await Bun.write(
-    settings,
-    JSON.stringify({ environments: {}, dataDir: legacy }),
-  )
-  const checkConfig = ['--approve', '--no-extensions', '--list-models']
-  const pinned = await cli(checkConfig, options)
-  expect(pinned.code).toBe(0)
-  expect(pinned.stderr).not.toContain('[data]')
-  const explicit = join(owner.path, 'chosen-store')
-  await Bun.write(
-    settings,
-    JSON.stringify({ environments: {}, dataDir: explicit }),
-  )
-  const ignored = await cli(checkConfig, options)
-  expect(ignored.code).toBe(0)
-  expect(ignored.stderr).not.toMatch(/pin.*dataDir/i)
-  expect(ignored.stderr).toMatch(/project.*ignored|ignor.*project/i)
-  expect(ignored.stderr).toContain(explicit)
-  expect(ignored.stderr).toContain(legacy)
-  expect(ignored.stdout).not.toContain(legacy)
-  expect(ignored.stdout).not.toContain(explicit)
-  const ownerOnly = await cli(checkConfig, {
-    ...options,
-    files: { '.vela/config.json': '{}' },
-  })
-  expect(ownerOnly.code).toBe(0)
-  expect(ownerOnly.stderr).not.toContain('[data]')
 })
 
 test.concurrent.if(hasScript)(
@@ -481,8 +419,12 @@ test.concurrent.if(hasScript)(
 )
 
 const dirs: { cleanup(): void }[] = []
+const agentDirs = new Set<string>()
 // Tests run concurrently (each spawns a process), so temp dirs are cleaned up once at the end
-afterAll(() => {
+afterAll(async () => {
+  await Promise.all(
+    [...agentDirs].map((agentDir) => stopDaemon({ agentDir }).catch(() => {})),
+  )
   for (const dir of dirs.splice(0)) dir.cleanup()
 })
 
@@ -540,6 +482,7 @@ async function cli(
     dirs.push(dir)
     agentDir = dir.path
   }
+  agentDirs.add(agentDir)
   for (const [path, content] of Object.entries(options.files ?? {}))
     await Bun.write(join(cwd, path), content)
   const env: Record<string, string> = {
@@ -712,7 +655,8 @@ test.concurrent('@file attaches every image format by header, only to the first 
     .filter(Boolean)
     .map((line) => JSON.parse(line))
     .filter(
-      (event) => event.type === 'message_end' && event.message.role === 'user',
+      (event) =>
+        event.type === 'message_committed' && event.message.role === 'user',
     )
     .map((event) => event.message.content)
   expect(users).toHaveLength(2)
@@ -785,7 +729,8 @@ test.concurrent('@file resolves screenshot narrow-space names and keeps image re
     .filter(Boolean)
     .map((line) => JSON.parse(line))
     .find(
-      (event) => event.type === 'message_end' && event.message.role === 'user',
+      (event) =>
+        event.type === 'message_committed' && event.message.role === 'user',
     )
   expect(user.message.content).toEqual([
     {
@@ -817,7 +762,8 @@ test.concurrent('@file inlines UTF-8 text even with an image suffix, preserving 
     .filter(Boolean)
     .map((line) => JSON.parse(line))
     .filter(
-      (event) => event.type === 'message_end' && event.message.role === 'user',
+      (event) =>
+        event.type === 'message_committed' && event.message.role === 'user',
     )
     .map((event) => event.message.content)
   expect(users).toEqual([
@@ -837,7 +783,8 @@ test.concurrent('@file alone sends an image-only prompt', async () => {
     .filter(Boolean)
     .map((line) => JSON.parse(line))
     .find(
-      (event) => event.type === 'message_end' && event.message.role === 'user',
+      (event) =>
+        event.type === 'message_committed' && event.message.role === 'user',
     )
   expect(user.message.content).toContainEqual(
     expect.objectContaining({ type: 'image', mimeType: 'image/png' }),
@@ -869,7 +816,8 @@ test.concurrent('@file skips empty text files and strips a leading BOM', async (
     .filter(Boolean)
     .map((line) => JSON.parse(line))
     .find(
-      (event) => event.type === 'message_end' && event.message.role === 'user',
+      (event) =>
+        event.type === 'message_committed' && event.message.role === 'user',
     )
   expect(user.message.content).toBe(
     `<file name="${join(result.cwd, 'notes.txt')}">\nhéllo\n</file>\n\nSummarize`,
@@ -897,7 +845,8 @@ test.concurrent('@file with a slash skill reports ignored attachments and still 
     .filter(Boolean)
     .map((line) => JSON.parse(line))
     .find(
-      (event) => event.type === 'message_end' && event.message.role === 'user',
+      (event) =>
+        event.type === 'message_committed' && event.message.role === 'user',
     )
   expect(user.message.content).toContain('Demo skill body')
   expect(JSON.stringify(user.message.content)).not.toContain('"type":"image"')
@@ -1033,11 +982,15 @@ test.concurrent('--mode json writes a session header and one JSON event per line
   expect(records[0]).toMatchObject({ type: 'session', thinkingLevel: 'medium' })
   const id = records[0].id
   expect(records.slice(1).every((r) => r.sessionId === id)).toBe(true)
-  expect(records.find((r) => r.type === 'tool_execution_start')).toMatchObject({
+  expect(records.find((r) => r.type === 'tool_started')).toMatchObject({
     toolName: 'read',
-    args: { path: 'notes.txt' },
+    input: { path: 'notes.txt' },
   })
-  expect(records.at(-1)).toEqual({ type: 'agent_settled', sessionId: id })
+  expect(records.at(-1)).toMatchObject({
+    type: 'run_finished',
+    sessionId: id,
+    status: 'completed',
+  })
 })
 
 for (const [mode, command, chunkDelayMs] of [
@@ -1083,7 +1036,7 @@ for (const [mode, command, chunkDelayMs] of [
         .split('\n')
         .map((line) => JSON.parse(line))
       const messages = records
-        .filter((record) => record.type === 'message_end')
+        .filter((record) => record.type === 'message_committed')
         .map((record) => JSON.stringify(record.message))
       for (const text of [
         'Original answer',
@@ -1158,7 +1111,7 @@ for (const { name, delay, input } of [
       .split('\n')
       .map((line) => JSON.parse(line))
     const messages = records
-      .filter((record) => record.type === 'message_end')
+      .filter((record) => record.type === 'message_committed')
       .map((record) => record.message)
     expect(
       messages.filter(
@@ -1215,14 +1168,14 @@ for (const mode of ['text', 'json'] as const) {
           .split('\n')
           .map((line) => JSON.parse(line)),
       ).toContainEqual(
-        expect.objectContaining({ type: 'agent_end', reason: 'error' }),
+        expect.objectContaining({ type: 'run_finished', status: 'failed' }),
       )
     expect(stderr).toContain('background provider rejected the request')
     expect(code).toBe(1)
   })
 }
 
-test.concurrent('--mode json reports a model error in agent_end and exits 1', async () => {
+test.concurrent('--mode json reports a model error in run_finished and exits 1', async () => {
   const { stdout, code, stderr } = await cli(['--mode', 'json', 'hi'], {
     model: `faux:${scenario('bad-request')}`,
   })
@@ -1231,10 +1184,10 @@ test.concurrent('--mode json reports a model error in agent_end and exits 1', as
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line))
-    .find((r) => r.type === 'agent_end')
-  expect(end.reason).toBe('error')
+    .find((r) => r.type === 'run_finished')
+  expect(end.status).toBe('failed')
   expect(end.errorKind).toBe('provider')
-  expect(end.error.message).toContain('400 Bad Request')
+  expect(end.error).toContain('400 Bad Request')
   expect(stderr).toContain('400 Bad Request')
 })
 
@@ -1305,7 +1258,7 @@ test.concurrent('--tools / --exclude-tools limit the tools; an unknown name stop
       .split('\n')
       .filter(Boolean)
       .map((line) => JSON.parse(line))
-      .find((event) => event.type === 'tool_execution_end')
+      .find((event) => event.type === 'tool_finished')
   const allowed = await run(['--tools', 're*,grep'])
   expect(allowed.code).toBe(0)
   expect(ended(allowed.stdout)).toMatchObject({ isError: false })
@@ -1354,8 +1307,7 @@ test.concurrent('+name / -name change the default tools, from --tools or default
       .filter(Boolean)
       .map((line) => JSON.parse(line))
       .find(
-        (event) =>
-          event.type === 'tool_execution_end' && event.toolName === 'grep',
+        (event) => event.type === 'tool_finished' && event.toolName === 'grep',
       )
 
   const off = await run([])
@@ -1554,13 +1506,15 @@ test.concurrent('extensions are discovered in ~/.vela/extensions and configured 
     join(home.path, 'config.json'),
     JSON.stringify({ extensionConfig: { greet: { token: '$GREET_TOKEN' } } }),
   )
-  const { stderr, code } = await cli(['-p', 'hello'], {
+  const { code, agentDir } = await cli(['-p', 'hello'], {
     model: `faux:${scenario('hello')}`,
     agentDir: home.path,
     env: { GREET_TOKEN: 't0k' },
   })
   expect(code).toBe(0)
-  expect(stderr).toContain('[greet] loaded {"token":"t0k"}')
+  expect(readFileSync(join(agentDir, 'daemon.log'), 'utf8')).toContain(
+    '[greet] loaded {"token":"t0k"}',
+  )
 })
 
 test.concurrent('a resumed CLI session uses the saved trust of its own workspace', async () => {
@@ -1603,7 +1557,9 @@ test.concurrent('a resumed CLI session uses the saved trust of its own workspace
     },
   })
   expect(denied.code).toBe(0)
-  expect(denied.stderr).toContain('system-files USER_SYSTEM USER_APPEND')
+  expect(readFileSync(join(home.path, 'daemon.log'), 'utf8')).toContain(
+    'system-files USER_SYSTEM USER_APPEND',
+  )
   expect(denied.stdout).not.toContain('B_WORKSPACE_TEMPLATE')
   expect(denied.stdout).not.toContain('A_WORKSPACE_TEMPLATE')
 
@@ -1613,11 +1569,15 @@ test.concurrent('a resumed CLI session uses the saved trust of its own workspace
     cwd: a.path,
   })
   expect(disabled.code).toBe(0)
-  expect(disabled.stderr).toContain('system-files USER_SYSTEM USER_APPEND')
+  expect(readFileSync(join(home.path, 'daemon.log'), 'utf8')).toContain(
+    'system-files USER_SYSTEM USER_APPEND',
+  )
   expect(disabled.stdout).not.toContain('B_WORKSPACE_TEMPLATE')
   const allowed = await cli(args, { ...options, cwd: a.path })
   expect(allowed.code).toBe(0)
-  expect(allowed.stderr).toContain('system-files B_SYSTEM B_APPEND')
+  expect(readFileSync(join(home.path, 'daemon.log'), 'utf8')).toContain(
+    'system-files B_SYSTEM B_APPEND',
+  )
   expect(allowed.stdout).toContain('B_WORKSPACE_TEMPLATE')
 })
 
@@ -1628,7 +1588,11 @@ test.concurrent('project extensions load only when the project is trusted', asyn
     files,
   })
   expect(skipped.code).toBe(0)
-  expect(skipped.stderr).not.toContain('[local] loaded')
+  expect(
+    existsSync(join(skipped.agentDir, 'daemon.log'))
+      ? readFileSync(join(skipped.agentDir, 'daemon.log'), 'utf8')
+      : '',
+  ).not.toContain('[local] loaded')
   expect(skipped.stderr).toContain('[trust] Did not load')
 
   const approved = await cli(['-p', 'hello', '--approve'], {
@@ -1636,7 +1600,9 @@ test.concurrent('project extensions load only when the project is trusted', asyn
     files,
   })
   expect(approved.code).toBe(0)
-  expect(approved.stderr).toContain('[local] loaded')
+  expect(readFileSync(join(approved.agentDir, 'daemon.log'), 'utf8')).toContain(
+    '[local] loaded',
+  )
   expect(approved.stderr).not.toContain('[trust]')
 
   // A saved decision
@@ -1651,7 +1617,10 @@ test.concurrent('project extensions load only when the project is trusted', asyn
     cwd: project.path,
     agentDir: home.path,
   })
-  expect(saved.stderr).toContain('[local] loaded')
+  expect(saved.stderr).not.toContain('[trust]')
+  expect(readFileSync(join(home.path, 'daemon.log'), 'utf8')).toContain(
+    '[local] loaded',
+  )
 }, 20_000)
 
 test.concurrent('--no-extensions keeps core auditing for file writes and edits', async () => {
@@ -1705,13 +1674,14 @@ test.concurrent('-e loads an extension file; --no-extensions drops built-in and 
   dirs.push(dir)
   const extra = join(dir.path, 'extra.ts')
   await Bun.write(extra, GREET('extra'))
-  const { stderr, code } = await cli(
+  const { code, agentDir } = await cli(
     ['-p', 'hello', '--no-extensions', '-e', extra],
     { model: `faux:${scenario('hello')}` },
   )
   expect(code).toBe(0)
-  expect(stderr).toContain('[extra] loaded {}')
-  expect(stderr).toBe('  [extra] loaded {}\n')
+  expect(readFileSync(join(agentDir, 'daemon.log'), 'utf8')).toContain(
+    '[extra] loaded {}',
+  )
 })
 
 test.concurrent('an invalid extension schema names the tool and leaves other extensions usable', async () => {
@@ -1828,8 +1798,9 @@ test.concurrent('a broken config.json stops the CLI with the file name', async (
     agentDir: home.path,
   })
   expect(code).toBe(2)
+  expect(stderr).toContain('[config]')
   expect(stderr).toContain(
-    `[config] ${join(home.path, 'config.json')} is not valid JSON`,
+    `${join(home.path, 'config.json')} is not valid JSON`,
   )
 })
 
@@ -2088,6 +2059,7 @@ test.concurrent('a reader that closes stdout early makes the CLI exit quietly', 
   dirs.push(dir)
   const home = tempDir('vela-home-')
   dirs.push(home)
+  agentDirs.add(home.path)
   // An answer far larger than a pipe buffer, so the CLI is still writing when `head` exits
   const long = Array.from({ length: 20_000 }, (_, i) => `line ${i}`).join('\n')
   const file = join(dir.path, 'long.json')
@@ -2150,6 +2122,7 @@ test.concurrent('-p: SIGTERM stops a running bash command with its process group
   const dir = tempDir('vela-cli-')
   const home = tempDir('vela-home-')
   dirs.push(dir, home)
+  agentDirs.add(home.path)
   const scenarioFile = join(dir.path, 'scenario.json')
   await Bun.write(
     scenarioFile,
@@ -2307,9 +2280,9 @@ for (const mode of ['-p', '--mode json']) {
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line))
-        .find((event) => event.type === 'agent_end')
+        .find((event) => event.type === 'run_finished')
       expect(end.errorKind).toBe('auth')
-      expect(end.error.message).toBe('401 Invalid API key')
+      expect(end.error).toBe('401 Invalid API key')
     }
   })
 }
@@ -2356,10 +2329,8 @@ test.concurrent('a failed project factory reports its location and cause without
         "export default function broken() { throw new Error('project setup failed') }",
     },
   })
-  expect(result.code).toBe(1)
-  expect(result.stderr).toContain(
-    `Project extensions at ${result.cwd} failed to prepare`,
-  )
+  expect(result.code).toBe(0)
+  expect(result.stderr).toContain('broken.ts')
   expect(result.stderr).toContain('project setup failed')
   expect(result.stderr).not.toContain('Bun v')
 })

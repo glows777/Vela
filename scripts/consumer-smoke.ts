@@ -30,6 +30,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  connectRuntime,
   createRuntime,
   createVela,
   EnvironmentRegistry,
@@ -45,7 +46,9 @@ import {
   type AgentDriverCapabilities,
   type ApprovalDecision,
   type ApprovalStatus,
+  type ConnectRuntimeOptions,
   type CreateRuntimeOptions,
+  type DaemonStatus,
   type ImageContent,
   type LarkMessageEvent,
   type LarkOptions,
@@ -77,11 +80,15 @@ if (typeof SpilledToolOutput !== 'function')
   throw new Error('missing SpilledToolOutput export')
 if (typeof lark !== 'function' || typeof local !== 'function')
   throw new Error('missing built-in channel factories')
+if (typeof connectRuntime !== 'function')
+  throw new Error('missing connectRuntime export')
 const _approvalTypeCheck = (
   _d?: ApprovalDecision,
   _p?: PendingApprovalInfo,
   _r?: ResolvedApprovalInfo,
-) => void [_d, _p, _r]
+  _c?: ConnectRuntimeOptions,
+  _s?: DaemonStatus,
+) => void [_d, _p, _r, _c, _s]
 void _approvalTypeCheck
 
 const hello: VelaExtension = (vela) => {
@@ -381,83 +388,117 @@ async function cli(app: string, runtime: string, version: string) {
     VELA_MODEL: 'mock',
     VELA_OFFLINE: '1',
   }
-  const output =
-    await $`${runtime} ./node_modules/.bin/vela -p hello < /dev/null`
-      .cwd(app)
-      .env(env)
-      .text()
-  if (!output.trim()) throw new Error('CLI printed no answer')
-  const actual = (
-    await $`${runtime} ./node_modules/.bin/vela --version`
-      .cwd(app)
-      .env(env)
-      .text()
-  ).trim()
-  if (actual !== version)
-    throw new Error(`CLI version ${actual}, expected ${version}`)
-  const file = join(app, 'node_modules/@glows777/vela/dist/cli/main.js')
-  if (!((await Bun.file(file).stat()).mode & 0o111))
-    throw new Error('CLI bin lost executable mode')
-  const reply = join(app, 'serve-reply.txt')
-  const stopped = join(app, 'serve-stopped.txt')
-  const extension = join(app, 'serve-channel.mjs')
-  const scenario = join(app, 'serve-faux.json')
-  await writeFile(
-    scenario,
-    JSON.stringify({ responses: [{ text: 'serve received' }] }),
-  )
-  await writeFile(
-    extension,
-    `import {appendFileSync} from 'node:fs';export default api=>{let receive,connection;api.registerChannel({name:'probe',description:'packed serve',start(){connection=setInterval(()=>{},1000);setTimeout(()=>receive({channelId:'room',senderId:'u',senderName:'Visitor',text:'ping'}),0)},stop(){clearInterval(connection);appendFileSync(${JSON.stringify(stopped)},'stop\\n')},onMessage(next){receive=next},async send(m){appendFileSync(${JSON.stringify(reply)},m.text+'\\n')}})}`,
-  )
-  const proc = Bun.spawn(
-    [
-      runtime,
-      './node_modules/.bin/vela',
-      'serve',
-      '--no-extensions',
-      '-e',
-      extension,
-    ],
-    {
-      cwd: app,
-      env: { ...env, VELA_MODEL: 'faux:' + scenario },
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-  )
-  let stderr = ''
-  const reading = (async () => {
-    for await (const chunk of proc.stderr)
-      stderr += new TextDecoder().decode(chunk)
-  })()
-  const stdout = new Response(proc.stdout).text()
   try {
-    const deadline = Date.now() + 20000
-    while (
-      !(stderr.includes('channel_reply') && (await Bun.file(reply).exists()))
-    ) {
-      if (Date.now() > deadline || proc.exitCode !== null)
-        throw new Error('packed serve failed: ' + stderr)
-      await new Promise((done) => setTimeout(done, 20))
-    }
-    proc.kill('SIGTERM')
-    const code = await proc.exited
-    await reading
+    const output =
+      await $`${runtime} ./node_modules/.bin/vela -p hello < /dev/null`
+        .cwd(app)
+        .env(env)
+        .text()
+    if (!output.trim()) throw new Error('CLI printed no answer')
+    const actual = (
+      await $`${runtime} ./node_modules/.bin/vela --version`
+        .cwd(app)
+        .env(env)
+        .text()
+    ).trim()
+    if (actual !== version)
+      throw new Error(`CLI version ${actual}, expected ${version}`)
+    const file = join(app, 'node_modules/@glows777/vela/dist/cli/main.js')
+    if (!((await Bun.file(file).stat()).mode & 0o111))
+      throw new Error('CLI bin lost executable mode')
+    const retired = await $`${runtime} ./node_modules/.bin/vela serve`
+      .cwd(app)
+      .env(env)
+      .nothrow()
+      .quiet()
     if (
-      code !== 0 ||
-      (await stdout) !== '' ||
-      (await readFile(stopped, 'utf8')) !== 'stop\n' ||
-      (await readFile(reply, 'utf8')).trim() !== 'serve received'
+      retired.exitCode !== 2 ||
+      !retired.stderr.toString().includes('vela daemon')
     )
-      throw new Error('packed serve lifecycle failed: ' + stderr)
-    console.log('packaged serve signal/disposal ok')
+      throw new Error(
+        `retired serve check failed (${retired.exitCode}): ${retired.stderr.toString()}`,
+      )
+
+    const daemonDir = join(app, 'daemon-agent')
+    await mkdir(daemonDir, { recursive: true })
+    const scenario = join(app, 'daemon-faux.json')
+    await writeFile(
+      scenario,
+      JSON.stringify({ responses: [{ text: 'daemon received' }] }),
+    )
+    const daemonEnv = { ...env, VELA_MODEL: `faux:${scenario}` }
+    const proc = Bun.spawn(
+      [
+        runtime,
+        './node_modules/.bin/vela',
+        '--agent-dir',
+        daemonDir,
+        'daemon',
+        'run',
+      ],
+      {
+        cwd: app,
+        env: daemonEnv,
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    let stderr = ''
+    const reading = (async () => {
+      for await (const chunk of proc.stderr)
+        stderr += new TextDecoder().decode(chunk)
+    })()
+    const stdout = new Response(proc.stdout).text()
+    try {
+      const deadline = Date.now() + 20000
+      while (true) {
+        if (Date.now() > deadline || proc.exitCode !== null)
+          throw new Error(`packed daemon failed to start: ${stderr}`)
+        const status =
+          await $`${runtime} ./node_modules/.bin/vela --agent-dir ${daemonDir} daemon status`
+            .cwd(app)
+            .env(daemonEnv)
+            .nothrow()
+            .quiet()
+        if (
+          status.exitCode === 0 &&
+          status.stdout.toString().includes('running')
+        )
+          break
+        await new Promise((done) => setTimeout(done, 50))
+      }
+      const reply = (
+        await $`${runtime} ./node_modules/.bin/vela --agent-dir ${daemonDir} -p ping < /dev/null`
+          .cwd(app)
+          .env(daemonEnv)
+          .text()
+      ).trim()
+      if (reply !== 'daemon received')
+        throw new Error(`packed daemon reply mismatch: ${reply}`)
+      proc.kill('SIGTERM')
+      const code = await proc.exited
+      await reading
+      if (code !== 0 || (await stdout) !== '')
+        throw new Error(`packed daemon lifecycle failed (${code}): ${stderr}`)
+      console.log('packaged daemon signal/disposal ok')
+    } finally {
+      if (proc.exitCode === null) proc.kill('SIGKILL')
+      await proc.exited
+      await reading
+      await stdout
+      await $`${runtime} ./node_modules/.bin/vela --agent-dir ${daemonDir} daemon stop`
+        .cwd(app)
+        .env(daemonEnv)
+        .nothrow()
+        .quiet()
+    }
   } finally {
-    if (proc.exitCode === null) proc.kill('SIGKILL')
-    await proc.exited
-    await reading
-    await stdout
+    await $`${runtime} ./node_modules/.bin/vela daemon stop`
+      .cwd(app)
+      .env(env)
+      .nothrow()
+      .quiet()
   }
 }
 

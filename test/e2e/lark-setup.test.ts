@@ -136,7 +136,7 @@ test('confirmed group merges settings, protects secrets, sends and closes', asyn
   expect(statSync(f.settings).mode & 0o777).toBe(0o600)
   expect(statSync(f.dir).mode & 0o777).toBe(0o700)
   expect(f.sent[0]).toContain('new:')
-  expect(f.sent[0]).toContain('vela serve')
+  expect(f.sent[0]).toContain('vela daemon start')
   expect(f.stopped()).toBe(true)
   expect(f.notices.join('\n')).not.toContain('secret')
 })

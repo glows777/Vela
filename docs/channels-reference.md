@@ -195,7 +195,7 @@ Status says "Recorded since …" using the first ledger row. Earlier usage is no
 
 ### Restart recovery
 
-The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, shared by startup recovery, `runtime.topics(chatId)` and `channel_list_topics`. Updates are serialized and published by a synced temporary file and atomic rename. A malformed directory rejects `startChannels()` with its path; it never becomes an empty topic list. This is a single-process directory, like the gateway's session queues; `vela serve` is that process, and the TUI does not open a second one.
+The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, shared by startup recovery, `runtime.topics(chatId)` and `channel_list_topics`. Updates are serialized and published by a synced temporary file and atomic rename. A malformed directory rejects `startChannels()` with its path; it never becomes an empty topic list. This is a single-process directory, like the gateway's session queues.
 
 Records contain the channel/chat kind, topic root/thread IDs, requester/reply target, task label, active and previous session IDs, run state, pending service-message IDs and timestamps. Input content remains in the session JSONL. The directory does not backfill pre-M2 topics or reconstruct hashed routing IDs; an older topic joins on its next admitted message. `runtime.topicCoverage()` reports that boundary.
 
@@ -260,9 +260,7 @@ Before automatically closing an idle session, the gateway saves it. If that save
 
 Extension notifications (`ctx.notify`) are emitted as `notify` session events. Sessions close after 10 idle minutes and resume on the next message; `createVela({ channelIdleMs })` changes that wait (`0` closes after each completed queue). Running sessions, queued chats, or a session with a running background command are not closed prematurely.
 
-**SDK:** `await vela.startChannels()` starts registered channels. `vela.channels()` lists them. `vela.dispose()` aborts running sessions, waits for pending work and stops channels. Tool-policy validation errors reject startup before transport/recovery; a failed channel `start()` is logged without stopping other channels.
-
-**CLI:** channels run only under `vela serve` (see [CLI](cli.md#serve)), which stops them on SIGINT/SIGTERM. It has no UI: one line per incoming message, reply and error goes to stderr, with a local timestamp; channel tool calls are not shown. It takes no prompt and cannot be combined with print, JSON, RPC, `--export`, `--list-models`, session selection or tool flags. Interactive, print, JSON and RPC modes do not start channels, so two processes never share the single-process channel directory. `/channel` lists the registered channels.
+**CLI & SDK:** `await vela.startChannels()` starts registered channels in an SDK host (`vela.channels()` lists them, `vela.dispose()` aborts running sessions, waits for pending work and stops channels). Standalone `vela serve` was retired in v0.9; CLI sessions connect to `vela daemon` and stay separate from channel sessions. Tool-policy validation errors reject startup before transport/recovery; a failed channel `start()` is logged without stopping other channels. (`/channel` in the TUI lists channel bindings.)
 
 ## Custom transports
 
@@ -309,7 +307,7 @@ External top-level inputs never borrow a previous human reply ID. Lark establish
 
 For the operator setup command, see [GitHub webhook setup](channels.md#github-webhook-setup). `vela setup github owner/repo --url https://your-tunnel-host` writes user settings and configures matching repository hooks through GitHub CLI.
 
-The CLI reads `webhooks` from user-level `~/.vela/config.json` (project `webhooks` settings are stripped). It is absent by default. To configure it manually, add top-level `webhooks` to `~/.vela/config.json`, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and run `vela serve` with at least one enabled, connected channel:
+The CLI reads `webhooks` from user-level `~/.vela/config.json` (project `webhooks` settings are stripped). It is absent by default. To configure it manually, add top-level `webhooks` to `~/.vela/config.json`, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and start the host with at least one enabled, connected channel:
 
 ```json
 {
@@ -393,7 +391,7 @@ Use a new delivery ID for a new event; resending the same ID is intentionally ig
 
 ### Tunnel deployment examples
 
-Vela does not install or manage tunnels. Choose one separately and keep the machine, `vela serve` and connector awake. A stopped connector, sleeping machine or broken outbound connection makes webhooks unavailable; there is no polling or automatic failover.
+Vela does not install or manage tunnels. Choose one separately and keep the machine, host process and connector awake. A stopped connector, sleeping machine or broken outbound connection makes webhooks unavailable; there is no polling or automatic failover.
 
 For a **named Cloudflare Tunnel**, use a Cloudflare-managed domain and follow the [locally managed tunnel setup](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/create-local-tunnel/). After creating `vela-events`, use its UUID/credential file in `~/.cloudflared/config.yml`:
 

@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { cliProjectExtensions } from '../../src/cli/project-extensions.ts'
+import { cliProjectExtensions } from '../../../../test/support/legacy-cli-helpers.ts'
 import { parseArgs } from '../../src/cli/setup.ts'
 import {
   assertNoLegacyConfigFiles,

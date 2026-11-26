@@ -8,23 +8,27 @@ import {
 } from '@glows777/vela'
 import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
 import { z } from 'zod'
+import { stopDaemon } from '../../packages/vela/src/daemon/index.ts'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { SessionStore } from '../../packages/vela/src/driver/session/index.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
 const CLI_ENTRY = join(ROOT, 'packages/vela/src/cli/main.ts')
-const cleanups: Array<() => void> = []
+const cleanups: Array<() => void | Promise<void>> = []
 
-afterEach(() => {
-  cleanupTestVelas()
-  while (cleanups.length) cleanups.pop()?.()
+afterEach(async () => {
+  await cleanupTestVelas()
+  while (cleanups.length) await cleanups.pop()?.()
 })
 
 test('oauth producer suffix flows to context hooks and CLI --export reads vela.db directly in readonly mode without models or extensions', async () => {
   const project = tempDir('vela-s2fix-proj-')
   const agentDir = tempDir('vela-s2fix-agent-')
-  cleanups.push(project.cleanup, agentDir.cleanup)
+  cleanups.push(project.cleanup, async () => {
+    await stopDaemon({ agentDir: agentDir.path }).catch(() => {})
+    agentDir.cleanup()
+  })
   const outHtml = join(project.path, 'out.html')
   const outJsonl = join(project.path, 'out.jsonl')
 

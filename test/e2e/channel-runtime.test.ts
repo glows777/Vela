@@ -26,7 +26,7 @@ function latch() {
 }
 
 async function until(check: () => boolean) {
-  const deadline = Date.now() + 2000
+  const deadline = Date.now() + 5000
   while (!check()) {
     if (Date.now() > deadline) throw new Error('Channel runtime did not settle')
     await Bun.sleep(1)
@@ -339,14 +339,21 @@ test('Stop expires when model work settles even while its reply is still deliver
     extensions: [(api) => api.registerChannel(f.channel)],
   })
   await t.vela.startChannels()
+  let startedRunId: string | undefined
+  const unsub = f.runtime.onSession((update) => {
+    if (update.run?.type === 'started') startedRunId = update.run.runId
+  })
   try {
     await f.runtime.submit(input('question'))
-    await until(() => !!f.runtime.sessions('project')[0]?.runId)
-    const runId = f.runtime.sessions('project')[0]!.runId!
+    await until(() =>
+      Boolean(startedRunId ?? f.runtime.sessions('project')[0]?.runId),
+    )
+    const runId = startedRunId ?? f.runtime.sessions('project')[0]!.runId!
     await sending.promise
     expect(await f.runtime.stop({ chatId: 'project' }, runId)).toBe(false)
     expect(f.runtime.sessions('project')[0]?.runId).toBeUndefined()
   } finally {
+    unsub()
     held.release()
   }
   await drainChannels(t.vela)

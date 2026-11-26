@@ -108,25 +108,23 @@ The wizard asks, in order:
 
    Enabling a group trusts everyone in it with this machine. There is no sandbox or per-member boundary; read [Security](security.md#channel-senders) before enabling a group.
 
-6. **Save.** It writes top-level `lark` with the app ID, secret and chat ID to `~/.vela/config.json` (mode `0600`), sends `Vela is connected to this group; run vela serve and @ me.` to the group, and prints a summary.
+6. **Save.** It writes top-level `lark` with the app ID, secret and chat ID to `~/.vela/config.json` (mode `0600`), sends a confirmation message to the group, and prints a summary.
 
 To add another group later, run `vela setup lark` again and mention the bot there.
 
-## 4. Run the bot
+## 4. Run the daemon
 
-Start the channels:
+Manage the resident background daemon:
 
 ```bash
-vela serve
+vela daemon start
 ```
 
-`vela serve` has no terminal UI: it keeps the configured channels running until SIGINT/SIGTERM (Ctrl+C) and writes one line per message, reply and error to stderr, with a local timestamp. If no channel starts, it says so and exits with code 1.
-
-Mention the bot in the enabled group again to check a model-backed reply. The terminal UI does not start channels, so `vela serve` runs separately from `vela`. To keep the bot after the shell closes and after a reboot, follow [Deploy `vela serve`](deploy.md), which installs it under a dedicated user with systemd.
+The CLI uses `vela daemon` (`start`, `status`, `stop`, or foreground `run`) to own `<VELA_DIR>/vela.db` and serve local clients on `<VELA_DIR>/vela.sock`. Note that standalone `vela serve` was retired in v0.9 (channel adapters migrate onto the Runtime daemon in the next slice). To run the daemon under a service manager, follow [Deploy `vela daemon`](deploy.md).
 
 ## 5. Use Vela in a terminal
 
-Without `serve`, `vela` opens the interactive UI in your working folder. The screen shows the conversation, an editor, and a footer with the folder, session id, token usage, context percentage, model and thinking level. Type a task and press Enter:
+Running `vela` opens the interactive UI in your working folder. The screen shows the conversation, an editor, and a footer with the folder, session id, token usage, context percentage, model and thinking level. Type a task and press Enter:
 
 ```text
 Explain how this repository is structured and how to run its tests.

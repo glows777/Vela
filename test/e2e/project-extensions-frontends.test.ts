@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
+import { createRuntime, createVela, type RuntimeEvent } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { extensionCommands } from '../../packages/vela/src/cli/commands/extensions.ts'
-import { runRpcMode } from '../../packages/vela/src/cli/rpc-mode.ts'
 import { loadConfig } from '../../packages/vela/src/driver/index.ts'
 import { local } from '../../packages/vela/src/legacy-channels/index.ts'
+import { legacyVelaAsRuntime } from '../support/legacy-vela-runtime.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 
 function setup() {
@@ -47,10 +47,11 @@ function setup() {
   return { dir, vela, model, projects }
 }
 
-test('/extensions prepares and lists only the active project, preserving host channel metadata', async () => {
+test('/extensions prepares and lists only the active project', async () => {
   const t = setup()
   try {
     await t.vela.ready()
+    const { runtime, clientFor } = legacyVelaAsRuntime(t.vela)
     const a = t.vela.session('A', { cwd: t.projects.alpha })
     const b = t.vela.session('B', { cwd: t.projects.beta })
     for (const [session, own, other] of [
@@ -60,19 +61,21 @@ test('/extensions prepares and lists only the active project, preserving host ch
     ] as const) {
       const lines: string[] = []
       const ctx = {
-        vela: t.vela,
-        session,
+        runtime,
+        session: clientFor(session),
         print: (line: string) => lines.push(line),
       }
       expect(extensionCommands[0]!('/unrelated', ctx)).toBe(false)
       await extensionCommands[0]!('/extensions', ctx)
       expect(lines.join('\n')).toContain(`Commands: /${own}-only`)
       expect(lines.join('\n')).not.toContain(`/${other}-only`)
-      const loaded = t.vela.extensions(session.id)
-      expect(loaded.find((entry) => entry.name === 'local')?.channels).toEqual([
-        'local',
-      ])
-      expect(loaded.find((entry) => entry.name === own)?.channels).toEqual([])
+      const loaded = await runtime.sessions.inspect(session.id)
+      expect(
+        loaded.extensions.find((entry) => entry.name === 'local'),
+      ).toBeDefined()
+      expect(
+        loaded.extensions.find((entry) => entry.name === own)?.commands,
+      ).toEqual([`${own}-only`])
     }
     expect(
       t.vela
@@ -119,64 +122,67 @@ test('TUI resumed project lists, completes and runs the active session extension
   }
 })
 
-test('RPC switches project command discovery and handles project commands without a model turn', async () => {
-  const t = setup()
+test('createRuntime switches project command discovery and handles project commands without a model turn', async () => {
+  const dir = tempDir('vela-project-runtime-')
+  const agentDir = join(dir.path, 'user')
+  mkdirSync(agentDir, { recursive: true })
+  const projects = { alpha: join(dir.path, 'A'), beta: join(dir.path, 'B') }
+  for (const [name, cwd] of Object.entries(projects)) {
+    mkdirSync(join(cwd, '.vela'), { recursive: true })
+    writeFileSync(
+      join(cwd, '.vela/config.json'),
+      JSON.stringify({ extensions: [`./${name}.ts`] }),
+    )
+    writeFileSync(
+      join(cwd, `.vela/${name}.ts`),
+      `export default function ${name}(api) {
+        api.registerCommand('${name}-only', {description: '${name} project command', handler: (_args, ctx) => ctx.notify('${name} command ran')})
+      }`,
+    )
+  }
+  const model = createFauxModel({ responses: [] })
+  const runtime = createRuntime({
+    agentDir,
+    hostEnv: {},
+    defaultModel: model,
+    trustOverride: () => true,
+  })
+  const events: RuntimeEvent[] = []
+  const unsub = runtime.events.subscribe((ev) => events.push(ev))
   try {
-    await t.vela.ready()
-    const b = t.vela.session('B', { cwd: t.projects.beta })
-    t.model.push(fauxText('Saved project B'))
-    await b.prompt('Save the B session')
-    await b.save()
-    await b.close()
-    const output: Array<{
-      id?: string
-      type: string
-      success?: boolean
-      data?: { commands?: { name: string }[]; disposition?: string }
-    }> = []
-    const pending = new Map<string, () => void>()
-    const commands = [
-      { id: 'a', type: 'get_commands' },
-      { id: 'switch', type: 'switch_session', sessionId: 'B' },
-      { id: 'b', type: 'get_commands' },
-      { id: 'run', type: 'prompt', message: '/beta-only' },
-    ]
-    await runRpcMode({
-      vela: t.vela,
-      sessionId: 'A',
-      resume: false,
-      newSessionId: () => 'unused',
-      input: (async function* () {
-        for (const command of commands) {
-          const response = new Promise<void>((resolve) =>
-            pending.set(command.id, resolve),
-          )
-          yield new TextEncoder().encode(`${JSON.stringify(command)}\n`)
-          await response
-        }
-      })(),
-      write: async (line) => {
-        const record = JSON.parse(line)
-        output.push(record)
-        if (record.type === 'response') pending.get(record.id)?.()
-      },
+    await runtime.ready()
+    const pAlpha = await runtime.projects.create({
+      name: 'alpha',
+      cwd: projects.alpha,
     })
+    const pBeta = await runtime.projects.create({
+      name: 'beta',
+      cwd: projects.beta,
+    })
+    await runtime.sessions.create({ id: 'A', projectId: pAlpha.id })
+    await runtime.sessions.create({ id: 'B', projectId: pBeta.id })
+
     for (const [id, own, other] of [
-      ['a', 'alpha-only', 'beta-only'],
-      ['b', 'beta-only', 'alpha-only'],
+      ['A', 'alpha-only', 'beta-only'],
+      ['B', 'beta-only', 'alpha-only'],
     ] as const) {
-      const response = output.find((item) => item.id === id)!
-      expect(response.success).toBe(true)
-      const names = response.data!.commands!.map((command) => command.name)
+      const inspected = await runtime.sessions.inspect(id)
+      const names = inspected.commands.map((command) => command.name)
       expect(names).toContain(own)
       expect(names).not.toContain(other)
     }
-    expect(output.find((item) => item.id === 'run')?.data?.disposition).toBe(
-      'handled',
-    )
-    expect(t.model.calls).toHaveLength(1)
+
+    const res = await runtime.sessions.runCommand('B', '/beta-only')
+    expect(res.handled).toBe(true)
+    expect(
+      events.some(
+        (ev) => ev.type === 'notify' && ev.message === 'beta command ran',
+      ),
+    ).toBe(true)
+    expect(model.calls).toHaveLength(0)
   } finally {
-    await t.vela.dispose()
-    t.dir.cleanup()
+    unsub()
+    await runtime.dispose()
+    dir.cleanup()
   }
 })

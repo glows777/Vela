@@ -8,8 +8,8 @@ Pick the surface first:
 
 | You are | Use | Docs |
 |---|---|---|
-| TypeScript in the same process | `createVela()` from `@glows777/vela` (see [packages](../../docs/sdk.md#packages)) | [sdk](../../docs/sdk.md) |
-| Another language or process | `vela --mode rpc` (long-lived) or `vela --mode json "<prompt>"` (one run) | [rpc](../../docs/rpc.md), [json](../../docs/json.md) |
+| TypeScript in the same process or local daemon IPC | `createRuntime()`, `connectRuntime()`, or legacy `createVela()` from `@glows777/vela` (see [packages](../../docs/sdk.md#packages)) | [sdk](../../docs/sdk.md) |
+| Another language or process | `vela --mode json "<prompt>"` (one run) or `connectRuntime()` over `vela.sock` | [json](../../docs/json.md) |
 | Adding tools, commands, providers, hooks or a chat app | An extension: `(vela) => { vela.registerTool(…); vela.on(…) }` | [extensions](../../docs/extensions.md), [channels](../../docs/channels.md) |
 | Testing any of the above offline | `@glows777/vela/testing` | [testing](../../docs/testing.md) |
 

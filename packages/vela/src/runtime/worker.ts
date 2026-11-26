@@ -515,6 +515,8 @@ export function finalizeTurnInDb(params: {
         runId: claimed.runId,
         status,
         ...(result.error ? { error: result.error } : {}),
+        ...(result.errorKind ? { errorKind: result.errorKind } : {}),
+        ...(result.errorHint ? { errorHint: result.errorHint } : {}),
       },
     })
     if (

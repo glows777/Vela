@@ -114,9 +114,9 @@ test('/status names a forked session and includes the cost of a priced model', a
   const { output } = await captureConsole(async () => {
     expect(await t.command('/status')).toBe(true)
     expect(
-      await createCliDispatcher(t.vela)('/status', {
+      await createCliDispatcher(t.runtime)('/status', {
         ...t.ctx,
-        session: forked,
+        session: t.clientFor(forked),
       }),
     ).not.toBe(false)
   })
@@ -275,7 +275,7 @@ test('/context and /usage report the conversation after a run', async () => {
 
   const { output } = await captureConsole(async () => {
     expect(await t.command('/context')).toBe(true)
-    expect(t.dispatch('/usage')).toBe(true)
+    expect(await t.command('/usage')).toBe(true)
   })
   expect(output).toContain('System prompt')
   expect(output).toContain('Usage Summary')
@@ -419,5 +419,5 @@ test('a message from a channel runs through the same model and tools, and the re
   // Channel sessions are separate from the CLI session
   expect(t.messages).toEqual([])
   const { output } = await captureConsole(() => t.dispatch('/channel list'))
-  expect(output).toContain('fake — test channel')
+  expect(output).toContain('[fake] test channel')
 })

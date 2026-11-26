@@ -1,6 +1,6 @@
-# Deploy `vela serve`
+# Deploy `vela daemon`
 
-`vela serve` runs the configured channels without a terminal, so a chat bot keeps answering after the shell closes and after a reboot. It has no sandbox: the operating-system account it runs under is the boundary, and anyone in an enabled chat can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access the bot needs (see [Security](security.md#channel-senders)), from a systemd unit.
+`vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, so a service stays running after the shell closes and after a reboot. It has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
 
 The steps below are for a Debian or Ubuntu host with systemd; adjust the package commands for other distributions. They use `vela` as the account name.
 
@@ -64,7 +64,7 @@ Group=vela
 WorkingDirectory=/home/vela/workspace
 Environment=VELA_DIR=/home/vela/.vela
 EnvironmentFile=/etc/vela/vela.env
-ExecStart=/usr/bin/vela serve
+ExecStart=/usr/bin/vela daemon run
 Restart=on-failure
 RestartSec=5
 
@@ -72,11 +72,11 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-- `ExecStart` takes the absolute path from `command -v vela`. `serve` stays in the foreground until SIGTERM, which is what `Type=simple` expects.
-- `WorkingDirectory` is the folder Vela starts in, and it selects the project data directory.
+- `ExecStart` takes the absolute path from `command -v vela`. `daemon run` stays in the foreground until SIGTERM, which is what `Type=simple` expects.
+- `WorkingDirectory` is the default workspace directory for the service.
 - `EnvironmentFile` holds the secrets. A missing file fails the start instead of running without a key.
-- `Restart=on-failure` restarts after a crash or a non-zero exit. `serve` exits 1 when no channel starts, so a broken `config.json` shows up as repeated restarts in the journal rather than as a running service.
-- There is no `StandardOutput=` or shell redirection: `vela serve` writes one line per event to stderr, which journald already collects. Vela does not rotate its own log.
+- `Restart=on-failure` restarts after a crash or a non-zero exit, so a broken `config.json` shows up as repeated restarts in the journal rather than as a running service.
+- There is no `StandardOutput=` or shell redirection: `vela daemon run` writes logs to stderr, which journald already collects. Vela does not rotate its own log.
 
 ```sh
 sudo systemctl daemon-reload
@@ -84,7 +84,7 @@ sudo systemctl enable --now vela
 systemctl status --no-pager vela
 ```
 
-`status` then shows `Active: active (running)` with the `vela serve` process as its main PID. `systemctl stop` sends SIGTERM; Vela saves and closes the sessions, closes the channels and exits 0.
+`status` then shows `Active: active (running)` with the `vela daemon run` process as its main PID. `systemctl stop` sends SIGTERM; Vela reaps active background jobs, saves and closes sessions, removes `vela.sock` and exits 0.
 
 ## 5. Logs
 
@@ -94,7 +94,7 @@ journalctl -u vela -n 100 --no-pager
 journalctl -u vela --since today
 ```
 
-The journal holds the gateway's startup lines and one line per channel event, with a local timestamp: `channel_message`, `channel_reply` and `channel_error` ([CLI serve](cli.md#serve)). Text is cut to one line of 80 characters, and terminal escape sequences are stripped. journald rotates and limits the journal, so no logrotate rule is needed.
+The journal holds the daemon's startup lines and operational logs ([CLI daemon](cli.md#daemon)). journald rotates and limits the journal, so no logrotate rule is needed.
 
 ## 6. Upgrade
 

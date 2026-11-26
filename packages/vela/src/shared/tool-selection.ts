@@ -53,6 +53,105 @@ export function getToolListError(
     : undefined
 }
 
+export interface ToolLoadout {
+  selection?: string[]
+  modifiers?: string[]
+}
+
+export interface SelectToolsArgs {
+  tools?: readonly string[]
+  noTools?: boolean
+  excludeTools?: readonly string[]
+}
+
+function toolMatcher(entry: string): (name: string) => boolean {
+  if (!entry.includes('*')) return (name) => name === entry
+  const pattern = new RegExp(
+    `^${entry
+      .split('*')
+      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+      .join('.*')}$`,
+  )
+  return (name) => pattern.test(name)
+}
+
+/**
+ * The tools a session starts with, from `--tools / --no-tools / --exclude-tools` and the
+ * `defaultTools` setting (like pi), or undefined for the default set. Plain entries are names or
+ * `*` patterns and replace the setting; `+name` / `-name` entries adjust the default set instead.
+ * One entry that matches no registered tool is an error.
+ */
+export function selectTools(
+  available: readonly string[],
+  args: SelectToolsArgs,
+  defaultTools?: readonly string[],
+): ToolLoadout | undefined {
+  const entries = [...(args.tools ?? [])]
+  const excludedEntries = [...(args.excludeTools ?? [])]
+  const listError = getToolListError(entries)
+  if (listError) throw new Error(`Invalid --tools list: ${listError}`)
+  const plain = entries.filter((entry) => !isToolModifier(entry))
+  const modifiers = entries.filter(isToolModifier)
+  const requested =
+    plain.length > 0
+      ? [...plain, ...excludedEntries]
+      : [...[...(defaultTools ?? []), ...entries], ...excludedEntries].map(
+          (entry) => (isToolModifier(entry) ? entry.slice(1) : entry),
+        )
+  const unknown = requested.filter(
+    (entry) => !available.some(toolMatcher(entry)),
+  )
+  if (unknown.length)
+    throw new Error(
+      `Unknown tool${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. Available: ${available.join(', ')}`,
+    )
+  const matches = (names: readonly string[]) => (name: string) =>
+    names.some((entry) => toolMatcher(entry)(name))
+  const settingsPlain = defaultTools?.filter((entry) => !isToolModifier(entry))
+  const settingsSelection =
+    settingsPlain && (settingsPlain.length > 0 || defaultTools?.length === 0)
+      ? applyToolModifiers(
+          available.filter(matches(settingsPlain)),
+          (defaultTools ?? []).filter(isToolModifier),
+        )
+      : undefined
+  let selection: string[] | undefined
+  let adjusted = modifiers
+  if (modifiers.length > 0) {
+    if (args.noTools) selection = applyToolModifiers([], modifiers)
+    else if (settingsSelection)
+      selection = applyToolModifiers(settingsSelection, modifiers)
+    else adjusted = [...(defaultTools ?? []), ...modifiers]
+  } else if (plain.length > 0) {
+    selection = available.filter(matches(plain))
+  } else if (args.noTools) {
+    selection = []
+  } else if (settingsSelection) {
+    selection = settingsSelection
+  } else if (defaultTools?.length) {
+    adjusted = defaultTools.filter(isToolModifier)
+  }
+  const excluded = available.filter(matches(excludedEntries))
+  if (selection)
+    selection = selection.filter((name) => !excluded.includes(name))
+  else adjusted = [...adjusted, ...excluded.map((name) => `-${name}`)]
+  if (selection) return { selection }
+  return adjusted.length > 0 ? { modifiers: adjusted } : undefined
+}
+
+function applyToolModifiers(
+  base: readonly string[],
+  modifiers: readonly string[],
+): string[] {
+  const result = new Set(base)
+  for (const entry of modifiers) {
+    const name = entry.slice(1)
+    if (entry.startsWith('+')) result.add(name)
+    else if (entry.startsWith('-')) result.delete(name)
+  }
+  return [...result]
+}
+
 /**
  * Project `tools` on top of the user list: a list with plain names replaces it, while
  * `+name` / `-name` entries append and adjust it. An empty list replaces it too, so a project can

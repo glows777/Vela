@@ -8,13 +8,13 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { CliSessionClient } from '../../packages/vela/src/cli/runtime-client.ts'
 import { setupWizard } from '../../packages/vela/src/cli/tui/setup-wizard.ts'
+import type { ProviderApi } from '../../packages/vela/src/driver/index.ts'
 import {
-  fileCredentialStore,
-  loadModels,
-  type ProviderApi,
-} from '../../packages/vela/src/driver/index.ts'
-import { createVela } from '../../packages/vela/src/vela.ts'
+  createRuntime,
+  type LocalVelaRuntime,
+} from '../../packages/vela/src/index.ts'
 import { responsesReply } from '../support/responses.ts'
 
 function reply(api: ProviderApi, body: { model: string; stream?: boolean }) {
@@ -144,20 +144,25 @@ for (const api of [
             : undefined,
         )
       const before = snapshot()
-      const options = () => ({
-        cwd: dir,
-        providers: loadModels({ agentDir: dir, env: {} }),
-        credentials: fileCredentialStore(join(dir, 'auth.json')),
+      const runtime = createRuntime({ agentDir: dir, hostEnv: {} })
+      await runtime.ready()
+      const project = await runtime.projects.create({ name: 'test', cwd: dir })
+      const initial = await runtime.sessions.create({
+        id: 'initial',
+        projectId: project.id,
       })
-      const vela = createVela(options())
-      const session = vela.session('initial')
+      const session = new CliSessionClient(
+        runtime,
+        initial.id,
+        await runtime.sessions.inspect(initial.id),
+      )
       const requests: {
         url: string
         body: { model: string; stream?: boolean }
         headers: Headers
       }[] = []
       const originalFetch = globalThis.fetch
-      let restarted: ReturnType<typeof createVela> | undefined
+      let restarted: LocalVelaRuntime | undefined
       let headerAttempts = 0
       let contextAttempts = 0
       globalThis.fetch = (async (input, init) => {
@@ -185,7 +190,7 @@ for (const api of [
       }) as typeof fetch
       try {
         const saved = await setupWizard({
-          vela,
+          runtime,
           session,
           agentDir: dir,
           select: async (title, choices) => {
@@ -308,16 +313,26 @@ for (const api of [
             ui: { note: 'keep', theme: 'dark' },
           })
         }
-        expect(session.modelInfo.ref).toBe('custom/custom-model')
+        await session.refresh()
+        expect(session.modelInfo?.ref).toBe('custom/custom-model')
         expect(session.thinkingLevel).toBe('off')
-        await session.prompt('Hello')
-        restarted = createVela(options())
-        const next = restarted.session('restart', {
+        await runtime.prompt(initial.id, { text: 'Hello' })
+        await runtime.waitForIdle(initial.id)
+        await runtime.dispose()
+        restarted = createRuntime({ agentDir: dir, hostEnv: {} })
+        await restarted.ready()
+        const restartRecord = await restarted.sessions.create({
+          id: 'restart',
+          projectId: project.id,
           model: 'custom/custom-model',
           thinkingLevel: 'off',
         })
-        await next.prompt('Hello again')
-        expect(JSON.stringify(next.messages)).toContain('OK')
+        await restarted.prompt(restartRecord.id, { text: 'Hello again' })
+        await restarted.waitForIdle(restartRecord.id)
+        const nextMessages = await restarted.sessions.messages({
+          sessionId: restartRecord.id,
+        })
+        expect(JSON.stringify(nextMessages.messages)).toContain('OK')
         expect(requests).toHaveLength(outcome === 'retry' ? 4 : 3)
         for (const request of requests) {
           expect(request.url).toBe(
@@ -335,7 +350,7 @@ for (const api of [
         }
       } finally {
         globalThis.fetch = originalFetch
-        await vela.dispose()
+        await runtime.dispose()
         await restarted?.dispose()
         rmSync(dir, { recursive: true, force: true })
       }

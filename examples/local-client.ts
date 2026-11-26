@@ -1,5 +1,5 @@
 /**
- * Minimal authenticated Local-channel client (not RPC): connect to an existing `vela serve`.
+ * Minimal authenticated Local-channel client (not daemon IPC): connect to an existing Local channel host.
  *   VELA_LOCAL_TOKEN=... bun examples/local-client.ts /absolute/project/path 'Hello'
  * The token is sent only in Authorization, never in a URL or printed to the console.
  * Set VELA_LOCAL_URL if the server uses a port other than 8788.

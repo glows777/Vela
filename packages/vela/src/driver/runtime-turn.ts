@@ -3,9 +3,14 @@ import type { DriverInboxItem, DriverTurnRequest } from '../runtime/driver.ts'
 import { enqueueInboxEvent } from '../runtime/inbox.ts'
 import type { BlobStore } from '../runtime/index.ts'
 import type { MemoryStore } from '../runtime/memory/index.ts'
-import type { VelaEvent } from './agent/events.ts'
+import type { ImageContent, UserContentPart } from '../shared/messages.ts'
+
 import type { ExecutionEnv } from './execution/types.ts'
-import type { AssistantModelMessage, ModelMessage } from './messages.ts'
+import {
+  type AssistantModelMessage,
+  type ModelMessage,
+  normalizeUserMessage,
+} from './messages.ts'
 import {
   expandPromptTemplate,
   type PromptTemplate,
@@ -461,6 +466,8 @@ export async function prepareRuntimeTurnMessages(options: {
           runId: request.runId,
           messageId: entry.id,
           message: memoryMsg,
+          customType: 'memory',
+          display: false,
         })
       })
       messages.push(memoryMsg)
@@ -517,6 +524,7 @@ export async function prepareRuntimeTurnMessages(options: {
         : undefined
   const lines: string[] = []
   const humanLines: string[] = []
+  const imageParts: ImageContent[] = []
   for (const item of usableInputs) {
     const formatted = await formatInboxItemText(item, {
       skills,
@@ -527,38 +535,71 @@ export async function prepareRuntimeTurnMessages(options: {
     })
     let line = formatted.text
     const atts = item.payload.attachments as
-      | Array<{ blobId: string; name: string }>
+      | Array<{
+          blobId: string
+          name: string
+          mimeType?: string
+          inlineOnly?: boolean
+        }>
       | undefined
     if (atts?.length) {
-      const env = await resolveEnv()
+      let env: ExecutionEnv | undefined
       const attachmentLines: string[] = []
       for (const att of atts) {
-        const matPath = await blobs.materializeIntoEnv(
-          att.blobId,
-          env,
-          request.sessionId,
-          signal,
-        )
-        attachmentLines.push(`[file: ${att.name}, saved at ${matPath}]`)
+        if (att.mimeType?.startsWith('image/')) {
+          try {
+            const bytes = await blobs.readBytes(att.blobId)
+            imageParts.push({
+              type: 'image',
+              data: Buffer.from(bytes).toString('base64'),
+              mimeType: att.mimeType,
+            })
+          } catch {}
+        }
+        if (!att.inlineOnly) {
+          env ??= await resolveEnv()
+          const matPath = await blobs.materializeIntoEnv(
+            att.blobId,
+            env,
+            request.sessionId,
+            signal,
+          )
+          attachmentLines.push(`[file: ${att.name}, saved at ${matPath}]`)
+        }
       }
-      line = line
-        ? `${line}\n${attachmentLines.join('\n')}`
-        : attachmentLines.join('\n')
+      if (attachmentLines.length > 0) {
+        line = line
+          ? `${line}\n${attachmentLines.join('\n')}`
+          : attachmentLines.join('\n')
+      }
     }
     if (line) lines.push(line)
     if (formatted.humanText) humanLines.push(formatted.humanText)
   }
-  if (lines.length === 0) {
+  if (lines.length === 0 && imageParts.length === 0) {
     return onlyWaitForInput
       ? loadExistingTurnUserMsg(db, request.sessionId, request.runId)
       : { hasHumanText: false }
   }
 
   const dreamHumanText = humanLines.join('\n\n')
-  const userMsg: ModelMessage = {
-    role: 'user',
-    content: lines.join('\n\n'),
-  }
+  const combinedText = lines.join('\n\n')
+  const rawUserMsg: ModelMessage =
+    imageParts.length > 0
+      ? {
+          role: 'user',
+          content: [
+            ...(combinedText
+              ? ([{ type: 'text', text: combinedText }] as UserContentPart[])
+              : []),
+            ...imageParts,
+          ],
+        }
+      : {
+          role: 'user',
+          content: combinedText,
+        }
+  const userMsg = await normalizeUserMessage(rawUserMsg)
   let userEntryId: string | undefined
   store.runInTransaction(() => {
     const entry = store.appendMessage(userMsg, {
@@ -579,92 +620,6 @@ export async function prepareRuntimeTurnMessages(options: {
   messages.push(userMsg)
   tracker.addMessage(userMsg)
   return { userEntryId, hasHumanText: Boolean(dreamHumanText) }
-}
-
-export function createRuntimeEventForwarder(
-  request: DriverTurnRequest,
-  onAssistantMessage: (message: AssistantModelMessage) => void,
-): (event: VelaEvent) => void {
-  return (event) => {
-    switch (event.type) {
-      case 'message_update': {
-        const inner = event.assistantMessageEvent
-        if (inner.type === 'text_delta' || inner.type === 'thinking_delta') {
-          request.onDelta({
-            type: inner.type,
-            sessionId: request.sessionId,
-            runId: request.runId,
-            contentIndex: inner.contentIndex,
-            delta: inner.delta,
-          })
-        }
-        break
-      }
-      case 'tool_execution_update': {
-        const delta =
-          typeof event.partialResult === 'string'
-            ? event.partialResult
-            : JSON.stringify(event.partialResult ?? '')
-        request.onDelta({
-          type: 'tool_output_delta',
-          sessionId: request.sessionId,
-          runId: request.runId,
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          delta,
-        })
-        break
-      }
-      case 'tool_execution_start':
-        request.onEvent({
-          type: 'tool_started',
-          runId: request.runId,
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          input: event.args,
-        })
-        break
-      case 'tool_execution_end':
-        request.onEvent({
-          type: 'tool_finished',
-          runId: request.runId,
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          isError: event.isError,
-          durationMs: event.durationMs,
-          details: event.details,
-        })
-        break
-      case 'approval_requested':
-        request.onEvent({
-          type: 'approval_requested',
-          runId: request.runId,
-          approvalId: event.approvalId,
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          summary: event.summary,
-          input: event.input ?? {},
-        })
-        break
-      case 'message_end':
-        if (event.message.role === 'assistant') {
-          onAssistantMessage(event.message)
-        }
-        break
-      case 'compaction_end':
-        if (event.result) {
-          request.onEvent({
-            type: 'compaction_finished',
-            runId: request.runId,
-            reason: event.reason,
-            tokensBefore: event.result.tokensBefore,
-            tokensAfter: event.result.tokensAfter,
-            messages: event.result.messages,
-          })
-        }
-        break
-    }
-  }
 }
 
 /** Re-enqueues unconsumed in-memory `steer()` inputs into durable `inbox_events` when a turn exits before consuming them. */

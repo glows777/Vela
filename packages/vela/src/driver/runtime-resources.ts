@@ -67,6 +67,7 @@ export async function loadTrustedRuntimeResources(options: {
   hostPromptTemplates?: readonly PromptTemplate[]
   hostEnv?: Record<string, string | undefined>
   trustOverride?: boolean
+  loadUntrustedContextFiles?: boolean
 }): Promise<TrustedRuntimeResources> {
   const isLocal = options.location.environment === 'local'
   const trustScopeDir = options.trustDataDir ?? options.agentDir
@@ -149,6 +150,25 @@ export async function loadTrustedRuntimeResources(options: {
   }
 
   if (!trusted) {
+    if (
+      options.loadUntrustedContextFiles &&
+      options.hostContextFiles === undefined &&
+      isLocal
+    ) {
+      env ??= await options.resolveEnv()
+      const loadedContext = await loadEnvironmentContextFiles(
+        env,
+        options.location.cwd,
+        options.signal,
+      )
+      const seenPaths = new Set(contextFiles.map((f) => f.path))
+      for (const file of loadedContext) {
+        if (!seenPaths.has(file.path)) {
+          seenPaths.add(file.path)
+          contextFiles.push(file)
+        }
+      }
+    }
     const systemPrompt =
       options.systemPrompt ??
       readLocalSystemFile([options.agentDir], 'SYSTEM.md')

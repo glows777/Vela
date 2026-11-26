@@ -1,5 +1,6 @@
 import { sessionContentText as messageText } from '../../driver/diagnostics.ts'
-import type { SessionEntry, VelaSession } from '../../driver/index.ts'
+import type { SessionEntry } from '../../driver/index.ts'
+import type { CliSessionClient } from '../runtime-client.ts'
 import {
   type DialogHost,
   errorMessage,
@@ -9,7 +10,7 @@ import {
 import { nearestShown, treeItems } from './tree-selector.ts'
 
 interface TreeHost extends DialogHost {
-  session: VelaSession
+  session: CliSessionClient
   options: { newSessionId: () => string }
   addNotice(text: string, level?: 'info' | 'warning' | 'error' | 'dim'): void
   busyNotice(): boolean
@@ -26,17 +27,17 @@ interface TreeHost extends DialogHost {
 export async function treeCommand(host: TreeHost): Promise<void> {
   if (host.busyNotice()) return
   const session = host.session
-  const branch = session.getBranch()
+  const treeState = await session.runtime.sessions.tree(session.id)
   const items = treeItems(
-    session.getTree(),
-    new Set(branch.map((entry) => entry.id)),
+    treeState.tree,
+    new Set(treeState.branch.map((entry) => entry.id)),
     null,
   )
   if (!items.length) {
     host.addNotice('No messages in this session yet', 'dim')
     return
   }
-  const current = nearestShown(branch, items)
+  const current = nearestShown(treeState.branch, items)
   for (const item of items)
     if (item.value === current) item.description = '← current'
   const targetId = await host.select('Session Tree', items, current)
@@ -51,8 +52,8 @@ export async function treeCommand(host: TreeHost): Promise<void> {
   if (action === 'label') {
     const label = await host.input('Label', 'empty clears the label')
     try {
-      session.setLabel(targetId, label)
-      await session.save()
+      await session.runtime.sessions.setLabel(session.id, targetId, label)
+      await session.refresh()
       host.addNotice(label ? `Label set: ${label}` : 'Label cleared', 'dim')
     } catch (error) {
       host.addNotice(errorMessage(error), 'error')
@@ -65,31 +66,34 @@ export async function treeCommand(host: TreeHost): Promise<void> {
     if (focus === undefined) return
   }
   const atLeaf =
-    targetId === session.getLeafId() &&
-    !session
-      .getBranch()
-      .some(
-        (entry) =>
-          entry.id === targetId &&
-          entry.type === 'message' &&
-          entry.message.role === 'user',
-      )
+    targetId === treeState.leafId &&
+    !treeState.branch.some(
+      (entry) =>
+        entry.id === targetId &&
+        entry.type === 'message' &&
+        entry.message.role === 'user',
+    )
   if (atLeaf) {
     host.addNotice('Already at this point', 'dim')
     return
   }
   if (action !== 'go') host.startLoader('Summarizing branch…')
   try {
-    const result = await session.navigateTree(targetId, {
-      summarize: action !== 'go',
-      focus,
-    })
+    const result = await session.runtime.sessions.navigateTree(
+      session.id,
+      targetId,
+      {
+        summarize: action !== 'go',
+        focus,
+      },
+    )
     if (result.cancelled) {
       host.addNotice('Navigation cancelled', 'dim')
       return
     }
+    await session.refresh()
     host.resetChat()
-    host.renderHistory(session.getBranch())
+    host.renderHistory(result.branch)
     if (result.editorText !== undefined) host.editor.setText(result.editorText)
     host.addNotice('Moved in the session tree', 'dim')
   } catch (error) {
@@ -101,7 +105,7 @@ export async function treeCommand(host: TreeHost): Promise<void> {
   }
 }
 
-/** `/fork` (pick an earlier user message) and `/clone` (the current branch), like pi: switch to the copy. */
+/** `/fork` (pick an earlier user message) and `/clone` (the current branch) */
 export async function forkCommand(
   host: TreeHost,
   clone = false,
@@ -110,13 +114,12 @@ export async function forkCommand(
   const session = host.session
   let entryId: string | undefined
   if (!clone) {
-    const users = session
-      .getEntries()
-      .flatMap((entry) =>
-        entry.type === 'message' && entry.message.role === 'user'
-          ? [{ id: entry.id, text: messageText(entry.message.content) }]
-          : [],
-      )
+    const treeState = await session.runtime.sessions.tree(session.id)
+    const users = treeState.entries.flatMap((entry) =>
+      entry.type === 'message' && entry.message.role === 'user'
+        ? [{ id: entry.id, text: messageText(entry.message.content) }]
+        : [],
+    )
     if (!users.length) {
       host.addNotice('No messages to fork from', 'dim')
       return
@@ -133,15 +136,17 @@ export async function forkCommand(
   }
   try {
     const result = clone
-      ? await session.clone({ sessionId: host.options.newSessionId() })
-      : await session.fork(entryId as string, {
+      ? await session.runtime.sessions.clone(session.id, {
           sessionId: host.options.newSessionId(),
         })
-    if (result.cancelled || !result.session) {
+      : await session.runtime.sessions.fork(session.id, entryId as string, {
+          sessionId: host.options.newSessionId(),
+        })
+    if (result.cancelled || !result.sessionId) {
       host.addNotice(`${clone ? 'Clone' : 'Fork'} cancelled`, 'dim')
       return
     }
-    await host.switchSession(result.session.id, false)
+    await host.switchSession(result.sessionId, false)
     host.editor.setText(result.selectedText ?? '')
     host.addNotice(
       clone ? 'Cloned to a new session' : 'Forked to a new session',

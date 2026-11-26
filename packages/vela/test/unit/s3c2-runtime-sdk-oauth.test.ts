@@ -1603,8 +1603,8 @@ test('Round 2 regressions: login/logout ordering, lazy getDeviceId, hostId check
   let selected = false
   await logoutCommand(
     {
-      vela: {
-        loginProviders: () => [
+      runtime: {
+        loginProviders: async () => [
           {
             provider: 'openai',
             oauth: 'Sign in with ChatGPT (Plus/Pro)',

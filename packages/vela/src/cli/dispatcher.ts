@@ -1,4 +1,4 @@
-import type { Vela } from '../vela.ts'
+import type { VelaRuntime } from '../runtime-sdk-types.ts'
 import { channelCommands } from './commands/channel.ts'
 import { extensionCommands } from './commands/extensions.ts'
 import {
@@ -14,11 +14,9 @@ import { statusCommands } from './commands/status.ts'
 
 /**
  * The CLI's own slash commands. Tests use the same dispatcher so commands behave as in the real entry point.
- * Extension commands (/memory, /dream, /rag, ...) are not here: any `/xxx` these don't claim
- * goes to session.prompt(), which runs extension commands. Text without a leading `/` is never
- * a command (like pi): it goes to the model.
+ * Extension/native commands (/memory, /dream, /tasks, /rag, ...) go to `runtime.sessions.runCommand`.
  */
-export function createCliDispatcher(_vela: Vela): CommandHandler {
+export function createCliDispatcher(_runtime?: VelaRuntime): CommandHandler {
   const dispatch = createDispatcher([
     ...debugCommands,
     ...statusCommands,

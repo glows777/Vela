@@ -108,6 +108,16 @@ export type FinishReason =
   | 'other'
   | 'interrupted'
 
+/** A terminal failure category for hosts; it does not decide retries. */
+export type AgentErrorKind =
+  | 'auth'
+  | 'billing'
+  | 'rate_limit'
+  | 'network'
+  | 'context_overflow'
+  | 'provider'
+  | 'unknown'
+
 /** Reasoning effort level passed to providers. */
 export type ReasoningOption =
   | 'none'

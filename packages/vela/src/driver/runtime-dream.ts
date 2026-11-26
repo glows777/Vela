@@ -6,7 +6,7 @@ import type { ExecutionEnv } from './execution/types.ts'
 import { type DreamScope, dreamKvKey, MemoryDream } from './memory/dream.ts'
 import type { TokenTracker } from './usage/tracker.ts'
 
-function resolveRuntimeDream(options: {
+export function resolveRuntimeDream(options: {
   db: VelaDatabase
   activeDreams: Map<string, MemoryDream>
   localStore: MemoryStore

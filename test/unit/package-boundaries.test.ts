@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { stopDaemon } from '../../packages/vela/src/daemon/index.ts'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -392,7 +393,9 @@ test('print mode with AGENTS.md does not load @earendil-works/pi-tui', async () 
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
     child.exited,
-  ])
+  ]).finally(() =>
+    stopDaemon({ agentDir: join(home, '.vela') }).catch(() => {}),
+  )
   expect(code, stderr).toBe(0)
   expect(stdout.trim().length).toBeGreaterThan(0)
   expect(stderr).not.toContain('pi-tui must not load')
