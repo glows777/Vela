@@ -128,6 +128,22 @@ export class EnvironmentRegistry {
     return process.platform
   }
 
+  networkMode(environment: string): 'on' | 'off' | 'restricted' {
+    if (
+      environment === 'local' ||
+      !Object.hasOwn(this.definitions, environment)
+    ) {
+      return 'on'
+    }
+    const entry = this.definitions[environment]
+    if (isRecord(entry)) {
+      if (entry.network === 'off' || entry.network === 'restricted') {
+        return entry.network
+      }
+    }
+    return 'on'
+  }
+
   async resolve(target: {
     sessionId: string
     location: ExecutionLocation

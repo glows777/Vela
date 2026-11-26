@@ -427,13 +427,23 @@ export function commitCompletedTurnInTx(params: {
       `stop_requested:${claimed.runId}`,
     ),
   )
-  const finalStatus: RunEndStatus = stopRequested ? 'stopped' : 'completed'
+  const pendingApproval = !stopRequested
+    ? db.get<{ id: string; summary: string }>(
+        `SELECT id, summary FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+        claimed.runId,
+      )
+    : undefined
+  const finalStatus: RunEndStatus = stopRequested
+    ? 'stopped'
+    : pendingApproval
+      ? 'waiting_human'
+      : 'completed'
   const updatedRun = db.run(
     `UPDATE runs
      SET status = ?, error = NULL, finished_at = ?, updated_at = ?
      WHERE id = ? AND owner_token = ?`,
     finalStatus,
-    now,
+    finalStatus === 'waiting_human' ? null : now,
     now,
     claimed.runId,
     claimed.ownerToken,
@@ -445,8 +455,12 @@ export function commitCompletedTurnInTx(params: {
   db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${claimed.runId}`)
   db.run(
     `UPDATE sessions
-     SET state = 'idle', waiting_reason = NULL, updated_at = ?
+     SET state = ?, waiting_reason = ?, updated_at = ?
      WHERE id = ?`,
+    finalStatus === 'waiting_human' ? 'waiting_human' : 'idle',
+    finalStatus === 'waiting_human'
+      ? (pendingApproval?.summary ?? 'approval')
+      : null,
     now,
     claimed.session.id,
   )
@@ -462,7 +476,7 @@ export function commitCompletedTurnInTx(params: {
     },
   })
   if (
-    finalStatus === 'completed' &&
+    (finalStatus === 'completed' || finalStatus === 'waiting_human') &&
     !outcome.silent &&
     outcome.replyText &&
     outboxTarget
@@ -478,6 +492,12 @@ export function commitCompletedTurnInTx(params: {
       text: outcome.replyText,
     })
   }
+  recordChildStatusNoteForHubInTx(
+    db,
+    claimed,
+    finalStatus,
+    pendingApproval?.summary ?? outcome.replyText,
+  )
 }
 
 export function finalizeTurnInDb(params: {
@@ -490,14 +510,12 @@ export function finalizeTurnInDb(params: {
   const { db, eventBus, claimed, result, outboxTarget } = params
   const now = new Date().toISOString()
   db.transaction(() => {
-    const hasPendingApproval = Boolean(
-      db.get<{ id: string }>(
-        `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1`,
-        claimed.runId,
-      ),
+    const pendingApproval = db.get<{ id: string; summary: string }>(
+      `SELECT id, summary FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+      claimed.runId,
     )
     const status: RunEndStatus =
-      result.status === 'waiting_human' || hasPendingApproval
+      result.status === 'waiting_human' || pendingApproval
         ? 'waiting_human'
         : result.status
     const nextSessionState =
@@ -529,7 +547,9 @@ export function finalizeTurnInDb(params: {
        SET state = ?, waiting_reason = ?, updated_at = ?
        WHERE id = ?`,
       nextSessionState,
-      nextSessionState === 'waiting_human' ? 'approval' : null,
+      nextSessionState === 'waiting_human'
+        ? (pendingApproval?.summary ?? 'approval')
+        : null,
       now,
       claimed.session.id,
     )
@@ -548,7 +568,7 @@ export function finalizeTurnInDb(params: {
       },
     })
     if (
-      status === 'completed' &&
+      (status === 'completed' || status === 'waiting_human') &&
       !result.silent &&
       result.replyText &&
       outboxTarget
@@ -564,6 +584,64 @@ export function finalizeTurnInDb(params: {
         text: result.replyText,
       })
     }
+    if (status !== 'interrupted') {
+      recordChildStatusNoteForHubInTx(
+        db,
+        claimed,
+        status,
+        pendingApproval?.summary ?? result.error ?? result.replyText,
+      )
+    }
+  })
+}
+
+function recordChildStatusNoteForHubInTx(
+  db: VelaDatabase,
+  claimed: ClaimedTurn,
+  status: RunEndStatus,
+  detail?: string,
+): void {
+  const { session } = claimed
+  if (
+    !session.projectId ||
+    (session.kind !== 'topic' && session.kind !== 'work')
+  ) {
+    return
+  }
+  const allPassive =
+    claimed.inputs.length > 0 && claimed.inputs.every((item) => item.passive)
+  if (allPassive) return
+  const project = db.get<{ hub_session_id: string | null }>(
+    'SELECT hub_session_id FROM projects WHERE id = ?',
+    session.projectId,
+  )
+  const hubId = project?.hub_session_id
+  if (!hubId || hubId === session.id) return
+  const label = session.name
+    ? `Session "${session.name}" (${session.id})`
+    : `Session ${session.id}`
+  const clipped = detail ? detail.replace(/\s+/g, ' ').trim().slice(0, 200) : ''
+  const line =
+    status === 'stopped'
+      ? `${label} was stopped`
+      : status === 'failed'
+        ? `${label} failed: ${clipped || 'error'}`
+        : status === 'waiting_human'
+          ? `${label} is waiting for input: ${clipped || 'approval'}`
+          : `${label} finished: ${clipped || '(no reply)'}`
+  enqueueInboxEvent(db, {
+    sessionId: hubId,
+    projectId: session.projectId,
+    source: 'handoff',
+    dedupeKey: `child-status:${claimed.runId}:${status}`,
+    wake: false,
+    payload: {
+      type: 'handoff_note',
+      childSessionId: session.id,
+      runId: claimed.runId,
+      status,
+      text: line,
+    },
   })
 }
 

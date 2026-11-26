@@ -165,6 +165,11 @@ export class SubscriptionManager {
           wakeSessions.add(sub.sessionId)
         }
       }
+      if (input.final && subs.length > 0) {
+        for (const sub of subs) {
+          this.db.run('DELETE FROM subscriptions WHERE id = ?', sub.id)
+        }
+      }
     })
 
     for (const sessionId of wakeSessions) {

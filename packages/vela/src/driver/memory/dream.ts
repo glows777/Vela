@@ -1,42 +1,72 @@
-import { randomUUID } from 'node:crypto'
-import fs from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, resolve } from 'node:path'
 import z from 'zod'
-import { generateProviderText } from '../../../providers/index.ts'
-import type { ModelMessage, VelaSession } from '../../extension-api.ts'
-import { normalizeUsage } from '../../usage/tracker.ts'
-import { bm25Search } from './search.ts'
+import type { VelaDatabase } from '../../db/index.ts'
+import { generateProviderText } from '../../providers/index.ts'
 import {
+  bm25Search,
+  MAX_NOTE_CHARS,
   MEMORY_RULES,
   type MemoryEntry,
   type MemoryStore,
-  writePrivate,
-} from './store.ts'
+} from '../../runtime/memory/index.ts'
+import type { VelaLogger } from '../../shared/logger.ts'
+import type { ModelPricing } from '../../shared/pricing.ts'
+import type { ModelInput, ProviderUsage } from '../../shared/provider-types.ts'
+import type { ModelMessage } from '../messages.ts'
+import { normalizeUsage, type StepUsage } from '../usage/tracker.ts'
+import type { VelaSession } from '../vela-session.ts'
 
 const MAX_INBOX_BYTES = 100 * 1024
 const NOTE_BUDGET = 60_000
+const MAX_LOGS = 20
 const DAY = 24 * 3600_000
-interface InboxTurn {
+
+export type DreamScope =
+  | { kind: 'project'; projectId: string }
+  | { kind: 'global' }
+  | { kind: 'tagged'; key: string }
+
+export interface DreamTurn {
   id: string
+  rowId: number
   sessionId: string
   time: number
   user: string
-  assistant: string
   tools: string[]
 }
-interface DreamState {
-  dropped: number
-  collected?: number
-  lastRun?: DreamRun
-}
-interface DreamRun {
+
+export interface DreamRunRecord {
   time: number
   changes: number
   report: string
   inboxLength: number
-  collected: number
+  attemptMaxRowId: number
   failed?: string
   skipped?: string
+}
+
+export interface DreamLogEntry {
+  time: number
+  report: string
+}
+
+export interface DreamKvState {
+  cursorRowId: number
+  lastRun?: DreamRunRecord
+  logs: DreamLogEntry[]
+  sessionIds: string[]
+}
+
+export interface DreamRunnerContext {
+  sessionId: string
+  model: ModelInput
+  pricing?: ModelPricing
+  recordUsage: (
+    modelId: string,
+    usage: StepUsage,
+    meta: { kind: 'dream'; usage: ProviderUsage; durationMs: number },
+    pricing: { value: ModelPricing | undefined },
+  ) => void
 }
 
 const line = z
@@ -55,7 +85,7 @@ const note = {
   name: line,
   description: optionalLine,
   type: z.enum(['user', 'feedback', 'project', 'reference']),
-  content: z.string().min(1).max(NOTE_BUDGET),
+  content: z.string().min(1).max(MAX_NOTE_CHARS),
 }
 const responseSchema = z
   .object({
@@ -91,6 +121,24 @@ function messageText(message: ModelMessage): string {
         .join('\n')
 }
 
+function assistantToolNames(message: ModelMessage): string[] {
+  if (!Array.isArray(message.content)) return []
+  const names: string[] = []
+  for (const part of message.content) {
+    if (
+      part &&
+      typeof part === 'object' &&
+      (part.type === 'tool_call' ||
+        (part as { type?: string }).type === 'tool-call') &&
+      'toolName' in part &&
+      typeof part.toolName === 'string'
+    ) {
+      names.push(part.toolName.slice(0, 100))
+    }
+  }
+  return names
+}
+
 function noteInput({ filePath, ...entry }: MemoryEntry) {
   return { filename: basename(filePath), ...entry }
 }
@@ -120,13 +168,6 @@ function trailingProse(rest: string): boolean {
   )
 }
 
-/**
- * A model may close a fence it never opened or explain itself afterwards. That
- * does not make the response unsafe: the object still goes through the schema
- * and every operation check. A second object, array or fence block could carry
- * operations the schema never sees, so those stay a parse error, as does text
- * before the object.
- */
 function responseJson(text: string): unknown {
   const payload = text.trim()
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(payload)
@@ -138,7 +179,6 @@ function responseJson(text: string): unknown {
   )
 }
 
-/** Zod's message is a multi-line JSON dump; one line fits the status line and the correction prompt. */
 function replyError(error: unknown): string {
   if (!(error instanceof z.ZodError))
     return error instanceof Error ? error.message : String(error)
@@ -151,115 +191,252 @@ function replyError(error: unknown): string {
   ].join('; ')
 }
 
-/** A store-local inbox and one background call. Never reads `vela.db` sessions or writes conversation messages. */
+export function dreamKvKey(scope: DreamScope): string {
+  if (scope.kind === 'project') return `memory_dream:project:${scope.projectId}`
+  if (scope.kind === 'global') return 'memory_dream:global'
+  return `memory_dream:${scope.key}`
+}
+
+export function readDreamKvState(
+  db: VelaDatabase,
+  scopeKey: string,
+): DreamKvState {
+  if (!db.open) return { cursorRowId: 0, logs: [], sessionIds: [] }
+  const row = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    scopeKey,
+  )
+  if (!row) return { cursorRowId: 0, logs: [], sessionIds: [] }
+  try {
+    const parsed = JSON.parse(row.value_json) as Partial<DreamKvState>
+    return {
+      cursorRowId:
+        typeof parsed.cursorRowId === 'number' ? parsed.cursorRowId : 0,
+      lastRun: parsed.lastRun,
+      logs: Array.isArray(parsed.logs) ? parsed.logs : [],
+      sessionIds: Array.isArray(parsed.sessionIds) ? parsed.sessionIds : [],
+    }
+  } catch {
+    return { cursorRowId: 0, logs: [], sessionIds: [] }
+  }
+}
+
+type RawMessageRow = {
+  row_id: number
+  session_id: string
+  role: string
+  content_json: string
+  created_at: string
+}
+
+function sessionRunnerContext(session: VelaSession): DreamRunnerContext {
+  return {
+    sessionId: session.id,
+    model: session.model,
+    pricing: session.modelInfo.cost,
+    recordUsage: (modelId, usage, meta, pricing) => {
+      session.tracker.record(modelId, usage, meta, pricing)
+    },
+  }
+}
+
+/**
+ * Store-local memory consolidation backed by `vela.db` (`kv_meta` cursor + `vela_messages`).
+ * Never creates `.dream/` files on disk or writes conversation messages.
+ */
 export class MemoryDream {
-  private readonly dir: string
+  readonly kvKey: string
   private running?: Promise<string>
   private controller?: AbortController
-  constructor(private readonly store: MemoryStore) {
-    this.dir = join(store.memoryDir, '.dream')
+  private memoryState: DreamKvState = {
+    cursorRowId: 0,
+    logs: [],
+    sessionIds: [],
   }
 
-  private read<T>(name: string, fallback: T): T {
-    const file = join(this.dir, name)
-    return fs.existsSync(file)
-      ? (JSON.parse(fs.readFileSync(file, 'utf8')) as T)
-      : fallback
-  }
-  private state(): DreamState {
-    return this.read('state.json', { dropped: 0 })
-  }
-  private inbox(): InboxTurn[] {
-    const file = join(this.dir, 'inbox.jsonl')
-    return fs.existsSync(file)
-      ? fs
-          .readFileSync(file, 'utf8')
-          .split('\n')
-          .filter(Boolean)
-          .map((line) => JSON.parse(line) as InboxTurn)
-      : []
-  }
-  private write(name: string, content: string): void {
-    fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
-    fs.chmodSync(this.dir, 0o700)
-    writePrivate(join(this.dir, name), content)
-  }
-  private writeInbox(turns: InboxTurn[]): void {
-    this.write(
-      'inbox.jsonl',
-      turns.map((turn) => `${JSON.stringify(turn)}\n`).join(''),
-    )
+  constructor(
+    private readonly store: MemoryStore,
+    private readonly db?: VelaDatabase,
+    private readonly scope: DreamScope = {
+      kind: 'tagged',
+      key: `dir:${resolve(store.memoryDir)}`,
+    },
+  ) {
+    this.kvKey = dreamKvKey(scope)
   }
 
-  collect(session: VelaSession, messages: ModelMessage[]): void {
-    const ordinary = messages.filter(
-      (message) => !session.customMessageOf(message),
-    )
-    const user = ordinary
-      .filter((message) => message.role === 'user')
-      .map(messageText)
-      .join('\n')
-      .slice(0, 2000)
-    const assistants = ordinary.filter(
-      (message) => message.role === 'assistant',
-    )
-    const assistant = assistants.length
-      ? messageText(assistants.at(-1)!).slice(0, 2000)
-      : ''
-    const tools = [
-      ...new Set(
-        assistants.flatMap((message) =>
-          Array.isArray(message.content)
-            ? message.content
-                .filter((part) => part.type === 'tool_call')
-                .map((part) => part.toolName.slice(0, 100))
-            : [],
-        ),
-      ),
-    ].slice(0, 50)
-    const turns = [
-      ...this.inbox(),
-      {
-        id: randomUUID(),
-        sessionId: session.id,
-        time: Date.now(),
-        user,
-        assistant,
-        tools,
-      },
-    ]
-    const state = this.state()
-    state.collected = (state.collected ?? 0) + 1
-    let bytes = turns.reduce(
-      (sum, turn) => sum + Buffer.byteLength(JSON.stringify(turn)) + 1,
-      0,
-    )
-    while (bytes > MAX_INBOX_BYTES && turns.length) {
-      bytes -= Buffer.byteLength(JSON.stringify(turns.shift())) + 1
-      state.dropped++
+  private state(): DreamKvState {
+    if (!this.db?.open) return this.memoryState
+    return readDreamKvState(this.db, this.kvKey)
+  }
+
+  private saveState(next: DreamKvState): void {
+    if (!this.db?.open) {
+      this.memoryState = next
+      return
     }
-    this.writeInbox(turns)
-    this.write('state.json', JSON.stringify(state))
+    this.db.run(
+      'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
+      this.kvKey,
+      JSON.stringify(next),
+      new Date().toISOString(),
+    )
+  }
+
+  private queryRows(
+    afterRowId: number,
+    sessionIds: readonly string[],
+  ): RawMessageRow[] {
+    if (!this.db?.open) return []
+    if (this.scope.kind === 'project') {
+      return this.db.all<RawMessageRow>(
+        `SELECT m.rowid AS row_id, m.session_id, m.role, m.content_json, m.created_at
+         FROM vela_messages m
+         JOIN sessions s ON s.id = m.session_id
+         WHERE s.project_id = ? AND m.rowid > ? AND m.kind = 'message' AND m.role IN ('user', 'assistant')
+         ORDER BY m.rowid ASC`,
+        this.scope.projectId,
+        afterRowId,
+      )
+    }
+    if (this.scope.kind === 'global') {
+      return this.db.all<RawMessageRow>(
+        `SELECT m.rowid AS row_id, m.session_id, m.role, m.content_json, m.created_at
+         FROM vela_messages m
+         JOIN sessions s ON s.id = m.session_id
+         WHERE s.project_id IS NULL AND m.rowid > ? AND m.kind = 'message' AND m.role IN ('user', 'assistant')
+         ORDER BY m.rowid ASC`,
+        afterRowId,
+      )
+    }
+    if (sessionIds.length === 0) return []
+    const placeholders = sessionIds.map(() => '?').join(', ')
+    return this.db.all<RawMessageRow>(
+      `SELECT rowid AS row_id, session_id, role, content_json, created_at
+       FROM vela_messages
+       WHERE session_id IN (${placeholders}) AND rowid > ? AND kind = 'message' AND role IN ('user', 'assistant')
+       ORDER BY rowid ASC`,
+      ...sessionIds,
+      afterRowId,
+    )
+  }
+
+  private pendingTurns(
+    state = this.state(),
+    afterRowId = state.cursorRowId,
+  ): {
+    allTurns: DreamTurn[]
+    turns: DreamTurn[]
+    dropped: number
+    maxRowId: number
+  } {
+    const rows = this.queryRows(afterRowId, state.sessionIds)
+    const turns: DreamTurn[] = []
+    const activeBySession = new Map<string, DreamTurn>()
+    let maxRowId = afterRowId
+
+    for (const row of rows) {
+      if (row.row_id > maxRowId) maxRowId = row.row_id
+      let parsed: ModelMessage | undefined
+      try {
+        parsed = JSON.parse(row.content_json) as ModelMessage
+      } catch {
+        continue
+      }
+      if (row.role === 'user') {
+        const turn: DreamTurn = {
+          id: `${row.session_id}:${row.row_id}`,
+          rowId: row.row_id,
+          sessionId: row.session_id,
+          time: Date.parse(row.created_at) || Date.now(),
+          user: messageText(parsed).slice(0, 2000),
+          tools: [],
+        }
+        activeBySession.set(row.session_id, turn)
+        turns.push(turn)
+      } else if (row.role === 'assistant') {
+        const open = activeBySession.get(row.session_id)
+        if (!open) continue
+        open.rowId = Math.max(open.rowId, row.row_id)
+        const existing = new Set(open.tools)
+        for (const name of assistantToolNames(parsed)) {
+          if (!existing.has(name) && open.tools.length < 50) {
+            existing.add(name)
+            open.tools.push(name)
+          }
+        }
+      }
+    }
+
+    // Apply 100KB evidence budget by keeping the most recent turns.
+    const kept: DreamTurn[] = []
+    let bytes = 0
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const turn = turns[i]!
+      const entrySize =
+        Buffer.byteLength(
+          JSON.stringify({
+            id: turn.id,
+            sessionId: turn.sessionId,
+            time: turn.time,
+            user: turn.user,
+            tools: turn.tools,
+          }),
+        ) + 1
+      if (bytes + entrySize > MAX_INBOX_BYTES && kept.length > 0) {
+        break
+      }
+      if (bytes + entrySize > MAX_INBOX_BYTES) {
+        // Even a single oversized turn stays represented up to cap rather than dropping everything.
+        kept.push({ ...turn, user: turn.user.slice(0, 1000) })
+        break
+      }
+      bytes += entrySize
+      kept.push(turn)
+    }
+    kept.reverse()
+    return {
+      allTurns: turns,
+      turns: kept,
+      dropped: turns.length - kept.length,
+      maxRowId,
+    }
+  }
+
+  /**
+   * Registers a session id for tagged-scope (`createVela`) dreams without duplicating
+   * message payloads on disk. Sessions without the `memory` tool never call `collect`.
+   */
+  collect(session: VelaSession): void {
+    if (this.scope.kind !== 'tagged') return
+    const state = this.state()
+    if (!state.sessionIds.includes(session.id)) {
+      state.sessionIds.push(session.id)
+      this.saveState(state)
+    }
   }
 
   due(): boolean {
     if (this.running) return false
-    const turns = this.inbox()
-    if (!turns.length) return false
     const state = this.state()
+    const pending = this.pendingTurns(state)
+    if (!pending.allTurns.length) return false
     const last = state.lastRun
-    if (last && (last.failed !== undefined || last.skipped !== undefined))
-      return (
-        (state.collected ?? 0) - (last.collected ?? 0) >= 20 ||
-        Date.now() - last.time > DAY
-      )
+    if (last && (last.failed !== undefined || last.skipped !== undefined)) {
+      const newerCount = pending.allTurns.filter(
+        (turn) => turn.rowId > last.attemptMaxRowId,
+      ).length
+      return newerCount >= 20 || Date.now() - last.time > DAY
+    }
     return (
-      turns.length >= 20 || turns.some((turn) => Date.now() - turn.time > DAY)
+      pending.allTurns.length >= 20 ||
+      pending.allTurns.some((turn) => Date.now() - turn.time > DAY)
     )
   }
+
   status(): string {
     const state = this.state()
-    const turns = this.inbox()
+    const pending = this.pendingTurns(state)
     const last = state.lastRun
     const outcome =
       last?.failed !== undefined
@@ -267,21 +444,56 @@ export class MemoryDream {
         : last?.skipped !== undefined
           ? `skipped: ${last.skipped}`
           : `${last?.changes} changes`
-    return `[dream] ${last ? `Last dream ${new Date(last.time).toISOString()}, ${outcome}` : 'No dream yet'}; inbox ${turns.length} turns; ${state.dropped} dropped${this.running ? '; running' : ''}`
+    return `[dream] ${last ? `Last dream ${new Date(last.time).toISOString()}, ${outcome}` : 'No dream yet'}; inbox ${pending.turns.length} turns; ${pending.dropped} dropped${this.running ? '; running' : ''}`
   }
+
+  auditState(): {
+    cursorRowId: number
+    lastRun?: DreamRunRecord
+    logs: DreamLogEntry[]
+    pendingTurns: DreamTurn[]
+    dropped: number
+  } {
+    const state = this.state()
+    const pending = this.pendingTurns(state)
+    return {
+      cursorRowId: state.cursorRowId,
+      lastRun: state.lastRun,
+      logs: state.logs,
+      pendingTurns: pending.turns,
+      dropped: pending.dropped,
+    }
+  }
+
   async stop(): Promise<void> {
     this.controller?.abort(new Error('Memory extension shut down'))
     await this.running?.catch(() => {})
   }
-  run(session: VelaSession, signal?: AbortSignal): Promise<string> {
-    // Concurrent manual and automatic requests share the one store-local pass.
+
+  /** Triggers an asynchronous auto-dream if due, tracked on the legacy session's backgroundWork. */
+  schedule(session: VelaSession, logger: VelaLogger): void {
+    if (!this.due()) return
+    const work = this.run(session).catch((error) =>
+      logger.warn(
+        `[dream] ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    )
+    session.trackWork(work)
+  }
+
+  run(
+    target: VelaSession | DreamRunnerContext,
+    signal?: AbortSignal,
+  ): Promise<string> {
     if (this.running) return this.running
+    const runnerCtx =
+      'tracker' in target ? sessionRunnerContext(target) : target
     const controller = new AbortController()
     this.controller = controller
     const forward = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', forward, { once: true })
     if (signal?.aborted) forward()
-    this.running = this.perform(session, controller.signal).finally(() => {
+    this.running = this.perform(runnerCtx, controller.signal).finally(() => {
       signal?.removeEventListener('abort', forward)
       this.running = undefined
       this.controller = undefined
@@ -289,35 +501,35 @@ export class MemoryDream {
     return this.running
   }
 
-  private audit(run: Omit<DreamRun, 'time'>): void {
+  private recordAudit(
+    run: Omit<DreamRunRecord, 'time'>,
+    advanceCursorTo?: number,
+  ): void {
     const state = this.state()
     const time = Date.now()
     state.lastRun = { ...run, time }
-    const file = join(this.dir, 'log.md')
-    const previous = fs.existsSync(file)
-      ? fs
-          .readFileSync(file, 'utf8')
-          .split(/(?=^## Dream )/m)
-          .filter(Boolean)
-      : []
-    previous.push(
-      `## Dream ${new Date(time).toISOString()}\n\n${run.report}\n\n`,
-    )
-    this.write('log.md', previous.slice(-20).join(''))
-    this.write('state.json', JSON.stringify(state))
+    state.logs = [...state.logs, { time, report: run.report }].slice(-MAX_LOGS)
+    if (advanceCursorTo !== undefined && advanceCursorTo > state.cursorRowId) {
+      state.cursorRowId = advanceCursorTo
+    }
+    this.saveState(state)
   }
 
   private async perform(
-    session: VelaSession,
+    ctx: DreamRunnerContext,
     signal: AbortSignal,
   ): Promise<string> {
     let changes = 0
     let responseText = ''
-    const attempt = { collected: this.state().collected ?? 0, inboxLength: 0 }
+    const initialState = this.state()
+    const snapshotPending = this.pendingTurns(initialState)
+    const turns = snapshotPending.turns
+    const attempt = {
+      inboxLength: turns.length,
+      attemptMaxRowId: snapshotPending.maxRowId,
+    }
     try {
       signal.throwIfAborted()
-      const turns = this.inbox()
-      attempt.inboxLength = turns.length
       const entries = this.store
         .list()
         .sort((a, b) => a.filePath.localeCompare(b.filePath))
@@ -325,9 +537,9 @@ export class MemoryDream {
         entries.map((entry) => [basename(entry.filePath), entry]),
       )
       const notes = this.selectNotes(entries, turns)
-      const editable = new Set(notes.map((note) => basename(note.filePath)))
+      const editable = new Set(notes.map((n) => basename(n.filePath)))
       const input = {
-        triggeringSessionId: session.id,
+        triggeringSessionId: ctx.sessionId,
         index: this.store.loadIndex(8000),
         notes: notes.map(noteInput),
         inbox: turns.map(({ id, sessionId, time, user, tools }) => ({
@@ -337,7 +549,7 @@ export class MemoryDream {
           user,
           tools,
         })),
-        dropped: this.state().dropped,
+        dropped: snapshotPending.dropped,
         findings: {
           index: this.store.indexWarnings(),
           notes: this.store.lint().map(({ entry, issues }) => ({
@@ -349,13 +561,11 @@ export class MemoryDream {
       const evidence = JSON.stringify(input)
       let prompt = evidence
       const sources = new Set(
-        turns.length ? turns.map((turn) => turn.sessionId) : [session.id],
+        turns.length ? turns.map((turn) => turn.sessionId) : [ctx.sessionId],
       )
       let result: z.infer<typeof responseSchema>
-      // A rejected reply is answered once with its own text and the error. A blind
-      // retry would send the same input and repeat the same omission.
       for (let round = 0; ; round++) {
-        const reply = await this.ask(session, prompt, signal)
+        const reply = await this.ask(ctx, prompt, signal)
         responseText = reply.text
         signal.throwIfAborted()
         try {
@@ -367,8 +577,6 @@ export class MemoryDream {
           break
         } catch (error) {
           if (round) throw error
-          // An empty reply is a parse failure too; send a placeholder rather than
-          // nothing so the correction request never carries an empty turn.
           const rejected = reply.text.trim() ? reply.text : '(empty reply)'
           prompt = `${evidence}\n\nYour previous reply was:\n${rejected}\n\n${REPAIR.replace('{error}', () => replyError(error))}`
         }
@@ -376,8 +584,6 @@ export class MemoryDream {
       const currentNotes = new Map(
         this.store.list().map((entry) => [basename(entry.filePath), entry]),
       )
-      // A deletion may depend on a duplicate the model read without updating it.
-      // Check the full read set before any write; no await separates application.
       const conflicts = notes.flatMap((before) => {
         const filename = basename(before.filePath)
         const current = currentNotes.get(filename)
@@ -400,7 +606,7 @@ export class MemoryDream {
       if (conflicts.length) {
         const skipped = `Notes changed since dream read them (${conflicts.join(', ')}).`
         const report = `[dream] Skipped all ${result.ops.length} operations: ${skipped} Inbox retained; run /dream to retry.`
-        this.audit({ ...attempt, report, changes: 0, skipped })
+        this.recordAudit({ ...attempt, report, changes: 0, skipped })
         return report
       }
       const details: string[] = []
@@ -427,16 +633,15 @@ export class MemoryDream {
         )
       }
       const report = `[dream] ${changes} changes. ${result.report}${details.length ? `\n${details.join('\n')}` : ''}`
-      this.audit({ ...attempt, report, changes })
-      // Only consume this snapshot; turns collected while the model was running stay queued.
-      const consumed = new Set(turns.map((turn) => turn.id))
-      this.writeInbox(this.inbox().filter((turn) => !consumed.has(turn.id)))
+      this.recordAudit(
+        { ...attempt, report, changes },
+        snapshotPending.maxRowId,
+      )
       return report
     } catch (error) {
       const failed = replyError(error)
-      // The parse message alone cannot tell the next unexpected shape apart.
       const tail = responseText.trim().slice(-500)
-      this.audit({
+      this.recordAudit({
         ...attempt,
         report: `[dream] Failed: ${failed}. Inbox retained.${tail ? `\n\nResponse tail:\n${tail}` : ''}`,
         changes,
@@ -446,14 +651,12 @@ export class MemoryDream {
     }
   }
 
-  /** One model call; the correction round is recorded as dream usage like the first. */
   private async ask(
-    session: VelaSession,
+    ctx: DreamRunnerContext,
     prompt: string,
     signal: AbortSignal,
   ): Promise<{ text: string; incomplete: boolean }> {
-    const model = session.model
-    const pricing = session.modelInfo.cost
+    const model = ctx.model
     const modelId = typeof model === 'string' ? model : model.modelId
     const started = performance.now()
     const response = await generateProviderText({
@@ -462,7 +665,7 @@ export class MemoryDream {
       prompt,
       abortSignal: signal,
     })
-    session.tracker.record(
+    ctx.recordUsage(
       modelId,
       normalizeUsage(response.usage),
       {
@@ -470,7 +673,7 @@ export class MemoryDream {
         usage: response.usage,
         durationMs: performance.now() - started,
       },
-      { value: pricing },
+      { value: ctx.pricing },
     )
     return {
       text: response.text,
@@ -479,7 +682,6 @@ export class MemoryDream {
     }
   }
 
-  /** Validate the entire reply before performing even the first operation. */
   private replyOps(
     text: string,
     sources: Set<string>,
@@ -502,7 +704,7 @@ export class MemoryDream {
 
   private selectNotes(
     entries: MemoryEntry[],
-    turns: InboxTurn[],
+    turns: DreamTurn[],
   ): MemoryEntry[] {
     if (JSON.stringify(entries.map(noteInput)).length <= NOTE_BUDGET)
       return entries
@@ -513,13 +715,12 @@ export class MemoryDream {
     )
     const selected: MemoryEntry[] = []
     let chars = 0
-    // Existing stores may have no inbox yet; manual cleanup must still see notes.
     const candidates = ranked.length ? ranked.map((hit) => hit.entry) : entries
     for (const entry of candidates) {
       const size = JSON.stringify(noteInput(entry)).length
       if (chars + size > NOTE_BUDGET) continue
-      selected.push(entry)
       chars += size
+      selected.push(entry)
     }
     return selected
   }

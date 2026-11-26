@@ -276,6 +276,31 @@ export function resolveRuntimeApproval(
       `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1`,
       row.run_id,
     )
+    const isWaitForInput = row.tool_name === 'wait_for_input'
+    const hasPendingToolCalls = Boolean(
+      db.get<{ id: string }>(
+        `SELECT id FROM vela_tool_calls
+         WHERE run_id = ? AND status IN ('pending', 'awaiting_approval')
+         LIMIT 1`,
+        row.run_id,
+      ),
+    )
+    if (isWaitForInput && !remaining && !hasPendingToolCalls) {
+      db.run(
+        `UPDATE runs
+         SET status = 'completed', finished_at = COALESCE(finished_at, ?), updated_at = ?
+         WHERE id = ? AND status = 'waiting_human'`,
+        now,
+        now,
+        row.run_id,
+      )
+      db.run(
+        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+         WHERE id = ? AND state = 'waiting_human'`,
+        now,
+        row.session_id,
+      )
+    }
     const shouldWake = !remaining && input.enqueueWake !== false
     if (shouldWake) {
       enqueueInboxEvent(db, {
@@ -288,6 +313,8 @@ export function resolveRuntimeApproval(
           type: 'approval_resolved',
           approvalId: row.id,
           runId: row.run_id,
+          toolName: row.tool_name,
+          waitForInput: isWaitForInput,
           decision: input.decision,
           ...(input.reason ? { reason: input.reason } : {}),
           ...(input.decidedBy ? { decidedBy: input.decidedBy } : {}),
@@ -301,6 +328,62 @@ export function resolveRuntimeApproval(
     )!
     return { approval: rowToApproval(updated), shouldWake }
   })
+}
+
+/**
+ * When a session is suspended purely on `wait_for_input` and receives an ordinary human reply,
+ * resolve the pending `wait_for_input` approvals and unblock the session so the new prompt runs.
+ */
+export function resolveWaitForInputOnUserReplyInTx(
+  db: VelaDatabase,
+  eventBus: RuntimeEventBus,
+  input: {
+    sessionId: string
+    replyText: string
+    decidedBy?: string
+  },
+): boolean {
+  const pending = listRuntimePendingApprovals(db, input.sessionId)
+  const hasPendingToolCalls = Boolean(
+    db.get<{ id: string }>(
+      `SELECT id FROM vela_tool_calls
+       WHERE session_id = ? AND status IN ('pending', 'awaiting_approval')
+       LIMIT 1`,
+      input.sessionId,
+    ),
+  )
+  if (
+    pending.length === 0 ||
+    pending.some((item) => item.toolName !== 'wait_for_input') ||
+    hasPendingToolCalls
+  ) {
+    return false
+  }
+  const now = new Date().toISOString()
+  for (const item of pending) {
+    resolveRuntimeApproval(db, eventBus, {
+      approvalId: item.id,
+      decision: 'approved',
+      reason: input.replyText,
+      decidedBy: input.decidedBy,
+      enqueueWake: false,
+    })
+  }
+  db.run(
+    `UPDATE runs
+     SET status = 'completed', finished_at = COALESCE(finished_at, ?), updated_at = ?
+     WHERE session_id = ? AND status = 'waiting_human'`,
+    now,
+    now,
+    input.sessionId,
+  )
+  db.run(
+    `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+     WHERE id = ? AND state = 'waiting_human'`,
+    now,
+    input.sessionId,
+  )
+  return true
 }
 
 export function cancelPendingApprovalsForSession(

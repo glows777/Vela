@@ -14,6 +14,69 @@ function leaseKey(outboxId: string): string {
   return `outbox_lease:${outboxId}`
 }
 
+function syncTopicBindingOnDeliveryInTx(
+  db: VelaDatabase,
+  row: OutboxRecord,
+  threadId: string,
+  now: string,
+): void {
+  const session = db.get<{ project_id: string | null }>(
+    'SELECT project_id FROM sessions WHERE id = ?',
+    row.sessionId,
+  )
+  const projectId = session?.project_id ?? null
+  const existingByThread = db.get<{ id: string }>(
+    `SELECT id FROM channel_bindings WHERE channel = ? AND external_id = ? AND thread_id = ?`,
+    row.channel,
+    row.externalChatId,
+    threadId,
+  )
+  if (existingByThread) {
+    db.run(
+      `UPDATE channel_bindings
+       SET project_id = COALESCE(?, project_id), session_id = ?, enabled = 1, updated_at = ?
+       WHERE id = ?`,
+      projectId,
+      row.sessionId,
+      now,
+      existingByThread.id,
+    )
+    return
+  }
+  const existingBySession = db.get<{ id: string }>(
+    `SELECT id FROM channel_bindings WHERE session_id = ? AND channel = ? AND external_id = ?`,
+    row.sessionId,
+    row.channel,
+    row.externalChatId,
+  )
+  if (existingBySession) {
+    db.run(
+      `UPDATE channel_bindings
+       SET thread_id = ?, project_id = COALESCE(?, project_id), enabled = 1, updated_at = ?
+       WHERE id = ?`,
+      threadId,
+      projectId,
+      now,
+      existingBySession.id,
+    )
+    return
+  }
+  db.run(
+    `INSERT INTO channel_bindings (
+       id, channel, external_id, thread_id, kind, project_id, session_id,
+       enabled, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, 'group', ?, ?, 1, ?, ?)`,
+    randomUUID(),
+    row.channel,
+    row.externalChatId,
+    threadId,
+    projectId,
+    row.sessionId,
+    now,
+    now,
+  )
+}
+
 export interface OutboxRecord {
   id: string
   sessionId: string
@@ -305,6 +368,12 @@ export class OutboxDispatcher {
             row.id,
             row.attempt,
           )
+          if (updated.changes === 1 && row.kind === 'topic_start') {
+            const threadId = result.threadId ?? result.externalMessageId
+            if (threadId) {
+              syncTopicBindingOnDeliveryInTx(this.db, row, threadId, sentAt)
+            }
+          }
           this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
           return updated.changes === 1
         })

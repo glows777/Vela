@@ -59,6 +59,7 @@ import {
   loadWorkspaceInventory,
   openVelaStorage,
   resolveSessionExecution,
+  syncSessionNetwork,
   workspaceKey,
 } from './session/workspace.ts'
 import { SkillLoader } from './skills/loader.ts'
@@ -73,6 +74,8 @@ export interface VelaOptions {
   sessionResources?: ConfigResourceSplit
   /** @internal Synchronous OS metadata lookup by environment name. */
   envOs?: (environment: string) => string | undefined
+  /** @internal Synchronous network mode lookup by environment name. */
+  envNetworkMode?: (environment: string) => 'on' | 'off' | 'restricted'
   /** Resolve the execution environment for a session tool call. */
   env?: (target: {
     sessionId: string
@@ -506,6 +509,7 @@ function initVelaInstance(
     )
     sessions.set(id, created)
     sessionCwds.set(created.registry, created.cwd)
+    syncSessionNetwork(created, options.envNetworkMode)
     return created
   }
 
@@ -535,6 +539,7 @@ function initVelaInstance(
   const identities = new Map<string, string>()
   const bindWorkspace = (session: VelaSession) => {
     sessionCwds.set(session.registry, session.cwd)
+    syncSessionNetwork(session, options.envNetworkMode)
     if (resourceSplit)
       projects.bind(
         workspaceKey(session.id, session.location),

@@ -16,6 +16,7 @@ export function ownerDocker(config: VelaConfig) {
   return {
     env,
     envOs: (environment: string) => registry.osFor(environment),
+    envNetworkMode: (environment: string) => registry.networkMode(environment),
     beforeDispose: () => registry.dispose(),
   }
 }

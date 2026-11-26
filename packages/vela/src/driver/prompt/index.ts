@@ -52,7 +52,7 @@ const FACTS_RULE =
 const STANDING_RULES: readonly string[] = [
   'Show file paths clearly when working with files.',
   'Lead with the answer or result; no preamble, and no closing summary unless asked.',
-  "Match the response length to the question: a short paragraph plus at most three bullets. Give the main path and the facts asked for; skip adjacent branches, options, tests and per-step file:line, and don't close by restating the answer.",
+  "Keep responses concise and proportional to the task: focus on what matters, include concrete details or file paths when helpful, and don't close by restating the answer.",
   "Don't restate the request or repeat what was already said; point back to it in one line if needed.",
   "Don't add unrequested suggestions or next steps unless they matter.",
   "Don't state unchecked things as fact. Say plainly when something failed, can't be done or is uncertain, and say something was saved, sent or done only after the tool call for it succeeded.",

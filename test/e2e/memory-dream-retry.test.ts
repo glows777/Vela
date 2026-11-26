@@ -1,5 +1,9 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
+import { MemoryDream } from '../../packages/vela/src/driver/memory/dream.ts'
+import { MemoryStore } from '../../packages/vela/src/runtime/memory/store.ts'
 import {
   fauxError,
   fauxText,
@@ -13,14 +17,25 @@ import {
 
 afterEach(cleanupTestVelas)
 
-const inboxFile = 'memory/.dream/inbox.jsonl'
 const read = (t: TestVela, path: string) =>
   readFileSync(t.dataPath(path), 'utf8')
-const inbox = (t: TestVela) => read(t, inboxFile).split('\n').filter(Boolean)
 const generations = (t: TestVela) =>
   t.model.calls.filter((call) => call.kind === 'generate').length
 const result = (ops: unknown[] = []) =>
   fauxText(JSON.stringify({ ops, report: 'Consolidated recent evidence' }))
+
+function dreamAudit(t: TestVela) {
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const memoryDir = t.dataPath('memory')
+    return new MemoryDream(new MemoryStore(memoryDir), db, {
+      kind: 'tagged',
+      key: `dir:${resolve(memoryDir)}`,
+    }).auditState()
+  } finally {
+    db.close()
+  }
+}
 
 async function status(t: TestVela) {
   await t.session.prompt('/memory')
@@ -48,8 +63,6 @@ function holdNextDream(t: TestVela) {
   return {
     entered: entered.promise,
     async finish(joined = t.session.prompt('/dream')) {
-      // Joining an already-entered run gives a public completion barrier
-      // without sleeps or observing a private MemoryDream instance.
       release.resolve()
       try {
         await joined
@@ -86,35 +99,45 @@ test('failed automatic dreams wait for 20 new turns despite inbox eviction, whil
   await turn(t, 'during-manual-attempt', true)
   await manual.finish(manuallyRetrying)
   expect(generations(t)).toBe(2)
-  for (let i = 2; i <= 19; i++) await turn(t, `new-${i}`, true)
+
+  for (let i = 2; i <= 19; i++) await turn(t, `after-manual1-${i}`, true)
   expect(generations(t)).toBe(2)
-  expect(
-    JSON.parse(read(t, 'memory/.dream/state.json')).dropped,
-  ).toBeGreaterThan(0)
-  expect(inbox(t).length).toBeLessThan(44)
+  t.model.pushGenerate(fauxError('429 Too Many Requests'))
+  const retry2 = holdNextDream(t)
+  await turn(t, 'after-manual1-20', true)
+  await retry2.entered
+  await retry2.finish()
+  expect(generations(t)).toBe(3)
+
+  for (let i = 1; i <= 19; i++) await turn(t, `new-${i}`, true)
+  expect(generations(t)).toBe(3)
+  expect(existsSync(t.dataPath('memory/.dream'))).toBe(false)
+  const preSuccessAudit = dreamAudit(t)
+  expect(preSuccessAudit.dropped).toBeGreaterThan(0)
+  expect(preSuccessAudit.pendingTurns.length).toBeLessThan(64)
 
   t.model.pushGenerate(result())
   const retry = holdNextDream(t)
   await turn(t, 'new-20', true)
   await retry.entered
   await retry.finish()
-  expect(generations(t)).toBe(3)
-  expect(inbox(t)).toEqual([])
+  expect(generations(t)).toBe(4)
+  expect(dreamAudit(t).pendingTurns).toEqual([])
   expect(await status(t)).not.toMatch(/failed|skipped/i)
 
   for (let i = 1; i < 20; i++) await turn(t, `after-success-${i}`)
-  expect(generations(t)).toBe(3)
+  expect(generations(t)).toBe(4)
   t.model.pushGenerate(result())
   const successful = holdNextDream(t)
   await turn(t, 'after-success-20')
   await successful.entered
   await successful.finish()
-  expect(generations(t)).toBe(4)
-  expect(inbox(t)).toEqual([])
+  expect(generations(t)).toBe(5)
+  expect(dreamAudit(t).pendingTurns).toEqual([])
 })
 
 test('a conflict-skipped dream reports its outcome and waits 24 hours from the attempt rather than the retained inbox age', async () => {
-  let now = Date.UTC(2026, 10, 8)
+  let now = Date.now()
   const clock = spyOn(Date, 'now').mockImplementation(() => now)
   const note = {
     name: 'release-day',
@@ -157,7 +180,7 @@ test('a conflict-skipped dream reports its outcome and waits 24 hours from the a
     await conflict.finish()
     const skippedStatus = await status(t)
     expect(read(t, 'memory/project_release-day.md')).toContain('Wednesday')
-    expect(inbox(t)).toHaveLength(3)
+    expect(dreamAudit(t).pendingTurns).toHaveLength(3)
 
     now += 3600_000
     await turn(t, 'One hour after the skipped attempt')
@@ -181,7 +204,7 @@ test('a conflict-skipped dream reports its outcome and waits 24 hours from the a
     await retry.entered
     await retry.finish()
     expect(generations(t)).toBe(2)
-    expect(inbox(t)).toEqual([])
+    expect(dreamAudit(t).pendingTurns).toEqual([])
     expect(await status(t)).not.toMatch(/failed|skipped/i)
   } finally {
     clock.mockRestore()
@@ -221,12 +244,12 @@ test('manual dream accepts one surrounding fence, a stray closing fence or trail
     expect(existsSync(t.dataPath(`memory/project_release-${index}.md`))).toBe(
       true,
     )
-    expect(inbox(t)).toEqual([])
+    expect(dreamAudit(t).pendingTurns).toEqual([])
   }
 
   t.model.push(fauxText('Noted'))
   await t.session.prompt('Keep this evidence until a valid consolidation')
-  const retained = read(t, inboxFile)
+  const retained = dreamAudit(t).pendingTurns
   const noteBefore = read(t, 'memory/project_release-0.md')
   for (const invalid of [
     `Here is the JSON:\n${fenced(JSON.stringify({ ops: [], report: 'Leading text' }))}`,
@@ -249,7 +272,7 @@ test('manual dream accepts one surrounding fence, a stray closing fence or trail
     await t.session.prompt('/dream')
     expect(await status(t)).toMatch(/failed/i)
     expect(generations(t) - before).toBe(2)
-    expect(read(t, inboxFile)).toBe(retained)
+    expect(dreamAudit(t).pendingTurns).toEqual(retained)
     expect(read(t, 'memory/project_release-0.md')).toBe(noteBefore)
     expect(existsSync(t.dataPath('escape.md'))).toBe(false)
   }
@@ -258,11 +281,11 @@ test('manual dream accepts one surrounding fence, a stray closing fence or trail
   t.model.pushGenerate(fauxText(long))
   t.model.pushGenerate(fauxText(long))
   await t.session.prompt('/dream')
-  const entry = read(t, 'memory/.dream/log.md').split('## Dream ').at(-1)!
+  const audit = dreamAudit(t)
+  const entry = audit.logs.at(-1)!.report
   const tail = entry.slice(entry.indexOf('Response tail:'))
   expect(tail.trimEnd()).toBe(`Response tail:\n${long.slice(-500)}`)
   expect(entry).toContain('Inbox retained')
-  expect(
-    JSON.parse(read(t, 'memory/.dream/state.json')).lastRun.failed,
-  ).not.toContain('Response tail')
+  expect(audit.lastRun?.failed).not.toContain('Response tail')
+  expect(existsSync(t.dataPath('memory/.dream'))).toBe(false)
 })

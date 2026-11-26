@@ -1,4 +1,9 @@
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { MemoryRegistry } from '../../../runtime/memory/registry.ts'
+import {
+  MEMORY_RULES,
+  type MemoryStore,
+} from '../../../runtime/memory/store.ts'
 import type {
   SessionScope,
   VelaExtension,
@@ -6,11 +11,10 @@ import type {
 } from '../../extension-api.ts'
 import {
   customMessageIfChanged,
-  customMessageMissing,
   lastCustomMessage,
 } from '../../extension-api.ts'
-import { MemoryDream } from './dream.ts'
-import { MEMORY_RULES, MemoryStore } from './store.ts'
+import { resolveMemoryDatabase } from '../../memory/db-registry.ts'
+import { MemoryDream } from '../../memory/dream.ts'
 import { createMemoryTool } from './tool.ts'
 
 const EMPTY_MEMORY =
@@ -23,43 +27,29 @@ const EMPTY_MEMORY =
  */
 export function memory(): VelaExtension {
   const extension: VelaExtension = (vela) => {
-    const store = new MemoryStore(
-      join(vela.dataDir, 'memory'),
-      vela.logger,
-      vela.cwd,
-    )
-    store.init()
-    const groups = new Map<string, MemoryStore>()
+    const registry = new MemoryRegistry(vela.logger)
+    const store = registry.get(join(vela.dataDir, 'memory'), vela.cwd)
+    const db = resolveMemoryDatabase(vela.dataDir)
     const forSession = (scope?: Readonly<SessionScope>): MemoryStore => {
       if (scope?.kind !== 'shared') return store
       const dir = scope.dataDir
-      let group = groups.get(dir)
-      if (!group) {
-        group = new MemoryStore(
-          join(dir, 'memory'),
-          vela.logger,
-          join(dir, 'workspace'),
-        )
-        group.init()
-        groups.set(dir, group)
-      }
-      return group
+      return registry.get(join(dir, 'memory'), join(dir, 'workspace'))
     }
     const dreams = new Map<MemoryStore, MemoryDream>()
     const dreamFor = (local: MemoryStore): MemoryDream => {
       let dream = dreams.get(local)
       if (!dream) {
-        dream = new MemoryDream(local)
+        dream = new MemoryDream(local, db, {
+          kind: 'tagged',
+          key: `dir:${resolve(local.memoryDir)}`,
+        })
         dreams.set(local, dream)
       }
       return dream
     }
-    vela.on('agent_end', (event, ctx) => {
+    vela.on('agent_end', (_event, ctx) => {
       if (!ctx.session.getActiveTools().includes('memory')) return
-      dreamFor(forSession(ctx.session.scope)).collect(
-        ctx.session,
-        event.messages,
-      )
+      dreamFor(forSession(ctx.session.scope)).collect(ctx.session)
     })
     vela.on('agent_settled', (_event, ctx) => {
       if (
@@ -67,15 +57,7 @@ export function memory(): VelaExtension {
         !ctx.session.getActiveTools().includes('memory')
       )
         return
-      const dream = dreamFor(forSession(ctx.session.scope))
-      if (dream.due())
-        void dream
-          .run(ctx.session)
-          .catch((error) =>
-            vela.logger.warn(
-              `[dream] ${error instanceof Error ? error.message : String(error)}`,
-            ),
-          )
+      dreamFor(forSession(ctx.session.scope)).schedule(ctx.session, vela.logger)
     })
     vela.onShutdown(async () => {
       await Promise.all([...dreams.values()].map((dream) => dream.stop()))
@@ -104,9 +86,6 @@ export function memory(): VelaExtension {
       )
     }
 
-    /** Sessions whose context carried an index when the prompt started: only those can lose one to compaction. */
-    const indexed = new WeakSet<VelaSession>()
-
     vela.on('before_agent_start', (event, ctx) => {
       if (!ctx.session.getActiveTools().includes('memory')) return
       event.sections.memory = MEMORY_RULES
@@ -114,19 +93,7 @@ export function memory(): VelaExtension {
       const message = content
         ? customMessageIfChanged(ctx.session, 'memory', content)
         : undefined
-      if (message || lastCustomMessage(ctx.session, 'memory'))
-        indexed.add(ctx.session)
-      else indexed.delete(ctx.session)
       return message ? { message } : undefined
-    })
-
-    // Automatic compaction can drop that message after the check above and before this request goes out
-    vela.on('context', (event, ctx) => {
-      if (!indexed.has(ctx.session)) return
-      const markers = ['[memory]', 'Group memory:', 'Global notes (']
-      if (!customMessageMissing(event.messages, markers)) return
-      const content = contentFor(ctx.session)
-      if (content) event.messages.push({ role: 'user', content })
     })
 
     vela.registerCommand('memory', {

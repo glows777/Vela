@@ -4,9 +4,9 @@ export interface SearchHit<T> {
 }
 
 /**
- * Simple tokenizer for English and Chinese:
- * - English and digits split on non-alphanumerics
- * - Chinese splits per character (crude, but memory entries are short)
+ * Simple tokenizer for English and Unicode/CJK text:
+ * - ASCII alphanumerics and underscores group into words
+ * - Unicode letters/digits outside ASCII (e.g. CJK) split per character
  */
 function tokenize(text: string): string[] {
   const tokens: string[] = []
@@ -15,7 +15,7 @@ function tokenize(text: string): string[] {
   for (const ch of lower) {
     if (/[a-z0-9_]/.test(ch)) {
       buf += ch
-    } else if (/[一-龥]/.test(ch)) {
+    } else if (/[\p{L}\p{N}]/u.test(ch)) {
       if (buf) {
         tokens.push(buf)
         buf = ''
@@ -57,6 +57,7 @@ export function bm25Search<
 
   const N = docs.length
   const avgdl = docs.reduce((s, d) => s + d.length, 0) / N
+  if (avgdl === 0) return []
 
   // df: number of documents containing each term
   const df = new Map<string, number>()

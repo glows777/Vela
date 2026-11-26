@@ -1,6 +1,6 @@
 import z from 'zod'
+import type { MemoryStore } from '../../../runtime/memory/store.ts'
 import type { ToolContext, ToolDefinition } from '../../extension-api.ts'
-import type { MemoryStore } from './store.ts'
 
 const memoryToolParamSchema = z
   .object({
@@ -8,10 +8,10 @@ const memoryToolParamSchema = z
       .enum(['save', 'list', 'search', 'read', 'delete', 'lint'])
       .describe('Memory operation'),
     scope: z
-      .enum(['group', 'global'])
+      .enum(['project', 'group', 'global'])
       .optional()
       .describe(
-        'Group sessions default to their own memory. Global notes allow only read/search from a group.',
+        'Project/group sessions default to their own memory. Global notes allow only read/search from a scoped session.',
       ),
     name: z.string().optional().describe('Memory name (required for save)'),
     description: z
@@ -36,8 +36,21 @@ const memoryToolParamSchema = z
       .string()
       .optional()
       .describe(
-        'Actual filename (required for read/delete; includes the type prefix and .md suffix). Do not provide the memory name/logical name. For example, user_favorite_language maps to user_user-favorite-language.md',
+        'Actual filename (required for read/delete; includes the type prefix and .md suffix). Do not provide the memory name/logical name. For example, favorite_language maps to user_favorite-language.md',
       ),
+    offset: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('Optional character offset for paginated read'),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(16_000)
+      .optional()
+      .describe('Optional character limit for paginated read (default 4000)'),
   })
   .strict()
 
@@ -61,7 +74,7 @@ export function createMemoryTool(
         args.action !== 'search'
       )
         throw new Error(
-          'Global memory is read-only from a group; use read/search with scope: global',
+          'Global memory is read-only from a scoped session; use read/search with scope: global',
         )
       const memoryStore = args.scope === 'global' ? globalStore : local
       switch (args.action) {
@@ -103,8 +116,10 @@ export function createMemoryTool(
         case 'read':
           if (!args.filename) return 'Read failed: filename is required'
           return (
-            memoryStore.loadFile(args.filename) ??
-            `File not found: ${args.filename}`
+            memoryStore.loadFile(args.filename, {
+              offset: args.offset,
+              limit: args.limit,
+            }) ?? `File not found: ${args.filename}`
           )
         case 'delete':
           if (!args.filename) return 'Delete failed: filename is required'

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { VelaDatabase } from '../db/index.ts'
+import { resolveWaitForInputOnUserReplyInTx } from './approvals.ts'
 import type { BlobStore } from './blobs.ts'
 import type {
   ChannelAdapter,
@@ -12,6 +13,7 @@ import type {
   SessionRecord,
   SessionStoreControl,
 } from './domain.ts'
+import type { RuntimeEventBus } from './event-bus.ts'
 import { enqueueInboxEvent } from './inbox.ts'
 import { type ControlShortcut, parseControlShortcut } from './shortcuts.ts'
 
@@ -81,6 +83,7 @@ export async function ingestChannelMessageInRuntime(params: {
   projects: ProjectStore
   sessions: SessionStoreControl
   bindings: ChannelBindingStore
+  eventBus?: RuntimeEventBus
   adapter: ChannelAdapter
   msg: ChannelInboundMessage
   executeShortcut: (input: {
@@ -96,6 +99,7 @@ export async function ingestChannelMessageInRuntime(params: {
     projects,
     sessions,
     bindings,
+    eventBus,
     adapter,
     msg,
     executeShortcut,
@@ -201,27 +205,36 @@ export async function ingestChannelMessageInRuntime(params: {
 
     const passive = msg.passive === true
     const wake = msg.wake ?? !passive
-    const { event, inserted } = enqueueInboxEvent(db, {
-      sessionId: session.id,
-      projectId: binding.projectId,
-      source: 'channel',
-      dedupeKey: msg.dedupeKey,
-      wake,
-      passive,
-      payload: {
-        type: 'channel',
-        channel: msg.channel,
-        externalChatId: msg.externalChatId,
-        kind: msg.kind,
-        ...(msg.threadId ? { threadId: msg.threadId } : {}),
-        ...(msg.messageId ? { messageId: msg.messageId } : {}),
-        senderId: msg.senderId,
-        senderName: msg.senderName,
-        text: msg.text,
-        ...(msg.mentioned !== undefined ? { mentioned: msg.mentioned } : {}),
-        timestamp: msg.timestamp,
-        ...(attachments.length ? { attachments } : {}),
-      },
+    const { event, inserted } = db.transaction(() => {
+      if (wake && !passive && eventBus) {
+        resolveWaitForInputOnUserReplyInTx(db, eventBus, {
+          sessionId: session.id,
+          replyText: msg.text,
+          decidedBy: msg.senderName,
+        })
+      }
+      return enqueueInboxEvent(db, {
+        sessionId: session.id,
+        projectId: binding.projectId,
+        source: 'channel',
+        dedupeKey: msg.dedupeKey,
+        wake,
+        passive,
+        payload: {
+          type: 'channel',
+          channel: msg.channel,
+          externalChatId: msg.externalChatId,
+          kind: msg.kind,
+          ...(msg.threadId ? { threadId: msg.threadId } : {}),
+          ...(msg.messageId ? { messageId: msg.messageId } : {}),
+          senderId: msg.senderId,
+          senderName: msg.senderName,
+          text: msg.text,
+          ...(msg.mentioned !== undefined ? { mentioned: msg.mentioned } : {}),
+          timestamp: msg.timestamp,
+          ...(attachments.length ? { attachments } : {}),
+        },
+      })
     })
     if (!inserted && attachments.length > 0) {
       for (const att of attachments) {

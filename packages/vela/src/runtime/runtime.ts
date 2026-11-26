@@ -10,6 +10,7 @@ import {
   createApprovalRequest,
   listRuntimePendingApprovals,
   resolveRuntimeApproval,
+  resolveWaitForInputOnUserReplyInTx,
 } from './approvals.ts'
 import { BackgroundJobManager } from './background-jobs.ts'
 import { BlobStore } from './blobs.ts'
@@ -160,6 +161,7 @@ export class VelaRuntimeEngine {
           projects: this.projects,
           sessions: this.sessions,
           bindings: this.bindings,
+          eventBus: this.eventBus,
           adapter,
           msg: message,
           executeShortcut: (shortcutInput) =>
@@ -202,21 +204,30 @@ export class VelaRuntimeEngine {
     if (!session) throw new Error(`Session ${input.sessionId} not found`)
     const passive = input.passive === true
     const wake = input.wake ?? !passive
-    const result = enqueueInboxEvent(this.db, {
-      sessionId: input.sessionId,
-      projectId: session.projectId,
-      source: input.source ?? 'user',
-      dedupeKey: input.dedupeKey ?? null,
-      wake,
-      passive,
-      payload: {
-        type: input.source ?? 'user',
-        text: input.text,
-        ...(input.attachments?.length
-          ? { attachments: input.attachments }
-          : {}),
-        ...(input.metadata ? { metadata: input.metadata } : {}),
-      },
+    const source = input.source ?? 'user'
+    const result = this.db.transaction(() => {
+      if (wake && !passive && source === 'user') {
+        resolveWaitForInputOnUserReplyInTx(this.db, this.eventBus, {
+          sessionId: input.sessionId,
+          replyText: input.text,
+        })
+      }
+      return enqueueInboxEvent(this.db, {
+        sessionId: input.sessionId,
+        projectId: session.projectId,
+        source,
+        dedupeKey: input.dedupeKey ?? null,
+        wake,
+        passive,
+        payload: {
+          type: source,
+          text: input.text,
+          ...(input.attachments?.length
+            ? { attachments: input.attachments }
+            : {}),
+          ...(input.metadata ? { metadata: input.metadata } : {}),
+        },
+      })
     })
     if (result.inserted && result.event.wake) {
       this.scheduleSession(input.sessionId)
@@ -768,7 +779,11 @@ export class VelaRuntimeEngine {
           )
       }
       this.syncWakeTimer()
-      if (result?.status === 'waiting_human') break
+      if (
+        result?.status === 'waiting_human' ||
+        this.sessions.get(sessionId)?.state === 'waiting_human'
+      )
+        break
     }
   }
 }
