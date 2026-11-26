@@ -342,13 +342,14 @@ test('R2-P1-4: stopSession fence lift does not spin on a topic awaiting channel 
   db.close()
 })
 
-test('R2-P1-5: interrupted driver result executes once without tight-loop replay and preserves durable progress inbox state', async () => {
+test('R2-P1-5: interrupted driver result executes once without tight-loop replay, preserves durable progress, and wakes concurrent prompts', async () => {
   const dir = tempDir('vela-r2-p1-5-')
   const db = openDatabase({ path: join(dir, 'vela.db') })
   const runtime = new VelaRuntimeEngine({ db, agentDir: dir })
 
   let runCalls = 0
   let writeProgressOnTurn = false
+  let submitConcurrentOnSession: string | undefined
   runtime.registerDriver({
     name: 'vela',
     capabilities: {
@@ -361,14 +362,24 @@ test('R2-P1-5: interrupted driver result executes once without tight-loop replay
       runCalls++
       if (writeProgressOnTurn) {
         db.run(
-          `INSERT INTO vela_messages (id, session_id, seq, kind, role, payload_json, created_at, run_id)
-           VALUES (?, ?, ?, 'message', 'user', '{"text":"hi"}', ?, ?)`,
-          'msg-progress-1',
+          `INSERT INTO vela_messages (id, session_id, seq, kind, role, content_json, created_at, run_id)
+           VALUES (?, ?, ?, 'message', 'user', '[{"type":"text","text":"hi"}]', ?, ?)`,
+          `msg-progress-${runCalls}`,
           req.sessionId,
-          1,
+          runCalls,
           new Date().toISOString(),
           req.runId,
         )
+      }
+      if (submitConcurrentOnSession === req.sessionId && runCalls === 3) {
+        runtime.submitPrompt({
+          sessionId: req.sessionId,
+          text: 'concurrent prompt after interrupt',
+        })
+        return { status: 'interrupted', error: 'graceful interrupt' }
+      }
+      if (submitConcurrentOnSession === req.sessionId && runCalls === 4) {
+        return { status: 'completed', replyText: 'concurrent ran' }
       }
       return { status: 'interrupted', error: 'graceful interrupt' }
     },
@@ -383,6 +394,12 @@ test('R2-P1-5: interrupted driver result executes once without tight-loop replay
   runtime.submitPrompt({ sessionId: s1.id, text: 'once please' })
   await runtime.waitForIdle(s1.id)
   expect(runCalls).toBe(1)
+  expect(
+    db.get<{ status: string }>(
+      'SELECT status FROM runs WHERE session_id = ? LIMIT 1',
+      s1.id,
+    )?.status,
+  ).toBe('interrupted')
   expect(
     db.get<{ status: string }>(
       'SELECT status FROM inbox_events WHERE session_id = ? LIMIT 1',
@@ -402,10 +419,37 @@ test('R2-P1-5: interrupted driver result executes once without tight-loop replay
   expect(runCalls).toBe(2)
   expect(
     db.get<{ status: string }>(
+      'SELECT status FROM runs WHERE session_id = ? LIMIT 1',
+      s2.id,
+    )?.status,
+  ).toBe('interrupted')
+  expect(
+    db.get<{ status: string }>(
       'SELECT status FROM inbox_events WHERE session_id = ? LIMIT 1',
       s2.id,
     )?.status,
   ).toBe('done')
+
+  // Concurrent prompt accepted during interrupted turn must NOT lose its wakeup
+  const s3 = runtime.sessions.create({
+    id: 's-int-concurrent',
+    kind: 'chat',
+    location: { environment: 'local', cwd: dir },
+  })
+  submitConcurrentOnSession = s3.id
+  runtime.submitPrompt({ sessionId: s3.id, text: 'turn 1 interrupted' })
+  await runtime.waitForIdle(s3.id)
+  expect(runCalls).toBe(4)
+  const s3Runs = db.all<{ status: string }>(
+    'SELECT status FROM runs WHERE session_id = ? ORDER BY started_at ASC, rowid ASC',
+    s3.id,
+  )
+  expect(s3Runs.map((r) => r.status)).toEqual(['interrupted', 'completed'])
+  const s3Inbox = db.all<{ status: string }>(
+    'SELECT status FROM inbox_events WHERE session_id = ? ORDER BY created_at ASC, rowid ASC',
+    s3.id,
+  )
+  expect(s3Inbox.map((i) => i.status)).toEqual(['done', 'done'])
 
   await runtime.dispose()
   db.close()

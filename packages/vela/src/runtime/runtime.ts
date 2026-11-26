@@ -67,7 +67,7 @@ interface ActiveWorker {
   ownerToken: string
   controller: AbortController
   promise: Promise<void>
-  interrupted?: boolean
+  suppressedInterruptedIds?: Set<string>
 }
 
 /**
@@ -496,16 +496,18 @@ export class VelaRuntimeEngine {
         if (
           !this.disposed &&
           !worker.controller.signal.aborted &&
-          !worker.interrupted &&
           !this.stoppingSessions.has(sessionId) &&
-          this.canWakeSessionNow(sessionId)
+          this.canWakeSessionNow(sessionId, worker.suppressedInterruptedIds)
         ) {
           this.scheduleSession(sessionId)
         }
       })
   }
 
-  private canWakeSessionNow(sessionId: string): boolean {
+  private canWakeSessionNow(
+    sessionId: string,
+    excludeInboxIds?: ReadonlySet<string>,
+  ): boolean {
     if (!this.db.open) return false
     const session = this.sessions.get(sessionId)
     if (!session) return false
@@ -529,7 +531,7 @@ export class VelaRuntimeEngine {
       )
     }
     if (session.state !== 'idle') return false
-    return hasSessionPendingWake(this.db, sessionId)
+    return hasSessionPendingWake(this.db, sessionId, excludeInboxIds)
   }
 
   private syncWakeTimer(): void {
@@ -720,7 +722,9 @@ export class VelaRuntimeEngine {
       }
       if (outcome.lostOwnership) break
       if (outcome.status === 'interrupted') {
-        worker.interrupted = true
+        worker.suppressedInterruptedIds = new Set(
+          claimed.inputs.map((item) => item.id),
+        )
         break
       }
 
