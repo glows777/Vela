@@ -406,8 +406,36 @@ export const openaiChatGPTLogin: OAuthLogin = {
       throw new Error(
         'Sign in with ChatGPT needs a device id (UUID) for this installation',
       )
-    const known = issuedClientId(options.previous)
-    const retainedIdentity = storedIdentity(options.previous)
+    const activePrevious =
+      options.previous?.type === 'oauth' ? options.previous : undefined
+    let known = issuedClientId(activePrevious)
+    let retainedIdentity = storedIdentity(activePrevious)
+    let expectedSubject = retainedField(activePrevious, 'subject')
+    if (!activePrevious && options.registration) {
+      const mode =
+        options.accountMode ??
+        (await interaction.prompt({
+          type: 'select',
+          message:
+            'A previous ChatGPT sign-in registration exists on this device. How would you like to sign in?',
+          options: [
+            { id: 'reuse', label: 'Continue with the same ChatGPT account' },
+            { id: 'switch', label: 'Switch to a different ChatGPT account' },
+          ],
+        }))
+      if (mode !== 'reuse' && mode !== 'switch') {
+        throw new Error(`Invalid ChatGPT account mode: ${mode}`)
+      }
+      if (mode === 'reuse') {
+        known = options.registration.clientId
+        expectedSubject = options.registration.subject
+        retainedIdentity = undefined
+      } else {
+        known = undefined
+        expectedSubject = undefined
+        retainedIdentity = undefined
+      }
+    }
     const { verifier, challenge } = await generatePKCE()
     const state = randomValue()
     const nonce = randomValue()
@@ -487,11 +515,12 @@ export const openaiChatGPTLogin: OAuthLogin = {
         nonce,
         signal: interaction.signal,
       })
-      // A reauthorization must prove it is the same OpenAI account as the credential it replaces
-      const storedSubject = retainedField(options.previous, 'subject')
-      if (storedSubject && storedSubject !== verified.subject)
+      // A reauthorization (or reused registration) must prove it is the same OpenAI account
+      if (expectedSubject && expectedSubject !== verified.subject)
         throw new Error(
-          'The ChatGPT sign-in returned a different account than the one already saved for this installation; sign in with that account, or log out first to replace it',
+          activePrevious
+            ? 'The ChatGPT sign-in returned a different account than the one already saved for this installation; sign in with that account, or log out first to replace it'
+            : 'The ChatGPT sign-in returned a different account than the retained registration; choose "Switch to a different ChatGPT account" during /login or run /logout openai --forget to register a new account',
         )
       const credential = credentialFrom(token, clientId, undefined, {
         idToken,

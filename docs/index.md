@@ -23,16 +23,16 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 
 - [JSON mode](json.md) streams the events of one run as JSON lines.
 - [RPC mode](rpc.md) controls a long-running Vela process over stdin and stdout.
-- The [SDK](sdk.md) runs Vela inside your application, with as many concurrent sessions as you need. Vela is published as six packages; `@glows777/vela` bundles them, and [Packages](sdk.md#packages) says which smaller one to depend on.
+- The [SDK](sdk.md) runs Vela inside your application, with as many concurrent sessions as you need via `createRuntime()` or `createVela()`; [Packages](sdk.md#packages) describes the package exports.
 
 ## Extend Vela
 
 - [Extensions](extensions.md): add tools, slash commands, model providers and channels, and hook into the agent loop.
-- [Built-in extensions](built-in-extensions.md): memory, the RAG knowledge base, web, Lark and MCP.
+- [Built-in extensions](built-in-extensions.md): memory, web, Lark and MCP.
 - [MCP servers](mcp.md): connect Model Context Protocol servers and use their tools.
 - [Channels reference](channels-reference.md): writing a channel, the gateway lifecycle, custom transports, external events and SDK host access.
 - [Testing](testing.md): test extensions and SDK code offline with the faux model.
-- [Session format](session-format.md): the on-disk session file.
+- [Session format](session-format.md): the SQLite session model and JSONL export format.
 
 Runnable examples are in [examples/](../examples/).
 

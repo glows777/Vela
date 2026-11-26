@@ -11,6 +11,10 @@ export type {
 } from './legacy-channels/index.ts'
 export { LocalError, local } from './legacy-channels/index.ts'
 export type {
+  AgentDriver,
+  ApprovalRecord,
+  BlobDirection,
+  BlobRecord,
   ChannelAdapter,
   ChannelAdapterContext,
   ChannelBinding,
@@ -19,11 +23,35 @@ export type {
   ChannelInboundAttachment,
   ChannelInboundMessage,
   ChannelOutboundMessage,
+  CreateProjectInput,
+  CreateSessionInput,
+  ProjectRecord,
   RunEndStatus,
   RuntimeEvent,
+  RuntimeEventListener,
   RuntimeEventPayload,
+  RuntimeMessagePage,
+  RuntimeMessageRecord,
+  SessionRecord,
+  SessionStatusInfo,
   StreamDeltaEvent,
+  StreamDeltaListener,
+  SubscriptionRecord,
+  TimerKind,
+  TimerRecord,
+  TimerTarget,
+  UpdateProjectInput,
+  UpsertChannelBindingInput,
 } from './runtime/index.ts'
+export {
+  type CreateRuntimeOptions,
+  createRuntime,
+  type LocalVelaRuntime,
+  type RuntimePromptInput,
+  type RuntimeRecoverySummary,
+  type VelaRuntime,
+} from './runtime-sdk.ts'
+export type { RoutineSchedule } from './shared/routine-time.ts'
 
 /**
  * Public entry point of the Vela SDK (`import { createVela } from '@glows777/vela'`).
@@ -80,6 +108,8 @@ export type {
   LineScan,
   LoginOptions,
   LoginProvider,
+  LogoutOptions,
+  LogoutResult,
   ModelCompat,
   ModelHandle,
   ModelInfo,
@@ -102,7 +132,6 @@ export type {
   ResolvedApprovalInfo,
   Result,
   SendMessageOptions,
-  SessionScope,
   SessionUsage,
   ShellExecOptions,
   ShellExecResult,

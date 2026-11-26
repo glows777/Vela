@@ -485,6 +485,7 @@ export async function checkBoundaries(root: string): Promise<string[]> {
             (dstBase === 'extension-api.ts' && canUseDriver) ||
             ((srcLayer === 'cli' || srcLayer === 'testing') &&
               (dstBase === 'vela.ts' ||
+                dstBase === 'runtime-sdk.ts' ||
                 dstBase === 'settings.ts' ||
                 dstBase === 'load-config.ts'))
           if (!allowedRoot)

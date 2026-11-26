@@ -53,7 +53,7 @@ A provider's key is looked up per request, in this order (pi's):
 2. `apiKey` under `providers` in `config.json`.
 3. The provider's environment variable.
 
-`/login` lists the providers you can sign in to and how; `/login <provider>` picks one directly. It stores either an API key you type or an OAuth credential. `/logout <provider>` removes the stored credential; environment variables and `config.json` are left alone.
+`/login` lists the providers you can sign in to and how; `/login <provider>` picks one directly. It stores either an API key you type or an OAuth credential. `/logout <provider> [--forget]` removes the stored credential (`--forget` also clears saved OAuth client registration in `vela.db`); environment variables and `config.json` are left alone.
 
 `auth.json` uses pi's format (`{ "<provider>": { "type": "api_key", "key": "…" } }` or `{ "type": "oauth", "access", "refresh", "expires", … }`). It is created with mode 0600 in a 0700 directory. Treat it like a password file.
 
@@ -61,11 +61,11 @@ OAuth access tokens with less than 5 minutes left are refreshed before the reque
 
 ### Sign in with ChatGPT
 
-`/login openai` → **Sign in with ChatGPT** uses your ChatGPT Plus or Pro plan instead of API billing, through OpenAI's [token sharing for open-source agents](https://developers.openai.com/siwc/token-sharing-open-source/sign-in). No app registration is needed: the first sign-in registers this installation (its id is in `~/.vela/installation-id`) and later sign-ins reuse it.
+`/login openai` → **Sign in with ChatGPT** uses your ChatGPT Plus or Pro plan instead of API billing, through OpenAI's [token sharing for open-source agents](https://developers.openai.com/siwc/token-sharing-open-source/sign-in). No app registration is needed: the first sign-in registers this installation (its id is in `~/.vela/installation-id`) and saves the registration in `vela.db` (`oauth_registrations`), and later sign-ins reuse it.
 
 Vela opens the browser and waits for the redirect on `http://127.0.0.1:1455/auth/callback`. When the browser runs on another machine, paste the final redirect URL into Vela instead. Port 1455 is shared with the Codex CLI, so finish or cancel a sign-in there first.
 
-The sign-in verifies the ID token OpenAI returns and keeps it with the account it belongs to. A later sign-in sends that token back, so OpenAI can skip the account selector instead of asking which account to use. `/logout openai` revokes the session at OpenAI before the credential is removed from `auth.json`. A network failure or a server error is retried with backoff inside one ten-second budget, and a refusal that means the token is already invalid is not retried; when OpenAI does not confirm the revocation, the credential is removed anyway and Vela says so.
+The sign-in verifies the ID token OpenAI returns and keeps its subject with the saved registration. When signing in again while signed out (`oauth_registrations` still present), Vela asks whether to reuse the saved account registration (preserving the account without preselecting via `id_token_hint`) or switch accounts (registering a new client); `/logout openai --forget` forgets the saved registration immediately. `/logout openai` revokes the session at OpenAI before the credential is removed from `auth.json`. A network failure or a server error is retried with backoff inside one ten-second budget, and a refusal that means the token is already invalid is not retried; when OpenAI does not confirm the revocation, the credential is removed anyway and `LogoutResult.notice` reports it.
 
 OpenAI documents this sign-in for local agents that the signed-in person runs. Use it only in the terminal on your own machine: not for a Lark bot, a server or any agent that other people talk to. Vela enforces part of this: when a channel session (Lark) encounters a ChatGPT OAuth credential, Vela refuses the OAuth token — falling back to `providers.openai.apiKey` or `OPENAI_API_KEY` if configured, or failing with an error when no API key is available.
 
@@ -276,4 +276,4 @@ In code and tests, use the faux model from `@glows777/vela/testing`. See [Testin
 
 ## SDK
 
-`createVela({ model, providers, credentials, thinkingLevel, limits })` takes the same pieces. `model` is a `provider/id` string or any AI SDK `LanguageModel`; without it, the default model is picked as in step 6 above. To use the CLI's providers and sign-ins, pass `loadConfig({ env: process.env })`'s `providers` and `credentials` (`fileCredentialStore('~/.vela/auth.json')`); the default `credentials` is `memoryCredentialStore()`, which keeps nothing on disk. `vela.models()` returns the available models (`{ all: true }` for every listed one), and `vela.login()` / `vela.logout()` do what `/login` and `/logout` do. See [SDK](sdk.md).
+`createVela({ model, providers, credentials, thinkingLevel, limits })` takes the same pieces (and `createRuntime({ agentDir, providers, credentials, ... })` exposes the isomorphic `VelaRuntime` interface over `<agentDir>/vela.db`). `model` is a `provider/id` string or any AI SDK `LanguageModel`; without it, the default model is picked as in step 6 above. To use the CLI's providers and sign-ins, pass `loadConfig({ env: process.env })`'s `providers` and `credentials` (`fileCredentialStore('~/.vela/auth.json')`); the default `credentials` is `memoryCredentialStore()`, which keeps nothing on disk. `vela.models({ all, channel })` returns the available models with live `planLabel` (`{ all: true }` for every listed one), and `vela.login()` / `vela.logout(provider, { signal?, forget? })` return structured results (`{ removed, forgotten?, notice? }`) matching `/login` and `/logout`. See [SDK](sdk.md).

@@ -14,7 +14,11 @@ const TUI_COMMANDS = [
   },
   { name: 'thinking', description: 'Select thinking level' },
   { name: 'login', description: 'Sign in to a provider or store its API key' },
-  { name: 'logout', description: "Remove a provider's stored credential" },
+  {
+    name: 'logout',
+    description:
+      "Remove a provider's stored credential (--forget clears saved OAuth registration)",
+  },
   { name: 'tree', description: 'Move to another point in the session tree' },
   {
     name: 'fork',

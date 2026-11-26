@@ -118,6 +118,7 @@ export class ToolResultError extends Error {
 }
 
 export interface ToolRegistryForkOptions {
+  /** @internal */
   scope?: () => Readonly<SessionScope> | undefined
   /** This session's event callback */
   onEvent?: VelaEventListener

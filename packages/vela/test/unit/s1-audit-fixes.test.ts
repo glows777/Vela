@@ -300,7 +300,7 @@ test('auth localOnly channel blocks local & lark (#4), $$ secret literal, live p
   })
   const raceRes = raceReg.logout('sub')
   await rs
-  expect(await raceRes).toBe(false)
+  expect(await raceRes).toEqual({ removed: false })
   expect(memStore.get('sub')).toMatchObject({ access: 'concurrent-new' })
 
   // Concurrent replacement during logout must not delete the new credential
@@ -316,7 +316,7 @@ test('auth localOnly channel blocks local & lark (#4), $$ secret literal, live p
     expires: Date.now() + 60_000,
   }))
   revokeResolve()
-  expect(await logoutP).toBe(false)
+  expect(await logoutP).toEqual({ removed: false })
   expect(store.get('sub')).toMatchObject({ access: 'tok-new' })
 
   // Aborting logout during revoke rejects and leaves the stored credential intact
@@ -431,7 +431,6 @@ test('ModelRegistry.logout fails closed without deleting when custom CredentialS
     ['openai', { type: 'api_key' as const, key: 'sk-old' }],
   ])
   let deleteCalls = 0
-  const notices: string[] = []
   const store = {
     path: ':custom:',
     get: (provider: string) => stored.get(provider),
@@ -455,11 +454,9 @@ test('ModelRegistry.logout fails closed without deleting when custom CredentialS
     },
     store as never,
   )
-  const ok = await registry.logout('openai', {
-    onNotice: (text) => notices.push(text),
-  })
-  expect(ok).toBe(false)
+  const res = await registry.logout('openai')
+  expect(res.removed).toBe(false)
   expect(deleteCalls).toBe(0)
   expect(stored.get('openai')).toEqual({ type: 'api_key', key: 'sk-old' })
-  expect(notices.length).toBe(1)
+  expect(res.notice).toContain('atomic conditional deletion')
 })

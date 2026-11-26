@@ -331,7 +331,7 @@ Recovery is at least once from the saved input; session markers align the routin
 
 An @ inside a Lark topic opens its own session, identified by channel, chat and root message ID. Different topics run concurrently without sharing transcripts; top-level messages and DMs retain one session per chat. Topics keep separate transcripts while sharing their group workspace and memory. Different groups use different default workspace and memory directories.
 
-A topic is owned when its session exists. After restart or idle eviction, the gateway opens and resumes it through its per-session queue before preparing an untagged input. An unknown untagged topic is ignored without resolving names, reading platform history, downloading attachments or writing an empty session file. Existing history is loaded once for the next run; interrupted work does not resume automatically.
+A topic is owned when its session exists. After restart or idle eviction, the gateway opens and resumes it through its per-session queue before preparing an untagged input. An unknown untagged topic is ignored without resolving names, reading platform history, downloading attachments or creating an empty session. Existing history is loaded once for the next run; interrupted work does not resume automatically.
 
 An untagged reply during a topic run automatically steers it without a Queue/Steer card. An idle reply starts the next run. Each run posts one shared progress card with **Stop** inside its topic. Stop aborts only that run, retains its session history and expires the callback; the next message continues the conversation. If the Stop card cannot be sent, Vela reports the cause and does not start the task.
 

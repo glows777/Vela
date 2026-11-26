@@ -77,7 +77,7 @@ export interface SessionHost {
 
 /** Options for `vela.session(id, options)`; `scope` and `channel` also bind an already-open session. */
 export interface SessionOptions {
-  /** Transient storage sharing identity; first routing binding can attach to an already-open session. */
+  /** @internal Transient storage sharing identity; transitional until S4b deletes `legacy-channels`. */
   scope?: SessionScope
   /** Provider channel and tool eligibility, bound together with scope before hooks. */
   channel?: string

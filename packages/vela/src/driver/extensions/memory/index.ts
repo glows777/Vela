@@ -4,17 +4,14 @@ import {
   MEMORY_RULES,
   type MemoryStore,
 } from '../../../runtime/memory/store.ts'
-import type {
-  SessionScope,
-  VelaExtension,
-  VelaSession,
-} from '../../extension-api.ts'
+import type { VelaExtension, VelaSession } from '../../extension-api.ts'
 import {
   customMessageIfChanged,
   lastCustomMessage,
 } from '../../extension-api.ts'
 import { resolveMemoryDatabase } from '../../memory/db-registry.ts'
 import { MemoryDream } from '../../memory/dream.ts'
+import { sharedScopeDataDir } from '../../memory/legacy-scope.ts'
 import { createMemoryTool } from './tool.ts'
 
 const EMPTY_MEMORY =
@@ -30,9 +27,11 @@ export function memory(): VelaExtension {
     const registry = new MemoryRegistry(vela.logger)
     const store = registry.get(join(vela.dataDir, 'memory'), vela.cwd)
     const db = resolveMemoryDatabase(vela.dataDir)
-    const forSession = (scope?: Readonly<SessionScope>): MemoryStore => {
-      if (scope?.kind !== 'shared') return store
-      const dir = scope.dataDir
+    const forSession = (
+      target?: Parameters<typeof sharedScopeDataDir>[0],
+    ): MemoryStore => {
+      const dir = sharedScopeDataDir(target)
+      if (!dir) return store
       return registry.get(join(dir, 'memory'), join(dir, 'workspace'))
     }
     const dreams = new Map<MemoryStore, MemoryDream>()
@@ -49,10 +48,7 @@ export function memory(): VelaExtension {
     }
     vela.on('agent_end', (event, ctx) => {
       if (!ctx.session.getActiveTools().includes('memory')) return
-      dreamFor(forSession(ctx.session.scope)).collect(
-        ctx.session,
-        event.messages,
-      )
+      dreamFor(forSession(ctx.session)).collect(ctx.session, event.messages)
     })
     vela.on('agent_settled', (_event, ctx) => {
       if (
@@ -60,17 +56,15 @@ export function memory(): VelaExtension {
         !ctx.session.getActiveTools().includes('memory')
       )
         return
-      dreamFor(forSession(ctx.session.scope)).schedule(ctx.session, vela.logger)
+      dreamFor(forSession(ctx.session)).schedule(ctx.session, vela.logger)
     })
     vela.onShutdown(async () => {
       await Promise.all([...dreams.values()].map((dream) => dream.stop()))
     })
-    vela.registerTool(
-      createMemoryTool(store, (context) => forSession(context?.scope)),
-    )
+    vela.registerTool(createMemoryTool(store, (context) => forSession(context)))
 
     const contentFor = (session: VelaSession): string | null => {
-      const local = forSession(session.scope)
+      const local = forSession(session)
       const index =
         local === store
           ? local.buildIndex()
@@ -105,7 +99,7 @@ export function memory(): VelaExtension {
       handler: (args, ctx) => {
         if (!ctx.session.getActiveTools().includes('memory'))
           return ctx.notify('Memory is not enabled for this session.')
-        const local = forSession(ctx.session.scope)
+        const local = forSession(ctx.session)
         if (args === 'lint') return ctx.notify(lintReport(local))
         if (args.startsWith('search ')) {
           const query = args.slice('search '.length).trim()
@@ -136,7 +130,7 @@ export function memory(): VelaExtension {
           return ctx.notify('Memory is not enabled for this session.')
         ctx.notify('[dream] Starting memory consolidation...')
         try {
-          const report = await dreamFor(forSession(ctx.session.scope)).run(
+          const report = await dreamFor(forSession(ctx.session)).run(
             ctx.session,
             ctx.signal,
           )

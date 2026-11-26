@@ -6,12 +6,25 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Isomorphic `VelaRuntime` / `createRuntime()` SDK, live `ModelInfo.planLabel`, `oauth_registrations` SQLite wiring, and `VelaSession` decomposition (`S3c-2`):** ([#579](https://github.com/glows777/Vela/issues/579), [#576](https://github.com/glows777/Vela/issues/576), [#581](https://github.com/glows777/Vela/issues/581), [#583](https://github.com/glows777/Vela/issues/583), [#534](https://github.com/glows777/Vela/issues/534))
+  - Added the isomorphic, JSON-serializable async `VelaRuntime` contract, `LocalVelaRuntime`, and `createRuntime()` in `@glows777/vela`, exposing `projects`, `sessions` (`create`, `get`, `list`, `messages`, `rename`, `delete`, `reset`), `prompt`, `steer`, `stop`, `waitForIdle`, `approvals`, `timers`, `subscriptions`, `bindings`, `blobs`, `events` (`list`, `bufferedDeltas`, `subscribe`, `subscribeDeltas`), `models`/`loginProviders`/`logout`, `recover`, and `dispose` (while keeping `createVela()` / `VelaSession` transitional until S4b/S4c).
+  - Computed `ModelInfo.planLabel` dynamically in `ModelRegistry.list()` / `available()` / `resolve()` without mutating the static catalog, persisted ChatGPT dynamic OAuth client registrations in `oauth_registrations` (`SqliteOAuthRegistrationStore`) with interactive `'reuse'` vs `'switch'` account selection on re-login ([#555](https://github.com/glows777/Vela/issues/555)), and added `--forget` to CLI `/logout [provider]`.
+  - Extracted session helpers into `driver/session/` and brought `VelaSession` under the 800-line ceiling.
+
 - **Platform-agnostic `Runtime` control tools, `VelaAgentDriver` capability integration, and SQLite-backed Dream (`S3c-1`):** ([#579](https://github.com/glows777/Vela/issues/579), [#534](https://github.com/glows777/Vela/issues/534))
   - Added platform-agnostic Runtime tools in `driver/runtime-tools.ts` + `runtime/control-ops.ts`: `session_start`, `session_forward`, `session_list`, `session_read`, `session_message`, `timers`, `subscriptions`, `wait_for_input`, `send_file`, and channel-only `skip_reply`, with prompt guidance filtered to actually active tools, handoff depth/silent/human-provenance persistence across approval suspension, and topic routing via `channel_bindings` before waking child topic sessions (`ChannelDeliveryResult` adds optional `rootId` / `threadId`).
   - Wired project trust (`canonicalEnvironmentPath`), trusted workspace `AGENTS.md` / skills / prompt templates (with `/skill:` and `/<template>` expansion), local-only workspace MCP attachment, network policy (`restricted`/`off` enforced ahead of project selection), `web_search` / `web_fetch` (HTML-to-Markdown conversion + 15s search timeout), and `memory` (collision-safe slugs, YAML-safe frontmatter serialization, `MAX_NOTE_CHARS = 16_000`, `offset`/`limit` read pagination, `ExecutionEnv`-aware lint, overflow compaction retention) into `VelaAgentDriver`.
   - Replaced file-based `.dream/` queues/logs with transactional SQLite `kv_meta` monotonic sequence refs and human-provenance-filtered `vela_messages` evidence per Dream scope (with one-time read-only `.dream/` import on upgrade).
 
+### Changed
+
+- **CLI SQLite consolidation (`$VELA_DIR/vela.db`):** The CLI now consolidates sessions, messages, tool calls, runs, approvals, project trust (`trusted_paths`), OAuth registrations (`oauth_registrations`), and usage records in `$VELA_DIR/vela.db` (`~/.vela/vela.db`), while SDK callers of `createVela({ dataDir })` without `agentDir` fall back to `<dataDir>/vela.db` ([#583](https://github.com/glows777/Vela/issues/583)).
+
 ### Breaking Changes
+
+- **Structured `logout()` return & `@internal` `SessionScope` (`S3c-2`):** ([#579](https://github.com/glows777/Vela/issues/579), [#555](https://github.com/glows777/Vela/issues/555))
+  - `ModelRegistry.logout(provider, { signal?, forget? })` and `vela.logout(...)` now return `Promise<LogoutResult>` (`{ removed, forgotten?, notice? }`) instead of `Promise<boolean>` with an `onNotice` callback.
+  - `SessionScope`, `session.scope`, `SessionOptions.scope`, and `ToolContext.scope` are marked `@internal` and removed from `@glows777/vela`, `@glows777/vela/extension-api`, and `api/public-api.txt` (retained internally until `legacy-channels` retirement).
 
 - **Vela now publishes a single npm package (`@glows777/vela`) and removes the built-in `rag` extension.** `@glows777/vela-core`, `@glows777/vela-channels`, `@glows777/vela-lark`, `@glows777/vela-mcp`, and `@glows777/vela-rag` (along with `sqlite-vec`, `rag`, `ragConfig`, `createEmbedder`, `EmbeddingFn`, and `createFauxEmbedder`) are retired. Import SDK APIs from `@glows777/vela`, extension authoring helpers from `@glows777/vela/extension-api`, and offline test helpers from `@glows777/vela/testing`. Heavy optional dependencies (`@larksuiteoapi/node-sdk`, `@modelcontextprotocol/sdk`, `@earendil-works/pi-tui`, `@silvia-odwyer/photon-node`) stay lazy-loaded off the cold-start graph ([#535](https://github.com/glows777/Vela/issues/535)).
 

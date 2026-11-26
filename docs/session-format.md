@@ -1,6 +1,6 @@
-# Session file format
+# Session format and export
 
-Vela persists active sessions in SQLite (`<dataDir>/vela.db`: `sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`) rather than per-session JSONL files on disk. The append-only JSONL tree layout below describes the **export format** written by `session.exportJsonl()` (compatible with pi's session format) and the logical entry tree stored in `vela_messages`.
+Vela persists active sessions in SQLite (`$VELA_DIR/vela.db` in the CLI, or `<dataDir>/vela.db` when only `dataDir` is passed to `createVela()`: `sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`) rather than per-session JSONL files on disk. The append-only JSONL tree layout below describes the **export format** written by `session.exportJsonl()` (compatible with pi's session format) and the logical entry tree stored in `vela_messages`.
 
 Like pi, entries form a tree: each entry names its `parentId`, and moving back to an earlier entry ([`/tree`](sessions.md#session-tree)) and continuing from there starts a new branch without deleting prior entries. A summary does not delete the messages it replaces; it adds a `compaction` entry, and the model context is rebuilt from the entries of the current branch when a session is resumed.
 
@@ -10,13 +10,12 @@ Source, in `packages/vela/src/driver/session/`: `entries.ts` (entry types, rebui
 
 ## Database vs JSONL export
 
-```
-<dataDir>/
-  vela.db                             SQLite database (sessions, vela_messages, vela_tool_calls, runs, approvals, usage_records)
-  sessions/<id>/tool-results/         environment-allocated spilled tool outputs
+```text
+$VELA_DIR/vela.db                     CLI SQLite database (or SDK <agentDir>/vela.db / <dataDir>/vela.db)
+<dataDir>/sessions/<id>/tool-results/ environment-allocated spilled tool outputs
 ```
 
-In the CLI, `<dataDir>` is the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. `<id>` is the session id (letters, digits, `.`, `_`, `-`; see [Sessions](sessions.md#session-ids-and-storage)). Opening and closing an empty session leaves no rows in `vela.db`; the first conversation entry or explicit location move persists the session row. Call `session.exportJsonl(path)` to write a single branch as an exported `.jsonl` file starting with a `SessionHeader` line.
+In the CLI, `vela.db` lives at `$VELA_DIR/vela.db` (`~/.vela/vela.db`), while `<dataDir>` is the [project data directory](settings.md#data-directory) under `~/.vela/projects/` for spilled tool outputs and per-project memory. `<id>` is the session id (letters, digits, `.`, `_`, `-`; see [Sessions](sessions.md#session-ids-and-storage)). Opening and closing an empty session leaves no rows in `vela.db`; the first conversation entry or explicit location move persists the session row. Call `session.exportJsonl(path)` to write a single branch as an exported `.jsonl` file starting with a `SessionHeader` line.
 
 ## Header
 
@@ -117,7 +116,7 @@ Resume loads that JSON. In the model request, Vela sends `preview` as text. When
 
 ## Tool call history
 
-Tool calls and execution states are persisted in `<dataDir>/vela.db` (`vela_tool_calls`), while full spilled tool outputs live under:
+Tool calls and execution states are persisted in `$VELA_DIR/vela.db` (or SDK `<agentDir>/vela.db` / `<dataDir>/vela.db`, table `vela_tool_calls`), while full spilled tool outputs live under:
 
 ```
 <dataDir>/sessions/<id>/tool-results/<callId>.txt
@@ -141,4 +140,4 @@ An exported JSONL branch where the user asked one question and the model read a 
 
 ## Reading sessions from code
 
-Sessions are persisted in SQLite (`<dataDir>/vela.db`). An open session returns its entries with `session.getEntries()`, its current branch with `session.getBranch()`, and the whole tree with `session.getTree()`; exported `.jsonl` branches can still be written with `session.exportJsonl(path)`.
+Sessions are persisted in SQLite (`$VELA_DIR/vela.db` in the CLI, or `<agentDir>/vela.db` / `<dataDir>/vela.db` in the SDK). An open session returns its entries with `session.getEntries()`, its current branch with `session.getBranch()`, and the whole tree with `session.getTree()`; exported `.jsonl` branches can still be written with `session.exportJsonl(path)`.

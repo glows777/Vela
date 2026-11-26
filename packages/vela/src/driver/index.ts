@@ -12,6 +12,8 @@ export type {
   Credential,
   CredentialStore,
   LoginOptions,
+  LogoutOptions,
+  LogoutResult,
   OAuthCredential,
   OAuthLogin,
 } from '../providers/auth/types.ts'
@@ -178,7 +180,6 @@ export type {
   SessionPersistence,
   SessionUsage,
 } from './session/options.ts'
-export type { SessionScope } from './session/scope.ts'
 export type { SessionSearchHit } from './session/search.ts'
 export type {
   ApprovalDecision,

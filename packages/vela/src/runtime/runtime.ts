@@ -238,6 +238,22 @@ export class VelaRuntimeEngine {
     return result
   }
 
+  async steerSession(sessionId: string, text: string): Promise<void> {
+    if (this.disposed) throw new Error('Runtime has been disposed')
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error(`Session ${sessionId} not found`)
+    const driver = this.drivers.get(session.driver)
+    if (
+      this.activeWorkers.has(sessionId) &&
+      driver?.capabilities.steer &&
+      driver.steer
+    ) {
+      await driver.steer(sessionId, text)
+      return
+    }
+    this.submitPrompt({ sessionId, text, source: 'user', wake: true })
+  }
+
   requestApproval(input: {
     sessionId: string
     runId: string

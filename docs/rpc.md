@@ -79,10 +79,10 @@ A successful `prompt` response means the prompt was accepted, not that the model
 | `disposition` | Meaning | What to wait for |
 |---|---|---|
 | `started` | A run started. | `agent_settled` |
-| `queued` | A run is in progress; the message was queued as a steer or follow-up. | `agent_settled` of the current run |
+| `queued` | A run is in progress; the message was queued as a steer. | `agent_settled` of the current run |
 | `handled` | The message was an extension command (`/name args`) and has finished. | Nothing; no run started. |
 
-Keep reading events after the response. `agent_end` closes one agent loop, but queued steer and follow-up messages can still run after it. `agent_settled` means the session is idle and nothing else will run on its own.
+Keep reading events after the response. `agent_end` closes one agent loop, but queued steer messages can still run after it. `agent_settled` means the session is idle and nothing else will run on its own.
 
 A prompt can also fail after it was answered with `started`, before the agent loop begins: no model is selected, the model doesn't support the thinking level, or an extension hook throws. No `agent_end` follows in that case, so Vela sends a second response with the same `id` and `success: false`. It comes after the run's `agent_settled`, so a client that stops reading at `agent_settled` misses it; keep reading until Vela exits (as the clients below do):
 

@@ -107,6 +107,8 @@ export interface VelaAgentDriverOptions {
   defaultThinkingLevel?: ThinkingLevel
   providers?: Record<string, ProviderDefinition>
   credentials?: CredentialStore
+  /** @internal Shared ModelRegistry (for live OAuth registrations & planLabel consistency). */
+  models?: ModelRegistry
   limits?: Partial<VelaLimits>
   tools?: ToolDefinition[]
   extensionConfig?: Record<string, Record<string, unknown>>
@@ -147,7 +149,8 @@ export function createVelaAgentDriver(
   options: VelaAgentDriverOptions,
 ): AgentDriver {
   const logger = options.logger ?? silentLogger
-  const models = new ModelRegistry(options.providers, options.credentials)
+  const models =
+    options.models ?? new ModelRegistry(options.providers, options.credentials)
   const memoryRegistry = options.memoryRegistry ?? new MemoryRegistry(logger)
   const activeAbort = new Map<string, AbortController>()
   const activeSteering = new Map<string, ModelMessage[]>()
@@ -250,6 +253,12 @@ export function createVelaAgentDriver(
         environment: 'local',
         cwd,
       }
+      const boundChannel = getActiveChannelForSession(
+        options.db,
+        request.sessionId,
+        request.runId,
+      )
+      const hasChannelBinding = Boolean(boundChannel)
       const modelInput =
         saved?.model ?? options.defaultModel ?? models.defaultRef()
       if (!modelInput) {
@@ -257,7 +266,7 @@ export function createVelaAgentDriver(
       }
       const resolved =
         typeof modelInput === 'string'
-          ? models.resolve(modelInput)
+          ? models.resolve(modelInput, { channel: () => boundChannel })
           : { model: modelInput, info: describeModel(modelInput) }
       const thinkingLevel =
         saved?.thinkingLevel ??
@@ -314,12 +323,6 @@ export function createVelaAgentDriver(
         'SELECT kind, created_at FROM sessions WHERE id = ?',
         request.sessionId,
       )
-      const boundChannel = getActiveChannelForSession(
-        options.db,
-        request.sessionId,
-        request.runId,
-      )
-      const hasChannelBinding = Boolean(boundChannel)
       const sessionKind = (sessionRow?.kind ??
         (request.projectId ? 'work' : 'chat')) as SessionRecord['kind']
       const networkMode = options.environments.networkMode(location.environment)

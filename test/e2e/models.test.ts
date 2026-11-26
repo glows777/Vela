@@ -495,8 +495,8 @@ test('an extension provider reads its /login credential per request, and an expi
   // The stored token expired within 5 minutes: refreshed before the first request, then reused
   expect(tokens).toEqual(['a2', 'a2'])
   expect(refreshes).toBe(1)
-  expect(await t.vela.logout('fake')).toBe(true)
-  expect(await t.vela.logout('fake')).toBe(false)
+  expect(await t.vela.logout('fake')).toEqual({ removed: true })
+  expect(await t.vela.logout('fake')).toEqual({ removed: false })
 })
 
 test('switching models drops an earlier model reasoning and keeps its own', async () => {

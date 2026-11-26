@@ -29,6 +29,7 @@ export interface ToolContext {
   /** @internal */ execution?: ExecutionEnv
   /** @internal */ background?: BackgroundCommands
   sessionId?: string
+  /** @internal */
   scope?: Readonly<SessionScope>
   toolCallId?: string
   /** Resolve the session's execution environment on demand (file, search, bash tools only). */

@@ -1,3 +1,10 @@
+import type {
+  OAuthRegistration,
+  OAuthRegistrationStore,
+} from '../../shared/oauth-registration.ts'
+
+export type { OAuthRegistrationStore }
+
 /** An API key stored with `/login` (pi's `api_key` credential). */
 export interface ApiKeyCredential {
   type: 'api_key'
@@ -74,6 +81,22 @@ export interface LoginOptions {
   getDeviceId?: () => string
   /** Name the app introduces itself with; default `Vela` */
   agentName?: string
+  /** How `/login` handles a retained OAuth registration when no token is active. */
+  accountMode?: 'reuse' | 'switch'
+}
+
+/** Options for `logout()`. */
+export interface LogoutOptions {
+  signal?: AbortSignal
+  /** Also clear any retained OAuth client registration metadata (`oauth_registrations`). */
+  forget?: boolean
+}
+
+/** Result of `logout()`. */
+export interface LogoutResult {
+  removed: boolean
+  forgotten?: boolean
+  notice?: string
 }
 
 /**
@@ -93,7 +116,11 @@ export interface OAuthLogin {
   usageUrl?: string
   login(
     interaction: AuthInteraction,
-    options: LoginOptions & { previous?: Credential },
+    options: LoginOptions & {
+      previous?: Credential
+      /** @internal Retained client registration when no active credential is stored. */
+      registration?: OAuthRegistration
+    },
   ): Promise<Credential>
   /** Exchanges the refresh token; Vela calls it under the store lock when the token has under 5 minutes left */
   refresh?(

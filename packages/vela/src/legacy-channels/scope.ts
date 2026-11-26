@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import type { SessionScope } from '../extension-api.ts'
+import type { SessionScope } from '../driver/session/scope.ts'
 import { channelSessionId } from './session-id.ts'
 
 export interface ChannelScope extends SessionScope {

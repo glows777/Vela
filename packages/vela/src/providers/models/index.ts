@@ -11,7 +11,10 @@ import type {
   Credential,
   CredentialStore,
   LoginOptions,
+  LogoutOptions,
+  LogoutResult,
   OAuthLogin,
+  OAuthRegistrationStore,
 } from '../auth/types.ts'
 import { MODEL_CATALOG } from './catalog.generated.ts'
 import type { CatalogModel, ModelSpec, ThinkingLevel } from './catalog.ts'
@@ -129,6 +132,7 @@ export class ModelRegistry {
   constructor(
     providers: Record<string, ProviderDefinition> = {},
     credentials: CredentialStore = memoryCredentialStore(),
+    private readonly registrations?: OAuthRegistrationStore,
   ) {
     this.credentials = credentials
     for (const [name, provider] of Object.entries(providers))
@@ -187,20 +191,24 @@ export class ModelRegistry {
     return this.authSource(provider) ? 'api_key' : undefined
   }
 
-  /** Models listed by all providers, configured or not */
-  list(): ModelInfo[] {
-    return [...this.providers].flatMap(([provider, def]) =>
-      (def.models ?? []).map((spec) => ({
+  /** Models listed by all providers, configured or not, with live `planLabel`. */
+  list(channel?: string): ModelInfo[] {
+    return [...this.providers].flatMap(([provider, def]) => {
+      const planLabel = this.planLabel(provider, channel)
+      return (def.models ?? []).map((spec) => ({
         ...spec,
         provider,
         ref: `${provider}/${spec.id}`,
-      })),
-    )
+        ...(planLabel ? { planLabel } : {}),
+      }))
+    })
   }
 
   /** Models of providers that have a credential (what `/model` and `--list-models` show, like pi) */
-  available(): ModelInfo[] {
-    return this.list().filter((m) => this.authSource(m.provider) !== undefined)
+  available(channel?: string): ModelInfo[] {
+    return this.list(channel).filter(
+      (m) => this.authSource(m.provider) !== undefined,
+    )
   }
 
   /**
@@ -249,9 +257,11 @@ export class ModelRegistry {
     if (method === 'oauth') {
       if (!def.oauth)
         throw new Error(`Provider ${provider} has no OAuth sign-in`)
+      const registration = this.registrations?.get(provider)
       credential = await def.oauth.login(interaction, {
         ...options,
         previous: this.credentials.get(provider),
+        ...(registration ? { registration } : {}),
       })
     } else {
       if (!def.apiKeyLogin)
@@ -267,40 +277,71 @@ export class ModelRegistry {
     }
     interaction.signal.throwIfAborted()
     await this.credentials.modify(provider, async () => credential)
+    if (
+      credential.type === 'oauth' &&
+      typeof credential.clientId === 'string' &&
+      credential.clientId
+    ) {
+      this.registrations?.set(provider, {
+        clientId: credential.clientId,
+        hostId: options.getDeviceId?.(),
+        subject:
+          typeof credential.subject === 'string' && credential.subject
+            ? credential.subject
+            : undefined,
+      })
+    }
   }
 
   /**
    * Removes the stored credential (`/logout`). An OAuth sign-in that supports it revokes its session at the
-   * provider first; when that fails the credential is removed anyway and `onNotice` says so. Environment variables
-   * and models.json keys are untouched.
+   * provider first; when that fails the credential is removed anyway and `notice` says so. Non-token OAuth
+   * client registration metadata is retained unless `forget: true`. Environment variables and config.json keys
+   * are untouched.
    */
   async logout(
     provider: string,
-    options: { signal?: AbortSignal; onNotice?: (text: string) => void } = {},
-  ): Promise<boolean> {
+    options: LogoutOptions = {},
+  ): Promise<LogoutResult> {
     options.signal?.throwIfAborted()
     const credential = this.credentials.get(provider)
-    if (!credential) return false
-    if (!this.credentials.deleteIf) {
-      options.onNotice?.(
-        `Could not log out ${provider}: credential store does not support atomic conditional deletion.`,
-      )
-      return false
+    if (!credential) {
+      const forgotten = options.forget
+        ? Boolean(this.registrations?.delete(provider))
+        : false
+      return {
+        removed: false,
+        ...(forgotten ? { forgotten: true } : {}),
+      }
     }
+    if (!this.credentials.deleteIf) {
+      return {
+        removed: false,
+        notice: `Could not log out ${provider}: credential store does not support atomic conditional deletion.`,
+      }
+    }
+    let notice: string | undefined
     const revoke = this.providers.get(provider)?.oauth?.logout
     if (credential.type === 'oauth' && revoke) {
       try {
         await revoke(credential, options.signal ?? new AbortController().signal)
       } catch (error) {
         if (options.signal?.aborted) throw options.signal.reason ?? error
-        options.onNotice?.(
-          `Could not confirm that ${provider} revoked this sign-in at the provider; the credential is removed locally.`,
-        )
+        notice = `Could not confirm that ${provider} revoked this sign-in at the provider; the credential is removed locally.`
       }
     }
-    return this.credentials.deleteIf(provider, (current) =>
+    const removed = await this.credentials.deleteIf(provider, (current) =>
       sameCredential(credential, current),
     )
+    const forgotten =
+      options.forget && (removed || !this.credentials.get(provider))
+        ? Boolean(this.registrations?.delete(provider))
+        : false
+    return {
+      removed,
+      ...(forgotten ? { forgotten: true } : {}),
+      ...(notice ? { notice } : {}),
+    }
   }
 
   /** `provider/id` → model; the id may contain more `/` (e.g. `openrouter/anthropic/claude`). */

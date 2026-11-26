@@ -2096,3 +2096,99 @@ test.each(['direct', 'symlink'])(
     expect(pending).toBe(0)
   },
 )
+
+test('renamed S3c control-plane tool names grade identically to legacy channel_* names', () => {
+  expect(
+    grade(
+      'G2',
+      evidence({
+        calls: [
+          {
+            name: 'session_start',
+            args: { title: 'Short task title', brief: 'Deliver X and Y.' },
+            phase: 0,
+            success: true,
+          },
+        ],
+        topics: ['Short task title'],
+      }),
+    ).find((c) => c.name === 'one topic call')?.pass,
+  ).toBe(true)
+
+  expect(
+    grade(
+      'G3',
+      evidence({
+        calls: [{ name: 'skip_reply', args: {}, phase: 0, success: true }],
+      }),
+    ).every((c) => c.pass),
+  ).toBe(true)
+
+  expect(
+    grade(
+      'G4',
+      evidence({
+        calls: [
+          {
+            name: 'wait_for_input',
+            args: { reason: 'Choose a color' },
+            phase: 0,
+            success: true,
+          },
+        ],
+        deliveries: [{ scope: 'topic', text: 'Blue or green?' }],
+      }),
+    ).every((c) => c.pass),
+  ).toBe(true)
+
+  expect(
+    grade(
+      'G6',
+      evidence({
+        calls: [
+          {
+            name: 'session_message',
+            args: { session_id: 'lark-oc_group-g6_b', text: 'Code: ORBIT-73' },
+            phase: 0,
+            sessionId: 'lark-oc_group-g6_a',
+            success: true,
+          },
+        ],
+        inputs: [
+          { topicRootId: 'g6_b', text: 'Wait for A.' },
+          { topicRootId: 'g6_a', text: 'Read the fixture.' },
+        ],
+        deliveries: [{ scope: 'topic', topicRootId: 'g6_b', text: 'ORBIT-73' }],
+      }),
+    ).every((c) => c.pass),
+  ).toBe(true)
+
+  expect(
+    grade(
+      'G6',
+      evidence({
+        calls: [
+          {
+            name: 'session_message',
+            args: { session_id: 'lark-oc_group-g6_b', text: 'Code: ORBIT-73' },
+            phase: 0,
+            sessionId: 'lark-oc_group-g6_a',
+            success: true,
+          },
+          {
+            name: 'timers',
+            args: { action: 'create' },
+            phase: 0,
+            sessionId: 'lark-oc_group-g6_a',
+            success: true,
+          },
+        ],
+        inputs: [
+          { topicRootId: 'g6_b', text: 'Wait for A.' },
+          { topicRootId: 'g6_a', text: 'Read the fixture.' },
+        ],
+        deliveries: [{ scope: 'topic', topicRootId: 'g6_b', text: 'ORBIT-73' }],
+      }),
+    ).find((c) => c.name === 'hand-off tool')?.pass,
+  ).toBe(false)
+})

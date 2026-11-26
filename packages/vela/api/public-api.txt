@@ -3,6 +3,13 @@
   interface AfterProviderResponseEvent
     headers: Record<string, string>
     type: "after_provider_response"
+  interface AgentDriver
+    abort?: ((sessionId: string) => void | Promise<void>) | undefined
+    dispose?: (() => void | Promise<void>) | undefined
+    readonly capabilities: AgentDriverCapabilities
+    readonly name: string
+    runTurn: (request: DriverTurnRequest) => Promise<DriverTurnResult>
+    steer?: ((sessionId: string, text: string) => void | Promise<void>) | undefined
   function agentErrorHint: (kind: AgentErrorKind | undefined) => string | undefined
   type AgentErrorKind = | 'auth'
       | 'billing'
@@ -18,6 +25,20 @@
     approved: boolean
     decidedBy?: string | undefined
     reason?: string | undefined
+  interface ApprovalRecord
+    createdAt: string
+    decidedBy: string | null
+    decisionReason: string | null
+    id: string
+    input: unknown
+    resolvedAt: string | null
+    runId: string
+    sessionId: string
+    status: ApprovalStatus
+    summary: string
+    toolCallId: string | null
+    toolCallRowId: string | null
+    toolName: string
   type AssistantMessageEvent = | { type: 'text_start'; contentIndex: number }
       | { type: 'text_delta'; contentIndex: number; delta: string }
       | { type: 'text_end'; contentIndex: number; content: string }
@@ -86,6 +107,19 @@
     info: (signal?: AbortSignal) => Promise<Result<FileInfo, FileError>>
     read: (offset: number, length: number, signal?: AbortSignal) => Promise<Result<Uint8Array, FileError>>
     scanLines: (options: { startLine: number; endLine?: number; }, signal?: AbortSignal) => Promise<Result<LineScan, FileError>>
+  type BlobDirection = 'inbound' | 'outbound'
+  interface BlobRecord
+    createdAt: string
+    direction: BlobDirection
+    filename: string
+    id: string
+    messageId: string | null
+    mimeType: string | null
+    projectId: string | null
+    sessionId: string | null
+    sha256: string
+    sizeBytes: number
+    storagePath: string
   interface BranchSummaryEntry
     fromId: string
     id: string
@@ -203,6 +237,52 @@
     path: string
   function createJsonSchema: <T = unknown>(schema: JsonSchemaObject | (() => JsonSchemaObject | PromiseLike<JsonSchemaObject>), options?: { validate?: VelaJsonSchema<T>["validate"]; }) => VelaJsonSchema<T>
   function createLocalExecutionEnv: (options: { cwd: string; shellPath?: string; }) => ExecutionEnv
+  interface CreateProjectInput
+    config?: Record<string, unknown> | null | undefined
+    cwd?: string | null | undefined
+    dataDir?: string | null | undefined
+    defaultDriver?: string | undefined
+    defaultLocation?: ExecutionLocation | null | undefined
+    defaultModel?: string | null | undefined
+    defaultThinkingLevel?: string | null | undefined
+    defaultTools?: string[] | null | undefined
+    hubSessionId?: string | boolean | null | undefined
+    id?: string | undefined
+    name: string
+  function createRuntime: (options?: CreateRuntimeOptions) => LocalVelaRuntime
+  interface CreateRuntimeOptions
+    agentDir?: string | undefined
+    contextFiles?: readonly ContextFile[] | undefined
+    credentials?: CredentialStore | undefined
+    defaultModel?: ModelInput | undefined
+    defaultThinkingLevel?: ThinkingLevel | undefined
+    dreamEnabled?: boolean | undefined
+    drivers?: AgentDriver[] | undefined
+    environments?: EnvironmentRegistry | undefined
+    ephemeral?: boolean | undefined
+    extensionConfig?: Record<string, Record<string, unknown>> | undefined
+    hostEnv?: Record<string, string | undefined> | undefined
+    limits?: Partial<VelaLimits> | undefined
+    logger?: VelaLogger | undefined
+    mcp?: boolean | undefined
+    offline?: boolean | undefined
+    promptTemplates?: readonly PromptTemplate[] | undefined
+    providers?: Record<string, ProviderDefinition> | undefined
+    skills?: readonly SkillDefinition[] | undefined
+    toolApprovalCheck?: ((toolName: string, input: unknown, sessionId: string) => Promise<{ requireApproval?: boolean; summary?: string; } | undefined> | { requireApproval?: boolean; summary?: string; } | undefined) | undefined
+    tools?: ToolDefinition[] | undefined
+    trustOverride?: ((location: ExecutionLocation) => boolean | Promise<boolean>) | undefined
+  interface CreateSessionInput
+    driver?: string | undefined
+    externalSessionId?: string | null | undefined
+    id?: string | undefined
+    kind?: SessionKind | undefined
+    location?: ExecutionLocation | null | undefined
+    model?: string | null | undefined
+    name?: string | null | undefined
+    parentSessionId?: string | null | undefined
+    projectId?: string | null | undefined
+    thinkingLevel?: string | null | undefined
   function createVela: (options?: ChannelVelaOptions) => Vela
   type Credential = ApiKeyCredential | OAuthCredential
   interface CredentialStore
@@ -593,7 +673,31 @@
     topic?: { rootId: string; threadId: string; } | undefined
     updatedAt: string
     waitingReason?: string | undefined
+  interface LocalVelaRuntime
+    dispose: () => Promise<void>
+    login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
+    loginProviders: () => Promise<LoginProvider[]>
+    logout: (provider: string, options?: LogoutOptions) => Promise<LogoutResult>
+    models: (options?: { all?: boolean; channel?: string; }) => Promise<ModelInfo[]>
+    prompt: (sessionId: string, input: RuntimePromptInput) => Promise<{ eventId: string; inserted: boolean; }>
+    readonly agentDir: string
+    readonly approvals: { list(sessionId?: string): Promise<ApprovalRecord[]>; resolve(input: { approvalId: string; decision: "approved" | "denied" | "cancelled"; reason?: string; decidedBy?: string; }): Promise<{ approval: ApprovalRecord; shouldWake: boolean; }>; }
+    readonly bindings: { list(filter?: { channel?: string; projectId?: string; enabledOnly?: boolean; }): Promise<ChannelBinding[]>; get(id: string): Promise<ChannelBinding | undefined>; upsert(input: UpsertChannelBindingInput): Promise<ChannelBinding>; setEnabled(id: string, enabled: boolean): Promise<ChannelBinding | undefined>; remove(id: string): Promise<boolean>; }
+    readonly blobs: { get(id: string): Promise<BlobRecord | undefined>; list(sessionId: string, direction?: BlobDirection): Promise<BlobRecord[]>; read(id: string): Promise<Uint8Array>; storeInbound(input: { id?: string; sessionId?: string | null; projectId?: string | null; messageId?: string | null; filename: string; mimeType?: string; bytes?: Uint8Array; hostPath?: string; }): Promise<BlobRecord>; }
+    readonly events: { list(options?: { sessionId?: string; projectId?: string; afterSeq?: number; limit?: number; }): Promise<RuntimeEvent[]>; bufferedDeltas(sessionId: string): Promise<StreamDeltaEvent[]>; subscribe(listener: RuntimeEventListener): () => void; subscribeDeltas(listener: StreamDeltaListener): () => void; }
+    readonly projects: { list(options?: { includeArchived?: boolean; }): Promise<ProjectRecord[]>; get(id: string): Promise<ProjectRecord | undefined>; getByCwd(cwd: string): Promise<ProjectRecord | undefined>; create(input: CreateProjectInput): Promise<ProjectRecord>; update(id: string, patch: UpdateProjectInput): Promise<ProjectRecord>; remove(id: string, options?: { deleteSessions?: boolean; }): Promise<boolean>; }
+    readonly sessions: { list(options?: { projectId?: string | null; includeArchived?: boolean; }): Promise<SessionRecord[]>; get(id: string): Promise<SessionRecord | undefined>; create(input?: CreateSessionInput): Promise<SessionRecord>; rename(id: string, name: string | null): Promise<SessionRecord>; delete(id: string): Promise<boolean>; reset(id: string): Promise<SessionRecord>; status(id: string): Promise<SessionStatusInfo>; messages(input: { sessionId: string; cursor?: string; limit?: number; }): Promise<RuntimeMessagePage>; }
+    readonly subscriptions: { list(filter?: { sessionId?: string; projectId?: string; source?: string; }): Promise<SubscriptionRecord[]>; create(input: { id?: string; source: string; eventKey: string; projectId?: string | null; sessionId: string; creatorId?: string | null; creatorName?: string | null; }): Promise<SubscriptionRecord>; remove(id: string): Promise<boolean>; }
+    readonly timers: { list(filter?: { projectId?: string; sessionId?: string; kind?: TimerKind; enabledOnly?: boolean; }): Promise<TimerRecord[]>; createRoutine(input: { id?: string; projectId?: string | null; sessionId?: string | null; channel?: string | null; target?: TimerTarget; creatorId?: string | null; creatorName?: string | null; message: string; schedule: RoutineSchedule; timezone?: string; nowMs?: number; }): Promise<TimerRecord>; createFollowup(input: { id?: string; sessionId: string; projectId?: string | null; channel?: string | null; target?: TimerTarget; message: string; fireAt: string; creatorId?: string | null; creatorName?: string | null; }): Promise<TimerRecord>; update(id: string, patch: { message?: string; schedule?: RoutineSchedule; timezone?: string; enabled?: boolean; nowMs?: number; }): Promise<TimerRecord | undefined>; delete(id: string): Promise<boolean>; }
+    recover: () => Promise<RuntimeRecoverySummary>
+    registerChannel: (adapter: ChannelAdapter) => Promise<void>
+    registerDriver: (driver: AgentDriver) => void
+    steer: (sessionId: string, text: string) => Promise<void>
+    stop: (sessionId: string, reason?: string) => Promise<boolean>
+    unregisterChannel: (name: string) => Promise<void>
+    waitForIdle: (sessionId?: string) => Promise<void>
   interface LoginOptions
+    accountMode?: "reuse" | "switch" | undefined
     agentName?: string | undefined
     getDeviceId?: (() => string) | undefined
   interface LoginProvider
@@ -601,6 +705,13 @@
     oauth?: string | undefined
     provider: string
     source?: string | undefined
+  interface LogoutOptions
+    forget?: boolean | undefined
+    signal?: AbortSignal | undefined
+  interface LogoutResult
+    forgotten?: boolean | undefined
+    notice?: string | undefined
+    removed: boolean
   function mcp: (options?: McpOptions) => VelaExtension
   const mcpConfig: ExtensionConfigDefinition
   type McpExposure = 'direct' | 'deferred' | 'hidden'
@@ -686,7 +797,7 @@
   interface OAuthLogin
     isSubscription?: boolean | undefined
     localOnly?: boolean | undefined
-    login: (interaction: AuthInteraction, options: LoginOptions & { previous?: Credential; }) => Promise<Credential>
+    login: (interaction: AuthInteraction, options: LoginOptions & { previous?: Credential; registration?: OAuthRegistration; }) => Promise<Credential>
     logout?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<void>) | undefined
     name: string
     planLabel?: string | undefined
@@ -709,6 +820,21 @@
     summary: string | null
     toolCallId: string | null
     toolName: string
+  interface ProjectRecord
+    archived: boolean
+    config: Record<string, unknown> | null
+    createdAt: string
+    cwd: string | null
+    dataDir: string | null
+    defaultDriver: string
+    defaultLocation: ExecutionLocation | null
+    defaultModel: string | null
+    defaultThinkingLevel: string | null
+    defaultTools: string[] | null
+    hubSessionId: string | null
+    id: string
+    name: string
+    updatedAt: string
   interface PromptOptions
     images?: ImageContent[] | undefined
     signal?: AbortSignal | undefined
@@ -777,6 +903,11 @@
     toolCallId: string | null
     toolName: string
   type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
+  type RoutineSchedule = | { at: string }
+      | {
+      time: string
+      days?: ('mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun')[]
+      }
   type RunEndStatus = | 'completed'
       | 'stopped'
       | 'failed'
@@ -788,6 +919,7 @@
       projectId: string | null
       timestamp: string
       }
+  type RuntimeEventListener = (event: RuntimeEvent) => void
   type RuntimeEventPayload = | {
       type: 'run_started'
       runId: string
@@ -855,6 +987,35 @@
       status: RunEndStatus
       error?: string
       }
+  interface RuntimeMessagePage
+    messages: RuntimeMessageRecord[]
+    nextCursor?: string | undefined
+  interface RuntimeMessageRecord
+    content: unknown
+    createdAt: string
+    details?: unknown
+    id: string
+    kind: string
+    producedBy?: string | undefined
+    role: "user" | "assistant" | "system" | "tool" | null
+    runId: string | null
+    seq: number
+    sessionId: string
+    stopReason?: string | undefined
+    text: string
+  interface RuntimePromptInput
+    attachments?: { blobId: string; name: string; mimeType?: string; }[] | undefined
+    dedupeKey?: string | undefined
+    metadata?: Record<string, unknown> | undefined
+    passive?: boolean | undefined
+    source?: "handoff" | "user" | "session" | undefined
+    text: string
+    wake?: boolean | undefined
+  interface RuntimeRecoverySummary
+    interruptedJobs: string[]
+    recoveredRuns: string[]
+    requeuedInboxRuns: string[]
+    wokenSessions: string[]
   interface SavedSessionOptions
     includeArchived?: boolean | undefined
   function saveLarkSection: (options: { agentDir: string; appId?: string; appSecret?: string; addChat?: string; removeChat?: string; runInApp?: boolean; env?: Record<string, string | undefined>; }) => Promise<{ written: string[]; }>
@@ -919,16 +1080,30 @@
     cwd?: string | undefined
     location?: ExecutionLocation | undefined
     model?: ModelInput | undefined
-    scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
     unattended?: boolean | undefined
   type SessionPersistence = | { type: 'file'; path: string }
       | { type: 'memory' }
-  interface SessionScope
-    readonly dataDir: string
-    readonly id: string
-    readonly kind: "private" | "shared"
+  interface SessionRecord
+    archived: boolean
+    createdAt: string
+    discoveredTools: string[]
+    driver: string
+    externalSessionId: string | null
+    followupStreak: number
+    id: string
+    kind: SessionKind
+    leafMessageId: string | null
+    location: ExecutionLocation | null
+    model: string | null
+    name: string | null
+    parentSessionId: string | null
+    projectId: string | null
+    state: SessionState
+    thinkingLevel: string | null
+    updatedAt: string
+    waitingReason: string | null
   interface SessionSearchHit
     id: string
     match: string
@@ -936,6 +1111,12 @@
     type: "session_shutdown"
   interface SessionStartEvent
     type: "session_start"
+  interface SessionStatusInfo
+    activeRunId: string | null
+    pendingApprovals: number
+    runningJobs: number
+    session: SessionRecord
+    usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number; }
   interface SessionSummary
     archived?: boolean | undefined
     channel?: string | undefined
@@ -1018,6 +1199,16 @@
       toolName: string
       delta: string
       }
+  type StreamDeltaListener = (delta: StreamDeltaEvent) => void
+  interface SubscriptionRecord
+    createdAt: string
+    creatorId: string | null
+    creatorName: string | null
+    eventKey: string
+    id: string
+    projectId: string | null
+    sessionId: string
+    source: string
   type TextContent = TextPart
   type ThinkingLevel = | 'off'
       | 'minimal'
@@ -1030,6 +1221,28 @@
     providerOptions?: ProviderOptions | undefined
     text: string
     type: "thinking"
+  type TimerKind = 'routine' | 'followup'
+  interface TimerRecord
+    channel: string | null
+    createdAt: string
+    creatorId: string | null
+    creatorName: string | null
+    enabled: boolean
+    id: string
+    kind: TimerKind
+    lastFiredAt: string | null
+    message: string
+    nextFireAt: string | null
+    projectId: string | null
+    schedule: RoutineSchedule
+    scheduleUpdatedAt: string | null
+    sessionId: string | null
+    timezone: string
+    updatedAt: string
+  interface TimerTarget
+    channel: string
+    externalChatId: string
+    threadId?: string | undefined
   function todo: () => VelaExtension
   interface ToolAnnotations
     destructiveHint?: boolean | undefined
@@ -1072,7 +1285,6 @@
   interface ToolContext
     onUpdate?: ((partialResult: unknown) => void) | undefined
     requireEnv?: ((signal?: AbortSignal) => Promise<ExecutionEnv>) | undefined
-    scope?: Readonly<SessionScope> | undefined
     sessionId?: string | undefined
     signal?: AbortSignal | undefined
     toolCallId?: string | undefined
@@ -1162,6 +1374,28 @@
     oldLeafId: string | null
     targetId: string
     userWantsSummary: boolean
+  interface UpdateProjectInput
+    archived?: boolean | undefined
+    config?: Record<string, unknown> | null | undefined
+    cwd?: string | null | undefined
+    dataDir?: string | null | undefined
+    defaultDriver?: string | undefined
+    defaultLocation?: ExecutionLocation | null | undefined
+    defaultModel?: string | null | undefined
+    defaultThinkingLevel?: string | null | undefined
+    defaultTools?: string[] | null | undefined
+    hubSessionId?: string | null | undefined
+    name?: string | undefined
+  interface UpsertChannelBindingInput
+    channel: string
+    config?: Record<string, unknown> | undefined
+    enabled?: boolean | undefined
+    externalId: string
+    id?: string | undefined
+    kind: ChannelBindingKind
+    projectId?: string | null | undefined
+    sessionId?: string | null | undefined
+    threadId?: string | null | undefined
   function usableModel: (options: { providers: Record<string, ProviderDefinition>; credentials: CredentialStore; model?: string; }) => { usable: boolean; reason?: "no-model" | "missing-credential"; provider?: string; }
   interface UsageTotals
     baselineCost?: number | undefined
@@ -1185,8 +1419,8 @@
     listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
     loginProviders: () => LoginProvider[]
-    logout: (provider: string, options?: { signal?: AbortSignal; onNotice?: (text: string) => void; }) => Promise<boolean>
-    models: (options?: { all?: boolean; }) => ModelInfo[]
+    logout: (provider: string, options?: LogoutOptions) => Promise<LogoutResult>
+    models: (options?: { all?: boolean; channel?: string; }) => ModelInfo[]
     publishEvent: (event: ChannelEvent) => Promise<void>
     readonly cwd: string
     readonly dataDir: string
@@ -1404,6 +1638,25 @@
       | ToolResultPart
       | ToolApprovalRequestPart
       | ToolApprovalResponsePart
+  interface VelaRuntime
+    dispose: () => Promise<void>
+    loginProviders: () => Promise<LoginProvider[]>
+    logout: (provider: string, options?: LogoutOptions) => Promise<LogoutResult>
+    models: (options?: { all?: boolean; channel?: string; }) => Promise<ModelInfo[]>
+    prompt: (sessionId: string, input: RuntimePromptInput) => Promise<{ eventId: string; inserted: boolean; }>
+    readonly agentDir: string
+    readonly approvals: { list(sessionId?: string): Promise<ApprovalRecord[]>; resolve(input: { approvalId: string; decision: "approved" | "denied" | "cancelled"; reason?: string; decidedBy?: string; }): Promise<{ approval: ApprovalRecord; shouldWake: boolean; }>; }
+    readonly bindings: { list(filter?: { channel?: string; projectId?: string; enabledOnly?: boolean; }): Promise<ChannelBinding[]>; get(id: string): Promise<ChannelBinding | undefined>; upsert(input: UpsertChannelBindingInput): Promise<ChannelBinding>; setEnabled(id: string, enabled: boolean): Promise<ChannelBinding | undefined>; remove(id: string): Promise<boolean>; }
+    readonly blobs: { get(id: string): Promise<BlobRecord | undefined>; list(sessionId: string, direction?: BlobDirection): Promise<BlobRecord[]>; read(id: string): Promise<Uint8Array>; storeInbound(input: { id?: string; sessionId?: string | null; projectId?: string | null; messageId?: string | null; filename: string; mimeType?: string; bytes?: Uint8Array; hostPath?: string; }): Promise<BlobRecord>; }
+    readonly events: { list(options?: { sessionId?: string; projectId?: string; afterSeq?: number; limit?: number; }): Promise<RuntimeEvent[]>; bufferedDeltas(sessionId: string): Promise<StreamDeltaEvent[]>; subscribe(listener: RuntimeEventListener): () => void; subscribeDeltas(listener: StreamDeltaListener): () => void; }
+    readonly projects: { list(options?: { includeArchived?: boolean; }): Promise<ProjectRecord[]>; get(id: string): Promise<ProjectRecord | undefined>; getByCwd(cwd: string): Promise<ProjectRecord | undefined>; create(input: CreateProjectInput): Promise<ProjectRecord>; update(id: string, patch: UpdateProjectInput): Promise<ProjectRecord>; remove(id: string, options?: { deleteSessions?: boolean; }): Promise<boolean>; }
+    readonly sessions: { list(options?: { projectId?: string | null; includeArchived?: boolean; }): Promise<SessionRecord[]>; get(id: string): Promise<SessionRecord | undefined>; create(input?: CreateSessionInput): Promise<SessionRecord>; rename(id: string, name: string | null): Promise<SessionRecord>; delete(id: string): Promise<boolean>; reset(id: string): Promise<SessionRecord>; status(id: string): Promise<SessionStatusInfo>; messages(input: { sessionId: string; cursor?: string; limit?: number; }): Promise<RuntimeMessagePage>; }
+    readonly subscriptions: { list(filter?: { sessionId?: string; projectId?: string; source?: string; }): Promise<SubscriptionRecord[]>; create(input: { id?: string; source: string; eventKey: string; projectId?: string | null; sessionId: string; creatorId?: string | null; creatorName?: string | null; }): Promise<SubscriptionRecord>; remove(id: string): Promise<boolean>; }
+    readonly timers: { list(filter?: { projectId?: string; sessionId?: string; kind?: TimerKind; enabledOnly?: boolean; }): Promise<TimerRecord[]>; createRoutine(input: { id?: string; projectId?: string | null; sessionId?: string | null; channel?: string | null; target?: TimerTarget; creatorId?: string | null; creatorName?: string | null; message: string; schedule: RoutineSchedule; timezone?: string; nowMs?: number; }): Promise<TimerRecord>; createFollowup(input: { id?: string; sessionId: string; projectId?: string | null; channel?: string | null; target?: TimerTarget; message: string; fireAt: string; creatorId?: string | null; creatorName?: string | null; }): Promise<TimerRecord>; update(id: string, patch: { message?: string; schedule?: RoutineSchedule; timezone?: string; enabled?: boolean; nowMs?: number; }): Promise<TimerRecord | undefined>; delete(id: string): Promise<boolean>; }
+    recover: () => Promise<RuntimeRecoverySummary>
+    steer: (sessionId: string, text: string) => Promise<void>
+    stop: (sessionId: string, reason?: string) => Promise<boolean>
+    waitForIdle: (sessionId?: string) => Promise<void>
   class VelaSession
     abort: (reason?: unknown) => Promise<void>
     abortBash: () => void
@@ -1434,7 +1687,6 @@
     get parentSession: string | undefined
     get persistence: SessionPersistence
     get queue: { steering: string[]; }
-    get scope: Readonly<SessionScope> | undefined
     get thinkingLevel: ThinkingLevel
     get usage: SessionUsage
     getActiveTools: () => string[]
@@ -1644,14 +1896,9 @@
     cwd?: string | undefined
     location?: ExecutionLocation | undefined
     model?: ModelInput | undefined
-    scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
     unattended?: boolean | undefined
-  interface SessionScope
-    readonly dataDir: string
-    readonly id: string
-    readonly kind: "private" | "shared"
   interface SessionShutdownEvent
     type: "session_shutdown"
   interface SessionStartEvent
@@ -1702,7 +1949,6 @@
   interface ToolContext
     onUpdate?: ((partialResult: unknown) => void) | undefined
     requireEnv?: ((signal?: AbortSignal) => Promise<ExecutionEnv>) | undefined
-    scope?: Readonly<SessionScope> | undefined
     sessionId?: string | undefined
     signal?: AbortSignal | undefined
     toolCallId?: string | undefined
@@ -1941,7 +2187,6 @@
     get parentSession: string | undefined
     get persistence: SessionPersistence
     get queue: { steering: string[]; }
-    get scope: Readonly<SessionScope> | undefined
     get thinkingLevel: ThinkingLevel
     get usage: SessionUsage
     getActiveTools: () => string[]

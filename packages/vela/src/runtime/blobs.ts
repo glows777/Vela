@@ -393,6 +393,14 @@ export class BlobStore {
     return row ? rowToRecord(row) : undefined
   }
 
+  async readBytes(id: string, signal?: AbortSignal): Promise<Uint8Array> {
+    const record = this.get(id)
+    if (!record) {
+      throw new Error(`Blob ${id} not found`)
+    }
+    return readCanonicalHostBytes(record.storagePath, signal)
+  }
+
   /** Creates a child-session-owned inbound copy of an existing blob visible to the caller. */
   async cloneForSession(
     blobId: string,
