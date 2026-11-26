@@ -116,6 +116,7 @@ export interface DriverTurnRequest {
   onDelta: (delta: StreamDeltaEvent) => void
   onEvent: (payload: RuntimeEventPayload) => void
   wakeSession?: (sessionId: string) => void
+  flushOutbox?: () => void
   /**
    * Optional hook invoked inside TX1 when the driver commits a final no-tool
    * assistant response, allowing Runtime to close `runs`, `sessions`,

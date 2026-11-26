@@ -300,6 +300,7 @@ export function cleanupFailedVelaInit(
   ephemeral: boolean,
   dataDir: string,
 ): void {
+  unregisterMemoryDatabase(dataDir, db)
   if (ownsDb && db.open) db.close()
   if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
 }

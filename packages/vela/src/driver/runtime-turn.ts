@@ -9,10 +9,16 @@ import type { ExecutionEnv } from './execution/types.ts'
 import { type DreamScope, dreamKvKey, MemoryDream } from './memory/dream.ts'
 import type { AssistantModelMessage, ModelMessage } from './messages.ts'
 import {
+  expandPromptTemplate,
+  type PromptTemplate,
+} from './prompt/templates.ts'
+import {
   formatRuntimeMemoryContent,
   lastActiveCustomMessageText,
 } from './runtime-resources.ts'
 import type { SessionStore } from './session/index.ts'
+import { expandEnvironmentSkill } from './skills/environment-skills.ts'
+import type { SkillDefinition } from './skills/loader.ts'
 import type { TokenTracker } from './usage/tracker.ts'
 
 export function assistantText(msg: AssistantModelMessage | undefined): string {
@@ -24,42 +30,114 @@ export function assistantText(msg: AssistantModelMessage | undefined): string {
     .join('')
 }
 
-function formatInboxItemText(item: DriverInboxItem): string {
+async function expandHumanText(
+  text: string,
+  skills: readonly SkillDefinition[] | undefined,
+  promptTemplates: readonly PromptTemplate[] | undefined,
+  resolveEnv: () => Promise<ExecutionEnv>,
+  signal: AbortSignal,
+): Promise<string> {
+  if (skills?.length && text.startsWith('/skill:')) {
+    const expanded = await expandEnvironmentSkill(
+      text,
+      skills,
+      await resolveEnv(),
+      signal,
+    )
+    if (expanded !== undefined) return expanded
+  }
+  if (promptTemplates?.length && text.startsWith('/')) {
+    const expanded = expandPromptTemplate(text, promptTemplates)
+    if (expanded !== undefined) return expanded
+  }
+  return text
+}
+
+async function formatInboxItemText(
+  item: DriverInboxItem,
+  options: {
+    skills?: readonly SkillDefinition[]
+    promptTemplates?: readonly PromptTemplate[]
+    resolveEnv: () => Promise<ExecutionEnv>
+    signal: AbortSignal
+  },
+): Promise<{ text: string; humanText?: string }> {
   const p = item.payload
   if (item.source === 'timer') {
     const kind = p.kind === 'followup' ? 'Follow-up timer' : 'Scheduled routine'
-    return `[${kind}] ${String(p.message ?? '')}`
+    return { text: `[${kind}] ${String(p.message ?? '')}` }
   }
   if (item.source === 'webhook') {
     const header = `[Event ${String(p.eventSource ?? 'webhook')}:${String(p.eventKey ?? '')}] ${String(p.summary ?? '')}`
-    return p.details ? `${header}\n${String(p.details)}` : header
+    return { text: p.details ? `${header}\n${String(p.details)}` : header }
   }
   if (item.source === 'job') {
-    return String(p.text ?? '')
+    return { text: String(p.text ?? '') }
   }
   if (item.source === 'approval' && p.waitForInput === true) {
-    return String(p.comment ?? p.decision ?? '')
+    const reason =
+      typeof p.reason === 'string' && p.reason.trim()
+        ? p.reason.trim()
+        : typeof p.comment === 'string' && p.comment.trim()
+          ? p.comment.trim()
+          : ''
+    const decision =
+      typeof p.decision === 'string' && p.decision.trim()
+        ? p.decision.trim()
+        : ''
+    const combined =
+      reason && decision && reason !== decision
+        ? `[User decision: ${decision}]\n${reason}`
+        : reason || decision
+    return { text: combined, humanText: combined || undefined }
   }
   if (item.source === 'channel') {
     const sender = typeof p.senderName === 'string' ? p.senderName : 'User'
-    const prefix = item.passive
-      ? `[Passive group message from ${sender}] `
-      : `${sender}: `
-    return `${prefix}${String(p.text ?? '')}`
+    if (item.passive) {
+      return {
+        text: `[Passive group message from ${sender}] ${String(p.text ?? '')}`,
+      }
+    }
+    if (p.type === 'session_forward') {
+      return { text: `${sender}: ${String(p.text ?? '')}` }
+    }
+    const rawBody = String(p.text ?? '')
+    const body = await expandHumanText(
+      rawBody,
+      options.skills,
+      options.promptTemplates,
+      options.resolveEnv,
+      options.signal,
+    )
+    const formatted = `${sender}: ${body}`
+    return { text: formatted, humanText: formatted }
+  }
+  if (item.source === 'user') {
+    const rawBody = String(p.text ?? '')
+    const expanded = await expandHumanText(
+      rawBody,
+      options.skills,
+      options.promptTemplates,
+      options.resolveEnv,
+      options.signal,
+    )
+    return { text: expanded, humanText: expanded || undefined }
   }
   if (!item.wake) {
-    return `[Background note] ${String(p.text ?? '')}`
+    return { text: `[Background note] ${String(p.text ?? '')}` }
   }
-  return String(p.text ?? '')
+  return { text: String(p.text ?? '') }
 }
 
 export function extractInputMeta(inputs: readonly DriverInboxItem[]): {
   replyToMessageId?: string
   handoffDepth?: number
+  humanProvenance?: { inboxEventId: string; senderName?: string }
   attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
 } {
   let replyToMessageId: string | undefined
   let handoffDepth = 0
+  let humanProvenance: { inboxEventId: string; senderName?: string } | undefined
   const attachments: Array<{
     blobId: string
     name: string
@@ -71,6 +149,19 @@ export function extractInputMeta(inputs: readonly DriverInboxItem[]): {
       replyToMessageId = p.replyToMessageId
     } else if (typeof p.messageId === 'string') {
       replyToMessageId = p.messageId
+    }
+    if (
+      item.source === 'user' ||
+      (item.source === 'channel' &&
+        !item.passive &&
+        p.type !== 'session_forward')
+    ) {
+      humanProvenance = {
+        inboxEventId: item.id,
+        ...(typeof p.senderName === 'string' && p.senderName
+          ? { senderName: p.senderName }
+          : {}),
+      }
     }
     const depth = Number(p.depth ?? p.handoffDepth ?? 0)
     if (Number.isFinite(depth) && depth > handoffDepth) {
@@ -94,6 +185,7 @@ export function extractInputMeta(inputs: readonly DriverInboxItem[]): {
   return {
     replyToMessageId,
     handoffDepth,
+    humanProvenance,
     attachments: attachments.length > 0 ? attachments : undefined,
   }
 }
@@ -114,7 +206,9 @@ export async function prepareRuntimeTurnMessages(options: {
   }
   resolveEnv: () => Promise<ExecutionEnv>
   signal: AbortSignal
-}): Promise<void> {
+  skills?: readonly SkillDefinition[]
+  promptTemplates?: readonly PromptTemplate[]
+}): Promise<{ userEntryId?: string; hasHumanText: boolean }> {
   const {
     db,
     blobs,
@@ -126,6 +220,8 @@ export async function prepareRuntimeTurnMessages(options: {
     memoryStores,
     resolveEnv,
     signal,
+    skills,
+    promptTemplates,
   } = options
 
   if (memoryActive) {
@@ -170,11 +266,18 @@ export async function prepareRuntimeTurnMessages(options: {
   const usableInputs = request.inputs.filter(
     (item) => item.source !== 'approval' || item.payload.waitForInput === true,
   )
-  if (usableInputs.length === 0) return
+  if (usableInputs.length === 0) return { hasHumanText: false }
 
   const lines: string[] = []
+  const humanLines: string[] = []
   for (const item of usableInputs) {
-    let line = formatInboxItemText(item)
+    const formatted = await formatInboxItemText(item, {
+      skills,
+      promptTemplates,
+      resolveEnv,
+      signal,
+    })
+    let line = formatted.text
     const atts = item.payload.attachments as
       | Array<{ blobId: string; name: string }>
       | undefined
@@ -195,15 +298,22 @@ export async function prepareRuntimeTurnMessages(options: {
         : attachmentLines.join('\n')
     }
     if (line) lines.push(line)
+    if (formatted.humanText) humanLines.push(formatted.humanText)
   }
-  if (lines.length === 0) return
+  if (lines.length === 0) return { hasHumanText: false }
 
+  const dreamHumanText = humanLines.join('\n\n')
   const userMsg: ModelMessage = {
     role: 'user',
     content: lines.join('\n\n'),
   }
+  let userEntryId: string | undefined
   store.runInTransaction(() => {
-    const entry = store.appendMessage(userMsg, { runId: request.runId })
+    const entry = store.appendMessage(userMsg, {
+      runId: request.runId,
+      ...(dreamHumanText ? { details: { dreamHumanText } } : {}),
+    })
+    userEntryId = entry.id
     request.onEvent({
       type: 'message_committed',
       runId: request.runId,
@@ -213,6 +323,7 @@ export async function prepareRuntimeTurnMessages(options: {
   })
   messages.push(userMsg)
   tracker.addMessage(userMsg)
+  return { userEntryId, hasHumanText: Boolean(dreamHumanText) }
 }
 
 export function createRuntimeEventForwarder(
@@ -307,6 +418,9 @@ export function scheduleRuntimeAutoDream(options: {
   localStore: MemoryStore
   projectId: string | null
   sessionId: string
+  userEntryId?: string
+  hasHumanText?: boolean
+  dreamEnabled?: boolean
   resolved: ResolvedModel
   tracker: TokenTracker
   logger: VelaLogger
@@ -320,7 +434,12 @@ export function scheduleRuntimeAutoDream(options: {
     dream = new MemoryDream(options.localStore, options.db, dreamScope)
     options.activeDreams.set(key, dream)
   }
-  if (!dream.due()) return
+  if (options.hasHumanText && options.userEntryId) {
+    dream.recordMessages(options.sessionId, [
+      { messageId: options.userEntryId, time: Date.now() },
+    ])
+  }
+  if (options.dreamEnabled === false || !dream.due()) return
   void dream
     .run({
       sessionId: options.sessionId,

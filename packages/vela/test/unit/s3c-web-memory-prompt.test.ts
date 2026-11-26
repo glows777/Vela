@@ -9,6 +9,11 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase } from '../../src/db/sqlite.ts'
+import {
+  ContextManager,
+  createRequestSnapshot,
+} from '../../src/driver/context/manager.ts'
+import type { ExecutionEnv } from '../../src/driver/execution/types.ts'
 import { createMemoryTool } from '../../src/driver/extensions/memory/tool.ts'
 import {
   serperSearchTool,
@@ -19,8 +24,11 @@ import { MemoryDream, readDreamKvState } from '../../src/driver/memory/dream.ts'
 import { rules } from '../../src/driver/prompt/index.ts'
 import { createVelaAgentDriver } from '../../src/driver/runtime-adapter.ts'
 import { runtimeToolModifiers } from '../../src/driver/runtime-prompt.ts'
+import { SessionStore } from '../../src/driver/session/index.ts'
 import { ToolRegistry } from '../../src/driver/tools/registry.ts'
+import { TokenTracker } from '../../src/driver/usage/tracker.ts'
 import { createVela } from '../../src/driver/vela.ts'
+import { enqueueInboxEvent } from '../../src/runtime/inbox.ts'
 import {
   EnvironmentRegistry,
   VelaRuntimeEngine,
@@ -328,7 +336,7 @@ test('MemoryDream in Runtime uses vela.db kv_meta + vela_messages cursor with ze
     expect(existsSync(join(root, 'memory', '.dream'))).toBe(false)
 
     const kv = readDreamKvState(db, dream.kvKey)
-    expect(kv.cursorRowId).toBeGreaterThan(0)
+    expect(kv.cursorSeq).toBeGreaterThan(0)
     expect(kv.logs).toHaveLength(1)
   } finally {
     await runtime.dispose()
@@ -392,4 +400,227 @@ test('VelaAgentDriver injects initial [memory] index before user turn and system
   expect(renderedRules).toContain('Keep responses concise and proportional')
   mkdirSync(join(root, 'noop'), { recursive: true })
   writeFileSync(join(root, 'noop', 'ok'), '1')
+})
+
+test('memorySlug hashes >64-char collisions, save updates matching type+name, frontmatter handles numeric/colon headers, and projectId rejects dot segments', async () => {
+  const root = tempDir('vela-r1-mem-')
+  const store = new MemoryStore(join(root, 'memory'), undefined, root)
+  const prefix = 'a'.repeat(64)
+  const f1 = store.save({
+    name: `${prefix}-one`,
+    description: 'first',
+    type: 'project',
+    content: 'first content',
+  })
+  const f2 = store.save({
+    name: `${prefix}-two`,
+    description: 'second',
+    type: 'project',
+    content: 'second content',
+  })
+  expect(f1).not.toBe(f2)
+
+  // Numeric & colon frontmatter roundtrip
+  store.save({
+    name: '123',
+    description: '2026-01-01',
+    type: 'user',
+    content: 'numeric name body',
+  })
+  writeFileSync(
+    join(root, 'memory', 'project_legacy-colon.md'),
+    '---\nname: Release: candidate\ndescription: Legacy header\ntype: project\n---\n\nlegacy colon body\n',
+  )
+  const names = store.list().map((e) => e.name)
+  expect(names).toContain('123')
+  expect(names).toContain('Release: candidate')
+
+  // Updating legacy/punctuation name updates same file instead of duplicating
+  const updatedLegacyFile = store.save({
+    name: 'Release: candidate',
+    description: 'Updated description',
+    type: 'project',
+    content: 'updated colon body',
+  })
+  expect(updatedLegacyFile).toBe('project_legacy-colon.md')
+  expect(
+    store.list().filter((e) => e.name === 'Release: candidate'),
+  ).toHaveLength(1)
+
+  // projectId rejects path traversal in resolveMemoryDirs and ProjectStore.create
+  expect(() => resolveMemoryDirs(root, '..')).toThrow(/Invalid projectId/)
+  const db = openDatabase({ path: join(root, 'vela.db') })
+  try {
+    const runtime = new VelaRuntimeEngine({ db, agentDir: root })
+    expect(() =>
+      runtime.projects.create({ id: '../escape', name: 'bad', cwd: root }),
+    ).toThrow(/Invalid projectId/)
+    await runtime.dispose()
+  } finally {
+    db.close()
+  }
+
+  // lintAsync checks paths through ExecutionEnv rather than host filesystem
+  store.save({
+    name: 'env-ref',
+    description: 'references guest file',
+    type: 'project',
+    content: 'Check src/guest-only.ts for details.',
+  })
+  const tool = createMemoryTool(store)
+  const envReport = (await tool.execute(
+    { action: 'lint' },
+    {
+      requireEnv: async () =>
+        ({
+          cwd: '/guest',
+          async absolutePath(p: string) {
+            return { ok: true as const, value: `/guest/${p}` }
+          },
+          async exists(p: string) {
+            return {
+              ok: true as const,
+              value: p === '/guest/src/guest-only.ts',
+            }
+          },
+        }) as unknown as ExecutionEnv,
+    },
+  )) as string
+  expect(envReport).not.toContain('src/guest-only.ts')
+})
+
+test('MemoryDream isolates scopes, excludes disabled/non-human turns, ignores rowid reuse, imports legacy .dream once, and overflow compaction keeps memory message', async () => {
+  const root = tempDir('vela-r1-dream-')
+  const db = openDatabase({ path: join(root, 'vela.db') })
+
+  // Pre-seed legacy .dream directory for read-only one-time migration check
+  const legacyDir = join(root, 'legacy-mem')
+  mkdirSync(join(legacyDir, '.dream'), { recursive: true })
+  writeFileSync(
+    join(legacyDir, '.dream', 'inbox.jsonl'),
+    `${JSON.stringify({ id: 'old-1', sessionId: 's-old', time: 1000, user: 'Old preference fact', tools: ['read'] })}\n`,
+  )
+  writeFileSync(
+    join(legacyDir, '.dream', 'log.md'),
+    '# Dream Log\n\n## 2026-01-01T00:00:00.000Z\n[dream] 1 changes. Migrated note.\n',
+  )
+  writeFileSync(
+    join(legacyDir, '.dream', 'state.json'),
+    JSON.stringify({
+      lastRun: { time: 1000, changes: 1, report: 'ok', inboxLength: 1 },
+    }),
+  )
+
+  try {
+    const legacyStore = new MemoryStore(legacyDir)
+    const migratedDream = new MemoryDream(legacyStore, db, {
+      kind: 'tagged',
+      key: `dir:${legacyDir}`,
+    })
+    const initialAudit = migratedDream.auditState()
+    expect(initialAudit.pendingTurns.map((t) => t.user)).toContain(
+      'Old preference fact',
+    )
+    expect(initialAudit.logs).toHaveLength(1)
+
+    // Global Dream must ignore private tagged SDK sessions and non-human Runtime turns
+    const runtime = new VelaRuntimeEngine({ db, agentDir: root })
+    const model = createFauxModel({
+      responses: [fauxText('Child brief acknowledged')],
+    })
+    runtime.registerDriver(
+      createVelaAgentDriver({
+        db,
+        agentDir: root,
+        blobs: runtime.blobs,
+        environments: runtime.environments,
+        defaultModel: model,
+        dreamEnabled: false,
+      }),
+    )
+
+    // Non-human Runtime turn (`session` source)
+    const p = runtime.projects.create({ name: 'p', cwd: root })
+    const child = runtime.sessions.create({
+      projectId: p.id,
+      kind: 'work',
+      location: { environment: 'local', cwd: root },
+    })
+    enqueueInboxEvent(db, {
+      sessionId: child.id,
+      projectId: p.id,
+      source: 'session',
+      wake: true,
+      payload: {
+        type: 'session_start',
+        title: 'Task',
+        text: 'Assistant brief text',
+      },
+    })
+    runtime.scheduleSession(child.id)
+    await runtime.waitForIdle(child.id)
+
+    const projDream = new MemoryDream(
+      new MemoryStore(join(root, 'projects', p.id, 'memory')),
+      db,
+      { kind: 'project', projectId: p.id },
+    )
+    expect(projDream.auditState().pendingTurns).toHaveLength(0)
+
+    const globalDream = new MemoryDream(
+      new MemoryStore(join(root, 'memory')),
+      db,
+      { kind: 'global' },
+    )
+    const store = new SessionStore('comp-1', db, {
+      blobsDir: join(root, 'blobs'),
+    })
+    const memMsg = {
+      role: 'user' as const,
+      content: '[memory]\nKeep this note',
+    }
+    const oldUser = { role: 'user' as const, content: 'old question' }
+    const oldAssistant = {
+      role: 'assistant' as const,
+      content: 'old answer '.repeat(200),
+    }
+    const turnUser = { role: 'user' as const, content: 'Final question' }
+    store.runInTransaction(() => {
+      store.appendCustomMessage(memMsg, {
+        customType: 'memory',
+        display: false,
+      })
+      store.appendMessage(oldUser)
+      store.appendMessage(oldAssistant)
+      store.appendMessage(turnUser)
+    })
+    const tracker = new TokenTracker()
+    const messages = [memMsg, oldUser, oldAssistant, turnUser]
+    const cm = new ContextManager(
+      store,
+      tracker,
+      { messages, timestamps: new Map(), summary: '' },
+      () => {},
+      { maxInputTokens: 200 },
+    )
+    const summaryModel = createFauxModel({
+      responses: [fauxText('## Goal\nKeep going')],
+    })
+    await cm.compact(
+      createRequestSnapshot(
+        summaryModel,
+        'sys',
+        { sdkTools: {}, toolDefinitions: [], hasHostedTools: false },
+        messages,
+      ),
+      undefined,
+      'overflow',
+    )
+    expect(messages.some((m) => m === memMsg)).toBe(true)
+
+    expect(globalDream.auditState().pendingTurns).toHaveLength(0)
+    await runtime.dispose()
+  } finally {
+    db.close()
+  }
 })

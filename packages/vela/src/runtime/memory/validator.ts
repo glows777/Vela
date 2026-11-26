@@ -50,25 +50,64 @@ function validateEntry(
   return issues
 }
 
+function buildDuplicateCounts<T extends ValidatableEntry>(
+  entries: readonly T[],
+): Map<string, number> {
+  const nameCount = new Map<string, number>()
+  for (const e of entries) {
+    nameCount.set(e.name, (nameCount.get(e.name) || 0) + 1)
+  }
+  return nameCount
+}
+
+function appendDuplicateIssue<T extends ValidatableEntry>(
+  entry: T,
+  issues: ValidationIssue[],
+  nameCount: ReadonlyMap<string, number>,
+): void {
+  const count = nameCount.get(entry.name) || 0
+  if (count > 1) {
+    issues.push({
+      kind: 'duplicate_name',
+      message: `${count} memories share this name; consider merging`,
+    })
+  }
+}
+
 export function lintAll<T extends ValidatableEntry>(
   entries: T[],
   baseDir = '.',
 ): ValidationReport<T>[] {
   const reports: ValidationReport<T>[] = []
-
-  const nameCount = new Map<string, number>()
-  for (const e of entries) {
-    nameCount.set(e.name, (nameCount.get(e.name) || 0) + 1)
-  }
+  const nameCount = buildDuplicateCounts(entries)
 
   for (const entry of entries) {
     const issues = validateEntry(entry, baseDir)
-    if ((nameCount.get(entry.name) || 0) > 1) {
-      issues.push({
-        kind: 'duplicate_name',
-        message: `${nameCount.get(entry.name)} memories share this name; consider merging`,
-      })
+    appendDuplicateIssue(entry, issues, nameCount)
+    if (issues.length > 0) reports.push({ entry, issues })
+  }
+
+  return reports
+}
+
+export async function lintAllAsync<T extends ValidatableEntry>(
+  entries: T[],
+  pathExists: (candidate: string) => Promise<boolean>,
+): Promise<ValidationReport<T>[]> {
+  const reports: ValidationReport<T>[] = []
+  const nameCount = buildDuplicateCounts(entries)
+
+  for (const entry of entries) {
+    const issues: ValidationIssue[] = []
+    for (const p of extractPaths(entry.content)) {
+      if (!(await pathExists(p))) {
+        issues.push({
+          kind: 'stale_path',
+          message: `Referenced path does not exist: ${p}`,
+        })
+      }
     }
+    appendDuplicateIssue(entry, issues, nameCount)
     if (issues.length > 0) reports.push({ entry, issues })
   }
 

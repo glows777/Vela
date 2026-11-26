@@ -206,14 +206,7 @@ export async function ingestChannelMessageInRuntime(params: {
     const passive = msg.passive === true
     const wake = msg.wake ?? !passive
     const { event, inserted } = db.transaction(() => {
-      if (wake && !passive && eventBus) {
-        resolveWaitForInputOnUserReplyInTx(db, eventBus, {
-          sessionId: session.id,
-          replyText: msg.text,
-          decidedBy: msg.senderName,
-        })
-      }
-      return enqueueInboxEvent(db, {
+      const enqueued = enqueueInboxEvent(db, {
         sessionId: session.id,
         projectId: binding.projectId,
         source: 'channel',
@@ -235,6 +228,14 @@ export async function ingestChannelMessageInRuntime(params: {
           ...(attachments.length ? { attachments } : {}),
         },
       })
+      if (enqueued.inserted && wake && !passive && eventBus) {
+        resolveWaitForInputOnUserReplyInTx(db, eventBus, {
+          sessionId: session.id,
+          replyText: msg.text,
+          decidedBy: msg.senderName,
+        })
+      }
+      return enqueued
     })
     if (!inserted && attachments.length > 0) {
       for (const att of attachments) {

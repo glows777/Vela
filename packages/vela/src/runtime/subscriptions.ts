@@ -133,12 +133,13 @@ export class SubscriptionManager {
     final?: boolean
     payload?: Record<string, unknown>
   }): { matchedSessionIds: string[]; enqueuedCount: number } {
-    const subs = this.findMatching(input.source, input.eventKey)
     const wakeSessions = new Set<string>()
     let enqueuedCount = 0
 
     this.db.transaction(() => {
+      const subs = this.findMatching(input.source, input.eventKey)
       const seenSessions = new Set<string>()
+      const insertedSessions = new Set<string>()
       for (const sub of subs) {
         if (seenSessions.has(sub.sessionId)) continue
         seenSessions.add(sub.sessionId)
@@ -163,11 +164,14 @@ export class SubscriptionManager {
         if (inserted) {
           enqueuedCount++
           wakeSessions.add(sub.sessionId)
+          insertedSessions.add(sub.sessionId)
         }
       }
-      if (input.final && subs.length > 0) {
+      if (input.final && subs.length > 0 && insertedSessions.size > 0) {
         for (const sub of subs) {
-          this.db.run('DELETE FROM subscriptions WHERE id = ?', sub.id)
+          if (insertedSessions.has(sub.sessionId)) {
+            this.db.run('DELETE FROM subscriptions WHERE id = ?', sub.id)
+          }
         }
       }
     })

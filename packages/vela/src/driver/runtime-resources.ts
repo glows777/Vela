@@ -20,6 +20,7 @@ import { loadEnvironmentTemplates } from './prompt/environment-templates.ts'
 import type { PromptTemplate } from './prompt/templates.ts'
 import type { SessionStore } from './session/index.ts'
 import { messageText } from './session/message-queue.ts'
+import { canonicalEnvironmentPath } from './session/project-config.ts'
 import { loadEnvironmentSkills } from './skills/environment-skills.ts'
 import type { SkillDefinition } from './skills/loader.ts'
 import type { ToolDefinition } from './tools/registry.ts'
@@ -50,9 +51,6 @@ export async function loadTrustedRuntimeResources(options: {
   hostEnv?: Record<string, string | undefined>
   trustOverride?: boolean
 }): Promise<TrustedRuntimeResources> {
-  const trusted =
-    options.trustOverride ??
-    savedTrust(options.db, options.location, options.agentDir) === true
   const contextFiles: ContextFile[] = [...(options.hostContextFiles ?? [])]
   const skillsByName = new Map<string, SkillDefinition>()
   for (const skill of options.hostSkills ?? []) {
@@ -61,6 +59,29 @@ export async function loadTrustedRuntimeResources(options: {
   const templatesByName = new Map<string, PromptTemplate>()
   for (const tpl of options.hostPromptTemplates ?? []) {
     templatesByName.set(tpl.name, tpl)
+  }
+
+  let env: ExecutionEnv | undefined
+  let targetCwd = options.location.cwd
+  let trusted: boolean
+  if (options.trustOverride !== undefined) {
+    trusted = options.trustOverride
+  } else if (options.location.environment === 'local') {
+    trusted =
+      savedTrust(options.db, options.location, options.agentDir) === true
+  } else {
+    env = await options.resolveEnv()
+    targetCwd = await canonicalEnvironmentPath(
+      env,
+      options.location.cwd,
+      options.signal,
+    )
+    trusted =
+      savedTrust(
+        options.db,
+        { environment: options.location.environment, cwd: targetCwd },
+        options.agentDir,
+      ) === true
   }
 
   if (!trusted) {
@@ -72,9 +93,19 @@ export async function loadTrustedRuntimeResources(options: {
     }
   }
 
-  const env = await options.resolveEnv()
+  env ??= await options.resolveEnv()
+  if (
+    options.location.environment !== 'local' &&
+    targetCwd === options.location.cwd
+  ) {
+    targetCwd = await canonicalEnvironmentPath(
+      env,
+      options.location.cwd,
+      options.signal,
+    )
+  }
   const project = await loadProjectSettings(env, {
-    cwd: options.location.cwd,
+    cwd: targetCwd,
     trusted: true,
     agentDir: options.agentDir,
     env: options.hostEnv ?? {},
@@ -82,7 +113,7 @@ export async function loadTrustedRuntimeResources(options: {
   })
   const loadedContext = await loadEnvironmentContextFiles(
     env,
-    options.location.cwd,
+    targetCwd,
     options.signal,
   )
   const seenPaths = new Set(contextFiles.map((f) => f.path))
@@ -95,28 +126,24 @@ export async function loadTrustedRuntimeResources(options: {
 
   const loadedSkills = await loadEnvironmentSkills(
     env,
-    options.location.cwd,
+    targetCwd,
     options.signal,
     false,
     () => {},
     project.skillDirs,
   )
   for (const skill of loadedSkills) {
-    if (!skillsByName.has(skill.name)) {
-      skillsByName.set(skill.name, skill)
-    }
+    skillsByName.set(skill.name, skill)
   }
 
   const loadedTemplates = await loadEnvironmentTemplates(
     env,
-    options.location.cwd,
+    targetCwd,
     options.signal,
     project.promptDirs,
   )
   for (const tpl of loadedTemplates) {
-    if (!templatesByName.has(tpl.name)) {
-      templatesByName.set(tpl.name, tpl)
-    }
+    templatesByName.set(tpl.name, tpl)
   }
 
   return {

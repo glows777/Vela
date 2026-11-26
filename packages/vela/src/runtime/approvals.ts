@@ -285,7 +285,12 @@ export function resolveRuntimeApproval(
         row.run_id,
       ),
     )
-    if (isWaitForInput && !remaining && !hasPendingToolCalls) {
+    if (
+      isWaitForInput &&
+      input.decision !== 'cancelled' &&
+      !remaining &&
+      !hasPendingToolCalls
+    ) {
       db.run(
         `UPDATE runs
          SET status = 'completed', finished_at = COALESCE(finished_at, ?), updated_at = ?
@@ -344,19 +349,23 @@ export function resolveWaitForInputOnUserReplyInTx(
   },
 ): boolean {
   const pending = listRuntimePendingApprovals(db, input.sessionId)
+  if (
+    pending.length === 0 ||
+    pending.some((item) => item.toolName !== 'wait_for_input')
+  ) {
+    return false
+  }
+  const runIds = [...new Set(pending.map((item) => item.runId))]
+  const placeholders = runIds.map(() => '?').join(', ')
   const hasPendingToolCalls = Boolean(
     db.get<{ id: string }>(
       `SELECT id FROM vela_tool_calls
-       WHERE session_id = ? AND status IN ('pending', 'awaiting_approval')
+       WHERE run_id IN (${placeholders}) AND status IN ('pending', 'awaiting_approval')
        LIMIT 1`,
-      input.sessionId,
+      ...runIds,
     ),
   )
-  if (
-    pending.length === 0 ||
-    pending.some((item) => item.toolName !== 'wait_for_input') ||
-    hasPendingToolCalls
-  ) {
+  if (hasPendingToolCalls) {
     return false
   }
   const now = new Date().toISOString()

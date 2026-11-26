@@ -107,19 +107,7 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 
 Extension commands run in every session; an input naming a registered command runs it instead of going to the model.
 
-**Dream.** After an eligible conversation turn, memory appends a bounded record to
-`<store>/.dream/inbox.jsonl`: session ID, time, user input and final assistant text
-(about 2,000 characters per side), plus tool names, never tool output. Only user
-input is evidence for new facts. Assistant text remains in the private inbox for
-compatibility, but is excluded from both the dream model input and the
-query that selects notes. Ambiguous acknowledgements without an explicit user fact
-do not justify a new fact. This removes assistant-only suggestions from the input;
-it does not validate the factual accuracy of arbitrary model output. The inbox is
-capped at about 100 KB, dropping oldest records and counting dropped records.
-It uses the same private file permissions as memory. Only sessions with the `memory` tool available
-contribute; sessions that omit it do not. Local sessions and owner DMs use global memory; a group's
-sessions write only that group's inbox and notes, never another group's or global
-store.
+**Dream.** After an eligible human conversation turn completes with `memory` active, memory records a monotonic sequence reference in `vela.db` (`kv_meta`) pointing to that human message in `vela_messages` (never on-disk `.dream/` files, and never assistant-only turns or background tool outputs): user input plus tool names used in that turn, never tool output. Only human-authored user input is evidence for new facts. Ambiguous acknowledgements without an explicit user fact do not justify a new fact. The evidence inbox is capped at about 100 KB (`MAX_NOTE_CHARS` 16,000 chars per note; `read` supports `offset` and `limit` pagination up to 16,000 chars, default 4,000), dropping oldest records and counting dropped records. Note files on disk keep private `0600`/`0700` permissions, and any pre-existing `.dream/` directory is imported read-only once into `vela.db` on upgrade. Only turns where the `memory` tool is active in the matching scope contribute; disabled turns, project sessions, and private groups never leak into another store or global memory. Local sessions and owner DMs use global memory; a group or project uses only its own isolated Dream cursor and notes.
 
 After a reply settles, automatic dream starts in the background when the inbox
 contains at least 20 turns or a turn older than 24 hours. It does not delay the
@@ -133,7 +121,7 @@ and manual dream require the `memory` tool to be available.
 
 Dream makes one isolated model call with no tools, plus at most one correction
 call. It compares recent conversation
-records with notes and deterministic lint findings, corrects contradicted notes,
+records with notes and deterministic lint findings (checking referenced workspace paths through the session's active execution environment), corrects contradicted notes,
 saves missing durable facts, merges duplicates and condenses the index. Large
 stores provide the index plus notes matched to the inbox within a content budget.
 Each operation names its filename, source session and an optional `reason`; a note's
@@ -153,11 +141,11 @@ the memory store. Before applying any operation, dream checks every full note
 supplied to the model for changes since the snapshot, plus create-target collisions. A live edit or a newly occupied create target skips
 the entire batch and retains the inbox for retry. This keeps a merge source from
 being deleted when its destination could not be updated. The report names the
-conflicting notes. The inbox is consumed only after successful application,
+conflicting notes. The SQLite sequence cursor advances only after successful application,
 preserving turns arriving during the run. Dream messages and tool traces do not enter the user's conversation.
 
 Changed notes retain the last five source session IDs in `sources:` frontmatter.
-`<store>/.dream/log.md` keeps reports for the last 20 runs; a failed run's report also
+The last 20 consolidation reports and latest run status live in `vela.db` (`kv_meta`); a failed run's report also
 keeps the last 500 characters of the model reply. `/memory` marks a failed
 or skipped last run explicitly instead of showing it as an ordinary zero-change run. Dream model usage is
 included in `/usage` and the usage ledger. `/memory` exposes the latest run and

@@ -208,6 +208,7 @@ export class OutboxDispatcher {
       channel: string,
     ) => ChannelAdapter | undefined,
     private readonly onScheduleChanged?: () => void,
+    private readonly onTopicBound?: (sessionId: string) => void,
   ) {}
 
   recoverStaleSending(): number {
@@ -341,6 +342,15 @@ export class OutboxDispatcher {
 
       try {
         const result = await adapter.deliver(message)
+        const topicThreadId =
+          row.kind === 'topic_start'
+            ? (result.threadId ?? result.rootId ?? result.externalMessageId)
+            : undefined
+        if (row.kind === 'topic_start' && !topicThreadId) {
+          throw new Error(
+            'Channel adapter returned no threadId, rootId, or externalMessageId for topic_start',
+          )
+        }
         const sentAt = new Date().toISOString()
         const applied = this.db.transaction(() => {
           const leaseRow = this.db.get<{ value_json: string }>(
@@ -368,16 +378,22 @@ export class OutboxDispatcher {
             row.id,
             row.attempt,
           )
-          if (updated.changes === 1 && row.kind === 'topic_start') {
-            const threadId = result.threadId ?? result.externalMessageId
-            if (threadId) {
-              syncTopicBindingOnDeliveryInTx(this.db, row, threadId, sentAt)
-            }
+          if (
+            updated.changes === 1 &&
+            row.kind === 'topic_start' &&
+            topicThreadId
+          ) {
+            syncTopicBindingOnDeliveryInTx(this.db, row, topicThreadId, sentAt)
           }
           this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
           return updated.changes === 1
         })
-        if (applied) delivered++
+        if (applied) {
+          delivered++
+          if (row.kind === 'topic_start') {
+            this.onTopicBound?.(row.sessionId)
+          }
+        }
       } catch (error) {
         const attempt = row.attempt + 1
         const errorText = error instanceof Error ? error.message : String(error)

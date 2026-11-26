@@ -40,6 +40,7 @@ export function createRuntimeMcpAdapter(
       registry,
       agentDir,
       cwd,
+      environment,
       trusted,
       env,
       waitMs = DIRECT_WAIT_MS,
@@ -49,7 +50,7 @@ export function createRuntimeMcpAdapter(
       const loaded = loadMcpServers({
         agentDir,
         projectDir: join(cwd, '.vela'),
-        trusted,
+        trusted: trusted && environment === 'local',
         env: mergedEnv,
       })
       const { entries, errors } = parseServers(loaded.servers, loaded.sources)

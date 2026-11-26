@@ -1,11 +1,13 @@
 import { basename, isAbsolute, relative, sep, win32 } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
 import type { ExecutionEnv } from '../shared/execution.ts'
-import { createApprovalRequest } from './approvals.ts'
-import type { BlobStore } from './blobs.ts'
-import type { ChannelBinding } from './channels.ts'
 import {
-  ChannelBindingStore,
+  createApprovalRequest,
+  listRuntimePendingApprovals,
+  resolveWaitForInputOnUserReplyInTx,
+} from './approvals.ts'
+import type { BlobStore } from './blobs.ts'
+import {
   ProjectStore,
   type SessionRecord,
   SessionStoreControl,
@@ -13,7 +15,10 @@ import {
 import type { RuntimeEventBus } from './event-bus.ts'
 import { enqueueInboxEvent } from './inbox.ts'
 import { enqueueOutboxInTx } from './outbox.ts'
-import { resolveOutboxTargetInDb } from './worker.ts'
+import {
+  recordChildStatusNoteForHubInTx,
+  resolveOutboxTargetInDb,
+} from './worker.ts'
 
 const MAX_HANDOFF_DEPTH = 3
 
@@ -63,14 +68,55 @@ function requireProjectSession(
   return { sessions, projects, caller, project }
 }
 
-function findProjectRootBinding(
+function resolveRootBindingForCaller(
   db: VelaDatabase,
   projectId: string,
-): ChannelBinding | undefined {
-  const bindings = new ChannelBindingStore(db)
-  return bindings
-    .list({ projectId, enabledOnly: true })
-    .find((binding) => !binding.threadId)
+  callerRunId?: string,
+): { channel: string; externalId: string } | undefined {
+  if (callerRunId) {
+    const stored = db.get<{ value_json: string }>(
+      'SELECT value_json FROM kv_meta WHERE key = ?',
+      `run_target:${callerRunId}`,
+    )
+    if (stored) {
+      try {
+        const target = JSON.parse(stored.value_json) as {
+          channel?: string
+          externalChatId?: string
+        }
+        if (target.channel && target.externalChatId) {
+          const matchingRoot = db.get<{
+            channel: string
+            external_id: string
+          }>(
+            `SELECT channel, external_id FROM channel_bindings
+             WHERE project_id = ? AND channel = ? AND external_id = ? AND thread_id IS NULL AND enabled = 1
+             ORDER BY created_at ASC LIMIT 1`,
+            projectId,
+            target.channel,
+            target.externalChatId,
+          )
+          if (matchingRoot) {
+            return {
+              channel: matchingRoot.channel,
+              externalId: matchingRoot.external_id,
+            }
+          }
+        }
+      } catch {
+        /* fall back to project root binding */
+      }
+    }
+  }
+  const fallback = db.get<{ channel: string; external_id: string }>(
+    `SELECT channel, external_id FROM channel_bindings
+     WHERE project_id = ? AND thread_id IS NULL AND enabled = 1
+     ORDER BY created_at ASC LIMIT 1`,
+    projectId,
+  )
+  return fallback
+    ? { channel: fallback.channel, externalId: fallback.external_id }
+    : undefined
 }
 
 export function getActiveChannelForSession(
@@ -102,18 +148,20 @@ export interface ControlOpsContext {
   blobs: BlobStore
   eventBus: RuntimeEventBus
   scheduleSession: (sessionId: string) => void
+  flushOutbox?: () => void
 }
 
-export function startProjectSession(
+export async function startProjectSession(
   ctx: ControlOpsContext,
   input: {
     callerSessionId: string
+    callerRunId?: string
     title: string
     brief: string
     replyToMessageId?: string
     attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
   },
-): { sessionId: string; kind: 'topic' | 'work'; title: string } {
+): Promise<{ sessionId: string; kind: 'topic' | 'work'; title: string }> {
   const title = input.title.trim()
   const brief = input.brief.trim()
   if (!title) throw new Error('title must not be empty')
@@ -128,54 +176,92 @@ export function startProjectSession(
     throw new Error('Only the project hub session can start child sessions')
   }
 
-  const rootBinding = findProjectRootBinding(ctx.db, project.id)
+  const rootBinding = resolveRootBindingForCaller(
+    ctx.db,
+    project.id,
+    input.callerRunId,
+  )
   const childKind: 'topic' | 'work' = rootBinding ? 'topic' : 'work'
 
-  const child = ctx.db.transaction(() => {
-    const created = sessions.create({
-      projectId: project.id,
-      kind: childKind,
-      name: title,
-      parentSessionId: caller.id,
-    })
-
-    enqueueInboxEvent(ctx.db, {
-      sessionId: created.id,
-      projectId: project.id,
-      source: rootBinding ? 'channel' : 'session',
-      wake: true,
-      payload: {
-        type: 'session_start',
-        title,
-        text: brief,
-        callerSessionId: caller.id,
-        ...(rootBinding
-          ? {
-              channel: rootBinding.channel,
-              externalChatId: rootBinding.externalId,
-            }
-          : {}),
-        ...(input.attachments?.length
-          ? { attachments: input.attachments }
-          : {}),
-      },
-    })
-
-    if (rootBinding) {
-      enqueueOutboxInTx(ctx.db, {
-        sessionId: created.id,
-        channel: rootBinding.channel,
-        externalChatId: rootBinding.externalId,
-        replyToMessageId: input.replyToMessageId,
-        kind: 'topic_start',
-        text: title,
-        title,
+  const clonedAttachments: Array<{
+    blobId: string
+    name: string
+    mimeType?: string
+  }> = []
+  if (input.attachments?.length) {
+    for (const att of input.attachments) {
+      const cloned = await ctx.blobs.cloneForSession(
+        att.blobId,
+        null,
+        project.id,
+        caller.id,
+      )
+      clonedAttachments.push({
+        blobId: cloned.id,
+        name: att.name,
+        ...(att.mimeType ? { mimeType: att.mimeType } : {}),
       })
     }
-    return created
-  })
+  }
 
-  ctx.scheduleSession(child.id)
+  let child: SessionRecord
+  try {
+    child = ctx.db.transaction(() => {
+      const created = sessions.create({
+        projectId: project.id,
+        kind: childKind,
+        name: title,
+        parentSessionId: caller.id,
+      })
+
+      if (clonedAttachments.length > 0) {
+        ctx.blobs.bindSession(
+          clonedAttachments.map((a) => a.blobId),
+          created.id,
+        )
+      }
+
+      enqueueInboxEvent(ctx.db, {
+        sessionId: created.id,
+        projectId: project.id,
+        source: 'session',
+        wake: true,
+        payload: {
+          type: 'session_start',
+          title,
+          text: brief,
+          callerSessionId: caller.id,
+          ...(clonedAttachments.length
+            ? { attachments: clonedAttachments }
+            : {}),
+        },
+      })
+
+      if (rootBinding) {
+        enqueueOutboxInTx(ctx.db, {
+          sessionId: created.id,
+          channel: rootBinding.channel,
+          externalChatId: rootBinding.externalId,
+          replyToMessageId: input.replyToMessageId,
+          kind: 'topic_start',
+          text: title,
+          title,
+        })
+      }
+      return created
+    })
+  } catch (error) {
+    for (const att of clonedAttachments) {
+      await ctx.blobs.deleteBlob(att.blobId).catch(() => {})
+    }
+    throw error
+  }
+
+  if (rootBinding && ctx.flushOutbox) {
+    ctx.flushOutbox()
+  } else {
+    ctx.scheduleSession(child.id)
+  }
   return { sessionId: child.id, kind: childKind, title }
 }
 
@@ -186,6 +272,7 @@ export function forwardToProjectSession(
     targetSessionId: string
     text: string
     replyToMessageId?: string
+    humanProvenance?: { inboxEventId: string; senderName?: string }
   },
 ): { sessionId: string; forwarded: true } {
   const text = input.text.trim()
@@ -223,6 +310,34 @@ export function forwardToProjectSession(
   )
 
   ctx.db.transaction(() => {
+    if (target.state === 'waiting_human') {
+      const pending = listRuntimePendingApprovals(ctx.db, target.id)
+      const verifiedHuman =
+        input.humanProvenance &&
+        Boolean(
+          ctx.db.get<{ id: string }>(
+            `SELECT id FROM inbox_events
+             WHERE id = ? AND session_id = ? AND source IN ('user', 'channel') AND passive = 0
+             LIMIT 1`,
+            input.humanProvenance.inboxEventId,
+            caller.id,
+          ),
+        )
+      if (
+        !verifiedHuman ||
+        pending.some((a) => a.toolName !== 'wait_for_input')
+      ) {
+        throw new Error(
+          `Session ${target.id} is waiting for human input or tool approval and cannot accept a forwarded message`,
+        )
+      }
+      resolveWaitForInputOnUserReplyInTx(ctx.db, ctx.eventBus, {
+        sessionId: target.id,
+        replyText: text,
+        decidedBy: input.humanProvenance?.senderName,
+      })
+    }
+
     enqueueInboxEvent(ctx.db, {
       sessionId: target.id,
       projectId: project.id,
@@ -335,18 +450,7 @@ export function readProjectSessionMessages(
         target.leafMessageId,
         target.id,
       )
-    : db.all<{
-        id: string
-        role: string | null
-        content_json: string
-        created_at: string
-      }>(
-        `SELECT id, role, content_json, created_at
-         FROM vela_messages
-         WHERE session_id = ? AND kind = 'message' AND role IN ('user', 'assistant')
-         ORDER BY seq ASC`,
-        target.id,
-      )
+    : []
   const sliced = rows.slice(-limit)
   return {
     sessionId: target.id,
@@ -562,4 +666,58 @@ export async function sendSessionFile(
     sizeBytes: blob.sizeBytes,
     deliveredViaOutbox: Boolean(outboxTarget),
   }
+}
+
+export function stopSessionRunsInDb(
+  db: VelaDatabase,
+  session: SessionRecord | undefined,
+  sessionId: string,
+  reason: string,
+): boolean {
+  const now = new Date().toISOString()
+  return db.transaction(() => {
+    const rows = db.all<{ id: string }>(
+      `SELECT id FROM runs
+       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+      sessionId,
+    )
+    const updated = db.run(
+      `UPDATE runs SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
+       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+      now,
+      now,
+      sessionId,
+    )
+    for (const r of rows) {
+      db.run(
+        `UPDATE vela_tool_calls SET status = 'interrupted', updated_at = ?
+         WHERE run_id = ? AND status IN ('pending', 'running', 'awaiting_approval')`,
+        now,
+        r.id,
+      )
+      db.run(
+        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?)',
+        `run_target:${r.id}`,
+        `stop_requested:${r.id}`,
+        `run_silent:${r.id}`,
+        `run_handoff_depth:${r.id}`,
+      )
+    }
+    db.run(
+      `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+       WHERE id = ? AND state IN ('running', 'waiting_human')`,
+      now,
+      sessionId,
+    )
+    const latestStoppedRun = rows.at(-1)
+    if (session && latestStoppedRun) {
+      recordChildStatusNoteForHubInTx(
+        db,
+        { session, runId: latestStoppedRun.id, inputs: [] },
+        'stopped',
+        reason,
+      )
+    }
+    return updated.changes > 0
+  })
 }

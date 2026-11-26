@@ -4,12 +4,21 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase } from '../../../src/db/sqlite.ts'
 import { saveTrust } from '../../../src/db/trust.ts'
+import type { ExecutionEnv } from '../../../src/driver/execution/types.ts'
 import { createVelaAgentDriver } from '../../../src/driver/runtime-adapter.ts'
+import { buildRuntimePromptSections } from '../../../src/driver/runtime-prompt.ts'
+import { ToolRegistry } from '../../../src/driver/tools/registry.ts'
 import { createRuntimeMcpAdapter } from '../../../src/mcp/index.ts'
-import { sendProjectSessionMessage } from '../../../src/runtime/control-ops.ts'
+import {
+  forwardToProjectSession,
+  readProjectSessionMessages,
+  sendProjectSessionMessage,
+  startProjectSession,
+} from '../../../src/runtime/control-ops.ts'
 import {
   type ChannelAdapter,
   type ChannelOutboundMessage,
+  EnvironmentRegistry,
   VelaRuntimeEngine,
 } from '../../../src/runtime/index.ts'
 import {
@@ -669,6 +678,399 @@ test('VelaAgentDriver gates workspace resources by trusted_paths, attaches MCP p
     saveTrust(db, workspace, true, agentDir)
     runtime.submitPrompt({ sessionId: s.id, text: 'Check trusted AGENTS' })
     await runtime.waitForIdle(s.id)
+  } finally {
+    await runtime.dispose()
+    db.close()
+  }
+})
+
+test('multi-room session_start routes topic to invoking room, clones attachments, waits for topic binding, and forwards human reply to waiting_human child', async () => {
+  const root = tempRoot('vela-r1-multiroom-')
+  const outbound: Array<ChannelOutboundMessage & { threadId?: string }> = []
+  const db = openDatabase({ path: join(root, 'vela.db') })
+  let hubStep = 0
+  let childStep = 0
+  let followUpForward = false
+  let childIdRef = ''
+  const model = createFauxModel({
+    responses: Array.from({ length: 8 }, () => (req) => {
+      if (req.system.includes('You are the hub session')) {
+        if (followUpForward && hubStep >= 2) {
+          if (hubStep === 2) {
+            hubStep++
+            expect(req.tools).toContain('session_forward')
+            return fauxToolCall('session_forward', {
+              session_id: childIdRef,
+              text: 'Use staging',
+            })
+          }
+          hubStep++
+          return fauxText('Handled Hub follow-up')
+        }
+        return hubStep++ === 0
+          ? fauxToolCall('session_start', {
+              title: 'Investigate build',
+              brief: 'Inspect attached artifact',
+            })
+          : fauxText('Started investigation in this room.')
+      }
+      switch (childStep++) {
+        case 0:
+          expect(req.lastUserText).toContain('spec.txt')
+          return fauxToolCall('wait_for_input', { reason: 'Choose target env' })
+        case 1:
+          return fauxText('Should we target staging or prod?')
+        default:
+          expect(req.lastUserText).toContain('Use staging')
+          return fauxText('Done targeting staging.')
+      }
+    }),
+  })
+  const runtime = new VelaRuntimeEngine({ db, agentDir: root })
+  let ingest!: Parameters<ChannelAdapter['start']>[0]['ingest']
+  await runtime.registerChannel({
+    name: 'lark',
+    async start(ctx) {
+      ingest = ctx.ingest
+    },
+    async stop() {},
+    async fetchAttachment() {
+      return new TextEncoder().encode('attached spec')
+    },
+    async deliver(msg) {
+      outbound.push(msg)
+      if (msg.kind === 'topic_start') {
+        return {
+          externalMessageId: 'msg-topic-1',
+          rootId: 'om-root-2',
+          threadId: 'thread-room-2',
+        }
+      }
+      return { externalMessageId: `msg-${outbound.length}` }
+    },
+  })
+  runtime.registerDriver(
+    createVelaAgentDriver({
+      db,
+      agentDir: root,
+      blobs: runtime.blobs,
+      environments: runtime.environments,
+      timers: runtime.timers,
+      subscriptions: runtime.subscriptions,
+      eventBus: runtime.eventBus,
+      defaultModel: model,
+      offline: true,
+    }),
+  )
+
+  try {
+    const project = runtime.projects.create({ name: 'proj', cwd: root })
+    const hub = runtime.sessions.create({
+      projectId: project.id,
+      kind: 'hub',
+      location: { environment: 'local', cwd: root },
+    })
+    runtime.projects.update(project.id, { hubSessionId: hub.id })
+    runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'chat-room-1',
+      kind: 'group',
+      projectId: project.id,
+      sessionId: hub.id,
+      enabled: true,
+    })
+    runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'chat-room-2',
+      kind: 'group',
+      projectId: project.id,
+      sessionId: hub.id,
+      enabled: true,
+    })
+
+    await ingest({
+      channel: 'lark',
+      dedupeKey: 'm-room2-1',
+      externalChatId: 'chat-room-2',
+      kind: 'group',
+      senderId: 'u1',
+      senderName: 'Liam',
+      mentioned: true,
+      text: 'Start investigating the attached spec',
+      timestamp: new Date().toISOString(),
+      attachments: [{ ref: 'ref-spec-1', name: 'spec.txt' }],
+    })
+    await runtime.waitForIdle(hub.id)
+
+    const child = runtime.sessions
+      .list({ projectId: project.id })
+      .find((s) => s.id !== hub.id)!
+    expect(child).toBeDefined()
+    expect(child.kind).toBe('topic')
+    await runtime.waitForIdle(child.id)
+
+    const topicStart = outbound.find((m) => m.kind === 'topic_start')
+    expect(topicStart?.externalChatId).toBe('chat-room-2')
+    expect(outbound.some((m) => m.threadId === 'thread-room-2')).toBe(true)
+    expect(runtime.sessions.get(child.id)?.state).toBe('waiting_human')
+
+    childIdRef = child.id
+    followUpForward = true
+    await ingest({
+      channel: 'lark',
+      dedupeKey: 'm-room2-2',
+      externalChatId: 'chat-room-2',
+      kind: 'group',
+      senderId: 'u1',
+      senderName: 'Liam',
+      mentioned: true,
+      text: 'Use staging',
+      timestamp: new Date().toISOString(),
+    })
+    await runtime.waitForIdle(hub.id)
+    await runtime.waitForIdle(child.id)
+    expect(
+      outbound.some((m) => m.text.includes('Done targeting staging.')),
+    ).toBe(true)
+  } finally {
+    await runtime.dispose()
+    db.close()
+  }
+})
+
+test('control ops enforce missing topic routing identity, null leaf read, non-human forward guard, followup timer edit, and final subscription replay', async () => {
+  const root = tempRoot('vela-r1-ops-')
+  const db = openDatabase({ path: join(root, 'vela.db') })
+  const runtime = new VelaRuntimeEngine({ db, agentDir: root })
+  await runtime.registerChannel({
+    name: 'lark',
+    async start() {},
+    async stop() {},
+    async deliver(msg) {
+      if (msg.kind === 'topic_start') {
+        return { externalMessageId: 'root-only-empty' }
+      }
+      return { externalMessageId: 'ok-1' }
+    },
+  })
+
+  try {
+    const project = runtime.projects.create({ name: 'p', cwd: root })
+    const hub = runtime.sessions.create({
+      projectId: project.id,
+      kind: 'hub',
+      location: { environment: 'local', cwd: root },
+    })
+    runtime.projects.update(project.id, { hubSessionId: hub.id })
+    const child = runtime.sessions.create({
+      projectId: project.id,
+      kind: 'work',
+      parentSessionId: hub.id,
+      location: { environment: 'local', cwd: root },
+    })
+    // session_read on null leaf returns empty messages
+    expect(
+      readProjectSessionMessages(db, {
+        callerSessionId: hub.id,
+        targetSessionId: child.id,
+      }).messages,
+    ).toEqual([])
+
+    // Non-human provenance cannot forward to a waiting_human child
+    db.run(
+      "UPDATE sessions SET state = 'waiting_human', waiting_reason = 'need input' WHERE id = ?",
+      child.id,
+    )
+    expect(() =>
+      forwardToProjectSession(
+        {
+          db,
+          blobs: runtime.blobs,
+          eventBus: runtime.eventBus,
+          scheduleSession: () => {},
+        },
+        {
+          callerSessionId: hub.id,
+          targetSessionId: child.id,
+          text: 'auto reply',
+        },
+      ),
+    ).toThrow(/waiting for human input/)
+
+    // Final subscription delivery replay must not delete a recreated subscription
+    runtime.subscriptions.create({
+      projectId: project.id,
+      sessionId: hub.id,
+      source: 'github',
+      eventKey: 'task.done',
+    })
+    const first = runtime.subscriptions.dispatchEvent({
+      source: 'github',
+      eventKey: 'task.done',
+      dedupeKey: 'del-1',
+      summary: 'done 1',
+      final: true,
+    })
+    expect(first.matchedSessionIds).toEqual([hub.id])
+    expect(runtime.subscriptions.list({ sessionId: hub.id })).toHaveLength(0)
+
+    runtime.subscriptions.create({
+      projectId: project.id,
+      sessionId: hub.id,
+      source: 'github',
+      eventKey: 'task.done',
+    })
+    const replay = runtime.subscriptions.dispatchEvent({
+      source: 'github',
+      eventKey: 'task.done',
+      dedupeKey: 'del-1',
+      summary: 'done 1',
+      final: true,
+    })
+    expect(replay.matchedSessionIds).toEqual([])
+    expect(runtime.subscriptions.list({ sessionId: hub.id })).toHaveLength(1)
+
+    // Outbox throws when topic_start returns no routing IDs at all
+    await runtime.unregisterChannel('lark')
+    await runtime.registerChannel({
+      name: 'lark',
+      async start() {},
+      async stop() {},
+      async deliver() {
+        return {}
+      },
+    })
+    runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'chat-empty',
+      kind: 'group',
+      projectId: project.id,
+      sessionId: hub.id,
+      enabled: true,
+    })
+    const badChild = await startProjectSession(
+      {
+        db,
+        blobs: runtime.blobs,
+        eventBus: runtime.eventBus,
+        scheduleSession: () => {},
+      },
+      {
+        callerSessionId: hub.id,
+        title: 'Bad topic',
+        brief: 'Needs binding',
+      },
+    )
+    await expect(runtime.outbox.flushOnce()).resolves.toMatchObject({
+      failed: 1,
+    })
+    expect(
+      db.get(
+        'SELECT 1 FROM channel_bindings WHERE session_id = ?',
+        badChild.sessionId,
+      ),
+    ).toBeUndefined()
+  } finally {
+    await runtime.dispose()
+    db.close()
+  }
+})
+
+test('restricted network overrides +web_fetch and explicit selection, prompt sections filter inactive tools, and non-local symlink trust + MCP isolation hold', async () => {
+  const reg = new ToolRegistry('/tmp/unused-spill')
+  reg.register({
+    name: 'read',
+    description: 'read',
+    inputSchema: {} as never,
+    execute: async () => '',
+  })
+  reg.register({
+    name: 'web_fetch',
+    description: 'web_fetch',
+    inputSchema: {} as never,
+    execute: async () => '',
+  })
+  reg.setRestrictedNetwork(true)
+  reg.setDefaultToolModifiers(['+web_fetch'])
+  reg.setSelection(['read', 'web_fetch'])
+  expect(reg.getActiveTools().map((t) => t.name)).toEqual(['read'])
+
+  const hubSections = buildRuntimePromptSections({
+    kind: 'hub',
+    projectId: 'p1',
+    hasChannelBinding: true,
+    activeTools: new Set(['read']),
+  })
+  expect(hubSections.projectSession).not.toContain('session_start')
+  expect(hubSections.projectSession).not.toContain('timers')
+  expect(hubSections.channelGuide).not.toContain('skip_reply')
+
+  // Non-local canonical symlink trust + MCP isolation
+  const root = tempRoot('vela-r1-trust-')
+  const db = openDatabase({ path: join(root, 'vela.db') })
+  const environments = new EnvironmentRegistry({
+    dataDir: root,
+    environments: { dev: { image: 'node:22', network: 'restricted' } },
+    openDocker: async () =>
+      ({
+        id: 'docker:dev',
+        cwd: '/trusted/link',
+        async canonicalPath(p: string) {
+          return {
+            ok: true as const,
+            value: p === '/trusted/link' ? '/denied/real' : p,
+          }
+        },
+        async readTextFile() {
+          return {
+            ok: true as const,
+            value:
+              '# Project Rules\nSHOULD_NEVER_LOAD_FROM_SYMLINKED_UNTRUSTED_DIR',
+          }
+        },
+        async exists() {
+          return { ok: true as const, value: true }
+        },
+        async listDir() {
+          return { ok: true as const, value: [] }
+        },
+        async cleanup() {},
+      }) as unknown as ExecutionEnv,
+  })
+  const runtime = new VelaRuntimeEngine({ db, agentDir: root, environments })
+  saveTrust(db, { environment: 'dev', cwd: '/trusted/link' }, true, root)
+  saveTrust(db, { environment: 'dev', cwd: '/denied/real' }, false, root)
+
+  const model = createFauxModel({
+    responses: [
+      (req) => {
+        expect(req.system).not.toContain(
+          'SHOULD_NEVER_LOAD_FROM_SYMLINKED_UNTRUSTED_DIR',
+        )
+        expect(req.tools).not.toContain('tool_search')
+        return fauxText('Isolated safely')
+      },
+    ],
+  })
+  runtime.registerDriver(
+    createVelaAgentDriver({
+      db,
+      agentDir: root,
+      blobs: runtime.blobs,
+      environments: runtime.environments,
+      defaultModel: model,
+      mcp: createRuntimeMcpAdapter(),
+    }),
+  )
+
+  try {
+    const s = runtime.sessions.create({
+      kind: 'chat',
+      location: { environment: 'dev', cwd: '/trusted/link' },
+    })
+    runtime.submitPrompt({ sessionId: s.id, text: 'hello' })
+    await runtime.waitForIdle(s.id)
+    expect(model.calls).toHaveLength(1)
   } finally {
     await runtime.dispose()
     db.close()

@@ -246,6 +246,15 @@ export function claimNextTurnInDb(params: {
   return db.transaction(() => {
     const session = sessions.get(sessionId)
     if (!session) return undefined
+    if (session.kind === 'topic') {
+      const pendingTopicStart = db.get<{ id: string }>(
+        `SELECT id FROM outbox
+         WHERE session_id = ? AND kind = 'topic_start' AND status IN ('pending', 'sending')
+         LIMIT 1`,
+        sessionId,
+      )
+      if (pendingTopicStart) return undefined
+    }
 
     if (session.state === 'running') {
       const orphaned = db.get<{
@@ -453,6 +462,13 @@ export function commitCompletedTurnInTx(params: {
   }
   db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${claimed.runId}`)
   db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${claimed.runId}`)
+  if (finalStatus !== 'waiting_human') {
+    db.run('DELETE FROM kv_meta WHERE key = ?', `run_silent:${claimed.runId}`)
+    db.run(
+      'DELETE FROM kv_meta WHERE key = ?',
+      `run_handoff_depth:${claimed.runId}`,
+    )
+  }
   db.run(
     `UPDATE sessions
      SET state = ?, waiting_reason = ?, updated_at = ?
@@ -541,6 +557,11 @@ export function finalizeTurnInDb(params: {
         'DELETE FROM kv_meta WHERE key = ?',
         `stop_requested:${claimed.runId}`,
       )
+      db.run('DELETE FROM kv_meta WHERE key = ?', `run_silent:${claimed.runId}`)
+      db.run(
+        'DELETE FROM kv_meta WHERE key = ?',
+        `run_handoff_depth:${claimed.runId}`,
+      )
     }
     db.run(
       `UPDATE sessions
@@ -595,9 +616,13 @@ export function finalizeTurnInDb(params: {
   })
 }
 
-function recordChildStatusNoteForHubInTx(
+export function recordChildStatusNoteForHubInTx(
   db: VelaDatabase,
-  claimed: ClaimedTurn,
+  claimed: {
+    session: SessionRecord
+    runId: string
+    inputs: readonly DriverInboxItem[]
+  },
   status: RunEndStatus,
   detail?: string,
 ): void {

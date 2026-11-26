@@ -393,6 +393,39 @@ export class BlobStore {
     return row ? rowToRecord(row) : undefined
   }
 
+  /** Creates a child-session-owned inbound copy of an existing blob visible to the caller. */
+  async cloneForSession(
+    blobId: string,
+    targetSessionId: string | null,
+    targetProjectId: string | null,
+    callerSessionId?: string,
+    signal?: AbortSignal,
+  ): Promise<BlobRecord> {
+    const source = this.get(blobId)
+    if (!source) {
+      throw new Error(`Blob ${blobId} not found`)
+    }
+    if (
+      callerSessionId &&
+      source.sessionId &&
+      source.sessionId !== callerSessionId &&
+      (!targetProjectId || source.projectId !== targetProjectId)
+    ) {
+      throw new Error(
+        `Blob ${blobId} does not belong to caller session ${callerSessionId}`,
+      )
+    }
+    const bytes = await readCanonicalHostBytes(source.storagePath, signal)
+    return this.storeInbound({
+      sessionId: targetSessionId,
+      projectId: targetProjectId,
+      filename: source.filename,
+      ...(source.mimeType ? { mimeType: source.mimeType } : {}),
+      bytes,
+      signal,
+    })
+  }
+
   listBySession(sessionId: string, direction?: BlobDirection): BlobRecord[] {
     const rows = direction
       ? (this.db.all<Record<string, unknown>>(

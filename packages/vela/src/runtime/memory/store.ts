@@ -4,7 +4,7 @@ import path from 'node:path'
 import { parseFrontmatter } from '../../shared/frontmatter.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
 import { bm25Search, type SearchHit } from './search.ts'
-import { lintAll, type ValidationReport } from './validator.ts'
+import { lintAll, lintAllAsync, type ValidationReport } from './validator.ts'
 
 export interface MemoryEntry {
   name: string
@@ -46,12 +46,9 @@ function writePrivate(filePath: string, content: string): void {
  */
 export function memorySlug(name: string): string {
   const normalized = name.normalize('NFKC').toLowerCase()
-  const base = normalized
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 64)
-    .replace(/-+$/g, '')
-  if (SAFE_PLAIN_NAME_RE.test(name) && base.length > 0) {
+  const full = normalized.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '')
+  const base = full.slice(0, 64).replace(/-+$/g, '')
+  if (SAFE_PLAIN_NAME_RE.test(name) && full.length > 0 && full.length <= 64) {
     return base
   }
   const hash = createHash('sha256').update(name).digest('hex').slice(0, 8)
@@ -68,13 +65,19 @@ function indexEntryPattern(filename: string): RegExp {
   )
 }
 
+const YAML_NUMBER_RE =
+  /^[+-]?(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d+)?$|^0[xbo][\da-f_]+$/i
+const YAML_KEYWORD_RE =
+  /^(?:true|false|yes|no|on|off|y|n|null|~|\.inf|-\.inf|\+\.inf|\.nan)$/i
+const YAML_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$/
+
 function formatYamlScalar(value: string): string {
   if (
     value.length > 0 &&
     !/[\r\n:#{}[\],&*!|>'"%@`]|^\s|\s$/.test(value) &&
-    value !== 'true' &&
-    value !== 'false' &&
-    value !== 'null'
+    !YAML_KEYWORD_RE.test(value) &&
+    !YAML_NUMBER_RE.test(value) &&
+    !YAML_DATE_RE.test(value)
   ) {
     return value
   }
@@ -124,7 +127,17 @@ export class MemoryStore {
     }
     this.init()
     const slug = memorySlug(entry.name)
-    const filename = targetFilename ?? `${entry.type}_${slug}.md`
+    let resolvedTarget = targetFilename
+    if (!resolvedTarget) {
+      const canonicalName = `${entry.type}_${slug}.md`
+      if (!fs.existsSync(path.join(this.memoryDir, canonicalName))) {
+        const existing = this.list().find(
+          (item) => item.type === entry.type && item.name === entry.name,
+        )
+        if (existing) resolvedTarget = path.basename(existing.filePath)
+      }
+    }
+    const filename = resolvedTarget ?? `${entry.type}_${slug}.md`
     const filePath = this.memoryFile(filename)
     const previous = fs.existsSync(filePath)
       ? this.parseFrontmatter(fs.readFileSync(filePath, 'utf-8'))
@@ -304,6 +317,12 @@ export class MemoryStore {
     return lintAll(this.list(), this.projectDir)
   }
 
+  lintAsync(
+    pathExists: (candidate: string) => Promise<boolean>,
+  ): Promise<ValidationReport<MemoryEntry>[]> {
+    return lintAllAsync(this.list(), pathExists)
+  }
+
   /** The changing part: count and index; null when the store is empty (the fixed rules explain how to save). */
   buildIndex(maxChars = MAX_FILE_CHARS): string | null {
     const entries = this.list()
@@ -312,24 +331,66 @@ export class MemoryStore {
     return prefix + this.loadIndex(maxChars - prefix.length)
   }
 
+  private parseLegacyFrontmatter(
+    normalized: string,
+  ): { frontmatter: Record<string, unknown>; body: string } | null {
+    const endIdx = normalized.indexOf('\n---', 3)
+    if (endIdx === -1) return null
+    const header = normalized.slice(4, endIdx)
+    const afterDelim = normalized.slice(endIdx + 4)
+    const body = afterDelim.replace(/^\n+/, '').trim()
+    if (!body) return null
+    const frontmatter: Record<string, unknown> = {}
+    for (const rawLine of header.split('\n')) {
+      const colon = rawLine.indexOf(':')
+      if (colon <= 0) continue
+      const key = rawLine.slice(0, colon).trim()
+      const val = rawLine.slice(colon + 1).trim()
+      if (!key) continue
+      if (key === 'sources' && val.startsWith('[')) {
+        try {
+          frontmatter.sources = JSON.parse(val)
+          continue
+        } catch {
+          /* fall through */
+        }
+      }
+      frontmatter[key] = val
+    }
+    return { frontmatter, body }
+  }
+
   private parseFrontmatter(raw: string): Omit<MemoryEntry, 'filePath'> | null {
     try {
       const normalized = raw.replace(/\r\n/g, '\n')
       if (!normalized.startsWith('---\n')) return null
-      const { frontmatter, body } = parseFrontmatter(normalized)
+      let frontmatter: Record<string, unknown>
+      let body: string
+      try {
+        const parsed = parseFrontmatter(normalized)
+        frontmatter = parsed.frontmatter
+        body = parsed.body
+      } catch {
+        const legacy = this.parseLegacyFrontmatter(normalized)
+        if (!legacy) return null
+        frontmatter = legacy.frontmatter
+        body = legacy.body
+      }
       if (!body) return null
 
-      const name =
-        typeof frontmatter.name === 'string' ? frontmatter.name.trim() : ''
-      const type =
-        typeof frontmatter.type === 'string' ? frontmatter.type.trim() : ''
+      const coerceScalar = (value: unknown): string => {
+        if (typeof value === 'string') return value.trim()
+        if (typeof value === 'number' || typeof value === 'boolean') {
+          return String(value)
+        }
+        return ''
+      }
+      const name = coerceScalar(frontmatter.name)
+      const type = coerceScalar(frontmatter.type)
       const validTypes = ['user', 'feedback', 'project', 'reference']
       if (!name || !type || !validTypes.includes(type)) return null
 
-      const description =
-        typeof frontmatter.description === 'string'
-          ? frontmatter.description.trim()
-          : ''
+      const description = coerceScalar(frontmatter.description)
       let sources: string[] | undefined
       if (
         Array.isArray(frontmatter.sources) &&

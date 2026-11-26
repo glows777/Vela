@@ -47,9 +47,12 @@ export function memory(): VelaExtension {
       }
       return dream
     }
-    vela.on('agent_end', (_event, ctx) => {
+    vela.on('agent_end', (event, ctx) => {
       if (!ctx.session.getActiveTools().includes('memory')) return
-      dreamFor(forSession(ctx.session.scope)).collect(ctx.session)
+      dreamFor(forSession(ctx.session.scope)).collect(
+        ctx.session,
+        event.messages,
+      )
     })
     vela.on('agent_settled', (_event, ctx) => {
       if (

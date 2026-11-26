@@ -23,12 +23,14 @@ export interface RuntimeToolDeps {
   timers: TimerScheduler
   subscriptions: SubscriptionManager
   scheduleSession: (sessionId: string) => void
+  flushOutbox?: () => void
   getRunContext: (sessionId: string) =>
     | {
         runId: string
         projectId: string | null
         replyToMessageId?: string
         handoffDepth?: number
+        humanProvenance?: { inboxEventId: string; senderName?: string }
         attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
         markSilent: () => void
       }
@@ -94,6 +96,7 @@ export function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
     blobs: deps.blobs,
     eventBus: deps.eventBus,
     scheduleSession: deps.scheduleSession,
+    flushOutbox: deps.flushOutbox,
   }
 
   return [
@@ -115,6 +118,7 @@ export function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
         const run = requireRun(deps, ctx)
         return startProjectSession(controlCtx, {
           callerSessionId: run.sessionId,
+          callerRunId: run.runId,
           title,
           brief,
           replyToMessageId: run.replyToMessageId,
@@ -143,6 +147,7 @@ export function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
           targetSessionId: session_id,
           text,
           replyToMessageId: run.replyToMessageId,
+          humanProvenance: run.humanProvenance,
         })
       },
     },
@@ -258,16 +263,43 @@ export function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
           if (!existing || !ownsTimer(existing)) {
             return { id: input.id, edited: false }
           }
-          if (input.message === undefined && input.schedule === undefined) {
+          const hasDeadlinePatch =
+            input.fire_at !== undefined || input.delay_seconds !== undefined
+          if (
+            input.message === undefined &&
+            input.schedule === undefined &&
+            !hasDeadlinePatch &&
+            input.timezone === undefined
+          ) {
             throw new Error('Provide a new message, a new schedule, or both')
           }
+          if (existing.kind === 'routine' && hasDeadlinePatch) {
+            throw new Error(
+              'fire_at and delay_seconds only apply to followup timers',
+            )
+          }
           const zone = routineTimezone(input.timezone ?? existing.timezone)
-          const schedule =
+          let schedule =
             input.schedule === undefined
               ? undefined
               : 'at' in input.schedule
                 ? { at: localRoutineInstant(input.schedule.at, zone) }
                 : input.schedule
+          if (existing.kind === 'followup' && hasDeadlinePatch) {
+            const fireAt =
+              input.fire_at ??
+              new Date(
+                Date.now() + (input.delay_seconds as number) * 1000,
+              ).toISOString()
+            const fireMs = Date.parse(fireAt)
+            if (!Number.isFinite(fireMs)) {
+              throw new Error(`Invalid followup fire_at timestamp "${fireAt}"`)
+            }
+            schedule = { at: new Date(fireMs).toISOString() }
+          }
+          if (existing.kind === 'followup' && schedule && !('at' in schedule)) {
+            throw new Error('Followup timers require a single timestamp')
+          }
           const updated = deps.timers.update(input.id, {
             message: input.message,
             schedule,

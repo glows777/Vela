@@ -5,33 +5,41 @@ interface DbEntry {
   refs: number
 }
 
-const byDataDir = new Map<string, DbEntry>()
+const byDataDir = new Map<string, DbEntry[]>()
 
 /**
  * Registers the `VelaDatabase` backing a `dataDir` while a host (`createVela`) is open,
  * allowing built-in extensions (like `memory()`) to use `vela.db` without exposing it
- * on the public `ExtensionAPI`.
+ * on the public `ExtensionAPI`. Maintains a ref-counted stack per `dataDir` so nested
+ * or multi-host openings never clobber an active host's database handle.
  */
 export function registerMemoryDatabase(
   dataDir: string,
   db: VelaDatabase,
 ): void {
-  const existing = byDataDir.get(dataDir)
-  if (existing && existing.db === db) {
+  const stack = byDataDir.get(dataDir) ?? []
+  const existing = stack.find((entry) => entry.db === db)
+  if (existing) {
     existing.refs++
-    return
+  } else {
+    stack.push({ db, refs: 1 })
+    byDataDir.set(dataDir, stack)
   }
-  byDataDir.set(dataDir, { db, refs: 1 })
 }
 
 export function unregisterMemoryDatabase(
   dataDir: string,
   db: VelaDatabase,
 ): void {
-  const existing = byDataDir.get(dataDir)
-  if (!existing || existing.db !== db) return
-  existing.refs--
-  if (existing.refs <= 0) {
+  const stack = byDataDir.get(dataDir)
+  if (!stack) return
+  const index = stack.findIndex((entry) => entry.db === db)
+  if (index === -1) return
+  stack[index]!.refs--
+  if (stack[index]!.refs <= 0) {
+    stack.splice(index, 1)
+  }
+  if (stack.length === 0) {
     byDataDir.delete(dataDir)
   }
 }
@@ -39,7 +47,10 @@ export function unregisterMemoryDatabase(
 export function resolveMemoryDatabase(
   dataDir: string,
 ): VelaDatabase | undefined {
-  const entry = byDataDir.get(dataDir)
-  if (!entry?.db.open) return undefined
-  return entry.db
+  const stack = byDataDir.get(dataDir)
+  if (!stack) return undefined
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (stack[i]!.db.open) return stack[i]!.db
+  }
+  return undefined
 }

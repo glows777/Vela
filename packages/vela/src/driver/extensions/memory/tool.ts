@@ -127,7 +127,19 @@ export function createMemoryTool(
             ? `Deleted: ${args.filename}`
             : `File not found: ${args.filename}`
         case 'lint': {
-          const reports = memoryStore.lint()
+          const env =
+            context?.execution ??
+            (context?.requireEnv
+              ? await context.requireEnv(context?.signal)
+              : undefined)
+          const reports = env
+            ? await memoryStore.lintAsync(async (candidate) => {
+                const abs = await env.absolutePath(candidate, context?.signal)
+                if (!abs.ok) return false
+                const res = await env.exists(abs.value, context?.signal)
+                return res.ok && res.value
+              })
+            : memoryStore.lint()
           if (reports.length === 0)
             return 'Memory store is healthy; no issues found.'
           const lines = [

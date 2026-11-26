@@ -1,5 +1,6 @@
 import { join, resolve } from 'node:path'
 import type { VelaLogger } from '../../shared/logger.ts'
+import { assertSafePathSegment } from '../driver.ts'
 import { MemoryStore } from './store.ts'
 
 export interface MemoryDirs {
@@ -19,6 +20,7 @@ export function resolveMemoryDirs(
 ): MemoryDirs {
   const globalDir = join(agentDir, 'memory')
   if (projectId) {
+    assertSafePathSegment(projectId, 'projectId')
     return {
       localDir: join(agentDir, 'projects', projectId, 'memory'),
       globalDir,

@@ -236,15 +236,14 @@ export class ToolRegistry {
         : tool.channel !== undefined && tool.channel !== this.channel
     )
       return false
-    if (this.selection) return this.selection.has(toolName)
-    const enabled = this.defaultToolStates?.get(toolName)
-    if (enabled === false) return false
     if (
       this.restrictedNetwork &&
-      enabled !== true &&
       (toolName === 'web_fetch' || toolName === 'web_search')
     )
       return false
+    if (this.selection) return this.selection.has(toolName)
+    const enabled = this.defaultToolStates?.get(toolName)
+    if (enabled === false) return false
     return enabled ?? tool.activeByDefault !== false
   }
 

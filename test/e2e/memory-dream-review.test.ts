@@ -1,5 +1,9 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
+import { MemoryDream } from '../../packages/vela/src/driver/memory/dream.ts'
+import { MemoryStore } from '../../packages/vela/src/runtime/memory/store.ts'
 import {
   fauxText,
   fauxToolCall,
@@ -26,7 +30,6 @@ const target = {
 }
 const sourceFile = 'memory/project_deploy-source.md'
 const targetFile = 'memory/project_deploy-target.md'
-const inboxFile = 'memory/.dream/inbox.jsonl'
 const liveDescription = 'Deployment schedule verified by the release manager'
 const result = (ops: unknown[] = []) =>
   fauxText(JSON.stringify({ ops, report: 'Merged deployment reminders' }))
@@ -51,15 +54,20 @@ const notices = (t: TestVela) =>
     .join('\n')
 const read = (t: TestVela, path: string) =>
   readFileSync(t.dataPath(path), 'utf8')
-const inbox = (
-  t: TestVela,
-): { id: string; sessionId: string; user: string }[] =>
-  existsSync(t.dataPath(inboxFile))
-    ? read(t, inboxFile)
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => JSON.parse(line))
-    : []
+
+function dreamAudit(t: TestVela) {
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const memoryDir = t.dataPath('memory')
+    const dream = new MemoryDream(new MemoryStore(memoryDir), db, {
+      kind: 'tagged',
+      key: `dir:${resolve(memoryDir)}`,
+    })
+    return dream.auditState()
+  } finally {
+    db.close()
+  }
+}
 
 function gateGeneration(t: TestVela) {
   const entered = Promise.withResolvers<void>()
@@ -107,7 +115,7 @@ for (const deletionOrder of ['before', 'after']) {
     const dreaming = t.session.prompt('/dream')
     let liveTarget = ''
     let liveIndex = ''
-    let queued = ''
+    let queuedIds: string[] = []
     try {
       await gate.entered
       await t.vela
@@ -115,29 +123,30 @@ for (const deletionOrder of ['before', 'after']) {
         .prompt('Change only the description of the deployment target')
       liveTarget = read(t, targetFile)
       liveIndex = read(t, 'memory/MEMORY.md')
-      queued = read(t, inboxFile)
+      queuedIds = dreamAudit(t).pendingTurns.map((turn) => turn.id)
     } finally {
       gate.release()
       await dreaming
       gate.restore()
     }
+    const audit = dreamAudit(t)
     expect({
       sourceStillExists: existsSync(t.dataPath(sourceFile)),
       target: read(t, targetFile),
       index: read(t, 'memory/MEMORY.md'),
-      inbox: read(t, inboxFile),
+      pendingIds: audit.pendingTurns.map((turn) => turn.id),
+      hasLegacyDreamDir: existsSync(t.dataPath('memory/.dream')),
     }).toEqual({
       sourceStillExists: true,
       target: liveTarget,
       index: liveIndex,
-      inbox: queued,
+      pendingIds: queuedIds,
+      hasLegacyDreamDir: false,
     })
     expect(read(t, sourceFile)).toBe(sourceBefore)
     expect(notices(t)).toMatch(/skip|conflict/i)
-    expect(read(t, 'memory/.dream/log.md')).toMatch(/skip|conflict/i)
-    expect(
-      JSON.parse(read(t, 'memory/.dream/state.json')).lastRun.changes,
-    ).toBe(0)
+    expect(audit.logs.at(-1)?.report).toMatch(/skip|conflict/i)
+    expect(audit.lastRun?.changes).toBe(0)
 
     t.model.pushGenerate((request) => {
       const input = JSON.parse(request.lastUserText)
@@ -169,7 +178,7 @@ for (const deletionOrder of ['before', 'after']) {
       await t.vela
         .session('latest')
         .prompt('A new fact after the retry snapshot')
-      latestId = inbox(t).at(-1)!.id
+      latestId = dreamAudit(t).pendingTurns.at(-1)!.id
     } finally {
       retryGate.release()
       await retrying
@@ -179,7 +188,7 @@ for (const deletionOrder of ['before', 'after']) {
     expect(read(t, targetFile)).toContain(source.content)
     expect(read(t, targetFile)).toContain(target.content)
     expect(read(t, targetFile)).toContain(liveDescription)
-    expect(inbox(t)).toEqual([
+    expect(dreamAudit(t).pendingTurns).toEqual([
       expect.objectContaining({
         id: latestId,
         sessionId: 'latest',
@@ -207,29 +216,32 @@ test('a concurrent create collision prevents an earlier source deletion and reta
   const gate = gateGeneration(t)
   const dreaming = t.session.prompt('/dream')
   let liveTarget = ''
-  let queued = ''
+  let queuedIds: string[] = []
   try {
     await gate.entered
     await t.vela.session('live').prompt('Save the deployment target note now')
     liveTarget = read(t, targetFile)
-    queued = read(t, inboxFile)
+    queuedIds = dreamAudit(t).pendingTurns.map((turn) => turn.id)
   } finally {
     gate.release()
     await dreaming
     gate.restore()
   }
+  const audit = dreamAudit(t)
   expect({
     sourceStillExists: existsSync(t.dataPath(sourceFile)),
     target: read(t, targetFile),
-    inbox: read(t, inboxFile),
+    pendingIds: audit.pendingTurns.map((turn) => turn.id),
+    hasLegacyDreamDir: existsSync(t.dataPath('memory/.dream')),
   }).toEqual({
     sourceStillExists: true,
     target: liveTarget,
-    inbox: queued,
+    pendingIds: queuedIds,
+    hasLegacyDreamDir: false,
   })
   expect(read(t, sourceFile)).toBe(sourceBefore)
   expect(notices(t)).toMatch(/skip|conflict/i)
-  expect(read(t, 'memory/.dream/log.md')).toMatch(/skip|conflict/i)
+  expect(audit.logs.at(-1)?.report).toMatch(/skip|conflict/i)
 })
 
 test('a changed read-only merge destination prevents duplicate deletion and retains the inbox', async () => {
@@ -273,7 +285,7 @@ test('a changed read-only merge destination prevents duplicate deletion and reta
   const dreaming = t.session.prompt('/dream')
   let liveTarget = ''
   let liveIndex = ''
-  let queued = ''
+  let queuedIds: string[] = []
   try {
     await gate.entered
     await t.vela
@@ -281,29 +293,30 @@ test('a changed read-only merge destination prevents duplicate deletion and reta
       .prompt('Keep only the deployment schedule in the target note')
     liveTarget = read(t, targetFile)
     liveIndex = read(t, 'memory/MEMORY.md')
-    queued = read(t, inboxFile)
+    queuedIds = dreamAudit(t).pendingTurns.map((turn) => turn.id)
   } finally {
     gate.release()
     await dreaming
     gate.restore()
   }
+  const audit = dreamAudit(t)
   expect(liveTarget).not.toContain(source.content)
   expect({
     sourceStillExists: existsSync(t.dataPath(sourceFile)),
     target: read(t, targetFile),
     index: read(t, 'memory/MEMORY.md'),
-    inbox: read(t, inboxFile),
+    pendingIds: audit.pendingTurns.map((turn) => turn.id),
+    hasLegacyDreamDir: existsSync(t.dataPath('memory/.dream')),
   }).toEqual({
     sourceStillExists: true,
     target: liveTarget,
     index: liveIndex,
-    inbox: queued,
+    pendingIds: queuedIds,
+    hasLegacyDreamDir: false,
   })
   expect(read(t, sourceFile)).toBe(sourceBefore)
   expect(notices(t)).toMatch(/skip|conflict/i)
   expect(notices(t)).toContain('project_deploy-target.md')
-  expect(read(t, 'memory/.dream/log.md')).toMatch(/skip|conflict/i)
-  expect(JSON.parse(read(t, 'memory/.dream/state.json')).lastRun.changes).toBe(
-    0,
-  )
+  expect(audit.logs.at(-1)?.report).toMatch(/skip|conflict/i)
+  expect(audit.lastRun?.changes).toBe(0)
 })
