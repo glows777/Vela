@@ -13,6 +13,12 @@ export const MAX_FOLLOWUP_STREAK = 3
 
 export type TimerKind = 'routine' | 'followup'
 
+export interface TimerTarget {
+  channel: string
+  externalChatId: string
+  threadId?: string
+}
+
 export interface TimerRecord {
   id: string
   kind: TimerKind
@@ -101,6 +107,7 @@ export class TimerScheduler {
     projectId?: string | null
     sessionId?: string | null
     channel?: string | null
+    target?: TimerTarget
     creatorId?: string | null
     creatorName?: string | null
     message: string
@@ -158,7 +165,7 @@ export class TimerScheduler {
         id,
         resolvedProjectId,
         input.sessionId ?? null,
-        input.channel ?? null,
+        input.target?.channel ?? input.channel ?? null,
         input.creatorId ?? null,
         input.creatorName ?? null,
         input.message,
@@ -169,6 +176,14 @@ export class TimerScheduler {
         nowIso,
         nowIso,
       )
+      if (input.target) {
+        this.db.run(
+          'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
+          `timer_target:${id}`,
+          JSON.stringify(input.target),
+          nowIso,
+        )
+      }
       return this.get(id)!
     })
     this.onScheduleChanged?.()
@@ -180,6 +195,7 @@ export class TimerScheduler {
     sessionId: string
     projectId?: string | null
     channel?: string | null
+    target?: TimerTarget
     message: string
     fireAt: string
     creatorId?: string | null
@@ -216,7 +232,7 @@ export class TimerScheduler {
         id,
         input.projectId ?? session.project_id ?? null,
         input.sessionId,
-        input.channel ?? null,
+        input.target?.channel ?? input.channel ?? null,
         input.creatorId ?? null,
         input.creatorName ?? null,
         input.message,
@@ -227,6 +243,14 @@ export class TimerScheduler {
         nowIso,
         nowIso,
       )
+      if (input.target) {
+        this.db.run(
+          'INSERT INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
+          `timer_target:${id}`,
+          JSON.stringify(input.target),
+          nowIso,
+        )
+      }
       return this.get(id)!
     })
     this.onScheduleChanged?.()
@@ -328,9 +352,39 @@ export class TimerScheduler {
   }
 
   delete(id: string): boolean {
-    const res = this.db.run('DELETE FROM timers WHERE id = ?', id)
+    const res = this.db.transaction(() => {
+      const deleted = this.db.run('DELETE FROM timers WHERE id = ?', id)
+      this.db.run('DELETE FROM kv_meta WHERE key = ?', `timer_target:${id}`)
+      return deleted
+    })
     if (res.changes > 0) this.onScheduleChanged?.()
     return res.changes > 0
+  }
+
+  private readTimerTarget(id: string): TimerTarget | undefined {
+    const row = this.db.get<{ value_json: string }>(
+      'SELECT value_json FROM kv_meta WHERE key = ?',
+      `timer_target:${id}`,
+    )
+    if (!row) return undefined
+    try {
+      const parsed = JSON.parse(row.value_json) as Partial<TimerTarget>
+      if (
+        typeof parsed.channel === 'string' &&
+        typeof parsed.externalChatId === 'string'
+      ) {
+        return {
+          channel: parsed.channel,
+          externalChatId: parsed.externalChatId,
+          ...(typeof parsed.threadId === 'string'
+            ? { threadId: parsed.threadId }
+            : {}),
+        }
+      }
+    } catch {
+      /* ignore malformed timer target */
+    }
+    return undefined
   }
 
   tick(nowMs = Date.now()): { fired: string[]; guardrailBlocked: string[] } {
@@ -395,6 +449,11 @@ export class TimerScheduler {
             nowIso,
             timer.id,
           )
+          const target = this.readTimerTarget(timer.id)
+          this.db.run(
+            'DELETE FROM kv_meta WHERE key = ?',
+            `timer_target:${timer.id}`,
+          )
           enqueueInboxEvent(this.db, {
             sessionId: targetSessionId,
             projectId: timer.projectId,
@@ -409,6 +468,13 @@ export class TimerScheduler {
               firedAt: nowIso,
               message: timer.message,
               followupStreak: session.followup_streak + 1,
+              ...(target
+                ? {
+                    channel: target.channel,
+                    externalChatId: target.externalChatId,
+                    ...(target.threadId ? { threadId: target.threadId } : {}),
+                  }
+                : {}),
             },
           })
           fired.push(timer.id)
@@ -446,6 +512,13 @@ export class TimerScheduler {
           nowIso,
           timer.id,
         )
+        const target = this.readTimerTarget(timer.id)
+        if (nextMs === undefined) {
+          this.db.run(
+            'DELETE FROM kv_meta WHERE key = ?',
+            `timer_target:${timer.id}`,
+          )
+        }
         enqueueInboxEvent(this.db, {
           sessionId: targetSessionId,
           projectId: timer.projectId,
@@ -461,6 +534,13 @@ export class TimerScheduler {
             message: timer.message,
             creatorId: timer.creatorId,
             creatorName: timer.creatorName,
+            ...(target
+              ? {
+                  channel: target.channel,
+                  externalChatId: target.externalChatId,
+                  ...(target.threadId ? { threadId: target.threadId } : {}),
+                }
+              : {}),
           },
         })
         fired.push(timer.id)

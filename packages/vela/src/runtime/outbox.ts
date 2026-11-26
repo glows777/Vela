@@ -14,6 +14,69 @@ function leaseKey(outboxId: string): string {
   return `outbox_lease:${outboxId}`
 }
 
+function syncTopicBindingOnDeliveryInTx(
+  db: VelaDatabase,
+  row: OutboxRecord,
+  threadId: string,
+  now: string,
+): void {
+  const session = db.get<{ project_id: string | null }>(
+    'SELECT project_id FROM sessions WHERE id = ?',
+    row.sessionId,
+  )
+  const projectId = session?.project_id ?? null
+  const existingByThread = db.get<{ id: string }>(
+    `SELECT id FROM channel_bindings WHERE channel = ? AND external_id = ? AND thread_id = ?`,
+    row.channel,
+    row.externalChatId,
+    threadId,
+  )
+  if (existingByThread) {
+    db.run(
+      `UPDATE channel_bindings
+       SET project_id = COALESCE(?, project_id), session_id = ?, enabled = 1, updated_at = ?
+       WHERE id = ?`,
+      projectId,
+      row.sessionId,
+      now,
+      existingByThread.id,
+    )
+    return
+  }
+  const existingBySession = db.get<{ id: string }>(
+    `SELECT id FROM channel_bindings WHERE session_id = ? AND channel = ? AND external_id = ?`,
+    row.sessionId,
+    row.channel,
+    row.externalChatId,
+  )
+  if (existingBySession) {
+    db.run(
+      `UPDATE channel_bindings
+       SET thread_id = ?, project_id = COALESCE(?, project_id), enabled = 1, updated_at = ?
+       WHERE id = ?`,
+      threadId,
+      projectId,
+      now,
+      existingBySession.id,
+    )
+    return
+  }
+  db.run(
+    `INSERT INTO channel_bindings (
+       id, channel, external_id, thread_id, kind, project_id, session_id,
+       enabled, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, 'group', ?, ?, 1, ?, ?)`,
+    randomUUID(),
+    row.channel,
+    row.externalChatId,
+    threadId,
+    projectId,
+    row.sessionId,
+    now,
+    now,
+  )
+}
+
 export interface OutboxRecord {
   id: string
   sessionId: string
@@ -145,6 +208,7 @@ export class OutboxDispatcher {
       channel: string,
     ) => ChannelAdapter | undefined,
     private readonly onScheduleChanged?: () => void,
+    private readonly onTopicBound?: (sessionId: string) => void,
   ) {}
 
   recoverStaleSending(): number {
@@ -278,6 +342,15 @@ export class OutboxDispatcher {
 
       try {
         const result = await adapter.deliver(message)
+        const topicThreadId =
+          row.kind === 'topic_start'
+            ? (result.threadId ?? result.rootId ?? result.externalMessageId)
+            : undefined
+        if (row.kind === 'topic_start' && !topicThreadId) {
+          throw new Error(
+            'Channel adapter returned no threadId, rootId, or externalMessageId for topic_start',
+          )
+        }
         const sentAt = new Date().toISOString()
         const applied = this.db.transaction(() => {
           const leaseRow = this.db.get<{ value_json: string }>(
@@ -305,10 +378,22 @@ export class OutboxDispatcher {
             row.id,
             row.attempt,
           )
+          if (
+            updated.changes === 1 &&
+            row.kind === 'topic_start' &&
+            topicThreadId
+          ) {
+            syncTopicBindingOnDeliveryInTx(this.db, row, topicThreadId, sentAt)
+          }
           this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
           return updated.changes === 1
         })
-        if (applied) delivered++
+        if (applied) {
+          delivered++
+          if (row.kind === 'topic_start') {
+            this.onTopicBound?.(row.sessionId)
+          }
+        }
       } catch (error) {
         const attempt = row.attempt + 1
         const errorText = error instanceof Error ? error.message : String(error)
@@ -337,6 +422,52 @@ export class OutboxDispatcher {
                 row.id,
                 row.attempt,
               ).changes === 1
+            if (ok && row.kind === 'topic_start' && row.sessionId) {
+              this.db.run(
+                `UPDATE inbox_events
+                 SET status = 'dropped', processed_at = COALESCE(processed_at, ?)
+                 WHERE session_id = ? AND status = 'pending'`,
+                updatedAt,
+                row.sessionId,
+              )
+              const child = this.db.get<{
+                name: string | null
+                project_id: string | null
+                parent_session_id: string | null
+              }>(
+                'SELECT name, project_id, parent_session_id FROM sessions WHERE id = ?',
+                row.sessionId,
+              )
+              const parentId =
+                child?.parent_session_id ??
+                (child?.project_id
+                  ? this.db.get<{ hub_session_id: string | null }>(
+                      'SELECT hub_session_id FROM projects WHERE id = ?',
+                      child.project_id,
+                    )?.hub_session_id
+                  : undefined)
+              if (parentId) {
+                const label = child?.name
+                  ? `"${child.name}" (${row.sessionId})`
+                  : row.sessionId
+                this.db.run(
+                  `INSERT OR IGNORE INTO inbox_events (
+                     id, session_id, project_id, source, dedupe_key, wake, passive, payload_json, status, created_at
+                   ) VALUES (?, ?, ?, 'handoff', ?, 0, 0, ?, 'pending', ?)`,
+                  randomUUID(),
+                  parentId,
+                  child?.project_id ?? null,
+                  `topic-failed:${row.id}`,
+                  JSON.stringify({
+                    type: 'handoff_note',
+                    childSessionId: row.sessionId,
+                    status: 'failed',
+                    text: `${label} failed to open its topic thread: ${errorText}`,
+                  }),
+                  updatedAt,
+                )
+              }
+            }
           } else {
             const delayMs = BASE_RETRY_MS * 2 ** (attempt - 1)
             const nextRetryAt = new Date(nowMs + delayMs).toISOString()

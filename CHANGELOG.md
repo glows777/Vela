@@ -4,6 +4,13 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Added
+
+- **Platform-agnostic `Runtime` control tools, `VelaAgentDriver` capability integration, and SQLite-backed Dream (`S3c-1`):** ([#579](https://github.com/glows777/Vela/issues/579), [#534](https://github.com/glows777/Vela/issues/534))
+  - Added platform-agnostic Runtime tools in `driver/runtime-tools.ts` + `runtime/control-ops.ts`: `session_start`, `session_forward`, `session_list`, `session_read`, `session_message`, `timers`, `subscriptions`, `wait_for_input`, `send_file`, and channel-only `skip_reply`, with prompt guidance filtered to actually active tools, handoff depth/silent/human-provenance persistence across approval suspension, and topic routing via `channel_bindings` before waking child topic sessions (`ChannelDeliveryResult` adds optional `rootId` / `threadId`).
+  - Wired project trust (`canonicalEnvironmentPath`), trusted workspace `AGENTS.md` / skills / prompt templates (with `/skill:` and `/<template>` expansion), local-only workspace MCP attachment, network policy (`restricted`/`off` enforced ahead of project selection), `web_search` / `web_fetch` (HTML-to-Markdown conversion + 15s search timeout), and `memory` (collision-safe slugs, YAML-safe frontmatter serialization, `MAX_NOTE_CHARS = 16_000`, `offset`/`limit` read pagination, `ExecutionEnv`-aware lint, overflow compaction retention) into `VelaAgentDriver`.
+  - Replaced file-based `.dream/` queues/logs with transactional SQLite `kv_meta` monotonic sequence refs and human-provenance-filtered `vela_messages` evidence per Dream scope (with one-time read-only `.dream/` import on upgrade).
+
 ### Breaking Changes
 
 - **Vela now publishes a single npm package (`@glows777/vela`) and removes the built-in `rag` extension.** `@glows777/vela-core`, `@glows777/vela-channels`, `@glows777/vela-lark`, `@glows777/vela-mcp`, and `@glows777/vela-rag` (along with `sqlite-vec`, `rag`, `ragConfig`, `createEmbedder`, `EmbeddingFn`, and `createFauxEmbedder`) are retired. Import SDK APIs from `@glows777/vela`, extension authoring helpers from `@glows777/vela/extension-api`, and offline test helpers from `@glows777/vela/testing`. Heavy optional dependencies (`@larksuiteoapi/node-sdk`, `@modelcontextprotocol/sdk`, `@earendil-works/pi-tui`, `@silvia-odwyer/photon-node`) stay lazy-loaded off the cold-start graph ([#535](https://github.com/glows777/Vela/issues/535)).

@@ -222,3 +222,7 @@ export function mcp(options: McpOptions = {}): VelaExtension {
 }
 
 export { mcpConfig } from './config.ts'
+export {
+  type CreateRuntimeMcpAdapterOptions,
+  createRuntimeMcpAdapter,
+} from './runtime-adapter.ts'

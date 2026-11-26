@@ -15,6 +15,10 @@ import {
   executionEnvOs,
   type InternalExecutionEnv,
 } from '../execution/types.ts'
+import {
+  registerMemoryDatabase,
+  unregisterMemoryDatabase,
+} from '../memory/db-registry.ts'
 import { loadEnvironmentContextFiles } from '../prompt/environment-context-files.ts'
 import { loadEnvironmentTemplates } from '../prompt/environment-templates.ts'
 import { loadEnvironmentSkills } from '../skills/environment-skills.ts'
@@ -25,6 +29,18 @@ import { type InventoryEnv, workspaceDiscovery } from './workspace-discovery.ts'
 
 export function workspaceKey(id: string, location: ExecutionLocation) {
   return JSON.stringify([id, location.environment, location.cwd])
+}
+
+export function syncSessionNetwork(
+  session: {
+    registry: { setRestrictedNetwork(restricted: boolean): void }
+    location: ExecutionLocation
+  },
+  envNetworkMode?: (environment: string) => 'on' | 'off' | 'restricted',
+) {
+  session.registry.setRestrictedNetwork(
+    (envNetworkMode?.(session.location.environment) ?? 'on') !== 'on',
+  )
 }
 
 export async function loadWorkspaceInventory(
@@ -170,46 +186,50 @@ export async function disposeVelaRuntime(options: {
   shutdownRunner: () => Promise<void>
   sessions: Iterable<{ close(): Promise<void> | void }>
   listeners: { clear(): void }
-  db: { close(): void }
+  db: VelaDatabase & { close(): void }
   ownsDb: boolean
   ephemeral: boolean
   dataDir: string
   beforeDispose?: () => Promise<void> | void
 }): Promise<void> {
-  await options.settled
-  const errors: unknown[] = []
   try {
-    await options.beforeDispose?.()
-  } catch (error) {
-    errors.push(error)
-  }
-  const closed = await Promise.allSettled(
-    [...options.sessions].map((s) => Promise.resolve().then(() => s.close())),
-  )
-  for (const result of closed) {
-    if (result.status === 'rejected') errors.push(result.reason)
-  }
-  try {
-    await options.shutdownRunner()
-  } catch (error) {
-    errors.push(error)
-  }
-  options.listeners.clear()
-  if (options.ownsDb) {
+    await options.settled
+    const errors: unknown[] = []
     try {
-      options.db.close()
+      await options.beforeDispose?.()
     } catch (error) {
       errors.push(error)
     }
-  }
-  if (options.ephemeral) {
+    const closed = await Promise.allSettled(
+      [...options.sessions].map((s) => Promise.resolve().then(() => s.close())),
+    )
+    for (const result of closed) {
+      if (result.status === 'rejected') errors.push(result.reason)
+    }
     try {
-      rmSync(options.dataDir, { recursive: true, force: true })
+      await options.shutdownRunner()
     } catch (error) {
       errors.push(error)
     }
+    options.listeners.clear()
+    if (options.ownsDb) {
+      try {
+        options.db.close()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    if (options.ephemeral) {
+      try {
+        rmSync(options.dataDir, { recursive: true, force: true })
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    if (errors.length) throw new AggregateError(errors, 'Vela disposal failed')
+  } finally {
+    unregisterMemoryDatabase(options.dataDir, options.db)
   }
-  if (errors.length) throw new AggregateError(errors, 'Vela disposal failed')
 }
 
 export function openVelaStorage(options: {
@@ -257,6 +277,7 @@ export function openVelaStorage(options: {
       openDatabase({
         path: ephemeralSessions ? ':memory:' : join(dbDir, 'vela.db'),
       })
+    registerMemoryDatabase(dataDir, db)
     return {
       cwd,
       agentDir,
@@ -279,6 +300,7 @@ export function cleanupFailedVelaInit(
   ephemeral: boolean,
   dataDir: string,
 ): void {
+  unregisterMemoryDatabase(dataDir, db)
   if (ownsDb && db.open) db.close()
   if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
 }

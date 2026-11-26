@@ -63,6 +63,8 @@ export interface ChannelOutboundMessage {
 
 export interface ChannelDeliveryResult {
   externalMessageId?: string
+  threadId?: string
+  rootId?: string
 }
 
 export interface ChannelAdapterContext {

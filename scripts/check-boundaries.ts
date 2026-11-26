@@ -335,7 +335,7 @@ export async function checkBoundaries(root: string): Promise<string[]> {
           ?.source.getLineAndCharacterOfPosition(node.getStart()).line
       : undefined
     errors.push(
-      `${relative(root, file).replaceAll('\\', '/')}${at === undefined ? '' : ':' + (at + 1)}: ${message}`,
+      `${relative(root, file).replaceAll('\\', '/')}${at === undefined ? '' : `:${at + 1}`}: ${message}`,
     )
   }
 
@@ -436,7 +436,7 @@ export async function checkBoundaries(root: string): Promise<string[]> {
         const name = packageName(spec)
         const target = byName.get(name)
         if (target) {
-          const subpath = spec === name ? '.' : '.' + spec.slice(name.length)
+          const subpath = spec === name ? '.' : `.${spec.slice(name.length)}`
           destination = sourceTarget(target, subpath)
           if (!destination)
             report(file, edge.at, `private or missing export ${spec}`)
@@ -513,11 +513,16 @@ export async function checkBoundaries(root: string): Promise<string[]> {
       if (builtin) {
         const publicAPI = resolve(pkg.dir, 'src/extension-api.ts')
         const driverAPI = resolve(pkg.dir, 'src/driver/extension-api.ts')
+        const memoryBuiltin =
+          builtinDir === resolve(pkg.dir, 'src/driver/extensions/memory')
         const local =
           destination &&
           (inside(destination, builtinDir) ||
             destination === publicAPI ||
             destination === driverAPI ||
+            (memoryBuiltin &&
+              (inside(destination, resolve(pkg.dir, 'src/runtime/memory')) ||
+                inside(destination, resolve(pkg.dir, 'src/driver/memory')))) ||
             (file ===
               resolve(pkg.dir, 'src/driver/extensions/memory/dream.ts') &&
               (destination ===

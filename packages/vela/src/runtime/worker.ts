@@ -19,6 +19,7 @@ import {
   completeInboxBatchInTx,
   enqueueInboxEvent,
   type InboxEventRecord,
+  isTopicAwaitingBindingInDb,
   listProcessingInboxForRun,
   listSessionsWithPendingWake,
   requeueProcessingForRunInTx,
@@ -124,7 +125,9 @@ export function recoverRuntimeState(params: {
           run.session_id,
         )
         recoveredRuns.push(run.id)
-        sessionsToWake.add(run.session_id)
+        if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
+          sessionsToWake.add(run.session_id)
+        }
       } else {
         db.run(
           `UPDATE runs
@@ -143,7 +146,9 @@ export function recoverRuntimeState(params: {
         db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${run.id}`)
         db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${run.id}`)
         requeuedInboxRuns.push(run.id)
-        sessionsToWake.add(run.session_id)
+        if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
+          sessionsToWake.add(run.session_id)
+        }
       }
     }
 
@@ -168,7 +173,9 @@ export function recoverRuntimeState(params: {
         wake: true,
         payload: { type: 'approval_resolved', runId: run.id },
       })
-      sessionsToWake.add(run.session_id)
+      if (!isTopicAwaitingBindingInDb(db, run.session_id)) {
+        sessionsToWake.add(run.session_id)
+      }
     }
 
     const orphanedProcessing = db.all<{
@@ -218,7 +225,9 @@ export function recoverRuntimeState(params: {
         `UPDATE inbox_events SET status = 'pending', run_id = NULL WHERE id = ?`,
         row.id,
       )
-      if (row.session_id) sessionsToWake.add(row.session_id)
+      if (row.session_id && !isTopicAwaitingBindingInDb(db, row.session_id)) {
+        sessionsToWake.add(row.session_id)
+      }
     }
   })
 
@@ -246,6 +255,9 @@ export function claimNextTurnInDb(params: {
   return db.transaction(() => {
     const session = sessions.get(sessionId)
     if (!session) return undefined
+    if (session.kind === 'topic' && isTopicAwaitingBindingInDb(db, sessionId)) {
+      return undefined
+    }
 
     if (session.state === 'running') {
       const orphaned = db.get<{
@@ -427,13 +439,23 @@ export function commitCompletedTurnInTx(params: {
       `stop_requested:${claimed.runId}`,
     ),
   )
-  const finalStatus: RunEndStatus = stopRequested ? 'stopped' : 'completed'
+  const pendingApproval = !stopRequested
+    ? db.get<{ id: string; summary: string }>(
+        `SELECT id, summary FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+        claimed.runId,
+      )
+    : undefined
+  const finalStatus: RunEndStatus = stopRequested
+    ? 'stopped'
+    : pendingApproval
+      ? 'waiting_human'
+      : 'completed'
   const updatedRun = db.run(
     `UPDATE runs
      SET status = ?, error = NULL, finished_at = ?, updated_at = ?
      WHERE id = ? AND owner_token = ?`,
     finalStatus,
-    now,
+    finalStatus === 'waiting_human' ? null : now,
     now,
     claimed.runId,
     claimed.ownerToken,
@@ -441,12 +463,24 @@ export function commitCompletedTurnInTx(params: {
   if (updatedRun.changes !== 1) {
     throw new LostRunOwnershipError(claimed.runId)
   }
-  db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${claimed.runId}`)
   db.run('DELETE FROM kv_meta WHERE key = ?', `stop_requested:${claimed.runId}`)
+  if (finalStatus !== 'waiting_human') {
+    db.run(
+      'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?)',
+      `run_target:${claimed.runId}`,
+      `run_silent:${claimed.runId}`,
+      `run_handoff_depth:${claimed.runId}`,
+      `run_input_meta:${claimed.runId}`,
+    )
+  }
   db.run(
     `UPDATE sessions
-     SET state = 'idle', waiting_reason = NULL, updated_at = ?
+     SET state = ?, waiting_reason = ?, updated_at = ?
      WHERE id = ?`,
+    finalStatus === 'waiting_human' ? 'waiting_human' : 'idle',
+    finalStatus === 'waiting_human'
+      ? (pendingApproval?.summary ?? 'approval')
+      : null,
     now,
     claimed.session.id,
   )
@@ -462,7 +496,7 @@ export function commitCompletedTurnInTx(params: {
     },
   })
   if (
-    finalStatus === 'completed' &&
+    (finalStatus === 'completed' || finalStatus === 'waiting_human') &&
     !outcome.silent &&
     outcome.replyText &&
     outboxTarget
@@ -478,6 +512,12 @@ export function commitCompletedTurnInTx(params: {
       text: outcome.replyText,
     })
   }
+  recordChildStatusNoteForHubInTx(
+    db,
+    claimed,
+    finalStatus,
+    pendingApproval?.summary ?? outcome.replyText,
+  )
 }
 
 export function finalizeTurnInDb(params: {
@@ -490,14 +530,12 @@ export function finalizeTurnInDb(params: {
   const { db, eventBus, claimed, result, outboxTarget } = params
   const now = new Date().toISOString()
   db.transaction(() => {
-    const hasPendingApproval = Boolean(
-      db.get<{ id: string }>(
-        `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1`,
-        claimed.runId,
-      ),
+    const pendingApproval = db.get<{ id: string; summary: string }>(
+      `SELECT id, summary FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+      claimed.runId,
     )
     const status: RunEndStatus =
-      result.status === 'waiting_human' || hasPendingApproval
+      result.status === 'waiting_human' || pendingApproval
         ? 'waiting_human'
         : result.status
     const nextSessionState =
@@ -518,10 +556,13 @@ export function finalizeTurnInDb(params: {
       throw new LostRunOwnershipError(claimed.runId)
     }
     if (status !== 'waiting_human') {
-      db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${claimed.runId}`)
       db.run(
-        'DELETE FROM kv_meta WHERE key = ?',
+        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
+        `run_target:${claimed.runId}`,
         `stop_requested:${claimed.runId}`,
+        `run_silent:${claimed.runId}`,
+        `run_handoff_depth:${claimed.runId}`,
+        `run_input_meta:${claimed.runId}`,
       )
     }
     db.run(
@@ -529,7 +570,9 @@ export function finalizeTurnInDb(params: {
        SET state = ?, waiting_reason = ?, updated_at = ?
        WHERE id = ?`,
       nextSessionState,
-      nextSessionState === 'waiting_human' ? 'approval' : null,
+      nextSessionState === 'waiting_human'
+        ? (pendingApproval?.summary ?? 'approval')
+        : null,
       now,
       claimed.session.id,
     )
@@ -548,7 +591,7 @@ export function finalizeTurnInDb(params: {
       },
     })
     if (
-      status === 'completed' &&
+      (status === 'completed' || status === 'waiting_human') &&
       !result.silent &&
       result.replyText &&
       outboxTarget
@@ -564,6 +607,68 @@ export function finalizeTurnInDb(params: {
         text: result.replyText,
       })
     }
+    if (status !== 'interrupted') {
+      recordChildStatusNoteForHubInTx(
+        db,
+        claimed,
+        status,
+        pendingApproval?.summary ?? result.error ?? result.replyText,
+      )
+    }
+  })
+}
+
+export function recordChildStatusNoteForHubInTx(
+  db: VelaDatabase,
+  claimed: {
+    session: SessionRecord
+    runId: string
+    inputs: readonly DriverInboxItem[]
+  },
+  status: RunEndStatus,
+  detail?: string,
+): void {
+  const { session } = claimed
+  if (
+    !session.projectId ||
+    (session.kind !== 'topic' && session.kind !== 'work')
+  ) {
+    return
+  }
+  const allPassive =
+    claimed.inputs.length > 0 && claimed.inputs.every((item) => item.passive)
+  if (allPassive) return
+  const project = db.get<{ hub_session_id: string | null }>(
+    'SELECT hub_session_id FROM projects WHERE id = ?',
+    session.projectId,
+  )
+  const hubId = project?.hub_session_id
+  if (!hubId || hubId === session.id) return
+  const label = session.name
+    ? `Session "${session.name}" (${session.id})`
+    : `Session ${session.id}`
+  const clipped = detail ? detail.replace(/\s+/g, ' ').trim().slice(0, 200) : ''
+  const line =
+    status === 'stopped'
+      ? `${label} was stopped`
+      : status === 'failed'
+        ? `${label} failed: ${clipped || 'error'}`
+        : status === 'waiting_human'
+          ? `${label} is waiting for input: ${clipped || 'approval'}`
+          : `${label} finished: ${clipped || '(no reply)'}`
+  enqueueInboxEvent(db, {
+    sessionId: hubId,
+    projectId: session.projectId,
+    source: 'handoff',
+    dedupeKey: `child-status:${claimed.runId}:${status}`,
+    wake: false,
+    payload: {
+      type: 'handoff_note',
+      childSessionId: session.id,
+      runId: claimed.runId,
+      status,
+      text: line,
+    },
   })
 }
 
@@ -573,22 +678,32 @@ function outboxTargetFromInputs(
   for (const requireWake of [true, false]) {
     for (let i = inputs.length - 1; i >= 0; i--) {
       const item = inputs[i]!
-      if (item.source !== 'channel' || item.passive) continue
+      const isRouteSource =
+        item.source === 'channel' ||
+        item.source === 'timer' ||
+        (item.source === 'approval' && item.payload.waitForInput === true)
+      if (!isRouteSource || item.passive) {
+        continue
+      }
       if (requireWake && !item.wake) continue
       const payload = item.payload
       if (
         typeof payload.channel === 'string' &&
         typeof payload.externalChatId === 'string'
       ) {
+        const replyToMessageId =
+          typeof payload.replyToMessageId === 'string'
+            ? payload.replyToMessageId
+            : typeof payload.messageId === 'string'
+              ? payload.messageId
+              : undefined
         return {
           channel: payload.channel,
           externalChatId: payload.externalChatId,
           ...(typeof payload.threadId === 'string'
             ? { threadId: payload.threadId }
             : {}),
-          ...(typeof payload.messageId === 'string'
-            ? { replyToMessageId: payload.messageId }
-            : {}),
+          ...(replyToMessageId ? { replyToMessageId } : {}),
         }
       }
     }

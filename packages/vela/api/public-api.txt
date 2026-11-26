@@ -135,6 +135,8 @@
     validateTools?: ((names: readonly string[]) => void) | undefined
   interface ChannelDeliveryResult
     externalMessageId?: string | undefined
+    rootId?: string | undefined
+    threadId?: string | undefined
   interface ChannelEvent
     deliveryId: string
     details?: string | undefined

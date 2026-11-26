@@ -9,6 +9,7 @@ export type {
   ChannelInboundMessage,
   ChannelOutboundMessage,
 } from './channels.ts'
+export * from './control-ops.ts'
 export { EnvironmentRegistry } from './environments.ts'
 export type {
   RunEndStatus,
@@ -16,6 +17,7 @@ export type {
   RuntimeEventPayload,
   StreamDeltaEvent,
 } from './events.ts'
+export * from './memory/index.ts'
 export {
   VelaRuntimeEngine,
   type VelaRuntimeEngineOptions,

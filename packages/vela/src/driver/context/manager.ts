@@ -105,6 +105,23 @@ export class ContextManager {
   ): Promise<void> {
     this.onEvent?.({ type: 'compaction_start', reason })
     try {
+      let latestMemoryMsg: ModelMessage | undefined
+      if (reason === 'overflow') {
+        for (let i = request.messages.length - 1; i >= 0; i--) {
+          const candidate = request.messages[i]!
+          const candidateId = this.store.idOf(candidate)
+          const entry = candidateId
+            ? this.store.getEntry(candidateId)
+            : undefined
+          if (
+            entry?.type === 'custom_message' &&
+            entry.customType === 'memory'
+          ) {
+            latestMemoryMsg = candidate
+            break
+          }
+        }
+      }
       const estimate = Math.max(
         0,
         estimateRequestTokens(request) + this.tracker.contextDelta,
@@ -121,16 +138,31 @@ export class ContextManager {
         this.limits.maxInputTokens,
         focus,
       )
-      const after = estimateRequestTokens(request, compacted.messages)
+      const nextMessages =
+        latestMemoryMsg && !compacted.messages.includes(latestMemoryMsg)
+          ? [
+              compacted.messages[0]!,
+              latestMemoryMsg,
+              ...compacted.messages.slice(1),
+            ]
+          : compacted.messages
+      const after = estimateRequestTokens(request, nextMessages)
       request.abortSignal?.throwIfAborted()
       const [summaryMessage, firstKept] = compacted.messages
+      const preservedMemoryId =
+        latestMemoryMsg && !compacted.messages.includes(latestMemoryMsg)
+          ? this.store.idOf(latestMemoryMsg)
+          : undefined
       const entry = this.store.appendCompaction(
         summaryMessage as ModelMessage,
         compacted.summary,
         firstKept,
         before,
+        preservedMemoryId
+          ? { preservedEntryIds: [preservedMemoryId] }
+          : undefined,
       )
-      this.replace(compacted.messages, compacted.summary, false)
+      this.replace(nextMessages, compacted.summary, false)
       this.tracker.setEstimatedTokens(after)
       this.onEvent?.({
         type: 'compaction_end',

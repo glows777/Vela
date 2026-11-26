@@ -1,14 +1,9 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
-import { MemoryStore } from '../../packages/vela/src/driver/extensions/memory/store.ts'
+import { MemoryDream } from '../../packages/vela/src/driver/memory/dream.ts'
+import { MemoryStore } from '../../packages/vela/src/runtime/memory/store.ts'
 import {
   fauxText,
   fauxToolCall,
@@ -17,6 +12,7 @@ import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
+  type TestVela,
 } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -39,17 +35,26 @@ const result = (
   report = 'Consolidated recent conversations',
 ) => fauxText(JSON.stringify({ ops, report }))
 const text = (file: string) => readFileSync(file, 'utf8')
-const records = (file: string) =>
-  text(file)
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
-const notices = (t: ReturnType<typeof createTestVela>) =>
+const notices = (t: TestVela) =>
   t
     .eventsOf('notify')
     .map((e) => e.message)
     .join('\n')
+
+function dreamAudit(t: TestVela) {
+  const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
+  try {
+    const memoryDir = t.dataPath('memory')
+    const dream = new MemoryDream(new MemoryStore(memoryDir), db, {
+      kind: 'tagged',
+      key: `dir:${resolve(memoryDir)}`,
+    })
+    return dream.auditState()
+  } finally {
+    db.close()
+  }
+}
+
 async function until(check: () => boolean) {
   const deadline = Date.now() + 2000
   while (!check()) {
@@ -89,10 +94,10 @@ test('a real memory save and later correction consolidate offline with provenanc
   const note = await t.readData('memory/project_deploy-day.md')
   expect(note).toContain('Deploys happen on Monday')
   expect(note).toMatch(/sources:.*second/)
-  expect(await t.readData('memory/.dream/log.md')).toContain(
-    'Corrected deployment day',
-  )
-  expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
+  expect(existsSync(t.dataPath('memory/.dream'))).toBe(false)
+  const audit = dreamAudit(t)
+  expect(audit.logs.at(-1)?.report).toContain('Corrected deployment day')
+  expect(audit.pendingTurns).toEqual([])
   const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
   try {
     const ledger = db.all<{ kind: string; input_tokens: number }>(
@@ -113,57 +118,45 @@ test('a real memory save and later correction consolidate offline with provenanc
   expect(notices(t)).toMatch(/inbox/i)
 })
 
-for (const inboxKind of ['collected', 'legacy'] as const) {
-  test(`dream excludes assistant-only requirements from ${inboxKind} evidence`, async () => {
-    const user =
-      'Deploys have moved to Monday permanently. Draft a short announcement of the new schedule.'
-    const invented =
-      "Merge and release prep must be ready before Monday's deploy window."
-    const assistant = `Deploys now happen on Monday permanently. ${invented}`
-    const t = createTestVela({
-      responses: inboxKind === 'collected' ? [fauxText(assistant)] : [],
-      generate: [
-        (req) => {
-          // Replay the observed copying failure only when its source is exposed.
-          const copied = req.lastUserText.includes(invented)
-            ? ` ${invented}`
-            : ''
-          return result([
-            {
-              ...update('default'),
-              content: `Deploys happen on Monday permanently.${copied}`,
-            },
-          ])
-        },
-      ],
-    })
-    new MemoryStore(t.dataPath('memory')).save(deploy)
-    if (inboxKind === 'collected') await t.run(user)
-    else {
-      const dir = t.dataPath('memory/.dream')
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(
-        join(dir, 'inbox.jsonl'),
-        `${JSON.stringify({ id: 'legacy', sessionId: 'default', time: Date.now(), user, assistant, tools: ['memory'] })}\n`,
-      )
-    }
-    expect(await t.readData('memory/.dream/inbox.jsonl')).toContain(invented)
-    const before = JSON.stringify(t.session.messages)
-    await t.run('/dream')
-    const note = await t.readData('memory/project_deploy-day.md')
-    expect(note).toContain('Deploys happen on Monday permanently.')
-    expect(note).not.toContain(invented)
-    const call = t.model.calls.find((item) => item.kind === 'generate')!
-    expect(call.system).toContain('User messages are the evidence')
-    const input = JSON.parse(call.lastUserText)
-    expect(input.inbox[0].user).toBe(user)
-    expect(input.inbox[0].sessionId).toBe('default')
-    expect(input.inbox[0]).not.toHaveProperty('assistant')
-    expect(call.lastUserText).not.toContain(invented)
-    expect(JSON.stringify(t.session.messages)).toBe(before)
-    expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
+test('dream excludes assistant-only requirements from collected evidence', async () => {
+  const user =
+    'Deploys have moved to Monday permanently. Draft a short announcement of the new schedule.'
+  const invented =
+    "Merge and release prep must be ready before Monday's deploy window."
+  const assistant = `Deploys now happen on Monday permanently. ${invented}`
+  const t = createTestVela({
+    responses: [fauxText(assistant)],
+    generate: [
+      (req) => {
+        // Replay the observed copying failure only when its source is exposed.
+        const copied = req.lastUserText.includes(invented) ? ` ${invented}` : ''
+        return result([
+          {
+            ...update('default'),
+            content: `Deploys happen on Monday permanently.${copied}`,
+          },
+        ])
+      },
+    ],
   })
-}
+  new MemoryStore(t.dataPath('memory')).save(deploy)
+  await t.run(user)
+  expect(existsSync(t.dataPath('memory/.dream'))).toBe(false)
+  const before = JSON.stringify(t.session.messages)
+  await t.run('/dream')
+  const note = await t.readData('memory/project_deploy-day.md')
+  expect(note).toContain('Deploys happen on Monday permanently.')
+  expect(note).not.toContain(invented)
+  const call = t.model.calls.find((item) => item.kind === 'generate')!
+  expect(call.system).toContain('User messages are the evidence')
+  const input = JSON.parse(call.lastUserText)
+  expect(input.inbox[0].user).toBe(user)
+  expect(input.inbox[0].sessionId).toBe('default')
+  expect(input.inbox[0]).not.toHaveProperty('assistant')
+  expect(call.lastUserText).not.toContain(invented)
+  expect(JSON.stringify(t.session.messages)).toBe(before)
+  expect(dreamAudit(t).pendingTurns).toEqual([])
+})
 
 test('assistant-only keywords cannot select dream notes over the budget', async () => {
   let sentNotes: { filename: string }[] = []
@@ -184,9 +177,11 @@ test('assistant-only keywords cannot select dream notes over the budget', async 
       type: 'project',
       content: 'Keep the verified release checklist. '.repeat(60).trim(),
     })
-  expect(JSON.stringify(store.list()).length).toBeGreaterThan(60_000)
-  await t.run('Qwertyuiopasdfghjkl')
+  await t.run('Consolidate old notes')
   await t.run('/dream')
+  expect(sentNotes.some((n) => n.filename === 'project_legacy-039.md')).toBe(
+    false,
+  )
   expect(sentNotes[0]?.filename).toBe('project_legacy-000.md')
 })
 
@@ -269,7 +264,7 @@ test('a live save during an isolated dream is preserved and the skipped overwrit
   await dreaming
   expect(await t.readData('memory/project_deploy-day.md')).toContain('Tuesday')
   expect(notices(t)).toMatch(/skip/i)
-  expect(await t.readData('memory/.dream/log.md')).toMatch(/skip/i)
+  expect(dreamAudit(t).logs.at(-1)?.report).toMatch(/skip/i)
 })
 
 test('over 200 index entries remain discoverable and dream condenses the injected index', async () => {
@@ -312,21 +307,18 @@ test('over 200 index entries remain discoverable and dream condenses the injecte
 
 for (const trigger of ['20 turns', 'older than 24 hours']) {
   test(`automatic dream after ${trigger} does not delay a reply`, async () => {
-    const turns = trigger === '20 turns' ? 20 : 1
+    let now = Date.now()
+    const clock =
+      trigger === '20 turns'
+        ? undefined
+        : spyOn(Date, 'now').mockImplementation(() => now)
+    const turns = trigger === '20 turns' ? 20 : 2
     const t = createTestVela({
       responses: Array.from({ length: turns }, () =>
         fauxText('Immediate answer'),
       ),
       generate: [result()],
     })
-    if (trigger !== '20 turns') {
-      const dir = t.dataPath('memory/.dream')
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(
-        join(dir, 'inbox.jsonl'),
-        `${JSON.stringify({ id: 'old', time: Date.now() - 25 * 3600_000, sessionId: 'old-session', user: 'Old durable fact', assistant: 'Noted', tools: [] })}\n`,
-      )
-    }
     let release!: () => void
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -339,14 +331,21 @@ for (const trigger of ['20 turns', 'older than 24 hours']) {
       return generate(opts)
     })
     try {
-      for (let i = 0; i < turns; i++) await t.run(`Turn ${i}`)
+      for (let i = 0; i < turns; i++) {
+        await t.run(`Turn ${i}`)
+        if (trigger !== '20 turns' && i === 0) {
+          now += 25 * 3600_000
+        }
+      }
       expect(t.lastAssistantText()).toBe('Immediate answer')
       await until(() => started)
       expect(t.session.busy.locked).toBe(false)
     } finally {
       release()
+      clock?.mockRestore()
     }
-    await until(() => existsSync(t.dataPath('memory/.dream/log.md')))
+    await until(() => dreamAudit(t).logs.length > 0)
+    expect(existsSync(t.dataPath('memory/.dream'))).toBe(false)
     expect(
       t.model.calls.filter((call) => call.kind === 'generate'),
     ).toHaveLength(1)
@@ -363,7 +362,7 @@ test('automatic dream can be disabled while the manual command remains available
   expect(t.model.calls.filter((call) => call.kind === 'generate')).toHaveLength(
     0,
   )
-  expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toHaveLength(21)
+  expect(dreamAudit(t).pendingTurns).toHaveLength(21)
   await t.run('/dream')
   expect(t.model.calls.filter((call) => call.kind === 'generate')).toHaveLength(
     1,
@@ -377,7 +376,8 @@ test('memory-denied sessions neither collect inbox records nor run a dream', asy
   })
   await t.run('Do not store this')
   await t.run('/dream')
-  expect(existsSync(t.dataPath('memory/.dream/inbox.jsonl'))).toBe(false)
+  expect(existsSync(t.dataPath('memory/.dream'))).toBe(false)
+  expect(dreamAudit(t).pendingTurns).toEqual([])
   expect(t.model.calls).toHaveLength(1)
   expect(notices(t)).toContain('Memory is not enabled')
 })
@@ -400,19 +400,17 @@ for (const invalid of [
     })
     new MemoryStore(t.dataPath('memory')).save(deploy)
     await t.run('Deploys moved to Monday')
-    const inbox = await t.readData('memory/.dream/inbox.jsonl')
+    const pendingBefore = dreamAudit(t).pendingTurns
     const note = await t.readData('memory/project_deploy-day.md')
     await t.run('/dream')
-    expect(await t.readData('memory/.dream/inbox.jsonl')).toBe(inbox)
+    expect(dreamAudit(t).pendingTurns).toEqual(pendingBefore)
     expect(await t.readData('memory/project_deploy-day.md')).toBe(note)
     expect(notices(t)).toMatch(/fail|invalid|error/i)
     // One correction round, then the run fails: no third call and no loop.
     expect(
       t.model.calls.filter((call) => call.kind === 'generate'),
     ).toHaveLength(2)
-    expect(
-      JSON.parse(await t.readData('memory/.dream/state.json')).lastRun.failed,
-    ).not.toContain('\n')
+    expect(dreamAudit(t).lastRun?.failed).not.toContain('\n')
   })
 }
 
@@ -422,31 +420,26 @@ test('the private inbox caps each side, excludes tool output and counts dropped 
     responses: [
       fauxToolCall('memory', { action: 'list' }),
       fauxText('A'.repeat(5000)),
-      ...Array.from({ length: 40 }, () => fauxText('A'.repeat(5000))),
+      ...Array.from({ length: 55 }, () => fauxText('A'.repeat(5000))),
     ],
   })
   new MemoryStore(t.dataPath('memory')).save({
     ...deploy,
     description: 'TOOL_OUTPUT_SECRET',
   })
-  for (let i = 0; i < 41; i++) await t.run(`Turn ${i}: ${'U'.repeat(5000)}`)
-  const file = t.dataPath('memory/.dream/inbox.jsonl')
-  expect(statSync(file).size).toBeLessThanOrEqual(102400)
-  expect(statSync(file).mode & 0o777).toBe(0o600)
-  const inbox = records(file)
-  expect(inbox.length).toBeLessThan(41)
-  expect(inbox.at(-1).user).toContain('Turn 40:')
-  for (const row of inbox) {
+  for (let i = 0; i < 56; i++) await t.run(`Turn ${i}: ${'U'.repeat(5000)}`)
+  expect(existsSync(t.dataPath('memory/.dream'))).toBe(false)
+  const audit = dreamAudit(t)
+  expect(audit.pendingTurns.length).toBeLessThan(56)
+  expect(audit.pendingTurns.at(-1)!.user).toContain('Turn 55:')
+  for (const row of audit.pendingTurns) {
     expect(row.user.length).toBeLessThanOrEqual(2100)
-    expect(row.assistant.length).toBeLessThanOrEqual(2100)
     expect(row.sessionId).toBe('default')
     expect(typeof row.time).toBe('number')
     expect(Array.isArray(row.tools)).toBe(true)
   }
-  expect(text(file)).not.toContain('TOOL_OUTPUT_SECRET')
-  expect(JSON.parse(await t.readData('memory/.dream/state.json')).dropped).toBe(
-    41 - inbox.length,
-  )
+  expect(JSON.stringify(audit.pendingTurns)).not.toContain('TOOL_OUTPUT_SECRET')
+  expect(audit.dropped).toBe(56 - audit.pendingTurns.length)
 })
 
 test('an unknown provenance session rejects the pass and retains its evidence', async () => {
@@ -456,9 +449,9 @@ test('an unknown provenance session rejects the pass and retains its evidence', 
   })
   new MemoryStore(t.dataPath('memory')).save(deploy)
   await t.run('Deploys moved to Monday')
-  const inbox = await t.readData('memory/.dream/inbox.jsonl')
+  const pendingBefore = dreamAudit(t).pendingTurns
   await t.run('/dream')
-  expect(await t.readData('memory/.dream/inbox.jsonl')).toBe(inbox)
+  expect(dreamAudit(t).pendingTurns).toEqual(pendingBefore)
   expect(await t.readData('memory/project_deploy-day.md')).toContain('Friday')
 })
 
@@ -469,13 +462,13 @@ test('a failed isolated model call keeps inbox evidence for a later successful r
   })
   new MemoryStore(t.dataPath('memory')).save(deploy)
   await t.run('Deploys moved to Monday')
-  const inbox = await t.readData('memory/.dream/inbox.jsonl')
+  const pendingBefore = dreamAudit(t).pendingTurns
   await t.run('/dream')
-  expect(await t.readData('memory/.dream/inbox.jsonl')).toBe(inbox)
+  expect(dreamAudit(t).pendingTurns).toEqual(pendingBefore)
   expect(notices(t)).toMatch(/fail|unavailable|error/i)
   await t.run('/dream')
   expect(await t.readData('memory/project_deploy-day.md')).toContain('Monday')
-  expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
+  expect(dreamAudit(t).pendingTurns).toEqual([])
 })
 
 test('ops apply without a reason or description, and the report names the fallbacks', async () => {
@@ -538,7 +531,7 @@ test('a rejected reply is corrected once with its own text and a one-line error'
   expect(correction).toContain('Deploys moved to Monday')
   expect(existsSync(t.dataPath('escape.md'))).toBe(false)
   expect(text(t.dataPath('memory/project_deploy-day.md'))).toContain('Monday')
-  expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
+  expect(dreamAudit(t).pendingTurns).toEqual([])
   const db = openDatabase({ path: join(t.dataDir, 'vela.db'), readonly: true })
   try {
     expect(
@@ -574,11 +567,10 @@ test('inbox captures tool names but never tool output, even before any record is
     description: 'ONLY_TOOL_OUTPUT',
   })
   await t.run('List memories')
-  const inbox = records(t.dataPath('memory/.dream/inbox.jsonl'))
+  const inbox = dreamAudit(t).pendingTurns
   expect(inbox).toHaveLength(1)
-  expect(inbox[0].tools).toEqual(['memory'])
-  expect(inbox[0].user).toBe('List memories')
-  expect(inbox[0].assistant).toBe('Noted')
+  expect(inbox[0]!.tools).toEqual(['memory'])
+  expect(inbox[0]!.user).toBe('List memories')
   expect(JSON.stringify(inbox)).not.toContain('ONLY_TOOL_OUTPUT')
 })
 
@@ -619,7 +611,7 @@ for (const inbox of ['empty', 'no matching conversations'] as const) {
     }
     expect(JSON.stringify(store.list()).length).toBeGreaterThan(60_000)
     if (inbox !== 'empty') await t.run('Qwertyuiopasdfghjkl')
-    else expect(existsSync(t.dataPath('memory/.dream/inbox.jsonl'))).toBe(false)
+    else expect(dreamAudit(t).pendingTurns).toEqual([])
     const before = JSON.stringify(t.session.messages)
     await t.run('/dream')
     expect(
@@ -628,7 +620,7 @@ for (const inbox of ['empty', 'no matching conversations'] as const) {
     ).toBe(content)
     expect(store.list()).toHaveLength(39)
     expect(existsSync(t.dataPath('memory/project_legacy-000.md'))).toBe(false)
-    expect(await t.readData('memory/.dream/log.md')).toContain(
+    expect(dreamAudit(t).logs.at(-1)?.report).toContain(
       'Removed a duplicate legacy checklist',
     )
     expect(JSON.stringify(t.session.messages)).toBe(before)
@@ -685,7 +677,7 @@ for (const action of ['update', 'delete'] as const) {
     expect(existsSync(path)).toBe(true)
     expect(text(path)).toBe(edited)
     expect(notices(t)).toMatch(/skip/i)
-    expect(await t.readData('memory/.dream/log.md')).toMatch(/skip/i)
+    expect(dreamAudit(t).logs.at(-1)?.report).toMatch(/skip/i)
   })
 }
 

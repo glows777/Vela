@@ -17,6 +17,7 @@ import {
 import {
   buildSessionContext,
   buildSessionPath,
+  contextEntries,
   messageText,
   type SessionEntry,
   type SessionSummary,
@@ -206,10 +207,50 @@ export function loadSavedSessionFromDb(
   if (location !== undefined) validateStoredLocation(location)
   const leaf = meta.row.leaf_message_id
   const byId = new Map(entries.map((e) => [e.id, e]))
+  const path = buildSessionPath(entries, leaf, byId)
   const context = buildSessionContext(entries, leaf, byId)
-  const activeIds = new Set(
-    buildSessionPath(entries, leaf, byId).map((e) => e.id),
-  )
+  const activeCompaction = contextEntries(path).compaction
+  if (activeCompaction) {
+    const compRow = rows.find((r) => r.id === activeCompaction.id)
+    if (compRow?.details_json) {
+      try {
+        const parsedDetails = JSON.parse(compRow.details_json) as {
+          preservedEntryIds?: unknown
+        }
+        if (Array.isArray(parsedDetails.preservedEntryIds)) {
+          const presentIds = new Set(context.ids.values())
+          let insertAt = 1
+          for (const rawId of parsedDetails.preservedEntryIds) {
+            if (typeof rawId !== 'string' || presentIds.has(rawId)) continue
+            const retained = byId.get(rawId)
+            if (retained?.type !== 'custom_message') continue
+            const msg: ModelMessage = {
+              role: 'user',
+              content: retained.content,
+            }
+            context.messages.splice(insertAt++, 0, msg)
+            context.ids.set(msg, retained.id)
+            const parsedTime = Date.parse(retained.timestamp)
+            context.timestamps.set(
+              msg,
+              Number.isFinite(parsedTime) ? parsedTime : Date.now(),
+            )
+            context.custom.set(msg, {
+              customType: retained.customType,
+              display: retained.display,
+              ...(retained.details === undefined
+                ? {}
+                : { details: retained.details }),
+            })
+            presentIds.add(retained.id)
+          }
+        }
+      } catch {
+        /* ignore malformed compaction details */
+      }
+    }
+  }
+  const activeIds = new Set(path.map((e) => e.id))
   const latestAssistantUsage = computeLatestAssistantUsage(
     rows,
     activeIds,

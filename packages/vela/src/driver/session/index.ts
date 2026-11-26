@@ -720,6 +720,7 @@ export class SessionStore {
     summary: string,
     firstKept: ModelMessage | undefined,
     tokensBefore: number,
+    extra?: { preservedEntryIds?: string[] },
   ): CompactionEntry {
     const firstKeptEntryId = firstKept ? this.ids.get(firstKept) : undefined
     if (firstKept && !firstKeptEntryId)
@@ -741,6 +742,14 @@ export class SessionStore {
             entry.id,
           )
         }
+      }
+      if (extra?.preservedEntryIds?.length && this.started) {
+        this.db.run(
+          'UPDATE vela_messages SET details_json = ? WHERE session_id = ? AND id = ?',
+          JSON.stringify({ preservedEntryIds: extra.preservedEntryIds }),
+          this.sessionId,
+          entry.id,
+        )
       }
       this.ids.set(summaryMessage, entry.id)
       return entry

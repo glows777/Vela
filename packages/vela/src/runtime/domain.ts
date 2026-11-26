@@ -233,6 +233,7 @@ export class ProjectStore {
 
   create(input: CreateProjectInput): ProjectRecord {
     const id = input.id ?? randomUUID()
+    assertSafePathSegment(id, 'projectId')
     const now = new Date().toISOString()
     return this.db.transaction(() => {
       const autoHub = input.hubSessionId === true

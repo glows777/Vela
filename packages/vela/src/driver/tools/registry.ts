@@ -196,6 +196,7 @@ export class ToolRegistry {
   private selection?: ReadonlySet<string>
   private defaultToolStates?: ReadonlyMap<string, boolean> // +name / -name overrides from --tools or defaultTools
   private channel?: string
+  private restrictedNetwork = false
   /** Only these tools are visible / callable by the model; undefined removes the limit */
   setSelection(names: Iterable<string> | undefined): void {
     const list = names ? [...names] : undefined
@@ -220,6 +221,11 @@ export class ToolRegistry {
     this.channel = name
   }
 
+  /** Disables host web tools by default when the session runs inside a restricted-network container. */
+  setRestrictedNetwork(restricted: boolean): void {
+    this.restrictedNetwork = restricted
+  }
+
   /** Whether tool selection and channel eligibility make a tool available in this session. */
   isAvailable(toolName: string): boolean {
     const tool = this.tools.get(toolName)
@@ -228,6 +234,11 @@ export class ToolRegistry {
       tool.channel === true
         ? !this.channel
         : tool.channel !== undefined && tool.channel !== this.channel
+    )
+      return false
+    if (
+      this.restrictedNetwork &&
+      (toolName === 'web_fetch' || toolName === 'web_search')
     )
       return false
     if (this.selection) return this.selection.has(toolName)

@@ -24,7 +24,10 @@ export function tavilySearchTool(apiKey: string): ToolDefinition {
     maxResultChars: 50 * 1024,
     execute: async ({ query, max_results = 5 }: SearchInput, context) => {
       const res = await fetch('https://api.tavily.com/search', {
-        signal: context?.signal,
+        signal: AbortSignal.any([
+          AbortSignal.timeout(15_000),
+          ...(context?.signal ? [context.signal] : []),
+        ]),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -70,7 +73,10 @@ export function serperSearchTool(apiKey: string): ToolDefinition {
     maxResultChars: 50 * 1024,
     execute: async ({ query, max_results = 5 }: SearchInput, context) => {
       const res = await fetch('https://google.serper.dev/search', {
-        signal: context?.signal,
+        signal: AbortSignal.any([
+          AbortSignal.timeout(15_000),
+          ...(context?.signal ? [context.signal] : []),
+        ]),
         method: 'POST',
         headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: query, num: max_results }),
@@ -155,10 +161,18 @@ export const webFetchTool: ToolDefinition = {
       })
       if (!res.ok) return `Fetch failed: HTTP ${res.status}`
       const { text, truncated } = await readLimited(res, MAX_FETCH_BYTES)
-      const markdown = turndown.turndown(text)
+      const contentType =
+        res.headers
+          .get('content-type')
+          ?.split(';', 1)[0]
+          ?.trim()
+          .toLowerCase() ?? ''
+      const isHtml =
+        contentType === 'text/html' || contentType === 'application/xhtml+xml'
+      const body = isHtml ? turndown.turndown(text) : text
       return truncated
-        ? `${markdown}\n\n[Truncated: the page is larger than ${MAX_FETCH_BYTES / 1024 / 1024} MB; only the start was read]`
-        : markdown
+        ? `${body}\n\n[Truncated: the page is larger than ${MAX_FETCH_BYTES / 1024 / 1024} MB; only the start was read]`
+        : body
     } catch (err) {
       return `Fetch failed: ${err instanceof Error ? err.message : String(err)}`
     }

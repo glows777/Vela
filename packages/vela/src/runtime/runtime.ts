@@ -10,11 +10,13 @@ import {
   createApprovalRequest,
   listRuntimePendingApprovals,
   resolveRuntimeApproval,
+  resolveWaitForInputOnUserReplyInTx,
 } from './approvals.ts'
 import { BackgroundJobManager } from './background-jobs.ts'
 import { BlobStore } from './blobs.ts'
 import { ingestChannelMessageInRuntime } from './channel-ingress.ts'
 import type { ChannelAdapter } from './channels.ts'
+import { stopSessionRunsInDb } from './control-ops.ts'
 import {
   ChannelBindingStore,
   ProjectStore,
@@ -120,6 +122,7 @@ export class VelaRuntimeEngine {
       this.db,
       (name) => this.channels.get(name),
       () => this.syncWakeTimer(),
+      (sessionId) => this.scheduleSession(sessionId),
     )
     this.timers = new TimerScheduler(
       this.db,
@@ -160,6 +163,7 @@ export class VelaRuntimeEngine {
           projects: this.projects,
           sessions: this.sessions,
           bindings: this.bindings,
+          eventBus: this.eventBus,
           adapter,
           msg: message,
           executeShortcut: (shortcutInput) =>
@@ -202,21 +206,31 @@ export class VelaRuntimeEngine {
     if (!session) throw new Error(`Session ${input.sessionId} not found`)
     const passive = input.passive === true
     const wake = input.wake ?? !passive
-    const result = enqueueInboxEvent(this.db, {
-      sessionId: input.sessionId,
-      projectId: session.projectId,
-      source: input.source ?? 'user',
-      dedupeKey: input.dedupeKey ?? null,
-      wake,
-      passive,
-      payload: {
-        type: input.source ?? 'user',
-        text: input.text,
-        ...(input.attachments?.length
-          ? { attachments: input.attachments }
-          : {}),
-        ...(input.metadata ? { metadata: input.metadata } : {}),
-      },
+    const source = input.source ?? 'user'
+    const result = this.db.transaction(() => {
+      const enqueued = enqueueInboxEvent(this.db, {
+        sessionId: input.sessionId,
+        projectId: session.projectId,
+        source,
+        dedupeKey: input.dedupeKey ?? null,
+        wake,
+        passive,
+        payload: {
+          type: source,
+          text: input.text,
+          ...(input.attachments?.length
+            ? { attachments: input.attachments }
+            : {}),
+          ...(input.metadata ? { metadata: input.metadata } : {}),
+        },
+      })
+      if (enqueued.inserted && wake && !passive && source === 'user') {
+        resolveWaitForInputOnUserReplyInTx(this.db, this.eventBus, {
+          sessionId: input.sessionId,
+          replyText: input.text,
+        })
+      }
+      return enqueued
     })
     if (result.inserted && result.event.wake) {
       this.scheduleSession(input.sessionId)
@@ -339,35 +353,16 @@ export class VelaRuntimeEngine {
       reason,
     )
     const stoppedJobs = this.backgroundJobs.stopSessionJobs(sessionId)
-    const now = new Date().toISOString()
-    this.db.transaction(() => {
-      const rows = this.db.all<{ id: string }>(
-        `SELECT id FROM runs
-         WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+    if (
+      stopSessionRunsInDb(
+        this.db,
+        this.sessions.get(sessionId),
         sessionId,
+        reason,
       )
-      const updated = this.db.run(
-        `UPDATE runs SET status = 'stopped', finished_at = COALESCE(finished_at, ?), updated_at = ?
-         WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
-        now,
-        now,
-        sessionId,
-      )
-      for (const r of rows) {
-        this.db.run('DELETE FROM kv_meta WHERE key = ?', `run_target:${r.id}`)
-        this.db.run(
-          'DELETE FROM kv_meta WHERE key = ?',
-          `stop_requested:${r.id}`,
-        )
-      }
-      if (updated.changes > 0) cancelledRun = true
-      this.db.run(
-        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
-         WHERE id = ? AND state IN ('running', 'waiting_human')`,
-        now,
-        sessionId,
-      )
-    })
+    ) {
+      cancelledRun = true
+    }
     return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
   }
 
@@ -715,6 +710,15 @@ export class VelaRuntimeEngine {
             })
           },
           wakeSession: (sid) => this.scheduleSession(sid),
+          flushOutbox: () => {
+            if (this.channels.size > 0) {
+              void this.outbox
+                .flushOnce()
+                .catch((error) =>
+                  this.logger.error(`[runtime] outbox flush failed: ${error}`),
+                )
+            }
+          },
           onTerminalCommitInTx: (outcome) =>
             commitCompletedTurnInTx({
               db: this.db,
@@ -768,7 +772,11 @@ export class VelaRuntimeEngine {
           )
       }
       this.syncWakeTimer()
-      if (result?.status === 'waiting_human') break
+      if (
+        result?.status === 'waiting_human' ||
+        this.sessions.get(sessionId)?.state === 'waiting_human'
+      )
+        break
     }
   }
 }

@@ -128,6 +128,7 @@ test('web_fetch keeps a 20KB page whole and an oversized page head with one reco
         new URL(req.url).pathname === '/small'
           ? `<p>${small}</p>`
           : `<p>${large}</p>`,
+        { headers: { 'content-type': 'text/html' } },
       ),
   })
   try {
