@@ -146,7 +146,7 @@ export class McpConnection implements McpToolCaller {
     const isHttp = 'url' in this.entry.config
     for (let attempt = 0; ; attempt++) {
       try {
-        const opened = await this.openOnce()
+        const opened = await this.openOnce(generation)
         if (this.shutdown.signal.aborted || generation !== this.generation) {
           await opened.client.close().catch(() => {})
           throw new Error('shut down')
@@ -192,7 +192,7 @@ export class McpConnection implements McpToolCaller {
     return message
   }
 
-  private async openOnce(): Promise<{
+  private async openOnce(generation: number): Promise<{
     client: Client
     instructions: string | undefined
     tools: McpTool[]
@@ -206,18 +206,19 @@ export class McpConnection implements McpToolCaller {
       import('@modelcontextprotocol/sdk/types.js'),
       import('@modelcontextprotocol/sdk/validation/cfworker'),
     ])
-    this.stderrTail = ''
     const transport = await (
       this.options.createTransport ?? this.createTransport
     )(this.entry, this.options.cwd)
-    if (this.shutdown.signal.aborted) {
+    if (this.shutdown.signal.aborted || generation !== this.generation) {
       await transport.close().catch(() => {})
       throw new Error('shut down')
     }
+    this.stderrTail = ''
     this.connecting = transport
     const stderr = (transport as { stderr?: NodeJS.ReadableStream | null })
       .stderr
     stderr?.on('data', (chunk: Buffer | string) => {
+      if (generation !== this.generation) return
       this.stderrTail = (this.stderrTail + chunk.toString()).slice(
         -STDERR_TAIL_CHARS,
       )

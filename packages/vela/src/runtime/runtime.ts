@@ -40,6 +40,7 @@ import {
   enqueueInboxEvent,
   hasSessionPendingWake,
   type InboxEventRecord,
+  isTopicAwaitingBindingInDb,
 } from './inbox.ts'
 import { OutboxDispatcher } from './outbox.ts'
 import { type ControlShortcut, executeControlShortcut } from './shortcuts.ts'
@@ -66,6 +67,7 @@ interface ActiveWorker {
   ownerToken: string
   controller: AbortController
   promise: Promise<void>
+  interrupted?: boolean
 }
 
 /**
@@ -178,7 +180,7 @@ export class VelaRuntimeEngine {
     if (!existing) return
     this.channels.delete(name)
     await existing.stop()
-    await this.outbox.drain().catch(() => {})
+    await this.outbox.drainChannel(name).catch(() => {})
   }
 
   channelAdapter(name: string): ChannelAdapter | undefined {
@@ -314,48 +316,55 @@ export class VelaRuntimeEngine {
     this.enterStopFence(sessionId)
     try {
       let cancelledRun = false
-      const active = this.activeWorkers.get(sessionId)
-      if (active) {
-        cancelledRun = true
-        active.controller.abort(new DOMException(reason, 'AbortError'))
-        const session = this.sessions.get(sessionId)
-        const driver = session ? this.drivers.get(session.driver) : undefined
-        await driver?.abort?.(sessionId)
-        await active.promise.catch(() => {})
-      }
+      let cancelledApprovals = 0
+      let stoppedJobs = 0
+      for (let pass = 0; pass < 2; pass++) {
+        const active = this.activeWorkers.get(sessionId)
+        if (active) {
+          cancelledRun = true
+          active.controller.abort(new DOMException(reason, 'AbortError'))
+          const session = this.sessions.get(sessionId)
+          const driver = session ? this.drivers.get(session.driver) : undefined
+          await driver?.abort?.(sessionId)
+          await active.promise.catch(() => {})
+        }
 
-      const external = await stopExternalSessionRuns({
-        db: this.db,
-        activeOwners: this.activeOwners,
-        sessionId,
-        reason,
-        isStopped: () => this.disposed,
-      })
-      if (external.stillOwnedRemotely) {
-        return false
-      }
-      if (external.cancelled) {
-        cancelledRun = true
-      }
+        const external = await stopExternalSessionRuns({
+          db: this.db,
+          activeOwners: this.activeOwners,
+          sessionId,
+          reason,
+          isStopped: () => this.disposed,
+        })
+        if (external.stillOwnedRemotely) {
+          return false
+        }
+        if (external.cancelled) {
+          cancelledRun = true
+        }
 
-      const cancelledApprovals = cancelPendingApprovalsForSession(
-        this.db,
-        this.eventBus,
-        sessionId,
-        reason,
-      )
-      const stoppedJobs = this.backgroundJobs.stopSessionJobs(sessionId)
-      if (
-        stopSessionRunsInDb(
+        cancelledApprovals += cancelPendingApprovalsForSession(
+          this.db,
+          this.eventBus,
+          sessionId,
+          reason,
+        )
+        stoppedJobs += this.backgroundJobs.stopSessionJobs(sessionId)
+        const dbStopped = stopSessionRunsInDb(
           this.db,
           this.sessions.get(sessionId),
           sessionId,
           reason,
+          this.activeOwners,
         )
-      ) {
-        cancelledRun = true
+        if (dbStopped.cancelled) {
+          cancelledRun = true
+        }
+        if (!dbStopped.liveOtherRuns) {
+          return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
+        }
       }
-      return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
+      return false
     } finally {
       this.leaveStopFence(sessionId)
     }
@@ -487,6 +496,7 @@ export class VelaRuntimeEngine {
         if (
           !this.disposed &&
           !worker.controller.signal.aborted &&
+          !worker.interrupted &&
           !this.stoppingSessions.has(sessionId) &&
           this.canWakeSessionNow(sessionId)
         ) {
@@ -499,6 +509,12 @@ export class VelaRuntimeEngine {
     if (!this.db.open) return false
     const session = this.sessions.get(sessionId)
     if (!session) return false
+    if (
+      session.kind === 'topic' &&
+      isTopicAwaitingBindingInDb(this.db, sessionId)
+    ) {
+      return false
+    }
     if (session.state === 'waiting_human') {
       const pendingApproval = this.db.get<{ id: string }>(
         `SELECT id FROM approvals WHERE session_id = ? AND status = 'pending' LIMIT 1`,
@@ -588,26 +604,26 @@ export class VelaRuntimeEngine {
       clearTimeout(this.nextWakeTimer)
       this.nextWakeTimer = undefined
     }
+    const channels = [...this.channels.entries()]
+    this.channels.clear()
     for (const worker of this.activeWorkers.values()) {
       worker.controller.abort(
         new DOMException('Runtime disposed', 'AbortError'),
       )
     }
     try {
-      await Promise.allSettled(
-        [...this.activeWorkers.values()].map((w) => w.promise),
-      )
-      const channels = [...this.channels.entries()]
-      this.channels.clear()
-      for (const [name, adapter] of channels) {
-        await adapter
-          .stop()
-          .catch((error) =>
-            this.logger.error(
-              `[runtime] failed stopping channel ${name}: ${error}`,
+      await Promise.allSettled([
+        ...channels.map(([name, adapter]) =>
+          adapter
+            .stop()
+            .catch((error) =>
+              this.logger.error(
+                `[runtime] failed stopping channel ${name}: ${error}`,
+              ),
             ),
-          )
-      }
+        ),
+        ...[...this.activeWorkers.values()].map((w) => w.promise),
+      ])
       await this.outbox
         .drain()
         .catch((error) =>
@@ -703,6 +719,10 @@ export class VelaRuntimeEngine {
         stopWaitResolve?.()
       }
       if (outcome.lostOwnership) break
+      if (outcome.status === 'interrupted') {
+        worker.interrupted = true
+        break
+      }
 
       if (this.channels.size > 0) {
         await this.flushOutboxBestEffort()

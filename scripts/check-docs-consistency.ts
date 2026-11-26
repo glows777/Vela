@@ -148,18 +148,23 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
       (line) =>
         (line.includes('$VELA_DIR/vela.db') ||
           line.includes('~/.vela/vela.db')) &&
+        line.includes('env:<encodedOwnerDataDir>:<encodedName>:<posixCwd>') &&
+        line.includes('env:<encodedName>:<posixCwd>') &&
         !line.includes('<dataDir>/vela.db'),
     )
   ) {
     errors.push(
-      'docs/upgrading.md: trusted_paths entry must document $VELA_DIR/vela.db (~/.vela/vela.db) rather than <dataDir>/vela.db (#581)',
+      'docs/upgrading.md: trusted_paths entry must document $VELA_DIR/vela.db (~/.vela/vela.db) and both container trust keys (env:<encodedOwnerDataDir>:<encodedName>:<posixCwd> and env:<encodedName>:<posixCwd>) rather than <dataDir>/vela.db (#581)',
     )
   }
   if (
-    !settingsDoc.includes('env:<encodedOwnerDataDir>:<encodedName>:<posixCwd>')
+    !settingsDoc.includes(
+      'env:<encodedOwnerDataDir>:<encodedName>:<posixCwd>',
+    ) ||
+    !settingsDoc.includes('env:<encodedName>:<posixCwd>')
   ) {
     errors.push(
-      'docs/settings.md: must document container trust key format env:<encodedOwnerDataDir>:<encodedName>:<posixCwd> (#581)',
+      'docs/settings.md: must document both container trust key formats env:<encodedOwnerDataDir>:<encodedName>:<posixCwd> and env:<encodedName>:<posixCwd> (#581)',
     )
   }
 

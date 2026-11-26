@@ -761,13 +761,13 @@ test('P2-2, P2-3, P2-4: warm docker rejects relative/NUL cwd, routine re-enable 
     runtime.timers.update(createdIds[0]!, { enabled: true }),
   ).toThrow(/20/)
 
-  // P2-4: C5 eval new arm tool names match builtin runtime tool registry
+  // P2-4: C5 eval selects tool names from the loaded revision instead of hardcoding arm
   const evalWorker = readFileSync(
     join(import.meta.dir, '../../../../scripts/eval/worker.ts'),
     'utf8',
   )
   expect(evalWorker).toContain(
-    "config.arm === 'old'\n                ? ['read_file', 'write_file', 'list_directory']\n                : ['read', 'write', 'ls']",
+    "paths.usesPiCoreToolNames\n              ? ['read', 'write', 'ls']\n              : ['read_file', 'write_file', 'list_directory']",
   )
   const defaultReg = createRuntimeSessionToolRegistry({
     spillDir: dir,

@@ -392,10 +392,9 @@ export async function runAttempt(
     session:
       config.scenario === 'C5'
         ? {
-            tools:
-              config.arm === 'old'
-                ? ['read_file', 'write_file', 'list_directory']
-                : ['read', 'write', 'ls'],
+            tools: paths.usesPiCoreToolNames
+              ? ['read', 'write', 'ls']
+              : ['read_file', 'write_file', 'list_directory'],
           }
         : undefined,
   })

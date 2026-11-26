@@ -1,6 +1,12 @@
 import type { VelaDatabase } from '../db/index.ts'
 import type { BackgroundJobManager } from './background-jobs.ts'
-import { isOwnerLive } from './driver.ts'
+import type { SessionRecord } from './domain.ts'
+import {
+  abortLiveProcessOwner,
+  type DriverInboxItem,
+  isOwnerLive,
+} from './driver.ts'
+import type { RunEndStatus } from './events.ts'
 import {
   enqueueInboxEvent,
   isTopicAwaitingBindingInDb,
@@ -202,4 +208,202 @@ export function recoverRuntimeState(params: {
     sessionsToWake.add(sessionId)
   }
   return { interruptedJobs, recoveredRuns, requeuedInboxRuns, sessionsToWake }
+}
+
+export function recordChildStatusNoteForHubInTx(
+  db: VelaDatabase,
+  claimed: {
+    session: SessionRecord
+    runId: string
+    inputs: readonly DriverInboxItem[]
+  },
+  status: RunEndStatus,
+  detail?: string,
+): void {
+  const { session } = claimed
+  if (
+    !session.projectId ||
+    (session.kind !== 'topic' && session.kind !== 'work')
+  ) {
+    return
+  }
+  const allPassive =
+    claimed.inputs.length > 0 && claimed.inputs.every((item) => item.passive)
+  if (allPassive) return
+  const project = db.get<{ hub_session_id: string | null }>(
+    'SELECT hub_session_id FROM projects WHERE id = ?',
+    session.projectId,
+  )
+  const hubId = project?.hub_session_id
+  if (!hubId || hubId === session.id) return
+  const label = session.name
+    ? `Session "${session.name}" (${session.id})`
+    : `Session ${session.id}`
+  const clipped = detail ? detail.replace(/\s+/g, ' ').trim().slice(0, 200) : ''
+  const line =
+    status === 'stopped'
+      ? `${label} was stopped`
+      : status === 'failed'
+        ? `${label} failed: ${clipped || 'error'}`
+        : status === 'waiting_human'
+          ? `${label} is waiting for input: ${clipped || 'approval'}`
+          : `${label} finished: ${clipped || '(no reply)'}`
+  enqueueInboxEvent(db, {
+    sessionId: hubId,
+    projectId: session.projectId,
+    source: 'handoff',
+    dedupeKey: `child-status:${claimed.runId}:${status}`,
+    wake: false,
+    payload: {
+      type: 'handoff_note',
+      childSessionId: session.id,
+      runId: claimed.runId,
+      status,
+      text: line,
+    },
+  })
+}
+
+export async function stopExternalSessionRuns(params: {
+  db: VelaDatabase
+  activeOwners: ReadonlySet<string>
+  sessionId: string
+  reason: string
+  isStopped: () => boolean
+}): Promise<{ cancelled: boolean; stillOwnedRemotely: boolean }> {
+  const { db, activeOwners, sessionId, reason, isStopped } = params
+  const otherLiveRuns = db.all<{
+    id: string
+    owner_token: string | null
+  }>(
+    `SELECT id, owner_token FROM runs
+     WHERE session_id = ? AND status IN ('queued', 'running')`,
+    sessionId,
+  )
+  let cancelled = false
+  const externalRunIds: string[] = []
+  for (const run of otherLiveRuns) {
+    if (!run.owner_token || !isOwnerLive(run.owner_token, activeOwners)) {
+      continue
+    }
+    const abortedLocal = await abortLiveProcessOwner(run.owner_token, reason)
+    if (abortedLocal) {
+      cancelled = true
+    } else {
+      externalRunIds.push(run.id)
+      db.run(
+        `INSERT INTO kv_meta (key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+        `stop_requested:${run.id}`,
+        JSON.stringify({ reason }),
+        new Date().toISOString(),
+      )
+    }
+  }
+  if (externalRunIds.length > 0) {
+    const deadline = Date.now() + 2000
+    while (Date.now() < deadline && db.open && !isStopped()) {
+      const placeholders = externalRunIds.map(() => '?').join(', ')
+      const stillLive = db.get<{ id: string }>(
+        `SELECT id FROM runs WHERE id IN (${placeholders}) AND status IN ('queued', 'running') LIMIT 1`,
+        ...externalRunIds,
+      )
+      if (!stillLive) break
+      await new Promise((r) => setTimeout(r, 25))
+    }
+    const placeholders = externalRunIds.map(() => '?').join(', ')
+    const remaining = db.all<{
+      id: string
+      owner_token: string | null
+    }>(
+      `SELECT id, owner_token FROM runs WHERE id IN (${placeholders}) AND status IN ('queued', 'running')`,
+      ...externalRunIds,
+    )
+    if (remaining.some((r) => isOwnerLive(r.owner_token, activeOwners))) {
+      return { cancelled, stillOwnedRemotely: true }
+    }
+    cancelled = true
+  }
+  return { cancelled, stillOwnedRemotely: false }
+}
+
+export function stopSessionRunsInDb(
+  db: VelaDatabase,
+  session: SessionRecord | undefined,
+  sessionId: string,
+  reason: string,
+  activeOwners: ReadonlySet<string> = new Set(),
+): { cancelled: boolean; liveOtherRuns: boolean } {
+  const now = new Date().toISOString()
+  return db.transaction(() => {
+    const rows = db.all<{
+      id: string
+      status: string
+      owner_token: string | null
+    }>(
+      `SELECT id, status, owner_token FROM runs
+       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+      sessionId,
+    )
+    if (
+      rows.some(
+        (r) =>
+          r.status === 'running' && isOwnerLive(r.owner_token, activeOwners),
+      )
+    ) {
+      return { cancelled: false, liveOtherRuns: true }
+    }
+    if (rows.length === 0) {
+      db.run(
+        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+         WHERE id = ? AND state IN ('running', 'waiting_human')`,
+        now,
+        sessionId,
+      )
+      return { cancelled: false, liveOtherRuns: false }
+    }
+    const placeholders = rows.map(() => '?').join(', ')
+    const runIds = rows.map((r) => r.id)
+    const updated = db.run(
+      `UPDATE runs
+       SET status = 'stopped', owner_token = NULL, finished_at = COALESCE(finished_at, ?), updated_at = ?
+       WHERE id IN (${placeholders}) AND status IN ('queued', 'running', 'waiting_human')`,
+      now,
+      now,
+      ...runIds,
+    )
+    for (const r of rows) {
+      db.run(
+        `UPDATE vela_tool_calls SET status = 'interrupted', updated_at = ?
+         WHERE run_id = ? AND status IN ('pending', 'running', 'awaiting_approval')`,
+        now,
+        r.id,
+      )
+      db.run(
+        'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
+        `run_target:${r.id}`,
+        `stop_requested:${r.id}`,
+        `run_silent:${r.id}`,
+        `run_handoff_depth:${r.id}`,
+        `run_input_meta:${r.id}`,
+      )
+    }
+    db.run(
+      `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+       WHERE id = ? AND state IN ('running', 'waiting_human')`,
+      now,
+      sessionId,
+    )
+    const latestStoppedRun = rows.at(-1)
+    if (session && latestStoppedRun) {
+      recordChildStatusNoteForHubInTx(
+        db,
+        { session, runId: latestStoppedRun.id, inputs: [] },
+        'stopped',
+        reason,
+      )
+    }
+    return { cancelled: updated.changes > 0, liveOtherRuns: false }
+  })
 }

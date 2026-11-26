@@ -55,7 +55,25 @@ test('#591: checkDocsConsistency catches retired APIs, legacy migration claims, 
     expect(joined).toContain('trusted_paths')
     expect(joined).toContain('rather than <dataDir>/vela.db')
     expect(joined).toContain('env:<encodedOwnerDataDir>')
+    expect(joined).toContain('env:<encodedName>:<posixCwd>')
     expect(joined).toContain('createVela({ dataDir })')
+
+    // Verify missing env:<encodedName>:<posixCwd> is caught even when env:<encodedOwnerDataDir>:<encodedName>:<posixCwd> is present
+    writeFileSync(
+      join(root, 'docs/settings.md'),
+      '$VELA_DIR/vela.db `env:<encodedOwnerDataDir>:<encodedName>:<posixCwd>`',
+    )
+    writeFileSync(
+      join(root, 'docs/upgrading.md'),
+      '`trusted_paths` in `$VELA_DIR/vela.db` (`env:<encodedOwnerDataDir>:<encodedName>:<posixCwd>`)\n`createVela({ dataDir })` `<dataDir>/vela.db`',
+    )
+    const missingUnscoped = (await checkDocsConsistency(root)).join('\n')
+    expect(missingUnscoped).toContain(
+      'docs/settings.md: must document both container trust key formats',
+    )
+    expect(missingUnscoped).toContain(
+      'docs/upgrading.md: trusted_paths entry must document',
+    )
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
