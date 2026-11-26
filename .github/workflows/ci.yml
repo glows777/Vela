@@ -63,8 +63,48 @@ jobs:
       - name: Consumer smoke test
         run: bun run smoke:consumer
 
+  desktop-impact:
+    if: ${{ github.event_name == 'pull_request' && !inputs.ref && !inputs.skip_desktop }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      skip_desktop: ${{ steps.paths.outputs.skip_desktop }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The workflow tests the GitHub merge commit, not the contributor's head.
+          fetch-depth: 2
+          persist-credentials: false
+      - id: paths
+        name: Check whether all changed paths are unrelated to Desktop
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] || exit 1
+          [[ "$(git rev-parse HEAD^1)" == "$PR_BASE_SHA" ]] || exit 1
+          changed=$(mktemp)
+          trap 'rm -f "$changed"' EXIT
+          # Treat a rename as a deletion plus an addition so both paths are checked.
+          git diff --no-ext-diff --no-renames --name-only -z "$PR_BASE_SHA" HEAD -- > "$changed"
+          [[ -s "$changed" ]] || exit 0
+          while IFS= read -r -d '' path; do
+            # Root prose and the terminal-only startup portrait are not Desktop inputs.
+            # Do not include docs/: the SDK build copies it into the package.
+            case "$path" in
+              README.md|CONTRIBUTING.md) ;;
+              packages/vela/src/cli/tui/logo.ts|packages/vela/test/unit/cli/logo.test.ts) ;;
+              *) exit 0 ;;
+            esac
+          done < "$changed"
+          echo 'skip_desktop=true' >> "$GITHUB_OUTPUT"
+
   desktop-package:
-    if: ${{ !inputs.skip_desktop }}
+    needs: desktop-impact
+    # A skipped or failed classifier must not skip macOS. !cancelled() overrides implicit success().
+    if: >-
+      ${{ !cancelled() && !inputs.skip_desktop &&
+          (needs.desktop-impact.result != 'success' || needs.desktop-impact.outputs.skip_desktop != 'true') }}
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
