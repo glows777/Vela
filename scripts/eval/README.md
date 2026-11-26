@@ -113,6 +113,8 @@ recorded provider usage and the entire continuation, including final verificatio
 calls, through both revisions' real context managers and local request guards;
 observing compaction alone does not establish that the fixture can finish.
 
+V4 (`user-ballast-v4`, `paddingBytes: [20_480, 1_024, 51_200, 0, 0, 0]`): keeps turn-1 discard sizing ahead of turn 2 while adding +1,024 / 0 / +4,096 bytes (+5,120 total) so Phase 2 crosses DeepSeek's 19,616 `summaryThreshold` cleanly before the Phase 3 status turn under post-S2a real token calibration.
+
 V3 investigation (saved-cloud artifacts, not part of a fresh checkout):
 
 ```sh
