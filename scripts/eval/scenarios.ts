@@ -17,11 +17,11 @@ export const baselineCommit = (id: ScenarioId) =>
         : OLD_COMMIT
 // Shared by both arms. Calibration uses real assembly with canned model responses, not live calls.
 export const compactionFixture = {
-  version: 'user-ballast-v3',
+  version: 'user-ballast-v4',
   contextWindow: 40_000,
-  // Preserve pressure before turn 3, but let the checkpoint remove more ballast
-  // with the completed first step instead of retaining it through continuation.
-  paddingBytes: [19_456, 1_024, 47_104, 0, 0, 0],
+  // Raise phases 0–2 ballast by 5,120 bytes so post-S2a real DeepSeek token calibration
+  // reliably crosses the 19,616 summaryThreshold before turn 3 without approaching 23,616 cap.
+  paddingBytes: [20_480, 1_024, 51_200, 0, 0, 0],
 }
 export const previousReport =
   'Completed the release checklist and archived the deployment evidence for the team. The documentation is updated and the handover is complete.'
