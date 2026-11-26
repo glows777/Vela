@@ -288,20 +288,32 @@ function repairChannelBindingsPartialIndexes(db: VelaDatabase): void {
  * bumping `SCHEMA_VERSION`.
  */
 function repairV1InboxAndSubscriptions(db: VelaDatabase): void {
-  const inboxFk = db
-    .all<{ from: string; table: string; on_delete: string }>(
-      "PRAGMA foreign_key_list('inbox_events')",
-    )
-    .find((fk) => fk.from === 'project_id' && fk.table === 'projects')
+  const hasInboxEvents = Boolean(
+    db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'inbox_events'`,
+    ),
+  )
+  const inboxFk = hasInboxEvents
+    ? db
+        .all<{ from: string; table: string; on_delete: string }>(
+          "PRAGMA foreign_key_list('inbox_events')",
+        )
+        .find((fk) => fk.from === 'project_id' && fk.table === 'projects')
+    : undefined
   const needsInboxFkRepair = Boolean(
     inboxFk && inboxFk.on_delete.toUpperCase() !== 'SET NULL',
   )
-  const hasSubsUnique = Boolean(
+  const hasSubscriptions = Boolean(
     db.get<{ name: string }>(
-      `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_subscriptions_unique'`,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'subscriptions'`,
     ),
   )
-  if (!needsInboxFkRepair && hasSubsUnique) return
+  const needsSubsRepair =
+    hasSubscriptions &&
+    !db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_subscriptions_unique'`,
+    )
+  if (!needsInboxFkRepair && !needsSubsRepair) return
 
   db.exec('PRAGMA foreign_keys = OFF')
   try {
@@ -340,7 +352,7 @@ function repairV1InboxAndSubscriptions(db: VelaDatabase): void {
             ON inbox_events (status, created_at);
         `)
       }
-      if (!hasSubsUnique) {
+      if (needsSubsRepair) {
         db.exec(`
           DELETE FROM subscriptions
           WHERE id != (
