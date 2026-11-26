@@ -1,7 +1,11 @@
 import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
-import { parseFrontmatter } from '../prompt/frontmatter.ts'
 import { parseSkill } from './definition.ts'
-import type { ResourceDiagnostic, SkillDefinition } from './loader.ts'
+import {
+  expandHostSkill,
+  formatSkillExpansion,
+  type ResourceDiagnostic,
+  type SkillDefinition,
+} from './loader.ts'
 
 const unwrap = <T>(result: Result<T, FileError>): T => {
   if (!result.ok) throw result.error
@@ -123,6 +127,7 @@ export async function expandEnvironmentSkill(
   skills: readonly SkillDefinition[],
   env: ExecutionEnv,
   signal?: AbortSignal,
+  hostSkills?: ReadonlySet<SkillDefinition>,
 ): Promise<string | undefined> {
   if (!text.startsWith('/skill:')) return
   const space = text.search(/\s/)
@@ -130,12 +135,14 @@ export async function expandEnvironmentSkill(
   const skill = skills.find((item) => item.name === name)
   if (!skill) return
   const content = await env.readTextFile(skill.filePath, signal)
-  if (!content.ok)
+  if (!content.ok) {
+    if (content.error.code === 'not_found' && hostSkills?.has(skill)) {
+      return expandHostSkill(text, skill)
+    }
     throw new Error(
       `Could not load skill ${name} from ${skill.filePath}: ${content.error.message}`,
     )
-  const body = parseFrontmatter(content.value).body
-  const block = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`
+  }
   const args = space === -1 ? '' : text.slice(space + 1).trim()
-  return args ? `${block}\n\n${args}` : block
+  return formatSkillExpansion(skill, content.value, args)
 }

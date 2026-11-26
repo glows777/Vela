@@ -72,25 +72,25 @@ export async function loadTrustedRuntimeResources(options: {
   const skillsByName = new Map<string, SkillDefinition>()
   const templatesByName = new Map<string, PromptTemplate>()
 
-  if (isLocal) {
-    if (options.hostContextFiles !== undefined) {
-      contextFiles.push(...options.hostContextFiles)
-    } else {
-      const userContext = loadAgentContextFile(options.agentDir)
-      if (userContext) contextFiles.push(userContext)
-    }
-    const userSkills =
-      options.hostSkills ??
-      new SkillLoader([join(options.agentDir, 'skills')]).load()
-    for (const skill of userSkills) {
-      skillsByName.set(skill.name, skill)
-    }
-    const userTemplates =
-      options.hostPromptTemplates ??
-      loadPromptTemplates([join(options.agentDir, 'prompts')]).templates
-    for (const tpl of userTemplates) {
-      templatesByName.set(tpl.name, tpl)
-    }
+  if (options.hostContextFiles !== undefined) {
+    contextFiles.push(...options.hostContextFiles)
+  } else if (isLocal) {
+    const userContext = loadAgentContextFile(options.agentDir)
+    if (userContext) contextFiles.push(userContext)
+  }
+  const userSkills =
+    options.hostSkills ??
+    (isLocal ? new SkillLoader([join(options.agentDir, 'skills')]).load() : [])
+  for (const skill of userSkills) {
+    skillsByName.set(skill.name, skill)
+  }
+  const userTemplates =
+    options.hostPromptTemplates ??
+    (isLocal
+      ? loadPromptTemplates([join(options.agentDir, 'prompts')]).templates
+      : [])
+  for (const tpl of userTemplates) {
+    templatesByName.set(tpl.name, tpl)
   }
 
   let env: ExecutionEnv | undefined

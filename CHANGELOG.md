@@ -19,7 +19,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 ### Changed
 
 - **Post-S3 runtime, driver, MCP, SDK, and docs hardening (`S3-fix`):** ([#591](https://github.com/glows777/Vela/issues/591), [#534](https://github.com/glows777/Vela/issues/534))
-  - `createRuntime()` now defaults `hostEnv` to `process.env` and loads owner `<agentDir>/config.json` (`model`, `thinkingLevel`, `limits`, `web`, `memory.dream`, `environments`, `providers`, `mcpServers`) when `ephemeral` is not set, while `ephemeral: true` isolates completely from disk `config.json`, `auth.json`, and user `mcpServers` unless explicitly supplied.
+  - `createRuntime()` keeps `hostEnv` defaulting to `{}` in both normal and ephemeral modes (pass `hostEnv: process.env` explicitly to opt in) and loads owner `<agentDir>/config.json` (`model`, `thinkingLevel`, `limits`, `web`, `memory.dream`, `environments`, `providers`, `mcpServers`) when `ephemeral` is not set, while `ephemeral: true` isolates completely from disk `config.json`, `auth.json`, and user `mcpServers` unless explicitly supplied.
   - Exported the full set of public Runtime contract types (`AgentDriverCapabilities`, `ApprovalStatus`, `DriverInboxItem`, `DriverTerminalOutcome`, `DriverTurnRequest`, `DriverTurnResult`, `EnvironmentRegistry`, `EnvironmentRegistryOptions`, `RunTrigger`, `SessionKind`, `SessionState`) from `@glows777/vela`.
   - Fixed Runtime SQLite/channel/outbox/timer/blob/cleanup leaks and races, `EnvironmentRegistry` per-container sharing across distinct working directories, `McpPool` retry & abort cancellation, `VelaAgentDriver` compaction/usage/`waitForInput` resume/background wait hooks, and added automated `check-docs-consistency` quality verification (`bun run quality`).
 

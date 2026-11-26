@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, posix, resolve } from 'node:path'
 import type { VelaSettings } from '../../config/index.ts'
 import { openDatabase, type VelaDatabase } from '../../db/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
@@ -341,10 +341,24 @@ export async function resolveSessionExecution(params: {
         })
       : undefined
   signal?.throwIfAborted()
+  const expectedCwd = local
+    ? location.cwd
+    : location.cwd.startsWith('/')
+      ? posix.resolve('/', location.cwd)
+      : undefined
+  const actualCwd = env?.cwd
+    ? local
+      ? env.cwd
+      : env.cwd.startsWith('/')
+        ? posix.resolve('/', env.cwd)
+        : undefined
+    : undefined
   if (
     !env?.id ||
     (env.id === 'node:local') !== local ||
-    env.cwd !== location.cwd ||
+    expectedCwd === undefined ||
+    actualCwd === undefined ||
+    actualCwd !== expectedCwd ||
     (params.identities.has(key) && params.identities.get(key) !== env.id)
   )
     throw new Error(

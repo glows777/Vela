@@ -6,8 +6,21 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { runtimePaths } from '../../../../scripts/eval/layout.ts'
 import { openDatabase } from '../../src/db/sqlite.ts'
+import { createLocalExecutionEnv } from '../../src/driver/execution/local.ts'
+import {
+  resolveLocation,
+  sameLocation,
+} from '../../src/driver/execution/location.ts'
+import type { ExecutionEnv } from '../../src/driver/execution/types.ts'
+import { createVelaAgentDriver } from '../../src/driver/runtime-adapter.ts'
+import { loadTrustedRuntimeResources } from '../../src/driver/runtime-resources.ts'
+import type { ProjectConfig } from '../../src/driver/session/project-config.ts'
+import { resolveSessionExecution } from '../../src/driver/session/workspace.ts'
 import { McpConnection } from '../../src/mcp/connection.ts'
+import { dockerContainerId } from '../../src/runtime/docker/container.ts'
+import { withDockerCwd } from '../../src/runtime/docker/operations.ts'
 import { LostRunOwnershipError } from '../../src/runtime/driver.ts'
+import { createEnvironmentRegistryForTest } from '../../src/runtime/environments.ts'
 import { RuntimeEventBus } from '../../src/runtime/event-bus.ts'
 import { enqueueInboxEvent } from '../../src/runtime/inbox.ts'
 import {
@@ -22,6 +35,8 @@ import {
   finalizeTurnInDb,
   stopSessionRunsInDb,
 } from '../../src/runtime/worker.ts'
+import { executionEnvOs } from '../../src/shared/execution.ts'
+import { createFauxModel, fauxText } from '../../src/testing/core/index.ts'
 
 const REPO_ROOT = resolve(import.meta.dir, '../../../..')
 const dirs: string[] = []
@@ -461,9 +476,17 @@ test('R2-P2-1: delayed stale McpConnection factory cannot overwrite connecting t
   const oldFactoryGate = new Promise<void>((r) => {
     releaseOldFactory = r
   })
+  let markOldFactoryEntered!: () => void
+  const oldFactoryEntered = new Promise<void>((r) => {
+    markOldFactoryEntered = r
+  })
   let releaseNewConnect!: () => void
   const newConnectGate = new Promise<void>((r) => {
     releaseNewConnect = r
+  })
+  let markNewStartEntered!: () => void
+  const newStartEntered = new Promise<void>((r) => {
+    markNewStartEntered = r
   })
   let oldClosed = false
   let newClosed = false
@@ -480,6 +503,7 @@ test('R2-P2-1: delayed stale McpConnection factory cannot overwrite connecting t
     createTransport: async () => {
       attempt++
       if (attempt === 1) {
+        markOldFactoryEntered()
         await oldFactoryGate
         const [c1] = InMemoryTransport.createLinkedPair()
         const orig = c1.close.bind(c1)
@@ -496,6 +520,7 @@ test('R2-P2-1: delayed stale McpConnection factory cannot overwrite connecting t
       const [c2, s2] = InMemoryTransport.createLinkedPair()
       const origStart = c2.start.bind(c2)
       c2.start = async () => {
+        markNewStartEntered()
         await newConnectGate
         await origStart()
       }
@@ -511,9 +536,9 @@ test('R2-P2-1: delayed stale McpConnection factory cannot overwrite connecting t
   })
 
   const p1 = conn.connect().catch(() => {})
-  await Promise.resolve()
+  await oldFactoryEntered
   const p2 = conn.reconnect().catch(() => {})
-  await Promise.resolve()
+  await newStartEntered
   // Release old delayed factory AFTER reconnect() already moved to generation 1
   releaseOldFactory()
   await p1
@@ -535,4 +560,213 @@ test('R2-P2-2: eval runtimePaths detects pi core tool names on current and legac
     `export const READ = { name: 'read_file' }\n`,
   )
   expect(runtimePaths(legacyRoot).usesPiCoreToolNames).toBe(false)
+})
+
+function makeRemoteDockerEnv(rootDir: string, cwd: string): ExecutionEnv {
+  const containerRoot = join(rootDir, 'container-ws')
+  mkdirSync(containerRoot, { recursive: true })
+  const local = createLocalExecutionEnv({ cwd: containerRoot })
+  const baseAbsolutePath = local.absolutePath.bind(local)
+  const baseJoinPath = local.joinPath.bind(local)
+  return Object.assign(local, {
+    id: 'docker:dev',
+    cwd,
+    [executionEnvOs]: 'linux',
+    [dockerContainerId]: 'cid-norm-1',
+    [withDockerCwd]: (nextCwd: string) => makeRemoteDockerEnv(rootDir, nextCwd),
+    async absolutePath(p: string, s?: AbortSignal) {
+      if (p.startsWith('~/.vela')) {
+        return {
+          ok: true as const,
+          value: join(containerRoot, '.vela-missing'),
+        }
+      }
+      const rel = p.startsWith(cwd)
+        ? p.slice(cwd.length).replace(/^\/+/, '')
+        : p
+      return baseAbsolutePath(rel || '.', s)
+    },
+    async joinPath(parts: string[], s?: AbortSignal) {
+      const mapped = parts.map((part) => (part === cwd ? containerRoot : part))
+      return baseJoinPath(mapped, s)
+    },
+  })
+}
+
+test('#594: loadTrustedRuntimeResources preserves explicit SDK host resources on non-local Docker sessions', async () => {
+  const dir = tempDir('vela-docker-host-ctx-')
+  const agentDir = join(dir, 'agent')
+  mkdirSync(agentDir, { recursive: true })
+  const db = openDatabase({ path: join(agentDir, 'vela.db') })
+  // Implicit local host file should NOT be loaded for non-local sessions
+  writeFileSync(
+    join(agentDir, 'AGENTS.md'),
+    'implicit local agent instructions',
+  )
+
+  const hostContextFiles = [
+    { path: 'host://sdk-context.md', content: 'explicit host context' },
+  ]
+  const hostSkills = [
+    {
+      name: 'host-skill',
+      description: 'Host skill',
+      filePath: 'host://skill.md',
+      baseDir: 'host://',
+      disableModelInvocation: false,
+    },
+  ]
+  const hostPromptTemplates = [
+    {
+      name: 'host-tpl',
+      description: 'Host template',
+      content: 'template body',
+      source: 'user' as const,
+      filePath: 'host://tpl.md',
+    },
+  ]
+
+  const res = await loadTrustedRuntimeResources({
+    db,
+    agentDir,
+    location: { environment: 'dev', cwd: '/workspace' },
+    resolveEnv: async () => makeRemoteDockerEnv(dir, '/workspace'),
+    signal: new AbortController().signal,
+    hostContextFiles,
+    hostSkills,
+    hostPromptTemplates,
+    trustOverride: false,
+  })
+  expect(res.trusted).toBe(false)
+  expect(res.contextFiles).toEqual(hostContextFiles)
+  expect(res.skills.map((s) => s.name)).toEqual(['host-skill'])
+  expect(res.promptTemplates.map((t) => t.name)).toEqual(['host-tpl'])
+
+  const trustedRes = await loadTrustedRuntimeResources({
+    db,
+    agentDir,
+    location: { environment: 'dev', cwd: '/workspace' },
+    resolveEnv: async () => makeRemoteDockerEnv(dir, '/workspace'),
+    signal: new AbortController().signal,
+    hostContextFiles,
+    hostSkills,
+    hostPromptTemplates,
+    trustOverride: true,
+  })
+  expect(trustedRes.trusted).toBe(true)
+  expect(trustedRes.contextFiles).toEqual(hostContextFiles)
+  expect(trustedRes.skills.map((s) => s.name)).toEqual(['host-skill'])
+  expect(trustedRes.promptTemplates.map((t) => t.name)).toEqual(['host-tpl'])
+
+  db.close()
+})
+
+test('#594: non-local trailing-slash Docker cwd normalizes consistently across resolveLocation, resolveSessionExecution, and VelaAgentDriver', async () => {
+  const dir = tempDir('vela-docker-cwd-')
+  const resolvedLoc = resolveLocation({
+    environment: 'dev',
+    cwd: '/workspace/',
+  })
+  expect(resolvedLoc.cwd).toBe('/workspace')
+  expect(
+    sameLocation(
+      { environment: 'dev', cwd: '/workspace/' },
+      { environment: 'dev', cwd: '/workspace' },
+    ),
+  ).toBe(true)
+
+  const envReg = createEnvironmentRegistryForTest({
+    dataDir: dir,
+    environments: { dev: { image: 'node:22-bookworm', network: 'off' } },
+    openDocker: async (_cfg, cwd = '/workspace') =>
+      makeRemoteDockerEnv(dir, cwd),
+    probeAlive: async () => true,
+  })
+
+  // resolveSessionExecution handles even pre-existing unnormalized trailing-slash location objects
+  const resolvedExec = await resolveSessionExecution({
+    sessionId: 's-exec',
+    location: { environment: 'dev', cwd: '/workspace/' },
+    envResolver: (t) => envReg.resolve(t),
+    dataDir: dir,
+    projectConfig: {} as ProjectConfig,
+    identities: new Map(),
+    sessionOs: new Map(),
+    sessionShells: new Map(),
+  })
+  expect(resolvedExec.cwd).toBe('/workspace')
+
+  // Reject a non-local adapter reporting a relative cwd even when posix.resolve('/', 'workspace') matches '/workspace'
+  await expect(
+    resolveSessionExecution({
+      sessionId: 's-exec-rel',
+      location: { environment: 'dev', cwd: '/workspace' },
+      envResolver: async () => makeRemoteDockerEnv(dir, 'workspace'),
+      dataDir: dir,
+      projectConfig: {} as ProjectConfig,
+      identities: new Map(),
+      sessionOs: new Map(),
+      sessionShells: new Map(),
+    }),
+  ).rejects.toThrow('Execution environment unavailable for dev:/workspace')
+
+  // Runtime + VelaAgentDriver executes a session persisted with '/workspace/' cleanly and expands host-only SDK skills
+  const hostSkillDir = join(dir, 'host-skills/deploy')
+  mkdirSync(hostSkillDir, { recursive: true })
+  const hostSkillPath = join(hostSkillDir, 'SKILL.md')
+  writeFileSync(
+    hostSkillPath,
+    '---\nname: deploy\ndescription: Host deploy workflow\n---\nRun the host checklist carefully.\n',
+  )
+  const db = openDatabase({ path: join(dir, 'vela.db') })
+  const runtime = new VelaRuntimeEngine({
+    db,
+    agentDir: dir,
+    environments: envReg,
+  })
+  const seenPrompts: string[] = []
+  const model = createFauxModel({
+    responses: [
+      (req) => {
+        seenPrompts.push(req.lastUserText)
+        return fauxText('docker ok')
+      },
+    ],
+  })
+  const driver = createVelaAgentDriver({
+    db,
+    agentDir: dir,
+    blobs: runtime.blobs,
+    environments: runtime.environments,
+    defaultModel: model,
+    contextFiles: [{ path: 'host://doc.md', content: 'host context' }],
+    skills: [
+      {
+        name: 'deploy',
+        description: 'Host deploy workflow',
+        filePath: hostSkillPath,
+        baseDir: hostSkillDir,
+        disableModelInvocation: false,
+      },
+    ],
+    trustOverride: async () => false,
+  })
+  runtime.registerDriver(driver)
+  const s = runtime.sessions.create({
+    id: 's-docker-runtime',
+    kind: 'chat',
+    location: { environment: 'dev', cwd: '/workspace/' },
+  })
+  runtime.submitPrompt({ sessionId: s.id, text: '/skill:deploy staging' })
+  await runtime.waitForIdle(s.id)
+  const lastRun = db.get<{ status: string; error: string | null }>(
+    'SELECT status, error FROM runs WHERE session_id = ? LIMIT 1',
+    s.id,
+  )
+  expect(lastRun?.status).toBe('completed')
+  expect(lastRun?.error).toBeNull()
+  expect(seenPrompts.join('\n')).toContain('Run the host checklist carefully.')
+
+  await runtime.dispose()
+  db.close()
 })
