@@ -4,6 +4,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -80,9 +81,10 @@ function acquireOwnerLock(
 ): () => void {
   mkdirSync(dirname(lockPath), { recursive: true })
   for (let attempt = 0; attempt < 2; attempt++) {
+    const tmpPath = `${lockPath}.${process.pid}.${instanceId}.tmp`
     try {
       const fd = openSync(
-        lockPath,
+        tmpPath,
         constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
         0o600,
       )
@@ -91,6 +93,7 @@ function acquireOwnerLock(
       } finally {
         closeSync(fd)
       }
+      linkSync(tmpPath, lockPath)
       ACTIVE_OWNER_IDS.add(instanceId)
       return () => {
         ACTIVE_OWNER_IDS.delete(instanceId)
@@ -111,6 +114,8 @@ function acquireOwnerLock(
         throw new DaemonAlreadyRunningError(socketPath)
       }
       rmSync(lockPath, { force: true })
+    } finally {
+      rmSync(tmpPath, { force: true })
     }
   }
   throw new DaemonAlreadyRunningError(socketPath)
@@ -162,6 +167,8 @@ interface ConnectedClient {
   subDeltas: boolean
   activeLogins: Map<number, PendingLoginClient>
   activeLogouts: Map<number, AbortController>
+  preCancelledLogins: Set<number>
+  preCancelledLogouts: Set<number>
 }
 
 async function probeSocketAlive(socketPath: string): Promise<boolean> {
@@ -394,6 +401,9 @@ export async function startDaemonServer(
     ) => {
       const controller = new AbortController()
       if (typeof p.logoutId === 'number') {
+        if (client.preCancelledLogouts.delete(p.logoutId)) {
+          controller.abort(new DOMException('Logout cancelled', 'AbortError'))
+        }
         client.activeLogouts.set(p.logoutId, controller)
       }
       try {
@@ -418,6 +428,9 @@ export async function startDaemonServer(
       client: ConnectedClient,
     ) => {
       const controller = new AbortController()
+      if (client.preCancelledLogins.delete(p.loginId)) {
+        controller.abort(new DOMException('Cancelled', 'AbortError'))
+      }
       const prompts = new Map<
         number,
         {
@@ -524,6 +537,8 @@ export async function startDaemonServer(
       subDeltas: false,
       activeLogins: new Map(),
       activeLogouts: new Map(),
+      preCancelledLogins: new Set(),
+      preCancelledLogouts: new Set(),
     }
     clients.add(client)
 
@@ -539,12 +554,20 @@ export async function startDaemonServer(
         }
         if (msg.type === 'auth_cancel') {
           const active = client.activeLogins.get(msg.loginId)
-          active?.controller.abort(new DOMException('Cancelled', 'AbortError'))
+          if (active) {
+            active.controller.abort(new DOMException('Cancelled', 'AbortError'))
+          } else {
+            client.preCancelledLogins.add(msg.loginId)
+          }
           return
         }
         if (msg.type === 'logout_cancel') {
           const ctrl = client.activeLogouts.get(msg.logoutId)
-          ctrl?.abort(new DOMException('Logout cancelled', 'AbortError'))
+          if (ctrl) {
+            ctrl.abort(new DOMException('Logout cancelled', 'AbortError'))
+          } else {
+            client.preCancelledLogouts.add(msg.logoutId)
+          }
           return
         }
         if (msg.type !== 'req') return

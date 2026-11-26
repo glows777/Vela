@@ -229,13 +229,11 @@ export class BlobStore {
     })
   }
 
-  async materializeIntoEnv(
+  private requireOwnedBlob(
     blobOrId: BlobRecord | string,
-    env: ExecutionEnv,
     sessionId: string,
-    signal?: AbortSignal,
     allowUnbound = false,
-  ): Promise<string> {
+  ): BlobRecord {
     assertSafePathSegment(sessionId, 'sessionId')
     const blob = typeof blobOrId === 'string' ? this.get(blobOrId) : blobOrId
     if (!blob) {
@@ -250,6 +248,27 @@ export class BlobStore {
     if (blob.sessionId === null && !allowUnbound) {
       throw new Error(`Blob ${blob.id} is not bound to session ${sessionId}`)
     }
+    return blob
+  }
+
+  async readOwnedBytes(
+    blobOrId: BlobRecord | string,
+    sessionId: string,
+    signal?: AbortSignal,
+    allowUnbound = false,
+  ): Promise<Uint8Array> {
+    const blob = this.requireOwnedBlob(blobOrId, sessionId, allowUnbound)
+    return readCanonicalHostBytes(blob.storagePath, signal)
+  }
+
+  async materializeIntoEnv(
+    blobOrId: BlobRecord | string,
+    env: ExecutionEnv,
+    sessionId: string,
+    signal?: AbortSignal,
+    allowUnbound = false,
+  ): Promise<string> {
+    const blob = this.requireOwnedBlob(blobOrId, sessionId, allowUnbound)
     if (env.id === 'node:local') {
       return blob.storagePath
     }

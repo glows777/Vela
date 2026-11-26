@@ -12,7 +12,10 @@ export const contextCommands: CommandHandler[] = [
     if (cmd !== '/context') return false
     return (async () => {
       try {
-        const snap = await session.refresh({ previewPrompt: true })
+        const snap = await session.refresh({
+          previewPrompt: true,
+          includeEntries: true,
+        })
         print(renderContextView(contextSnapshot(snap)))
       } catch (error) {
         print(

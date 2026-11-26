@@ -44,7 +44,17 @@ export function writeStdout(text: string): Promise<void> {
   } catch (error) {
     onStdoutError(error)
   }
-  return new Promise((resolve) => process.stdout.once('drain', resolve))
+  return new Promise((resolve) => {
+    const finish = () => {
+      process.stdout.off('drain', finish)
+      process.stdout.off('close', finish)
+      process.stdout.off('error', finish)
+      resolve()
+    }
+    process.stdout.once('drain', finish)
+    process.stdout.once('close', finish)
+    process.stdout.once('error', finish)
+  })
 }
 
 /** json / print modes: stdout carries only results and protocol; console output goes to stderr. */

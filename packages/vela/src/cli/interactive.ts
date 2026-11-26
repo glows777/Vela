@@ -589,7 +589,7 @@ export class InteractiveMode {
 
   private async copyLastAnswer(): Promise<void> {
     if (!this.session) return
-    const snap = await this.session.refresh()
+    const snap = await this.session.refresh({ includeEntries: true })
     const msgs = snap.branch.flatMap((e) =>
       e.type === 'message' ? [e.message] : [],
     )

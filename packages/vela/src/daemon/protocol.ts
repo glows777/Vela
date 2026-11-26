@@ -6,7 +6,7 @@ import type { AuthEvent, AuthPrompt } from '../providers/auth/types.ts'
 import type { RuntimeEvent, StreamDeltaEvent } from '../runtime/events.ts'
 
 export const DAEMON_PROTOCOL_VERSION = 1
-const MAX_WIRE_FRAME_BYTES = 32 * 1024 * 1024
+const MAX_WIRE_FRAME_BYTES = 128 * 1024 * 1024
 
 export interface DaemonHello {
   protocolVersion: number
@@ -255,6 +255,15 @@ export function createNdjsonParser(
         parsed = decodeIpcValue(JSON.parse(line)) as DaemonWireMessage
       } catch (error) {
         onParseError?.(error, line)
+        continue
+      }
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        typeof (parsed as { type?: unknown }).type !== 'string'
+      ) {
+        onParseError?.(new Error('Invalid IPC message'), line)
         continue
       }
       onMessage(parsed)

@@ -1,6 +1,6 @@
 import type { RuntimeSessionInspection } from '../../driver/runtime-types.ts'
 import type { VelaRuntime } from '../../runtime-sdk-types.ts'
-import { CliSessionClient } from '../runtime-client.ts'
+import { CliSessionClient, ensureCliProject } from '../runtime-client.ts'
 import { errorMessage } from './components.ts'
 import { isModelUsable } from './model-availability.ts'
 import type { InteractiveOptions } from './types.ts'
@@ -19,6 +19,9 @@ export async function prepareInteractiveSession(
   resumeFailure?: string
   setupNext: boolean
 }> {
+  const projectId = options.noSession
+    ? undefined
+    : await ensureCliProject(runtime, options.cwd)
   let resumed = false
   let resumeFailure: string | undefined
   try {
@@ -30,12 +33,14 @@ export async function prepareInteractiveSession(
         resumeFailure = `Session ${sessionId} not found`
         await runtime.sessions.create({
           id: sessionId,
+          ...(projectId ? { projectId } : {}),
           location: { environment: 'local', cwd: options.cwd },
         })
       }
     } else if (!existing) {
       await runtime.sessions.create({
         id: sessionId,
+        ...(projectId ? { projectId } : {}),
         location: { environment: 'local', cwd: options.cwd },
       })
     }
@@ -47,6 +52,7 @@ export async function prepareInteractiveSession(
     if (!fallbackExisting) {
       await runtime.sessions.create({
         id: sessionId,
+        ...(projectId ? { projectId } : {}),
         location: { environment: 'local', cwd: options.cwd },
       })
     }
@@ -56,7 +62,7 @@ export async function prepareInteractiveSession(
   try {
     const setupNext = startup && Boolean(options.agentDir)
     await options.configure(session, { quiet: setupNext, startup })
-    const inspection = await session.refresh()
+    const inspection = await session.refresh({ includeEntries: true })
     if (!isModelUsable(session, options.hasUsableModel) && !setupNext) {
       await options.configure(session, { quiet: false, startup })
     }

@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import {
   assertSocketOrMissing,
+  daemonOwnerLockPath,
   removeStaleSocketFile,
   resolveDaemonPaths,
 } from './paths.ts'
@@ -253,11 +254,34 @@ function readPidRecord(
   }
 }
 
+function readOwnerRecord(
+  ownerPath: string,
+): { pid?: number; instanceId?: string } | undefined {
+  if (!existsSync(ownerPath)) return undefined
+  try {
+    const parsed = JSON.parse(readFileSync(ownerPath, 'utf8')) as {
+      pid?: unknown
+      instanceId?: unknown
+    }
+    return {
+      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
+      ...(typeof parsed.instanceId === 'string'
+        ? { instanceId: parsed.instanceId }
+        : {}),
+    }
+  } catch {
+    return undefined
+  }
+}
+
 async function waitForDaemonExit(
   socketPath: string,
   pidPath: string,
-  expected: { pid?: number; instanceId?: string } | undefined,
+  expected:
+    | { pid?: number; instanceId?: string; allowSignal?: boolean }
+    | undefined,
   timeoutMs: number,
+  ownerPath?: string,
 ): Promise<boolean> {
   const pid = expected?.pid
   const expectedInstanceId = expected?.instanceId
@@ -295,10 +319,16 @@ async function waitForDaemonExit(
     await sleep(50)
   }
   const currentPidRecord = readPidRecord(pidPath)
+  const currentOwnerRecord = ownerPath ? readOwnerRecord(ownerPath) : undefined
+  const ownerVerified =
+    currentOwnerRecord?.pid === pid &&
+    (!expectedInstanceId ||
+      currentOwnerRecord?.instanceId === expectedInstanceId)
   const safeToSignal =
     !sameProcess &&
     pid !== undefined &&
     isPidAlive(pid) &&
+    (expected?.allowSignal === true || ownerVerified) &&
     (!expectedInstanceId ||
       !currentPidRecord?.instanceId ||
       currentPidRecord.instanceId === expectedInstanceId)
@@ -325,31 +355,78 @@ export async function ensureDaemonRunning(
   const hostEnv = options.hostEnv ?? {}
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
   const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
+  const ownerPath = daemonOwnerLockPath(paths.agentDir)
   assertSocketOrMissing(paths.socketPath)
   const expectedProto = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION
   const expectedApp = options.appVersion ?? getAppVersion()
   const timeoutMs = options.timeoutMs ?? DEFAULT_START_TIMEOUT_MS
 
+  const assertMatchingAgentDir = (hello: DaemonHello | undefined): void => {
+    if (hello && hello.agentDir !== paths.agentDir) {
+      throw new Error(
+        `Socket ${paths.socketPath} belongs to ${hello.agentDir}, expected ${paths.agentDir}`,
+      )
+    }
+  }
+
   const matches = (hello: DaemonHello | undefined): boolean =>
     Boolean(
       hello &&
+        hello.agentDir === paths.agentDir &&
         hello.protocolVersion === expectedProto &&
         hello.appVersion === expectedApp,
     )
 
   const existing = await probeDaemonHello(paths.socketPath, 500)
+  assertMatchingAgentDir(existing)
   if (existing && matches(existing)) return existing
 
   const release = await acquireLock(paths.lockPath, timeoutMs)
   try {
-    const secondCheck = await probeDaemonHello(paths.socketPath, 500)
+    let secondCheck = await probeDaemonHello(paths.socketPath, 500)
+    assertMatchingAgentDir(secondCheck)
     if (secondCheck && matches(secondCheck)) return secondCheck
+
+    if (!secondCheck) {
+      const ownerDeadline = Date.now() + timeoutMs
+      while (Date.now() < ownerDeadline) {
+        const owner = readOwnerRecord(ownerPath)
+        if (
+          !owner?.pid ||
+          owner.pid === process.pid ||
+          !isPidAlive(owner.pid)
+        ) {
+          break
+        }
+        const candidate = await probeDaemonHello(paths.socketPath, 300)
+        assertMatchingAgentDir(candidate)
+        if (candidate) {
+          secondCheck = candidate
+          break
+        }
+        await sleep(50)
+      }
+      if (secondCheck && matches(secondCheck)) return secondCheck
+      if (!secondCheck) {
+        const ownerAfterWait = readOwnerRecord(ownerPath)
+        if (
+          ownerAfterWait?.pid &&
+          ownerAfterWait.pid !== process.pid &&
+          isPidAlive(ownerAfterWait.pid)
+        ) {
+          throw new Error(
+            `Vela daemon owner (pid ${ownerAfterWait.pid}) is active, but socket ${paths.socketPath} did not become ready`,
+          )
+        }
+      }
+    }
 
     if (secondCheck) {
       const pidRecord = readPidRecord(paths.pidPath)
       const target = {
         pid: secondCheck.pid ?? pidRecord?.pid,
         instanceId: secondCheck.instanceId ?? pidRecord?.instanceId,
+        allowSignal: secondCheck.pid !== undefined,
       }
       try {
         await rpcOnce(paths.socketPath, 'daemon.stop', undefined, 3000)
@@ -358,7 +435,8 @@ export async function ensureDaemonRunning(
         paths.socketPath,
         paths.pidPath,
         target,
-        5000,
+        30_000,
+        ownerPath,
       )
       if (!exited) {
         throw new Error(
@@ -420,12 +498,22 @@ export async function stopDaemon(
   const hostEnv = options.hostEnv ?? {}
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
   const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
+  const ownerPath = daemonOwnerLockPath(paths.agentDir)
   assertSocketOrMissing(paths.socketPath)
   const hello = await probeDaemonHello(paths.socketPath, 500)
-  const pidRecord = readPidRecord(paths.pidPath)
-  const pid = hello?.pid ?? pidRecord?.pid
-  const instanceId = hello?.instanceId ?? pidRecord?.instanceId
-  if (!hello && (!pid || !isPidAlive(pid))) {
+  if (hello && hello.agentDir !== paths.agentDir) {
+    throw new Error(
+      `Socket ${paths.socketPath} belongs to ${hello.agentDir}, expected ${paths.agentDir}`,
+    )
+  }
+  const ownerRecord = readOwnerRecord(ownerPath)
+  const liveOwner =
+    ownerRecord?.pid !== undefined && isPidAlive(ownerRecord.pid)
+      ? ownerRecord
+      : undefined
+  const pid = hello?.pid ?? liveOwner?.pid
+  const instanceId = hello?.instanceId ?? liveOwner?.instanceId
+  if (!hello && !liveOwner) {
     removeStaleSocketFile(paths.socketPath)
     if (existsSync(paths.pidPath)) {
       rmSync(paths.pidPath, { force: true })
@@ -440,8 +528,9 @@ export async function stopDaemon(
   const exited = await waitForDaemonExit(
     paths.socketPath,
     paths.pidPath,
-    { pid, instanceId },
-    options.timeoutMs ?? 5000,
+    { pid, instanceId, allowSignal: Boolean(hello?.pid || liveOwner) },
+    options.timeoutMs ?? 30_000,
+    ownerPath,
   )
   if (!exited) {
     throw new Error(

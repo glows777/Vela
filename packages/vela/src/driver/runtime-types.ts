@@ -215,6 +215,7 @@ export interface VelaAgentDriverOptions {
     | { requireApproval?: boolean; summary?: string }
     | undefined
   resolveSpecialModel?: ResolveSpecialModelFn
+  spillRoot?: string
   onBeforeExtensionImport?: () => Promise<void> | void
   logger?: VelaLogger
 }

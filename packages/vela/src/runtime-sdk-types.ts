@@ -192,7 +192,7 @@ export interface VelaRuntime {
     }>
     inspect(
       sessionId: string,
-      options?: { previewPrompt?: boolean },
+      options?: { previewPrompt?: boolean; includeEntries?: boolean },
     ): Promise<RuntimeSessionInspection>
     execBash(
       sessionId: string,
@@ -330,7 +330,11 @@ export interface VelaRuntime {
     subscribe(listener: RuntimeEventListener): () => void
     subscribeDeltas(listener: StreamDeltaListener): () => void
   }
-  models(options?: { all?: boolean; channel?: string }): Promise<ModelInfo[]>
+  models(options?: {
+    all?: boolean
+    channel?: string
+    env?: Record<string, string | undefined>
+  }): Promise<ModelInfo[]>
   loginProviders(): Promise<LoginProvider[]>
   login(
     provider: string,

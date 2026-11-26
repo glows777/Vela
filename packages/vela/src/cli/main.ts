@@ -18,7 +18,9 @@ import { runPrintMode } from './print-mode.ts'
 import {
   buildCliSessionOverride,
   CliSessionClient,
+  ensureCliProject,
   openCliRuntime,
+  pickTransientEnv,
 } from './runtime-client.ts'
 import {
   type CliArgs,
@@ -248,8 +250,10 @@ const logger =
 
 let runtime: Awaited<ReturnType<typeof openCliRuntime>> | undefined
 let activeSessionId: string | undefined
+let clearTransientApproval: (() => Promise<void>) | undefined
 let signalCode: number | undefined
 const exit = async (code: number): Promise<never> => {
+  await clearTransientApproval?.().catch(() => {})
   await runtime?.dispose().catch(() => {})
   process.exit(signalCode ?? code)
 }
@@ -286,6 +290,7 @@ try {
   }
   if (args.listModels) {
     await runtime.ready().catch(() => {})
+    const transientEnv = pickTransientEnv(env)
     let extensionErrors = await runtime.extensionErrors()
     if (args.extensions.length > 0 || args.noExtensions) {
       const probeId = `list-models-${newSessionId()}`
@@ -296,16 +301,23 @@ try {
       try {
         await runtime.sessions.configure(probeId, {
           cwd,
+          ...(Object.keys(transientEnv).length > 0
+            ? { env: transientEnv }
+            : {}),
           extensions: args.extensions,
           noExtensions: args.noExtensions,
         })
-        const snap = await runtime.sessions.inspect(probeId)
+        const snap = await runtime.sessions.inspect(probeId, {
+          includeEntries: false,
+        })
         extensionErrors = snap.extensionErrors
       } finally {
         await runtime.sessions.delete(probeId).catch(() => {})
       }
     }
-    const models = await runtime.models()
+    const models = await runtime.models({
+      ...(Object.keys(transientEnv).length > 0 ? { env: transientEnv } : {}),
+    })
     const list = formatModelList(
       models,
       args.listModels === true ? undefined : args.listModels,
@@ -360,6 +372,22 @@ try {
     (env.VELA_OFFLINE ?? '').toLowerCase(),
   )
   let cliOverride = buildCliSessionOverride(args, env, cwd, args.approve)
+  clearTransientApproval = async () => {
+    if (
+      !runtime ||
+      !activeSessionId ||
+      args.noSession ||
+      args.approve === undefined
+    ) {
+      return
+    }
+    const {
+      approve: _approve,
+      approveLocation: _loc,
+      ...withoutApproval
+    } = cliOverride
+    await runtime.sessions.configure(activeSessionId, withoutApproval)
+  }
 
   let forkedId: string | undefined
   if (args.fork) {
@@ -394,10 +422,14 @@ try {
   activeSessionId = sessionId
 
   if (mode === 'print' || mode === 'json') {
+    const projectId = args.noSession
+      ? undefined
+      : await ensureCliProject(runtime, cwd)
     const existing = await runtime.sessions.get(sessionId)
     if (!existing) {
       await runtime.sessions.create({
         id: sessionId,
+        ...(projectId ? { projectId } : {}),
         location: { environment: 'local', cwd },
       })
     }
@@ -405,7 +437,7 @@ try {
     try {
       await runtime.ready().catch(() => {})
       await client.configure(cliOverride)
-      const snap = await client.refresh()
+      const snap = await client.refresh({ includeEntries: false })
       const line = formatContextFileList(snap.resources.contextFiles, {
         cwd: snap.cwd,
         homeDir: homedir(),
@@ -471,6 +503,7 @@ try {
       attachLogger: interactiveLogger?.attach,
       setupOnly: args.setup,
       setupTarget: args.setupTarget,
+      noSession: args.noSession,
       projectSettingsPath:
         existsSync(projectConfigPath) &&
         resolve(projectConfigPath) !== resolve(join(agentDir, 'config.json'))
@@ -482,6 +515,7 @@ try {
         cliOverride = buildCliSessionOverride(args, env, cwd, args.approve)
       },
       onExit: async () => {
+        await clearTransientApproval?.().catch(() => {})
         await runtime?.dispose()
       },
     })

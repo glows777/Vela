@@ -10,6 +10,7 @@ import { ensureDaemonRunning, stripTransientDaemonEnv } from './launcher.ts'
 import { resolveDaemonPaths } from './paths.ts'
 import {
   createNdjsonParser,
+  type DaemonHello,
   type DaemonWireMessage,
   deserializeError,
   encodeWireLine,
@@ -67,7 +68,22 @@ export async function connectRuntime(
   }
 
   const socket = await openSocket(paths.socketPath, options.timeoutMs ?? 15_000)
-  return createSocketRuntimeClient(paths.agentDir, socket)
+  const { runtime, verifyHello } = createSocketRuntimeClient(
+    paths.agentDir,
+    socket,
+  )
+  try {
+    const hello = await verifyHello()
+    if (hello.agentDir !== paths.agentDir) {
+      throw new Error(
+        `Socket ${paths.socketPath} belongs to ${hello.agentDir}, expected ${paths.agentDir}`,
+      )
+    }
+    return runtime
+  } catch (error) {
+    await runtime.dispose().catch(() => {})
+    throw error
+  }
 }
 
 async function openSocket(
@@ -104,7 +120,7 @@ async function openSocket(
 function createSocketRuntimeClient(
   agentDir: string,
   socket: Socket,
-): VelaRuntime {
+): { runtime: VelaRuntime; verifyHello: () => Promise<DaemonHello> } {
   let nextReqId = 1
   let nextLoginId = 1
   let nextLogoutId = 1
@@ -263,7 +279,7 @@ function createSocketRuntimeClient(
     failAll(new Error('Disconnected from Vela daemon socket')),
   )
 
-  return {
+  const runtime: VelaRuntime = {
     agentDir,
     ready: () => rpc('runtime.ready'),
     extensionErrors: () => rpc('runtime.extensionErrors'),
@@ -407,8 +423,13 @@ function createSocketRuntimeClient(
       interaction,
       loginOptions?: LoginOptions,
     ) => {
-      const loginId = nextLoginId++
       const signal = interaction.signal
+      if (signal.aborted) {
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new DOMException('Login cancelled', 'AbortError')
+      }
+      const loginId = nextLoginId++
       const abortListener = () => {
         try {
           writeMsg({ type: 'auth_cancel', loginId })
@@ -420,8 +441,7 @@ function createSocketRuntimeClient(
         abortListener,
         prompts: new Map(),
       })
-      if (signal.aborted) abortListener()
-      else signal.addEventListener('abort', abortListener, { once: true })
+      signal.addEventListener('abort', abortListener, { once: true })
       const { getDeviceId, ...restLoginOptions } = loginOptions ?? {}
       const deviceId = getDeviceId?.()
       try {
@@ -497,5 +517,9 @@ function createSocketRuntimeClient(
       socket.end()
       socket.destroy()
     },
+  }
+  return {
+    runtime,
+    verifyHello: () => rpc<DaemonHello>('daemon.hello'),
   }
 }

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { connectRuntime } from '../daemon/index.ts'
+import { canonicalLocalPath } from '../db/trust.ts'
 import type { ImageContent } from '../driver/index.ts'
 import type { RuntimeSessionOverride } from '../driver/runtime-types.ts'
 import type { ModelInfo, ThinkingLevel } from '../providers/models/index.ts'
@@ -29,6 +30,34 @@ function readPromptInput(input: string): string {
     : input
 }
 
+export function pickTransientEnv(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const overlayEnv: Record<string, string> = {}
+  for (const key of TRANSIENT_ENV_KEYS) {
+    const val = env[key]
+    if (val !== undefined && val !== '') overlayEnv[key] = val
+  }
+  return overlayEnv
+}
+
+/** Looks up or creates the owner-DB project entry matching `cwd` so CLI sessions isolate project memory. */
+export async function ensureCliProject(
+  runtime: VelaRuntime,
+  cwd: string,
+): Promise<string> {
+  const canonicalCwd = canonicalLocalPath(cwd)
+  const existing =
+    (await runtime.projects.getByCwd(cwd)) ??
+    (canonicalCwd !== cwd
+      ? await runtime.projects.getByCwd(canonicalCwd)
+      : undefined)
+  if (existing) return existing.id
+  const name = basename(canonicalCwd) || 'project'
+  const created = await runtime.projects.create({ name, cwd })
+  return created.id
+}
+
 /**
  * Extracts per-session transient env overlay and CLI flags passed to `runtime.sessions.configure()`
  * without mutating resident daemon state or `vela.db`.
@@ -39,16 +68,15 @@ export function buildCliSessionOverride(
   cwd: string,
   trusted?: boolean,
 ): RuntimeSessionOverride {
-  const overlayEnv: Record<string, string> = {}
-  for (const key of TRANSIENT_ENV_KEYS) {
-    const val = env[key]
-    if (val !== undefined && val !== '') overlayEnv[key] = val
-  }
-  const explicitModel =
+  const overlayEnv = pickTransientEnv(env)
+  const rawModel =
     args.model ??
     (env.VELA_MODEL === 'mock' || env.VELA_MODEL?.startsWith('faux:')
       ? env.VELA_MODEL
       : undefined)
+  const explicitModel = rawModel?.startsWith('faux:')
+    ? `faux:${resolve(cwd, rawModel.slice('faux:'.length))}`
+    : rawModel
   const resolvedApprove =
     trusted !== undefined
       ? trusted
@@ -88,7 +116,7 @@ export function buildCliSessionOverride(
       : {}),
     ...(resolvedExtensions.length ? { extensions: resolvedExtensions } : {}),
     ...(args.noExtensions ? { noExtensions: true } : {}),
-    ...(env.VELA_RECORD ? { recordPath: env.VELA_RECORD } : {}),
+    ...(env.VELA_RECORD ? { recordPath: resolve(cwd, env.VELA_RECORD) } : {}),
   }
 }
 
@@ -193,8 +221,12 @@ export class CliSessionClient {
 
   async refresh(options?: {
     previewPrompt?: boolean
+    includeEntries?: boolean
   }): Promise<RuntimeSessionInspection> {
-    const snap = await this.runtime.sessions.inspect(this.id, options)
+    const snap = await this.runtime.sessions.inspect(this.id, {
+      ...options,
+      includeEntries: options?.includeEntries ?? false,
+    })
     this._snapshot = snap
     this._isRunning = snap.isRunning
     this._isBashRunning = snap.isBashRunning

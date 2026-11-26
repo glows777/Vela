@@ -528,3 +528,80 @@ test('IPC transports login deviceId, auth_prompt AbortSignal, and logout AbortSi
   handle.runtime.login = origLogin
   handle.runtime.logout = origLogout
 })
+
+test('connectRuntime and ensureDaemonRunning reject a socket belonging to another agentDir', async () => {
+  const dirA = makeShortTempDir('vd-own-a-')
+  const dirB = makeShortTempDir('vd-own-b-')
+  const handle = await startDaemonServer({
+    agentDir: dirA,
+    registerSignalHandlers: false,
+  })
+  cleanupTasks.push(() => handle.close('test-cleanup'))
+
+  await expect(
+    ensureDaemonRunning({ agentDir: dirB, socketPath: handle.socketPath }),
+  ).rejects.toThrow(/belongs to/)
+  await expect(
+    connectRuntime({
+      agentDir: dirB,
+      socketPath: handle.socketPath,
+      autoStart: false,
+    }),
+  ).rejects.toThrow(/belongs to/)
+  await expect(
+    stopDaemon({ agentDir: dirB, socketPath: handle.socketPath }),
+  ).rejects.toThrow(/belongs to/)
+})
+
+test('daemon ignores non-object NDJSON frames without crashing server or other clients', async () => {
+  const { createConnection } = await import('node:net')
+  const agentDir = makeShortTempDir('vd-nullframe-')
+  const handle = await startDaemonServer({
+    agentDir,
+    registerSignalHandlers: false,
+  })
+  cleanupTasks.push(() => handle.close('test-cleanup'))
+
+  const rawClosed = new Promise<void>((resolve) => {
+    const raw = createConnection(handle.socketPath)
+    raw.once('close', () => resolve())
+    raw.once('connect', () => {
+      raw.write('null\n123\n')
+    })
+  })
+  await rawClosed
+
+  const healthy = await connectRuntime({ agentDir, autoStart: false })
+  cleanupTasks.push(() => healthy.dispose())
+  await expect(healthy.models()).resolves.toEqual([])
+})
+
+test('stopDaemon never signals an unrelated live PID from a stale daemon.pid file', async () => {
+  const { spawn } = await import('node:child_process')
+  const agentDir = makeShortTempDir('vd-stale-pid-')
+  const sleeper = spawn(
+    process.execPath,
+    ['-e', 'setTimeout(() => {}, 30000)'],
+    {
+      stdio: 'ignore',
+    },
+  )
+  cleanupTasks.push(() => {
+    try {
+      sleeper.kill('SIGKILL')
+    } catch {}
+  })
+  expect(typeof sleeper.pid).toBe('number')
+
+  const paths = resolveDaemonPaths(agentDir)
+  writeFileSync(
+    paths.pidPath,
+    JSON.stringify({ pid: sleeper.pid, instanceId: 'dead-instance' }),
+  )
+
+  const stopped = await stopDaemon({ agentDir })
+  expect(stopped).toBe(false)
+  expect(existsSync(paths.pidPath)).toBe(false)
+  // Sleeper process must still be alive
+  expect(() => process.kill(sleeper.pid!, 0)).not.toThrow()
+})

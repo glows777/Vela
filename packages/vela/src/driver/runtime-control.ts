@@ -17,10 +17,10 @@ import { createInspectAndBashControl } from './runtime-control-inspect.ts'
 import { createTreeControl } from './runtime-control-tree.ts'
 import {
   type DriverSharedState,
-  disposeCachedSessionRunner,
   type PreparedSessionEnv,
   prepareSessionSetup,
   resolveSessionModels,
+  retireOrDisposeCachedRunner,
 } from './runtime-session-setup.ts'
 import type {
   RuntimeReloadableConfig,
@@ -275,6 +275,8 @@ export function createRuntimeControl(
     extensionErrors: () => state.extHost.errors,
 
     async reloadConfig(next: RuntimeReloadableConfig): Promise<void> {
+      await state.extHost.ready().catch(() => {})
+      state.extHost.unregisterExtensionProviders()
       if (next.providers) {
         for (const oldName of configProviderNames) {
           if (!(oldName in next.providers)) {
@@ -286,28 +288,24 @@ export function createRuntimeControl(
         }
         configProviderNames = new Set(Object.keys(next.providers))
       }
-      if (next.rawConfigProviders !== undefined) {
+      if ('rawConfigProviders' in next) {
         state.rawConfigProviders = next.rawConfigProviders
       }
       state.reloadable = {
         ...state.reloadable,
-        ...(next.limits !== undefined ? { limits: next.limits } : {}),
-        ...(next.defaultTools !== undefined
-          ? { defaultTools: next.defaultTools }
-          : {}),
-        ...(next.extensionConfig !== undefined
+        ...('limits' in next ? { limits: next.limits } : {}),
+        ...('defaultTools' in next ? { defaultTools: next.defaultTools } : {}),
+        ...('extensionConfig' in next
           ? { extensionConfig: next.extensionConfig }
           : {}),
-        ...(next.extensions !== undefined
-          ? { extensions: next.extensions }
-          : {}),
-        ...(next.enabledModels !== undefined
+        ...('extensions' in next ? { extensions: next.extensions } : {}),
+        ...('enabledModels' in next
           ? { enabledModels: next.enabledModels }
           : {}),
-        ...(next.dreamEnabled !== undefined
-          ? { dreamEnabled: next.dreamEnabled }
+        ...('dreamEnabled' in next ? { dreamEnabled: next.dreamEnabled } : {}),
+        ...('offline' in next && next.offline !== undefined
+          ? { offline: next.offline }
           : {}),
-        ...(next.offline !== undefined ? { offline: next.offline } : {}),
       }
       if ('defaultModel' in next) {
         state.reloadable.defaultModel = next.defaultModel
@@ -412,7 +410,7 @@ export function createRuntimeControl(
         if (special) {
           state.specialModels.set(sessionId, special)
         }
-      } else if (override.model) {
+      } else {
         const existingSpecial = state.specialModels.get(sessionId)
         if (existingSpecial) {
           state.specialModels.delete(sessionId)
@@ -425,11 +423,12 @@ export function createRuntimeControl(
         override.noTools ||
         (override.excludeTools && override.excludeTools.length > 0)
       ) {
+        state.sessionActiveTools.delete(sessionId)
         const sessionRow = state.db.get<{ project_id: string | null }>(
           'SELECT project_id FROM sessions WHERE id = ?',
           sessionId,
         )
-        await prepareSessionSetup({
+        const prepared = await prepareSessionSetup({
           state,
           sessionId,
           projectId: sessionRow?.project_id ?? null,
@@ -440,6 +439,7 @@ export function createRuntimeControl(
           attachMcp: false,
           allowNoModel: true,
         })
+        await prepared.releaseSession()
       }
     },
 
@@ -455,7 +455,11 @@ export function createRuntimeControl(
       const resolved = activeModels.resolve(modelRef, {
         channel: () => channel,
       })
-      state.specialModels.delete(sessionId)
+      const existingSpecial = state.specialModels.get(sessionId)
+      if (existingSpecial) {
+        state.specialModels.delete(sessionId)
+        await existingSpecial.flush?.().catch(() => {})
+      }
       if (override) {
         state.sessionOverrides.set(sessionId, {
           ...override,
@@ -540,44 +544,48 @@ export function createRuntimeControl(
           attachMcp: false,
           allowNoModel: false,
         })
-        const { contextManager } = buildTrackerAndContext({
-          store,
-          saved,
-          prepared,
-          sessionId,
-          projectId: row.project_id,
-        })
-        const systemPrompt = prepared.builder.build({
-          sessionId,
-          activeTools: prepared.registry.getActiveTools(),
-          deferredToolSummary: prepared.registry.getDeferredToolSummary(),
-          extensionSections: prepared.runtimeSections,
-        })
-        const snapshot = await resolveRequestSnapshot(
-          prepared.resolved!.model,
-          systemPrompt,
-          prepared.registry.toProviderTools(),
-          messages,
-          controller.signal,
-          prepared.resolved!.info.maxTokens,
-        )
-        const beforeLeaf = store.getLeafId()
-        await contextManager.compact(snapshot, instructions, 'manual')
-        await store.flush()
-        const entries = store.getBranch()
-        const compEntry = entries
-          .slice()
-          .reverse()
-          .find((e) => e.type === 'compaction')
-        if (compEntry?.type !== 'compaction' || compEntry.id === beforeLeaf) {
-          return undefined
-        }
-        return {
-          summary: compEntry.summary,
-          firstKeptEntryId: compEntry.firstKeptEntryId,
-          tokensBefore: compEntry.tokensBefore,
-          tokensAfter: contextManager.tracker.status.tokens,
-          messages: 0,
+        try {
+          const { contextManager } = buildTrackerAndContext({
+            store,
+            saved,
+            prepared,
+            sessionId,
+            projectId: row.project_id,
+          })
+          const systemPrompt = prepared.builder.build({
+            sessionId,
+            activeTools: prepared.registry.getActiveTools(),
+            deferredToolSummary: prepared.registry.getDeferredToolSummary(),
+            extensionSections: prepared.runtimeSections,
+          })
+          const snapshot = await resolveRequestSnapshot(
+            prepared.resolved!.model,
+            systemPrompt,
+            prepared.registry.toProviderTools(),
+            messages,
+            controller.signal,
+            prepared.resolved!.info.maxTokens,
+          )
+          const beforeLeaf = store.getLeafId()
+          await contextManager.compact(snapshot, instructions, 'manual')
+          await store.flush()
+          const entries = store.getBranch()
+          const compEntry = entries
+            .slice()
+            .reverse()
+            .find((e) => e.type === 'compaction')
+          if (compEntry?.type !== 'compaction' || compEntry.id === beforeLeaf) {
+            return undefined
+          }
+          return {
+            summary: compEntry.summary,
+            firstKeptEntryId: compEntry.firstKeptEntryId,
+            tokensBefore: compEntry.tokensBefore,
+            tokensAfter: contextManager.tracker.status.tokens,
+            messages: 0,
+          }
+        } finally {
+          await prepared.releaseSession()
         }
       })
     },
@@ -688,10 +696,11 @@ export function createRuntimeControl(
       const cachedRunner = state.sessionRunners.get(sessionId)
       if (cachedRunner) {
         state.sessionRunners.delete(sessionId)
-        await disposeCachedSessionRunner(cachedRunner)
+        await retireOrDisposeCachedRunner(cachedRunner)
       }
       state.sessionResourceSnapshots.delete(sessionId)
       state.sessionOverrides.delete(sessionId)
+      state.sessionActiveTools.delete(sessionId)
       const special = state.specialModels.get(sessionId)
       if (special) {
         state.specialModels.delete(sessionId)

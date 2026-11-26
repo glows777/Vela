@@ -383,6 +383,15 @@ export class RuntimeExtensionHost {
     },
   ) {}
 
+  unregisterExtensionProviders(): void {
+    const loaded = this.current.runner?.loaded() ?? []
+    for (const ext of loaded) {
+      for (const providerName of ext.providers) {
+        this.deps.models?.unregister(providerName)
+      }
+    }
+  }
+
   reload(options: {
     configured?: readonly string[]
     extensionConfig: Record<string, Record<string, unknown>>
@@ -401,6 +410,7 @@ export class RuntimeExtensionHost {
     const runLoad = prevLoad
       .catch(() => {})
       .then(async () => {
+        this.unregisterExtensionProviders()
         const nextRegistry = new ToolRegistry(undefined)
         const factories = await loadExtensionEntries({
           entries: resolved.entries,
@@ -554,7 +564,8 @@ export class RuntimeExtensionHost {
         models: this.deps.models,
         parent: options.noExtensions ? undefined : options.hostSnapshot.runner,
       },
-      factories.concat(auditLog),
+      factories,
+      [auditLog],
     )
     await runner.ready.catch(() => {})
     return {
@@ -602,6 +613,7 @@ export function createExtensionSessionView(params: {
   signal?: AbortSignal
   buildSystem?: (sections?: Record<string, string>) => string
   onNotify?: (message: string, level: 'info' | 'warning' | 'error') => void
+  onSetActiveTools?: (names: string[] | undefined) => void
 }): VelaSession {
   const view = {
     id: params.sessionId,
@@ -619,6 +631,7 @@ export function createExtensionSessionView(params: {
     getActiveTools: () => params.registry.getActiveTools().map((t) => t.name),
     setActiveTools: (names: string[] | undefined) => {
       params.registry.setSelection(names)
+      params.onSetActiveTools?.(names)
     },
     buildSystem: (sections?: Record<string, string>) =>
       params.buildSystem?.(sections) ?? '',

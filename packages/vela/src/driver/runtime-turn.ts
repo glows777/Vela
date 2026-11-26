@@ -547,14 +547,16 @@ export async function prepareRuntimeTurnMessages(options: {
       const attachmentLines: string[] = []
       for (const att of atts) {
         if (att.mimeType?.startsWith('image/')) {
-          try {
-            const bytes = await blobs.readBytes(att.blobId)
-            imageParts.push({
-              type: 'image',
-              data: Buffer.from(bytes).toString('base64'),
-              mimeType: att.mimeType,
-            })
-          } catch {}
+          const bytes = await blobs.readOwnedBytes(
+            att.blobId,
+            request.sessionId,
+            signal,
+          )
+          imageParts.push({
+            type: 'image',
+            data: Buffer.from(bytes).toString('base64'),
+            mimeType: att.mimeType,
+          })
         }
         if (!att.inlineOnly) {
           env ??= await resolveEnv()

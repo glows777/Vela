@@ -58,6 +58,7 @@ export interface InteractiveOptions {
   offline?: boolean
   setupOnly?: boolean
   setupTarget?: 'lark'
+  noSession?: boolean
   projectSettingsPath?: string
   hasUsableModel?: (session: CliSessionClient) => boolean
   onConfigured?: () => void

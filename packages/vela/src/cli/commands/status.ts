@@ -12,7 +12,7 @@ export const statusCommands: CommandHandler[] = [
   (cmd, { print, session, agentDir }) => {
     if (cmd !== '/status') return false
     return (async () => {
-      const snap = await session.refresh()
+      const snap = await session.refresh({ includeEntries: true })
       const windowTokens =
         snap.modelInfo?.contextWindow ?? snap.usage.contextWindow
       const model = snap.modelInfo

@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
-import { canonicalLocalPath } from '../db/trust.ts'
+import { canonicalLocalPath, savedTrust } from '../db/trust.ts'
 import type { OAuthRegistrationStore } from '../providers/auth/types.ts'
 import {
   DEFAULT_THINKING_LEVEL,
@@ -72,9 +72,11 @@ export interface CachedSessionRunner {
   releaseHost: () => void
   started: boolean
   lastView?: VelaSession
+  refs: number
+  retired?: boolean
 }
 
-export async function disposeCachedSessionRunner(
+async function disposeCachedSessionRunner(
   entry: CachedSessionRunner,
 ): Promise<void> {
   try {
@@ -85,6 +87,47 @@ export async function disposeCachedSessionRunner(
   } finally {
     entry.releaseHost()
   }
+}
+
+export async function retireOrDisposeCachedRunner(
+  entry: CachedSessionRunner,
+): Promise<void> {
+  entry.retired = true
+  if (entry.refs === 0) {
+    await disposeCachedSessionRunner(entry)
+  }
+}
+
+async function releaseCachedSessionRunner(
+  entry: CachedSessionRunner,
+): Promise<void> {
+  entry.refs = Math.max(0, entry.refs - 1)
+  if (entry.retired && entry.refs === 0) {
+    await disposeCachedSessionRunner(entry)
+  }
+}
+
+function withSessionRunnerLock<T>(
+  state: DriverSharedState,
+  sessionId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = state.sessionRunnerLocks.get(sessionId) ?? Promise.resolve()
+  const next = prev.catch(() => {}).then(fn)
+  const tail = next.then(
+    () => {
+      if (state.sessionRunnerLocks.get(sessionId) === tail) {
+        state.sessionRunnerLocks.delete(sessionId)
+      }
+    },
+    () => {
+      if (state.sessionRunnerLocks.get(sessionId) === tail) {
+        state.sessionRunnerLocks.delete(sessionId)
+      }
+    },
+  )
+  state.sessionRunnerLocks.set(sessionId, tail)
+  return next
 }
 
 export async function disposeDriverSharedState(
@@ -123,8 +166,9 @@ export async function disposeDriverSharedState(
   const runners = [...state.sessionRunners.values()]
   state.sessionRunners.clear()
   state.sessionResourceSnapshots.clear()
+  state.sessionActiveTools.clear()
   await Promise.allSettled(
-    runners.map((entry) => disposeCachedSessionRunner(entry)),
+    runners.map((entry) => retireOrDisposeCachedRunner(entry)),
   )
   await state.options.mcp?.dispose?.()
   await state.extHost.shutdown().catch(() => {})
@@ -144,6 +188,8 @@ export interface DriverSharedState {
   sessionOverrides: Map<string, RuntimeSessionOverride>
   specialModels: Map<string, RuntimeSpecialModelHandle>
   sessionRunners: Map<string, CachedSessionRunner>
+  sessionRunnerLocks: Map<string, Promise<void>>
+  sessionActiveTools: Map<string, string[] | undefined>
   sessionResourceSnapshots: Map<
     string,
     {
@@ -197,6 +243,7 @@ export interface PreparedSessionEnv {
   memoryActive: boolean
   builder: SystemPromptBuilder
   runtimeSections: Record<string, string>
+  releaseSession: () => Promise<void>
 }
 
 function resolveEffectiveEnv(
@@ -282,12 +329,9 @@ export async function prepareSessionSetup(params: {
     location.environment,
   )
 
-  const spillDir = join(
-    state.options.agentDir,
-    'sessions',
-    sessionId,
-    'tool-results',
-  )
+  const spillDir = state.options.spillRoot
+    ? join(state.options.spillRoot, sessionId, 'tool-results')
+    : join(state.options.agentDir, 'sessions', sessionId, 'tool-results')
   const resolveEnv = async (): Promise<ExecutionEnv> => {
     if (location.environment === 'local') {
       return createSessionLocalExecutionEnv({
@@ -326,9 +370,15 @@ export async function prepareSessionSetup(params: {
     : state.options.trustOverride
       ? await state.options.trustOverride(location)
       : undefined
+  const savedTrustState = savedTrust(
+    state.db,
+    location,
+    state.options.environments.dataDir,
+  )
   const resourceSnapshotKey = JSON.stringify([
     location.environment,
     location.cwd,
+    savedTrustState ?? null,
     trustOverride ?? null,
     override?.systemPrompt ?? state.options.systemPrompt ?? null,
     override?.appendSystemPrompt ?? state.options.appendSystemPrompt ?? null,
@@ -434,55 +484,72 @@ export async function prepareSessionSetup(params: {
     hostLease.snapshot.generation,
     extensionConfig,
   ])
-  let cachedRunner = state.sessionRunners.get(sessionId)
-  if (cachedRunner && cachedRunner.key === runnerKey) {
-    hostLease.release()
-  } else {
-    if (cachedRunner) {
-      state.sessionRunners.delete(sessionId)
-      await disposeCachedSessionRunner(cachedRunner)
-    }
-    const sessionExtRegistry = new ToolRegistry(
-      undefined,
-      undefined,
-      noExtensions ? undefined : hostLease.snapshot.registry,
-    )
-    let created:
-      | Awaited<ReturnType<RuntimeExtensionHost['createSessionRunner']>>
-      | undefined
-    try {
-      created = await state.extHost.createSessionRunner({
-        cwd: location.cwd,
-        trusted: resources.trusted,
-        isLocalLocation: location.environment === 'local',
-        projectExtensions,
-        extraExtensions,
-        noExtensions,
-        extensionConfig,
+  const cachedRunner = await withSessionRunnerLock(
+    state,
+    sessionId,
+    async () => {
+      let existing = state.sessionRunners.get(sessionId)
+      if (existing && existing.key === runnerKey) {
+        hostLease.release()
+        existing.refs += 1
+        return existing
+      }
+      if (existing) {
+        state.sessionRunners.delete(sessionId)
+        await retireOrDisposeCachedRunner(existing)
+      }
+      const sessionExtRegistry = new ToolRegistry(
+        undefined,
+        undefined,
+        noExtensions ? undefined : hostLease.snapshot.registry,
+      )
+      let created:
+        | Awaited<ReturnType<RuntimeExtensionHost['createSessionRunner']>>
+        | undefined
+      try {
+        created = await state.extHost.createSessionRunner({
+          cwd: location.cwd,
+          trusted: resources.trusted,
+          isLocalLocation: location.environment === 'local',
+          projectExtensions,
+          extraExtensions,
+          noExtensions,
+          extensionConfig,
+          registry: sessionExtRegistry,
+          hostSnapshot: hostLease.snapshot,
+        })
+      } catch (error) {
+        hostLease.release()
+        throw error
+      }
+      existing = {
+        key: runnerKey,
+        runner: created.runner,
         registry: sessionExtRegistry,
-        hostSnapshot: hostLease.snapshot,
-      })
-    } catch (error) {
-      hostLease.release()
-      throw error
-    }
-    cachedRunner = {
-      key: runnerKey,
-      runner: created.runner,
-      registry: sessionExtRegistry,
-      errors: created.errors,
-      releaseHost: hostLease.release,
-      started: false,
-    }
-    state.sessionRunners.set(sessionId, cachedRunner)
+        errors: created.errors,
+        releaseHost: hostLease.release,
+        started: false,
+        refs: 1,
+      }
+      state.sessionRunners.set(sessionId, existing)
+      return existing
+    },
+  )
+  let releasedRunner = false
+  const releaseSession = async (): Promise<void> => {
+    if (releasedRunner) return
+    releasedRunner = true
+    await releaseCachedSessionRunner(cachedRunner)
   }
   const extensionRunner = cachedRunner.runner
   const extensionErrors = cachedRunner.errors
+  let refreshRuntimeSections = () => {}
   const ensureSessionStarted = async (extView: VelaSession): Promise<void> => {
-    cachedRunner!.lastView = extView
-    if (cachedRunner!.started) return
-    cachedRunner!.started = true
-    await cachedRunner!.runner.sessionStart(extView)
+    cachedRunner.lastView = extView
+    if (cachedRunner.started) return
+    cachedRunner.started = true
+    await cachedRunner.runner.sessionStart(extView)
+    refreshRuntimeSections()
   }
 
   const registry = createRuntimeSessionToolRegistry({
@@ -554,8 +621,21 @@ export async function prepareSessionSetup(params: {
     (override?.excludeTools && override.excludeTools.length > 0) ||
     mergedDefaultTools !== undefined
   ) {
+    const candidateNames = new Set(registry.getAllTools().map((t) => t.name))
+    if (saved?.discoveredTools.length) {
+      for (const name of saved.discoveredTools) candidateNames.add(name)
+    }
+    if (!attachMcp && !effectiveDisabledBuiltins.has('mcp')) {
+      for (const name of [
+        ...(override?.tools ?? []),
+        ...(override?.excludeTools ?? []),
+        ...(mergedDefaultTools ?? []),
+      ]) {
+        if (name.startsWith('mcp_')) candidateNames.add(name)
+      }
+    }
     const loadout = selectTools(
-      registry.getAllTools().map((t) => t.name),
+      [...candidateNames],
       {
         tools: override?.tools,
         noTools: override?.noTools,
@@ -568,13 +648,13 @@ export async function prepareSessionSetup(params: {
       registry.setDefaultToolModifiers([...baseModifiers, ...loadout.modifiers])
   }
 
+  if (state.sessionActiveTools.has(sessionId)) {
+    registry.setSelection(state.sessionActiveTools.get(sessionId))
+  }
+
   if (saved?.discoveredTools.length) {
     registry.discoveredTools = new Set(saved.discoveredTools)
   }
-
-  const activeTools = registry.getActiveTools()
-  const activeToolNames = new Set(activeTools.map((t) => t.name))
-  const memoryActive = activeToolNames.has('memory')
 
   const pinnedDate = localDateString(
     new Date(sessionRow?.created_at ?? Date.now()),
@@ -594,15 +674,23 @@ export async function prepareSessionSetup(params: {
     () => state.options.environments.osFor(location.environment),
     () => pinnedDate,
   )
-  const runtimeSections = {
-    ...buildRuntimePromptSections({
-      kind: sessionKind,
-      projectId,
-      hasChannelBinding,
-      activeTools: activeToolNames,
-    }),
-    ...(memoryActive ? { memory: MEMORY_RULES } : {}),
+  let memoryActive = false
+  let runtimeSections: Record<string, string> = {}
+  refreshRuntimeSections = () => {
+    const currentTools = registry.getActiveTools()
+    const currentNames = new Set(currentTools.map((t) => t.name))
+    memoryActive = currentNames.has('memory')
+    runtimeSections = {
+      ...buildRuntimePromptSections({
+        kind: sessionKind,
+        projectId,
+        hasChannelBinding,
+        activeTools: currentNames,
+      }),
+      ...(memoryActive ? { memory: MEMORY_RULES } : {}),
+    }
   }
+  refreshRuntimeSections()
 
   return {
     location,
@@ -635,8 +723,13 @@ export async function prepareSessionSetup(params: {
     extensionErrors,
     mcpLease,
     memoryStores,
-    memoryActive,
+    get memoryActive() {
+      return memoryActive
+    },
     builder,
-    runtimeSections,
+    get runtimeSections() {
+      return runtimeSections
+    },
+    releaseSession,
   }
 }

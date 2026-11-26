@@ -39,11 +39,13 @@ Configure a model and its credentials first (see [Models](models.md)), then merg
 
 The timezone is optional and defaults to the process timezone for routines. Supply a nonempty secret through the daemon's environment, not a committed config file. For example, in a shell with OpenSSL installed:
 
+Run a lightweight Local gateway host script (until S4b wires `local` directly onto `vela daemon`):
+
 ```sh
 export VELA_LOCAL_TOKEN="$(openssl rand -hex 32)"
-cd /absolute/path/to/daemon-workspace
-vela serve
 ```
+
+See [SDK startup](#sdk-startup) below (`vela.startChannels()`), and note that `vela serve` was retired from the CLI in v0.9.
 
 Keep the same token in the client environment through your normal secret-management mechanism. Do not print it in logs or include it in URLs. A service manager must supply the token and model credentials to the host. Restart after changing config. Local is disabled by default; in the CLI `vela serve` was retired in v0.9 (use `local({ token })` in the SDK until channel adapters complete their daemon migration). Project-level `local` in `.vela/config.json` cannot enable, disable or override it. There is no `builtin:local` selector.
 

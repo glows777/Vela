@@ -273,6 +273,25 @@ export function createRuntimeBackgroundController(params: {
     )
   }
 
+  const attachJobDeadline = (
+    job: LiveRuntimeJob,
+    controller: AbortController,
+    timeout?: number,
+  ) => {
+    const hasTimeout =
+      timeout !== undefined && Number.isFinite(timeout) && timeout > 0
+    const limit = hasTimeout
+      ? Math.min(timeout * 1000, MAX_LIMIT_MS)
+      : DEFAULT_LIMIT_MS
+    job.deadline = setTimeout(() => {
+      if (controller.signal.aborted) return
+      job.timedOut = true
+      job.stopped = true
+      controller.abort(new DOMException('Time limit', 'AbortError'))
+    }, limit)
+    job.deadline.unref?.()
+  }
+
   const moveForegroundEntry = (entry: LiveForeground): string => {
     const id = `bg-${++seq}`
     const token = randomUUID()
@@ -311,6 +330,7 @@ export function createRuntimeBackgroundController(params: {
       )
     }
     entry.resumeTimeout = undefined
+    attachJobDeadline(job, entry.controller)
     job.finished = entry.exitResult.then(
       (exit) => settleFromCommandExit(job, clearPoll, exit),
       (error) =>
@@ -378,19 +398,7 @@ export function createRuntimeBackgroundController(params: {
       }
 
       signal?.removeEventListener('abort', onSignalAbort)
-
-      const hasTimeout =
-        timeout !== undefined && Number.isFinite(timeout) && timeout > 0
-      const limit = hasTimeout
-        ? Math.min(timeout * 1000, MAX_LIMIT_MS)
-        : DEFAULT_LIMIT_MS
-      job.deadline = setTimeout(() => {
-        if (controller.signal.aborted) return
-        job.timedOut = true
-        job.stopped = true
-        controller.abort(new DOMException('Time limit', 'AbortError'))
-      }, limit)
-      job.deadline.unref?.()
+      attachJobDeadline(job, controller, timeout)
 
       job.finished = Promise.resolve()
         .then(() =>

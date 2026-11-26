@@ -83,6 +83,12 @@ export async function runPrintMode(options: {
       } else if (event.status === 'stopped') {
         if (event.runId === lastUserRunId) userRunFailed = true
         failure ??= { message: 'Stopped', kind: undefined }
+      } else if (event.status === 'waiting_human') {
+        if (event.runId === lastUserRunId) userRunFailed = true
+        failure ??= {
+          message: 'Waiting for human approval or input',
+          kind: undefined,
+        }
       }
     }
   })
@@ -96,7 +102,7 @@ export async function runPrintMode(options: {
       : () => {}
 
   if (mode === 'json') {
-    const snap = await session.refresh()
+    const snap = await session.refresh({ includeEntries: false })
     await writeStdout(
       toJsonLine({
         type: 'session',

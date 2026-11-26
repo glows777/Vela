@@ -115,10 +115,15 @@ The running process keeps the old code until the restart. A run in progress is s
 Until S4b wires `lark` and `local` directly onto `vela daemon`, deploy a lightweight host script (`gateway.mjs`) alongside your workspace and run `ExecStart=/usr/bin/node /home/vela/gateway.mjs` under the same `vela` systemd user:
 
 ```js
-import { createVela, lark, loadConfig } from '@glows777/vela'
+import { createVela, lark, local, loadConfig } from '@glows777/vela'
 
 const config = loadConfig({ cwd: process.cwd(), agentDir: process.env.VELA_DIR, env: process.env })
-const extensions = config.settings.lark ? [lark(config.settings.lark)] : []
+const extensions = [
+  ...(config.settings.lark ? [lark(config.settings.lark)] : []),
+  ...(config.settings.local?.enabled && config.settings.local.token
+    ? [local(config.settings.local)]
+    : []),
+]
 const vela = createVela({
   cwd: config.cwd,
   agentDir: config.agentDir,

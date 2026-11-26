@@ -14,7 +14,7 @@ import {
   toExtensionConfigView,
   type VelaSettings,
 } from './config/index.ts'
-import { openDatabase } from './db/index.ts'
+import { openDatabase, withReadonlyDb } from './db/index.ts'
 import { savedTrust, saveTrust } from './db/trust.ts'
 import { defaultAgentDir } from './driver/config/paths.ts'
 import {
@@ -169,9 +169,12 @@ export function createRuntime(
   const isEphemeralDb = isEphemeral || options.ephemeralSessions === true
   const hostEnv = options.hostEnv ?? {}
   const transientAgentDir =
-    isEphemeralDb && !options.agentDir
+    isEphemeral && !options.agentDir
       ? mkdtempSync(join(tmpdir(), 'vela-runtime-'))
       : undefined
+  const transientSpillRoot = isEphemeralDb
+    ? mkdtempSync(join(tmpdir(), 'vela-spill-'))
+    : undefined
   const agentDir = resolve(
     options.agentDir ?? transientAgentDir ?? defaultAgentDir(hostEnv),
   )
@@ -181,6 +184,46 @@ export function createRuntime(
     openDatabase({
       path: isEphemeralDb ? ':memory:' : join(agentDir, 'vela.db'),
     })
+  if (isEphemeralDb && !isEphemeral && !options.db) {
+    try {
+      withReadonlyDb(join(agentDir, 'vela.db'), (ownerDb) => {
+        const trustRows = ownerDb.all<{
+          path: string
+          trusted: number
+          updated_at: string
+        }>('SELECT path, trusted, updated_at FROM trusted_paths')
+        for (const r of trustRows) {
+          db.run(
+            'INSERT OR REPLACE INTO trusted_paths (path, trusted, updated_at) VALUES (?, ?, ?)',
+            r.path,
+            r.trusted,
+            r.updated_at,
+          )
+        }
+        const oauthRows = ownerDb.all<{
+          provider: string
+          client_id: string
+          host_id: string | null
+          subject: string | null
+          updated_at: string
+        }>(
+          'SELECT provider, client_id, host_id, subject, updated_at FROM oauth_registrations',
+        )
+        for (const r of oauthRows) {
+          db.run(
+            'INSERT OR REPLACE INTO oauth_registrations (provider, client_id, host_id, subject, updated_at) VALUES (?, ?, ?, ?, ?)',
+            r.provider,
+            r.client_id,
+            r.host_id,
+            r.subject,
+            r.updated_at,
+          )
+        }
+      })
+    } catch {
+      /* ignore unreadable owner db when seeding ephemeral state */
+    }
+  }
 
   try {
     const configPath = join(agentDir, 'config.json')
@@ -308,6 +351,7 @@ export function createRuntime(
       trustOverride: options.trustOverride,
       toolApprovalCheck: options.toolApprovalCheck,
       resolveSpecialModel: createSpecialModelResolver(),
+      spillRoot: transientSpillRoot,
       onBeforeExtensionImport,
       logger,
     })
@@ -326,8 +370,6 @@ export function createRuntime(
         ) {
           return
         }
-        lastConfigSig = nextConfigSig
-        lastAuthSig = nextAuthSig
         const updated = computeConfigState()
         await velaDriver.control.reloadConfig({
           defaultModel: options.defaultModel ?? updated.ownerConfig.model,
@@ -343,6 +385,8 @@ export function createRuntime(
           dreamEnabled: updated.dreamEnabled,
           offline: options.offline,
         })
+        lastConfigSig = nextConfigSig
+        lastAuthSig = nextAuthSig
       })
       reloadQueue = next.catch(() => {})
       return next
@@ -501,9 +545,24 @@ export function createRuntime(
       },
       models: async (opts) => {
         await maybeRefreshConfig()
+        let registry = models
+        if (opts?.env) {
+          const updated = computeConfigState()
+          const effectiveEnv = { ...hostEnv, ...opts.env }
+          const overlaid = loadModels({
+            agentDir,
+            env: effectiveEnv,
+            providers: updated.configProviders,
+          })
+          registry = new ModelRegistry(
+            { ...models.providerDefinitions(), ...overlaid },
+            credentials,
+            registrations,
+          )
+        }
         return opts?.all
-          ? models.list(opts.channel)
-          : models.available(opts?.channel)
+          ? registry.list(opts.channel)
+          : registry.available(opts?.channel)
       },
       loginProviders: async () => {
         await maybeRefreshConfig()
@@ -531,6 +590,9 @@ export function createRuntime(
             if (transientAgentDir) {
               rmSync(transientAgentDir, { recursive: true, force: true })
             }
+            if (transientSpillRoot) {
+              rmSync(transientSpillRoot, { recursive: true, force: true })
+            }
           }
         })()
         return disposing
@@ -540,6 +602,9 @@ export function createRuntime(
     if (ownsDb && db.open) db.close()
     if (transientAgentDir) {
       rmSync(transientAgentDir, { recursive: true, force: true })
+    }
+    if (transientSpillRoot) {
+      rmSync(transientSpillRoot, { recursive: true, force: true })
     }
     throw error
   }

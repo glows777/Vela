@@ -65,7 +65,7 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
   return {
     async inspect(
       sessionId: string,
-      options?: { previewPrompt?: boolean },
+      options?: { previewPrompt?: boolean; includeEntries?: boolean },
     ): Promise<RuntimeSessionInspection> {
       const row = state.db.get<{
         project_id: string | null
@@ -89,164 +89,171 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
         attachMcp: false,
         allowNoModel: true,
       })
-      const { tracker, effectiveLimits } = buildTrackerAndContext({
-        store,
-        saved,
-        prepared,
-        sessionId,
-        projectId: row.project_id,
-      })
-      const activeTools = prepared.registry.getActiveTools()
-      const allTools = prepared.registry.getAllTools().map((t) => t.name)
-      const availableThinkingLevels = prepared.resolved
-        ? supportedThinkingLevels(prepared.resolved.info, THINKING_LEVELS)
-        : [...THINKING_LEVELS]
-      const extCommands = prepared.extensionRunner.commands().map((c) => ({
-        name: c.name,
-        ...(c.description ? { description: c.description } : {}),
-        source: 'extension' as const,
-        extension: c.extension,
-      }))
-      const commands = [...NATIVE_COMMANDS, ...extCommands]
-      const runningJobs =
-        state.sessionBackgrounds
-          .get(sessionId)
-          ?.tasks()
-          .filter((t) => t.snapshot.state === 'running') ?? []
-      const liveSteering =
-        state.activeSteering
-          .get(sessionId)
-          ?.map((m) =>
-            typeof m.content === 'string'
-              ? m.content
-              : JSON.stringify(m.content),
-          ) ?? []
-      const dbSteering = listPendingUserInboxTexts(state.db, sessionId)
-
-      let promptSnapshot: RuntimePromptPreview | undefined
-      if (options?.previewPrompt) {
-        const systemPrompt = prepared.builder.build({
+      try {
+        const { tracker, effectiveLimits } = buildTrackerAndContext({
+          store,
+          saved,
+          prepared,
           sessionId,
-          activeTools,
-          deferredToolSummary: prepared.registry.getDeferredToolSummary(),
-          extensionSections: prepared.runtimeSections,
+          projectId: row.project_id,
         })
-        const resolvedTools = await resolveProviderTools(
-          prepared.resolved?.model ?? '',
-          prepared.registry.toProviderTools(),
-        )
-        const skillsStr =
-          formatSkillsForPrompt(
-            prepared.resources.skills,
-            activeTools.map((t) => t.name),
-          ) ?? ''
-        const ctxParams = {
-          extensionSections: prepared.runtimeSections,
-          deferredToolSummary: prepared.registry.getDeferredToolSummary(),
+        const activeTools = prepared.registry.getActiveTools()
+        const allTools = prepared.registry.getAllTools().map((t) => t.name)
+        const availableThinkingLevels = prepared.resolved
+          ? supportedThinkingLevels(prepared.resolved.info, THINKING_LEVELS)
+          : [...THINKING_LEVELS]
+        const extCommands = prepared.extensionRunner.commands().map((c) => ({
+          name: c.name,
+          ...(c.description ? { description: c.description } : {}),
+          source: 'extension' as const,
+          extension: c.extension,
+        }))
+        const commands = [...NATIVE_COMMANDS, ...extCommands]
+        const runningJobs =
+          state.sessionBackgrounds
+            .get(sessionId)
+            ?.tasks()
+            .filter((t) => t.snapshot.state === 'running') ?? []
+        const liveSteering =
+          state.activeSteering
+            .get(sessionId)
+            ?.map((m) =>
+              typeof m.content === 'string'
+                ? m.content
+                : JSON.stringify(m.content),
+            ) ?? []
+        const dbSteering = listPendingUserInboxTexts(state.db, sessionId)
+
+        let promptSnapshot: RuntimePromptPreview | undefined
+        if (options?.previewPrompt) {
+          const systemPrompt = prepared.builder.build({
+            sessionId,
+            activeTools,
+            deferredToolSummary: prepared.registry.getDeferredToolSummary(),
+            extensionSections: prepared.runtimeSections,
+          })
+          const resolvedTools = await resolveProviderTools(
+            prepared.resolved?.model ?? '',
+            prepared.registry.toProviderTools(),
+          )
+          const skillsStr =
+            formatSkillsForPrompt(
+              prepared.resources.skills,
+              activeTools.map((t) => t.name),
+            ) ?? ''
+          const ctxParams = {
+            extensionSections: prepared.runtimeSections,
+            deferredToolSummary: prepared.registry.getDeferredToolSummary(),
+            sessionId,
+            activeTools,
+          }
+          promptSnapshot = {
+            windowTokens: tracker.contextWindow,
+            systemPrompt,
+            systemPromptChars: systemPrompt.length,
+            toolDescriptionChars: JSON.stringify(resolvedTools.toolDefinitions)
+              .length,
+            skillsChars: skillsStr.length,
+            extensionSections: { ...prepared.runtimeSections },
+            stages: prepared.builder.status(ctxParams),
+          }
+        }
+
+        const modelInfo = prepared.resolved
+          ? {
+              ...prepared.resolved.info,
+              ...(typeof prepared.modelInput === 'string'
+                ? (() => {
+                    const provider = prepared.modelInput.slice(
+                      0,
+                      prepared.modelInput.indexOf('/'),
+                    )
+                    const plan = prepared.activeModels.planLabel(
+                      provider,
+                      prepared.boundChannel,
+                    )
+                    return plan ? { planLabel: plan } : {}
+                  })()
+                : {}),
+            }
+          : undefined
+
+        const includeEntries = options?.includeEntries !== false
+        return {
           sessionId,
-          activeTools,
-        }
-        promptSnapshot = {
-          windowTokens: tracker.contextWindow,
-          systemPrompt,
-          systemPromptChars: systemPrompt.length,
-          toolDescriptionChars: JSON.stringify(resolvedTools.toolDefinitions)
-            .length,
-          skillsChars: skillsStr.length,
-          extensionSections: { ...prepared.runtimeSections },
-          stages: prepared.builder.status(ctxParams),
-        }
-      }
-
-      const modelInfo = prepared.resolved
-        ? {
-            ...prepared.resolved.info,
-            ...(typeof prepared.modelInput === 'string'
-              ? (() => {
-                  const provider = prepared.modelInput.slice(
-                    0,
-                    prepared.modelInput.indexOf('/'),
-                  )
-                  const plan = prepared.activeModels.planLabel(
-                    provider,
-                    prepared.boundChannel,
-                  )
-                  return plan ? { planLabel: plan } : {}
-                })()
+          cwd: prepared.location.cwd,
+          ...(prepared.sessionName ? { name: prepared.sessionName } : {}),
+          ...(prepared.boundChannel ? { channel: prepared.boundChannel } : {}),
+          ...(row.parent_session_id
+            ? { parentSession: row.parent_session_id }
+            : {}),
+          persistence:
+            state.db.path === ':memory:'
+              ? { type: 'memory' as const }
+              : { type: 'file' as const, path: state.db.path },
+          ...(modelInfo ? { modelInfo } : {}),
+          ...(prepared.modelError ? { modelError: prepared.modelError } : {}),
+          thinkingLevel: prepared.thinkingLevel,
+          availableThinkingLevels,
+          limits: effectiveLimits,
+          usage: (() => {
+            const snap = tracker.snapshot()
+            return {
+              tokens: snap.tokens,
+              contextWindow: snap.contextWindow,
+              percent: snap.percent,
+              totals: snap.totals,
+            }
+          })(),
+          entries: includeEntries ? store.getEntries() : [],
+          branch: includeEntries ? store.getBranch() : [],
+          leafId: store.getLeafId(),
+          allTools,
+          activeTools: activeTools.map((t) => t.name),
+          commands,
+          extensions: prepared.extensionRunner.loaded().map((e) => ({
+            name: e.name,
+            tools: [...e.tools],
+            providers: [...e.providers],
+            commands: [...e.commands],
+          })),
+          extensionErrors: prepared.extensionErrors,
+          hooks: prepared.extensionRunner.toolHandlers(),
+          runningJobs,
+          isRunning: isSessionRunning(sessionId),
+          isBashRunning: state.activeBash.has(sessionId),
+          queuedSteering: [...dbSteering, ...liveSteering],
+          resources: {
+            trusted: prepared.resources.trusted,
+            contextFiles: prepared.resources.contextFiles.map((f) => ({
+              ...f,
+            })),
+            skills: prepared.resources.skills.map(
+              ({ name, description, filePath, disableModelInvocation }) => ({
+                name,
+                description,
+                filePath,
+                ...(disableModelInvocation ? { disableModelInvocation } : {}),
+              }),
+            ),
+            promptTemplates: prepared.resources.promptTemplates.map(
+              ({ name, description, argumentHint }) => ({
+                name,
+                description,
+                ...(argumentHint ? { argumentHint } : {}),
+              }),
+            ),
+            ...(prepared.projectDefaultTools
+              ? { defaultTools: [...prepared.projectDefaultTools] }
               : {}),
-          }
-        : undefined
-
-      return {
-        sessionId,
-        cwd: prepared.location.cwd,
-        ...(prepared.sessionName ? { name: prepared.sessionName } : {}),
-        ...(prepared.boundChannel ? { channel: prepared.boundChannel } : {}),
-        ...(row.parent_session_id
-          ? { parentSession: row.parent_session_id }
-          : {}),
-        persistence:
-          state.db.path === ':memory:'
-            ? { type: 'memory' as const }
-            : { type: 'file' as const, path: state.db.path },
-        ...(modelInfo ? { modelInfo } : {}),
-        ...(prepared.modelError ? { modelError: prepared.modelError } : {}),
-        thinkingLevel: prepared.thinkingLevel,
-        availableThinkingLevels,
-        limits: effectiveLimits,
-        usage: (() => {
-          const snap = tracker.snapshot()
-          return {
-            tokens: snap.tokens,
-            contextWindow: snap.contextWindow,
-            percent: snap.percent,
-            totals: snap.totals,
-          }
-        })(),
-        entries: store.getEntries(),
-        branch: store.getBranch(),
-        leafId: store.getLeafId(),
-        allTools,
-        activeTools: activeTools.map((t) => t.name),
-        commands,
-        extensions: prepared.extensionRunner.loaded().map((e) => ({
-          name: e.name,
-          tools: [...e.tools],
-          providers: [...e.providers],
-          commands: [...e.commands],
-        })),
-        extensionErrors: prepared.extensionErrors,
-        hooks: prepared.extensionRunner.toolHandlers(),
-        runningJobs,
-        isRunning: isSessionRunning(sessionId),
-        isBashRunning: state.activeBash.has(sessionId),
-        queuedSteering: [...dbSteering, ...liveSteering],
-        resources: {
-          trusted: prepared.resources.trusted,
-          contextFiles: prepared.resources.contextFiles.map((f) => ({ ...f })),
-          skills: prepared.resources.skills.map(
-            ({ name, description, filePath, disableModelInvocation }) => ({
-              name,
-              description,
-              filePath,
-              ...(disableModelInvocation ? { disableModelInvocation } : {}),
-            }),
-          ),
-          promptTemplates: prepared.resources.promptTemplates.map(
-            ({ name, description, argumentHint }) => ({
-              name,
-              description,
-              ...(argumentHint ? { argumentHint } : {}),
-            }),
-          ),
-          ...(prepared.projectDefaultTools
-            ? { defaultTools: [...prepared.projectDefaultTools] }
-            : {}),
-          ...(prepared.enabledModels
-            ? { enabledModels: [...prepared.enabledModels] }
-            : {}),
-        },
-        ...(promptSnapshot ? { promptSnapshot } : {}),
+            ...(prepared.enabledModels
+              ? { enabledModels: [...prepared.enabledModels] }
+              : {}),
+          },
+          ...(promptSnapshot ? { promptSnapshot } : {}),
+        }
+      } finally {
+        await prepared.releaseSession()
       }
     },
 
@@ -260,100 +267,106 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
           'A shell command is already running: wait for it or call abortBash()',
         )
       }
-      const row = state.db.get<{ project_id: string | null }>(
-        'SELECT project_id FROM sessions WHERE id = ?',
-        sessionId,
-      )
-      if (!row) throw new Error(`Session ${sessionId} not found`)
-      const { store, saved } = await loadStore(sessionId)
       const controller = new AbortController()
       state.activeBash.set(sessionId, controller)
-      try {
-        const prepared = await prepareSessionSetup({
-          state,
-          sessionId,
-          projectId: row.project_id,
-          saved,
-          store,
-          messages: [...(saved?.messages ?? [])],
-          signal: controller.signal,
-          attachMcp: false,
-          allowNoModel: true,
-        })
-        const env = await prepared.resolveEnv()
-        controller.signal.throwIfAborted()
-        let bg = state.sessionBackgrounds.get(sessionId)
-        if (!bg) {
-          bg = createRuntimeBackgroundController({
-            db: state.db,
+      const execPromise = (async (): Promise<BashResult> => {
+        let prepared: PreparedSessionEnv | undefined
+        try {
+          const row = state.db.get<{ project_id: string | null }>(
+            'SELECT project_id FROM sessions WHERE id = ?',
             sessionId,
-            runId: randomUUID(),
-            wakeSession: state.options.wakeSession,
-            location: prepared.location,
+          )
+          if (!row) throw new Error(`Session ${sessionId} not found`)
+          const { store, saved } = await loadStore(sessionId)
+          controller.signal.throwIfAborted()
+          prepared = await prepareSessionSetup({
+            state,
+            sessionId,
+            projectId: row.project_id,
+            saved,
+            store,
+            messages: [...(saved?.messages ?? [])],
+            signal: controller.signal,
+            attachMcp: false,
+            allowNoModel: true,
           })
-          state.sessionBackgrounds.set(sessionId, bg)
-        }
-        const extView = createExtensionSessionView({
-          sessionId,
-          cwd: prepared.location.cwd,
-          name: prepared.sessionName,
-          channel: prepared.boundChannel,
-          messages: [...(saved?.messages ?? [])],
-          registry: prepared.registry,
-          store,
-          eventBus: state.options.eventBus,
-          projectId: row.project_id,
-          signal: controller.signal,
-        })
-        await prepared.ensureSessionStarted(extView)
-        const output = new OutputTail()
-        const start = (signal: AbortSignal) =>
-          runBash(command, {
-            env,
-            signal,
-            onDelta: (delta) =>
-              state.options.eventBus?.emitDelta({
-                type: 'bash_output_delta',
+          const env = await prepared.resolveEnv()
+          controller.signal.throwIfAborted()
+          let bg = state.sessionBackgrounds.get(sessionId)
+          if (!bg) {
+            bg = createRuntimeBackgroundController({
+              db: state.db,
+              sessionId,
+              runId: randomUUID(),
+              wakeSession: state.options.wakeSession,
+              location: prepared.location,
+            })
+            state.sessionBackgrounds.set(sessionId, bg)
+          }
+          const extView = createExtensionSessionView({
+            sessionId,
+            cwd: prepared.location.cwd,
+            name: prepared.sessionName,
+            channel: prepared.boundChannel,
+            messages: [...(saved?.messages ?? [])],
+            registry: prepared.registry,
+            store,
+            eventBus: state.options.eventBus,
+            projectId: row.project_id,
+            signal: controller.signal,
+            onSetActiveTools: (names) =>
+              state.sessionActiveTools.set(
                 sessionId,
-                ...(options.id ? { bashId: options.id } : {}),
-                delta,
-              }),
-            output,
+                names ? [...names] : undefined,
+              ),
           })
-        const fg = bg.watch({
-          command,
-          signal: controller.signal,
-          output,
-          start,
-          excludeFromContext: options.excludeFromContext,
-          exit: (settled) => ({
-            exitCode: settled.exitCode,
-            spillPath: settled.fullOutputPath,
-          }),
-        })
-        const runPromise = Promise.race([
-          fg.result.then((value) => ({ type: 'result' as const, value })),
-          fg.detached.then((admission) => ({
-            type: 'detached' as const,
-            admission,
-          })),
-        ])
-        state.activeBashPromises.add(runPromise)
-        const outcome = await runPromise.finally(() => {
-          state.activeBashPromises.delete(runPromise)
-        })
-        const result: BashResult =
-          outcome.type === 'result'
-            ? outcome.value
-            : {
-                output: outcome.admission.output,
-                exitCode: undefined,
-                cancelled: false,
-                truncated: outcome.admission.truncated,
-                backgroundTaskId: outcome.admission.id,
-              }
-        const entry: Omit<BashExecutionEntry, 'id' | 'parentId' | 'timestamp'> =
-          {
+          await prepared.ensureSessionStarted(extView)
+          const output = new OutputTail()
+          const start = (signal: AbortSignal) =>
+            runBash(command, {
+              env,
+              signal,
+              onDelta: (delta) =>
+                state.options.eventBus?.emitDelta({
+                  type: 'bash_output_delta',
+                  sessionId,
+                  ...(options.id ? { bashId: options.id } : {}),
+                  delta,
+                }),
+              output,
+            })
+          const fg = bg.watch({
+            command,
+            signal: controller.signal,
+            output,
+            start,
+            excludeFromContext: options.excludeFromContext,
+            exit: (settled) => ({
+              exitCode: settled.exitCode,
+              spillPath: settled.fullOutputPath,
+            }),
+          })
+          const outcome = await Promise.race([
+            fg.result.then((value) => ({ type: 'result' as const, value })),
+            fg.detached.then((admission) => ({
+              type: 'detached' as const,
+              admission,
+            })),
+          ])
+          const result: BashResult =
+            outcome.type === 'result'
+              ? outcome.value
+              : {
+                  output: outcome.admission.output,
+                  exitCode: undefined,
+                  cancelled: false,
+                  truncated: outcome.admission.truncated,
+                  backgroundTaskId: outcome.admission.id,
+                }
+          const entry: Omit<
+            BashExecutionEntry,
+            'id' | 'parentId' | 'timestamp'
+          > = {
             type: 'bash_execution',
             command,
             output: result.output,
@@ -370,23 +383,33 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
               : {}),
             ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
           }
-        if (isSessionRunning(sessionId)) {
-          const list = state.pendingBashBySession.get(sessionId) ?? []
-          list.push(entry as BashExecutionEntry)
-          state.pendingBashBySession.set(sessionId, list)
-        } else {
-          const msg = options.excludeFromContext
-            ? undefined
-            : ({
-                role: 'user',
-                content: bashExecutionToText(entry as BashExecutionEntry),
-              } satisfies ModelMessage)
-          store.appendBashExecution(entry, msg)
-          await store.flush()
+          if (isSessionRunning(sessionId)) {
+            const list = state.pendingBashBySession.get(sessionId) ?? []
+            list.push(entry as BashExecutionEntry)
+            state.pendingBashBySession.set(sessionId, list)
+          } else {
+            const msg = options.excludeFromContext
+              ? undefined
+              : ({
+                  role: 'user',
+                  content: bashExecutionToText(entry as BashExecutionEntry),
+                } satisfies ModelMessage)
+            store.appendBashExecution(entry, msg)
+            await store.flush()
+          }
+          return result
+        } finally {
+          await prepared?.releaseSession()
+          if (state.activeBash.get(sessionId) === controller) {
+            state.activeBash.delete(sessionId)
+          }
         }
-        return result
+      })()
+      state.activeBashPromises.add(execPromise)
+      try {
+        return await execPromise
       } finally {
-        state.activeBash.delete(sessionId)
+        state.activeBashPromises.delete(execPromise)
       }
     },
 
@@ -422,70 +445,79 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
         attachMcp: false,
         allowNoModel: true,
       })
-      const { tracker } = buildTrackerAndContext({
-        store,
-        saved,
-        prepared,
-        sessionId,
-        projectId: row.project_id,
-      })
-
-      let bg = state.sessionBackgrounds.get(sessionId)
-      if (!bg) {
-        bg = createRuntimeBackgroundController({
-          db: state.db,
+      try {
+        const { tracker } = buildTrackerAndContext({
+          store,
+          saved,
+          prepared,
           sessionId,
-          runId: randomUUID(),
-          wakeSession: state.options.wakeSession,
-          location: prepared.location,
+          projectId: row.project_id,
         })
-        state.sessionBackgrounds.set(sessionId, bg)
+
+        let bg = state.sessionBackgrounds.get(sessionId)
+        if (!bg) {
+          bg = createRuntimeBackgroundController({
+            db: state.db,
+            sessionId,
+            runId: randomUUID(),
+            wakeSession: state.options.wakeSession,
+            location: prepared.location,
+          })
+          state.sessionBackgrounds.set(sessionId, bg)
+        }
+
+        const extView = createExtensionSessionView({
+          sessionId,
+          cwd: prepared.location.cwd,
+          name: prepared.sessionName,
+          channel: prepared.boundChannel,
+          messages,
+          registry: prepared.registry,
+          store,
+          eventBus: state.options.eventBus,
+          projectId: row.project_id,
+          signal: controller.signal,
+          onSetActiveTools: (names) =>
+            state.sessionActiveTools.set(
+              sessionId,
+              names ? [...names] : undefined,
+            ),
+        })
+        await prepared.ensureSessionStarted(extView)
+
+        const handledNative = await runNativeRuntimeCommand({
+          name: cmdName,
+          args: cmdArgs,
+          db: state.db,
+          memoryActive: prepared.memoryActive,
+          memoryStore: prepared.memoryStores.local,
+          activeDreams: state.activeDreams,
+          projectId: row.project_id,
+          sessionId,
+          resolvedModel: prepared.resolved
+            ? {
+                model: prepared.resolved.model,
+                cost: prepared.resolved.info.cost,
+              }
+            : undefined,
+          tracker,
+          resolveEnv: prepared.resolveEnv,
+          background: bg,
+          setCacheEnabled: prepared.specialModel?.setCacheEnabled,
+          signal: controller.signal,
+          notify: (msg, level) =>
+            emitNotify(sessionId, row.project_id, msg, level),
+        })
+        if (handledNative) return { handled: true }
+        const handledExt = await prepared.extensionRunner.runCommand(
+          extView,
+          trimmed,
+          controller.signal,
+        )
+        return { handled: handledExt }
+      } finally {
+        await prepared.releaseSession()
       }
-
-      const extView = createExtensionSessionView({
-        sessionId,
-        cwd: prepared.location.cwd,
-        name: prepared.sessionName,
-        channel: prepared.boundChannel,
-        messages,
-        registry: prepared.registry,
-        store,
-        eventBus: state.options.eventBus,
-        projectId: row.project_id,
-        signal: controller.signal,
-      })
-      await prepared.ensureSessionStarted(extView)
-
-      const handledNative = await runNativeRuntimeCommand({
-        name: cmdName,
-        args: cmdArgs,
-        db: state.db,
-        memoryActive: prepared.memoryActive,
-        memoryStore: prepared.memoryStores.local,
-        activeDreams: state.activeDreams,
-        projectId: row.project_id,
-        sessionId,
-        resolvedModel: prepared.resolved
-          ? {
-              model: prepared.resolved.model,
-              cost: prepared.resolved.info.cost,
-            }
-          : undefined,
-        tracker,
-        resolveEnv: prepared.resolveEnv,
-        background: bg,
-        setCacheEnabled: prepared.specialModel?.setCacheEnabled,
-        signal: controller.signal,
-        notify: (msg, level) =>
-          emitNotify(sessionId, row.project_id, msg, level),
-      })
-      if (handledNative) return { handled: true }
-      const handledExt = await prepared.extensionRunner.runCommand(
-        extView,
-        trimmed,
-        controller.signal,
-      )
-      return { handled: handledExt }
     },
   }
 }

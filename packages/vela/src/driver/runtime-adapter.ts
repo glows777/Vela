@@ -123,6 +123,8 @@ export function createVelaAgentDriver(
     sessionOverrides: new Map(),
     specialModels: new Map(),
     sessionRunners: new Map(),
+    sessionRunnerLocks: new Map(),
+    sessionActiveTools: new Map(),
     sessionResourceSnapshots: new Map(),
     activeAbort: new Map(),
     activeSteering: new Map(),
@@ -373,6 +375,11 @@ export function createVelaAgentDriver(
         runId: request.runId,
         projectId: request.projectId,
         signal: controller.signal,
+        onSetActiveTools: (names) =>
+          state.sessionActiveTools.set(
+            request.sessionId,
+            names ? [...names] : undefined,
+          ),
         buildSystem: (sections) =>
           systemPromptOverride ??
           prepared!.builder.build({
@@ -763,6 +770,7 @@ export function createVelaAgentDriver(
       if (prepared?.registry) {
         await prepared.registry.waitForIdle().catch(() => {})
       }
+      await prepared?.releaseSession().catch(() => {})
     }
   }
 }
