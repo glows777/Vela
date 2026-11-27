@@ -30,7 +30,10 @@ function currentModelRef(host: ModelHost): string | undefined {
 /** `/model` and Ctrl+L: pick from the models of providers with a credential, with search (like pi) */
 export async function selectModel(host: ModelHost): Promise<void> {
   const current = currentModelRef(host)
-  const models = await host.runtime.models({ channel: host.session.channel })
+  const models = await host.runtime.models({
+    channel: host.session.channel,
+    ...(host.session.modelEnv ? { env: host.session.modelEnv } : {}),
+  })
   if (!models.length) {
     host.addNotice(
       'No models available: sign in with /login, set a provider API key (e.g. ANTHROPIC_API_KEY), or switch directly with /model provider/id',
@@ -103,7 +106,10 @@ export async function cycleModel(
   try {
     const snap = await active.refresh()
     if (active !== host.session) return
-    const allModels = await host.runtime.models({ channel: snap.channel })
+    const allModels = await host.runtime.models({
+      channel: snap.channel,
+      ...(active.modelEnv ? { env: active.modelEnv } : {}),
+    })
     const models = scopedModels(
       allModels,
       snap.resources.enabledModels ?? host.options.enabledModels,

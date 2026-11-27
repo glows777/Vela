@@ -156,6 +156,7 @@ export class CliSessionClient {
     readonly runtime: VelaRuntime,
     readonly id: string,
     initialSnapshot?: RuntimeSessionInspection,
+    readonly modelEnv?: Record<string, string>,
   ) {
     this._snapshot = initialSnapshot
     this._isRunning = initialSnapshot?.isRunning ?? false

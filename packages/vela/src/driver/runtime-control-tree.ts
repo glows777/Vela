@@ -81,95 +81,100 @@ export function createTreeControl(deps: TreeControlDeps) {
         attachMcp: false,
         allowNoModel: true,
       })
-      const extView = createExtensionSessionView({
-        sessionId,
-        cwd: prepared.location.cwd,
-        name: prepared.sessionName,
-        channel: prepared.boundChannel,
-        messages,
-        registry: prepared.registry,
-        store,
-        eventBus: state.options.eventBus,
-        projectId: row.project_id,
-        signal: controller.signal,
-      })
-      if (
-        await prepared.extensionRunner.beforeFork(extView, entryId, position)
-      ) {
-        return { cancelled: true }
-      }
-      const branch = point.leafId === null ? [] : store.getBranch(point.leafId)
-      const targetId = options.sessionId ?? newSessionId()
-      const targetStore = new SessionStore(targetId, state.db, {
-        blobsDir: state.options.blobs.rootDir,
-        location: prepared.location,
-        logger: state.logger,
-      })
-      const parentSpillDir = join(
-        state.options.agentDir,
-        'sessions',
-        sessionId,
-        'tool-results',
-      )
-      const targetSpillDir = join(
-        state.options.agentDir,
-        'sessions',
-        targetId,
-        'tool-results',
-      )
-      await targetStore.seedFrom(
-        branch,
-        { id: sessionId, store, location: prepared.location },
-        prepared.resolveEnv,
-        {
-          parentSpillDir,
-          spillDir: targetSpillDir,
-          resolveSourceEnv: () => prepared.resolveEnv(),
-        },
-      )
-      const childKind = row.project_id ? 'work' : 'chat'
-      const existingTarget = state.db.get<{ id: string }>(
-        'SELECT id FROM sessions WHERE id = ?',
-        targetId,
-      )
-      if (!existingTarget) {
-        const now = new Date().toISOString()
-        state.db.run(
-          `INSERT INTO sessions (
-             id, project_id, kind, driver, parent_session_id, model, thinking_level, location_json, state, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
-          targetId,
-          row.project_id,
-          childKind,
-          row.driver,
+      try {
+        const extView = createExtensionSessionView({
           sessionId,
-          saved?.model ?? null,
-          saved?.thinkingLevel ?? null,
-          JSON.stringify(prepared.location),
-          now,
-          now,
+          cwd: prepared.location.cwd,
+          name: prepared.sessionName,
+          channel: prepared.boundChannel,
+          messages,
+          registry: prepared.registry,
+          store,
+          eventBus: state.options.eventBus,
+          projectId: row.project_id,
+          signal: controller.signal,
+        })
+        if (
+          await prepared.extensionRunner.beforeFork(extView, entryId, position)
+        ) {
+          return { cancelled: true }
+        }
+        const branch =
+          point.leafId === null ? [] : store.getBranch(point.leafId)
+        const targetId = options.sessionId ?? newSessionId()
+        const targetStore = new SessionStore(targetId, state.db, {
+          blobsDir: state.options.blobs.rootDir,
+          location: prepared.location,
+          logger: state.logger,
+        })
+        const parentSpillDir = join(
+          state.options.agentDir,
+          'sessions',
+          sessionId,
+          'tool-results',
         )
-      } else {
-        state.db.run(
-          `UPDATE sessions
-           SET project_id = ?, kind = ?, driver = ?, parent_session_id = ?, model = COALESCE(?, model), thinking_level = COALESCE(?, thinking_level)
-           WHERE id = ?`,
-          row.project_id,
-          childKind,
-          row.driver,
-          sessionId,
-          saved?.model ?? null,
-          saved?.thinkingLevel ?? null,
+        const targetSpillDir = join(
+          state.options.agentDir,
+          'sessions',
+          targetId,
+          'tool-results',
+        )
+        await targetStore.seedFrom(
+          branch,
+          { id: sessionId, store, location: prepared.location },
+          prepared.resolveEnv,
+          {
+            parentSpillDir,
+            spillDir: targetSpillDir,
+            resolveSourceEnv: () => prepared.resolveEnv(),
+          },
+        )
+        const childKind = row.project_id ? 'work' : 'chat'
+        const existingTarget = state.db.get<{ id: string }>(
+          'SELECT id FROM sessions WHERE id = ?',
           targetId,
         )
-      }
-      await targetStore.flush()
-      return {
-        cancelled: false,
-        sessionId: targetId,
-        ...(point.selectedText === undefined
-          ? {}
-          : { selectedText: point.selectedText }),
+        if (!existingTarget) {
+          const now = new Date().toISOString()
+          state.db.run(
+            `INSERT INTO sessions (
+               id, project_id, kind, driver, parent_session_id, model, thinking_level, location_json, state, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
+            targetId,
+            row.project_id,
+            childKind,
+            row.driver,
+            sessionId,
+            saved?.model ?? null,
+            saved?.thinkingLevel ?? null,
+            JSON.stringify(prepared.location),
+            now,
+            now,
+          )
+        } else {
+          state.db.run(
+            `UPDATE sessions
+             SET project_id = ?, kind = ?, driver = ?, parent_session_id = ?, model = COALESCE(?, model), thinking_level = COALESCE(?, thinking_level)
+             WHERE id = ?`,
+            row.project_id,
+            childKind,
+            row.driver,
+            sessionId,
+            saved?.model ?? null,
+            saved?.thinkingLevel ?? null,
+            targetId,
+          )
+        }
+        await targetStore.flush()
+        return {
+          cancelled: false,
+          sessionId: targetId,
+          ...(point.selectedText === undefined
+            ? {}
+            : { selectedText: point.selectedText }),
+        }
+      } finally {
+        await prepared.releaseSession()
       }
     })
 
@@ -224,60 +229,64 @@ export function createTreeControl(deps: TreeControlDeps) {
           attachMcp: false,
           allowNoModel: !options.summarize,
         })
-        const { contextManager } = buildTrackerAndContext({
-          store,
-          saved,
-          prepared,
-          sessionId,
-          projectId: row.project_id,
-        })
-        const systemPrompt = prepared.builder.build({
-          sessionId,
-          activeTools: prepared.registry.getActiveTools(),
-          deferredToolSummary: prepared.registry.getDeferredToolSummary(),
-          extensionSections: prepared.runtimeSections,
-        })
-        const extView = createExtensionSessionView({
-          sessionId,
-          cwd: prepared.location.cwd,
-          name: prepared.sessionName,
-          channel: prepared.boundChannel,
-          messages,
-          registry: prepared.registry,
-          store,
-          eventBus: state.options.eventBus,
-          projectId: row.project_id,
-          signal: controller.signal,
-        })
-        const result = await executeTreeNavigation({
-          session: extView,
-          store,
-          target,
-          oldLeafId,
-          options,
-          signal: controller.signal,
-          beforeTree: (s, prep, sig) =>
-            prepared.extensionRunner.beforeTree(s, prep, sig),
-          afterTree: (s, event) => prepared.extensionRunner.tree(s, event),
-          summarizeBranch: async (entries, focus, sig) => {
-            const branchMessages = entriesToMessages(entries)
-            if (!branchMessages.length) return undefined
-            const req = await resolveRequestSnapshot(
-              prepared.resolved!.model,
-              systemPrompt,
-              prepared.registry.toProviderTools(),
-              branchMessages,
-              sig,
-              prepared.resolved!.info.maxTokens,
-            )
-            return contextManager.summarizeBranch(req, 0, focus)
-          },
-          loadBranch: async () => {},
-          save: () => store.flush(),
-        })
-        return {
-          ...result,
-          branch: store.getBranch(),
+        try {
+          const { contextManager } = buildTrackerAndContext({
+            store,
+            saved,
+            prepared,
+            sessionId,
+            projectId: row.project_id,
+          })
+          const systemPrompt = prepared.builder.build({
+            sessionId,
+            activeTools: prepared.registry.getActiveTools(),
+            deferredToolSummary: prepared.registry.getDeferredToolSummary(),
+            extensionSections: prepared.runtimeSections,
+          })
+          const extView = createExtensionSessionView({
+            sessionId,
+            cwd: prepared.location.cwd,
+            name: prepared.sessionName,
+            channel: prepared.boundChannel,
+            messages,
+            registry: prepared.registry,
+            store,
+            eventBus: state.options.eventBus,
+            projectId: row.project_id,
+            signal: controller.signal,
+          })
+          const result = await executeTreeNavigation({
+            session: extView,
+            store,
+            target,
+            oldLeafId,
+            options,
+            signal: controller.signal,
+            beforeTree: (s, prep, sig) =>
+              prepared.extensionRunner.beforeTree(s, prep, sig),
+            afterTree: (s, event) => prepared.extensionRunner.tree(s, event),
+            summarizeBranch: async (entries, focus, sig) => {
+              const branchMessages = entriesToMessages(entries)
+              if (!branchMessages.length) return undefined
+              const req = await resolveRequestSnapshot(
+                prepared.resolved!.model,
+                systemPrompt,
+                prepared.registry.toProviderTools(),
+                branchMessages,
+                sig,
+                prepared.resolved!.info.maxTokens,
+              )
+              return contextManager.summarizeBranch(req, 0, focus)
+            },
+            loadBranch: async () => {},
+            save: () => store.flush(),
+          })
+          return {
+            ...result,
+            branch: store.getBranch(),
+          }
+        } finally {
+          await prepared.releaseSession()
         }
       })
     },

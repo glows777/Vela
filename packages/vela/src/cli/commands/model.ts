@@ -24,7 +24,10 @@ export const modelCommands: CommandHandler[] = [
         ? snap.modelInfo.ref
         : `(unavailable: ${snap.modelError ?? 'no model selected'})`
       const lines = [`\n[model] Current: ${current}`]
-      const models = await runtime.models({ channel: snap.channel })
+      const models = await runtime.models({
+        channel: snap.channel,
+        ...(session.modelEnv ? { env: session.modelEnv } : {}),
+      })
       if (models.length) {
         lines.push(
           '  Available models (switch with /model <provider/id>; unlisted ids work too):',

@@ -389,3 +389,44 @@ test('promoted background job stops cleanly after detaching foreground command',
   ).toBe(true)
   await runtime.jobs.stop(s.id, promoted[0]!)
 })
+
+test('tree fork and navigateTree release cached runner leases cleanly on session delete', async () => {
+  const agentDir = makeTempDir('vela-r2-treelease-agent-')
+  const cwd = makeTempDir('vela-r2-treelease-cwd-')
+  const marker = join(agentDir, 'shutdown-fired')
+  const extPath = join(agentDir, 'tree-lease-ext.mjs')
+  writeFileSync(
+    extPath,
+    `import { writeFileSync } from 'node:fs'
+export default function (pi) {
+  pi.on('session_shutdown', () => {
+    writeFileSync(${JSON.stringify(marker)}, 'yes')
+  })
+}`,
+  )
+  const runtime = createRuntime({
+    agentDir,
+    defaultModel: createFauxModel({ responses: [fauxText('hi-tree')] }),
+  })
+  cleanups.push(() => runtime.dispose())
+
+  const s = await runtime.sessions.create({
+    id: 'tree-lease-1',
+    location: { environment: 'local', cwd },
+  })
+  await runtime.sessions.configure(s.id, { cwd, extensions: [extPath] })
+  await runTextTurn(runtime, s.id, 'turn-1')
+  const tree = await runtime.sessions.tree(s.id)
+  const userEntry = tree.entries.find(
+    (e) => e.type === 'message' && e.message.role === 'user',
+  )
+  expect(userEntry).toBeDefined()
+
+  const forked = await runtime.sessions.fork(s.id, userEntry!.id)
+  expect(forked.cancelled).toBe(false)
+  const nav = await runtime.sessions.navigateTree(s.id, userEntry!.id)
+  expect(nav.cancelled).toBe(false)
+
+  await runtime.sessions.delete(s.id)
+  expect(existsSync(marker)).toBe(true)
+})

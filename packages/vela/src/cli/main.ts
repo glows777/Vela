@@ -288,9 +288,9 @@ try {
         }
       })
   }
+  const transientEnv = pickTransientEnv(env)
   if (args.listModels) {
     await runtime.ready().catch(() => {})
-    const transientEnv = pickTransientEnv(env)
     let extensionErrors = await runtime.extensionErrors()
     if (args.extensions.length > 0 || args.noExtensions) {
       const probeId = `list-models-${newSessionId()}`
@@ -371,14 +371,10 @@ try {
   const offline = ['1', 'true', 'yes'].includes(
     (env.VELA_OFFLINE ?? '').toLowerCase(),
   )
+  const approvedSessionIds = new Set<string>()
   let cliOverride = buildCliSessionOverride(args, env, cwd, args.approve)
   clearTransientApproval = async () => {
-    if (
-      !runtime ||
-      !activeSessionId ||
-      args.noSession ||
-      args.approve === undefined
-    ) {
+    if (!runtime || args.noSession || args.approve === undefined) {
       return
     }
     const {
@@ -386,7 +382,11 @@ try {
       approveLocation: _loc,
       ...withoutApproval
     } = cliOverride
-    await runtime.sessions.configure(activeSessionId, withoutApproval)
+    const targets = new Set(approvedSessionIds)
+    if (activeSessionId) targets.add(activeSessionId)
+    for (const sid of targets) {
+      await runtime.sessions.configure(sid, withoutApproval).catch(() => {})
+    }
   }
 
   let forkedId: string | undefined
@@ -481,6 +481,9 @@ try {
       newSessionId,
       configure: async (target, opts) => {
         try {
+          if (args.approve !== undefined) {
+            approvedSessionIds.add(target.id)
+          }
           await target.configure(cliOverride)
           const snap = await target.refresh()
           if (!snap.modelInfo && !opts?.quiet) {
@@ -504,6 +507,9 @@ try {
       setupOnly: args.setup,
       setupTarget: args.setupTarget,
       noSession: args.noSession,
+      ...(Object.keys(transientEnv).length > 0
+        ? { modelEnv: transientEnv }
+        : {}),
       projectSettingsPath:
         existsSync(projectConfigPath) &&
         resolve(projectConfigPath) !== resolve(join(agentDir, 'config.json'))

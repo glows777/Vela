@@ -58,7 +58,12 @@ export async function prepareInteractiveSession(
     }
   }
 
-  const session = new CliSessionClient(runtime, sessionId)
+  const session = new CliSessionClient(
+    runtime,
+    sessionId,
+    undefined,
+    options.modelEnv,
+  )
   try {
     const setupNext = startup && Boolean(options.agentDir)
     await options.configure(session, { quiet: setupNext, startup })

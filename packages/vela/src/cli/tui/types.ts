@@ -61,5 +61,7 @@ export interface InteractiveOptions {
   noSession?: boolean
   projectSettingsPath?: string
   hasUsableModel?: (session: CliSessionClient) => boolean
+  /** Transient caller provider credentials for model discovery in TUI (`/model` / Ctrl+P). */
+  modelEnv?: Record<string, string>
   onConfigured?: () => void
 }
