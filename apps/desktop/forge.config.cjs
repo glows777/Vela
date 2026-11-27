@@ -4,7 +4,7 @@ const { dirname, join } = require('node:path')
 module.exports = {
   packagerConfig: {
     asar: {
-      unpack: '**/.vite/build/{daemon.mjs,photon_rs_bg.wasm}',
+      unpack: '**/.vite/build/{daemon.mjs,photon_rs_bg.wasm,babel.cjs}',
     },
     extraResource: [
       'src/assets/fonts/Barlow-LICENSE.txt',

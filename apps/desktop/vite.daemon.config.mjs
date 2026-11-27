@@ -5,18 +5,20 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 
 const require = createRequire(import.meta.url)
-const velaSdkVersion = JSON.parse(
-  readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      '../../packages/vela/package.json',
-    ),
-    'utf8',
-  ),
-).version
+const velaPackageJson = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../packages/vela/package.json',
+)
+const velaRequire = createRequire(velaPackageJson)
+const velaSdkVersion = JSON.parse(readFileSync(velaPackageJson, 'utf8')).version
 const photonWasm = join(
   dirname(require.resolve('@silvia-odwyer/photon-node')),
   'photon_rs_bg.wasm',
+)
+const jitiBabel = join(
+  dirname(velaRequire.resolve('jiti/package.json')),
+  'dist',
+  'babel.cjs',
 )
 
 export default defineConfig({
@@ -34,6 +36,27 @@ export default defineConfig({
           fileName: 'photon_rs_bg.wasm',
           source: readFileSync(photonWasm),
         })
+      },
+    },
+    {
+      name: 'jiti-babel',
+      apply: 'build',
+      buildStart() {
+        // jiti loads babel.cjs dynamically via createRequire(import.meta.url) under ELECTRON_RUN_AS_NODE.
+        this.emitFile({
+          type: 'asset',
+          fileName: 'babel.cjs',
+          source: readFileSync(jitiBabel),
+        })
+      },
+      transform(code, id) {
+        if (
+          id.replaceAll('\\', '/').endsWith('/jiti/lib/jiti.mjs') &&
+          code.includes('"../dist/babel.cjs"')
+        ) {
+          return code.replace('"../dist/babel.cjs"', '"./babel.cjs"')
+        }
+        return undefined
       },
     },
   ],
