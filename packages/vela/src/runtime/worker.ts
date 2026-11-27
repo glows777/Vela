@@ -26,6 +26,7 @@ import { recordChildStatusNoteForHubInTx } from './recovery.ts'
 
 export {
   canWakeSessionInDb,
+  computeNextWakeDelayMs,
   recoverRuntimeState,
   stopSessionInRuntime,
   stopSessionRunsInDb,
@@ -278,7 +279,12 @@ export function claimNextTurnInDb(params: {
       sessionId,
       projectId: session.projectId,
       runId,
-      payload: { type: 'run_started', runId, trigger },
+      payload: {
+        type: 'run_started',
+        runId,
+        trigger,
+        inboxEventIds: batch.map((item) => item.id),
+      },
     })
     return {
       runId,
@@ -358,6 +364,12 @@ export function commitCompletedTurnInTx(params: {
     claimed.session.id,
   )
   completeInboxBatchInTx(db, claimed.runId, now)
+  const willDeliverReply = Boolean(
+    (finalStatus === 'completed' || finalStatus === 'waiting_human') &&
+      !outcome.silent &&
+      outcome.replyText &&
+      outboxTarget,
+  )
   eventBus.append({
     sessionId: claimed.session.id,
     projectId: claimed.session.projectId,
@@ -366,14 +378,11 @@ export function commitCompletedTurnInTx(params: {
       type: 'run_finished',
       runId: claimed.runId,
       status: finalStatus,
+      ...(outcome.silent ? { silent: true } : {}),
+      ...(willDeliverReply ? { replyPending: true } : {}),
     },
   })
-  if (
-    (finalStatus === 'completed' || finalStatus === 'waiting_human') &&
-    !outcome.silent &&
-    outcome.replyText &&
-    outboxTarget
-  ) {
+  if (willDeliverReply && outboxTarget) {
     enqueueOutboxInTx(db, {
       sessionId: claimed.session.id,
       runId: claimed.runId,
@@ -386,7 +395,7 @@ export function commitCompletedTurnInTx(params: {
       isRoutine: outboxTarget.isRoutine,
       isHandoff: outboxTarget.isHandoff,
       kind: 'reply',
-      text: outcome.replyText,
+      text: outcome.replyText!,
     })
   }
   recordChildStatusNoteForHubInTx(
@@ -525,6 +534,12 @@ export function finalizeTurnInDb(params: {
     } else {
       completeInboxBatchInTx(db, claimed.runId, now)
     }
+    const willDeliverReply = Boolean(
+      (status === 'completed' || status === 'waiting_human') &&
+        !result.silent &&
+        result.replyText &&
+        outboxTarget,
+    )
     eventBus.append({
       sessionId: claimed.session.id,
       projectId: claimed.session.projectId,
@@ -533,17 +548,14 @@ export function finalizeTurnInDb(params: {
         type: 'run_finished',
         runId: claimed.runId,
         status,
+        ...(result.silent ? { silent: true } : {}),
+        ...(willDeliverReply ? { replyPending: true } : {}),
         ...(result.error ? { error: result.error } : {}),
         ...(result.errorKind ? { errorKind: result.errorKind } : {}),
         ...(result.errorHint ? { errorHint: result.errorHint } : {}),
       },
     })
-    if (
-      (status === 'completed' || status === 'waiting_human') &&
-      !result.silent &&
-      result.replyText &&
-      outboxTarget
-    ) {
+    if (willDeliverReply && outboxTarget) {
       enqueueOutboxInTx(db, {
         sessionId: claimed.session.id,
         runId: claimed.runId,
@@ -556,7 +568,7 @@ export function finalizeTurnInDb(params: {
         isRoutine: outboxTarget.isRoutine,
         isHandoff: outboxTarget.isHandoff,
         kind: 'reply',
-        text: result.replyText,
+        text: result.replyText!,
       })
     }
     if (status !== 'interrupted') {
@@ -584,50 +596,56 @@ function outboxTargetFromInputs(
   inputs: readonly DriverInboxItem[],
 ): OutboxTarget | undefined {
   const isHandoff = hasHandoffWake(inputs)
-  for (const requireWake of [true, false]) {
-    for (let i = inputs.length - 1; i >= 0; i--) {
-      const item = inputs[i]!
-      const isRouteSource =
-        item.source === 'channel' ||
-        item.source === 'timer' ||
-        item.source === 'webhook' ||
-        item.source === 'handoff' ||
-        (item.source === 'approval' && item.payload.waitForInput === true)
-      if (!isRouteSource || item.passive) {
-        continue
-      }
-      if (requireWake && !item.wake) continue
-      const payload = item.payload
-      if (
-        typeof payload.channel === 'string' &&
-        typeof payload.externalChatId === 'string'
-      ) {
-        const replyToMessageId =
-          typeof payload.replyToMessageId === 'string'
-            ? payload.replyToMessageId
-            : typeof payload.messageId === 'string'
-              ? payload.messageId
-              : undefined
-        const recipientId =
-          typeof payload.senderId === 'string' && payload.senderId
-            ? payload.senderId
-            : typeof payload.creatorId === 'string' && payload.creatorId
-              ? payload.creatorId
-              : undefined
-        const isRoutine = item.source === 'timer' && payload.kind === 'routine'
-        return {
-          channel: payload.channel,
-          externalChatId: payload.externalChatId,
-          ...(typeof payload.threadId === 'string'
-            ? { threadId: payload.threadId }
-            : {}),
-          ...(replyToMessageId ? { replyToMessageId } : {}),
-          ...(recipientId ? { recipientId } : {}),
-          ...(payload.mentionRecipient === true && recipientId
-            ? { mentionRecipient: true }
-            : {}),
-          ...(isRoutine ? { isRoutine: true } : {}),
-          ...(isHandoff ? { isHandoff: true } : {}),
+  // Prefer non-passive inputs first; fall back to waking passive evaluations (e.g. untagged group bursts)
+  // when no explicit human/timer/webhook trigger is in the batch.
+  for (const allowPassive of [false, true]) {
+    for (const requireWake of [true, false]) {
+      if (allowPassive && !requireWake) continue
+      for (let i = inputs.length - 1; i >= 0; i--) {
+        const item = inputs[i]!
+        const isRouteSource =
+          item.source === 'channel' ||
+          item.source === 'timer' ||
+          item.source === 'webhook' ||
+          item.source === 'handoff' ||
+          (item.source === 'approval' && item.payload.waitForInput === true)
+        if (!isRouteSource) continue
+        if (!allowPassive && item.passive) continue
+        if (allowPassive && !item.passive) continue
+        if (requireWake && !item.wake) continue
+        const payload = item.payload
+        if (
+          typeof payload.channel === 'string' &&
+          typeof payload.externalChatId === 'string'
+        ) {
+          const replyToMessageId =
+            typeof payload.replyToMessageId === 'string'
+              ? payload.replyToMessageId
+              : typeof payload.messageId === 'string'
+                ? payload.messageId
+                : undefined
+          const recipientId =
+            typeof payload.senderId === 'string' && payload.senderId
+              ? payload.senderId
+              : typeof payload.creatorId === 'string' && payload.creatorId
+                ? payload.creatorId
+                : undefined
+          const isRoutine =
+            item.source === 'timer' && payload.kind === 'routine'
+          return {
+            channel: payload.channel,
+            externalChatId: payload.externalChatId,
+            ...(typeof payload.threadId === 'string'
+              ? { threadId: payload.threadId }
+              : {}),
+            ...(replyToMessageId ? { replyToMessageId } : {}),
+            ...(recipientId ? { recipientId } : {}),
+            ...(payload.mentionRecipient === true && recipientId
+              ? { mentionRecipient: true }
+              : {}),
+            ...(isRoutine ? { isRoutine: true } : {}),
+            ...(isHandoff ? { isHandoff: true } : {}),
+          }
         }
       }
     }

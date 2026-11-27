@@ -141,7 +141,11 @@ export interface AgentDriver {
   readonly name: string
   readonly capabilities: AgentDriverCapabilities
   runTurn(request: DriverTurnRequest): Promise<DriverTurnResult>
-  steer?(sessionId: string, text: string): boolean | Promise<boolean>
+  steer?(
+    sessionId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType: string }>,
+  ): boolean | Promise<boolean>
   abort?(sessionId: string): void | Promise<void>
   waitForBackground?(): Promise<void>
   dispose?(): void | Promise<void>

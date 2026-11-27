@@ -1,21 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import {
   chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  linkSync,
   mkdirSync,
-  openSync,
-  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
-  writeSync,
 } from 'node:fs'
 import { createServer, type Socket } from 'node:net'
 import { dirname } from 'node:path'
 import { defaultAgentDir } from '../driver/config/paths.ts'
+import type { LarkTransport } from '../lark/transport.ts'
 import type {
   AuthEvent,
   AuthInteraction,
@@ -24,6 +18,12 @@ import type {
 } from '../providers/auth/types.ts'
 import { createRuntime, type LocalVelaRuntime } from '../runtime-sdk.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
+import { DaemonLarkHost } from './lark-host.ts'
+import {
+  acquireOwnerLock,
+  DaemonAlreadyRunningError,
+  readOwnerRecord,
+} from './owner-lock.ts'
 import {
   assertSocketOrMissing,
   daemonOwnerLockPath,
@@ -48,91 +48,7 @@ import {
   startDaemonConfigWatcher,
 } from './webhooks-host.ts'
 
-const ACTIVE_OWNER_IDS = new Set<string>()
-
-function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-function readOwnerRecord(
-  lockPath: string,
-): { pid?: number; instanceId?: string } | undefined {
-  if (!existsSync(lockPath)) return undefined
-  try {
-    const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as {
-      pid?: unknown
-      instanceId?: unknown
-    }
-    return {
-      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
-      ...(typeof parsed.instanceId === 'string'
-        ? { instanceId: parsed.instanceId }
-        : {}),
-    }
-  } catch {
-    return undefined
-  }
-}
-
-function acquireOwnerLock(
-  lockPath: string,
-  instanceId: string,
-  socketPath: string,
-): () => void {
-  mkdirSync(dirname(lockPath), { recursive: true })
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const tmpPath = `${lockPath}.${process.pid}.${instanceId}.tmp`
-    try {
-      const fd = openSync(
-        tmpPath,
-        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-        0o600,
-      )
-      try {
-        writeSync(fd, JSON.stringify({ pid: process.pid, instanceId }))
-      } finally {
-        closeSync(fd)
-      }
-      linkSync(tmpPath, lockPath)
-      ACTIVE_OWNER_IDS.add(instanceId)
-      return () => {
-        ACTIVE_OWNER_IDS.delete(instanceId)
-        const current = readOwnerRecord(lockPath)
-        if (!current || current.instanceId === instanceId) {
-          rmSync(lockPath, { force: true })
-        }
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      const owner = readOwnerRecord(lockPath)
-      const ownerAlive =
-        owner?.pid !== undefined &&
-        (owner.pid === process.pid
-          ? Boolean(owner.instanceId && ACTIVE_OWNER_IDS.has(owner.instanceId))
-          : isPidAlive(owner.pid))
-      if (ownerAlive) {
-        throw new DaemonAlreadyRunningError(socketPath)
-      }
-      rmSync(lockPath, { force: true })
-    } finally {
-      rmSync(tmpPath, { force: true })
-    }
-  }
-  throw new DaemonAlreadyRunningError(socketPath)
-}
-
-export class DaemonAlreadyRunningError extends Error {
-  constructor(socketPath: string) {
-    super(`Vela daemon is already running at ${socketPath}`)
-    this.name = 'DaemonAlreadyRunningError'
-  }
-}
+export { DaemonAlreadyRunningError }
 
 export interface StartDaemonServerOptions {
   agentDir?: string
@@ -143,6 +59,8 @@ export interface StartDaemonServerOptions {
   protocolVersion?: number
   registerSignalHandlers?: boolean
   enableWebhooks?: boolean
+  enableLark?: boolean
+  larkTransport?: LarkTransport
   onClosed?: (reason: string) => void
 }
 
@@ -204,6 +122,7 @@ export async function startDaemonServer(
 
   let runtime: LocalVelaRuntime
   let webhooksHost: DaemonWebhooksHost | undefined
+  let larkHost: DaemonLarkHost | undefined
   try {
     if (process.platform !== 'win32') {
       mkdirSync(dirname(paths.socketPath), { recursive: true })
@@ -228,12 +147,27 @@ export async function startDaemonServer(
       onConfigReloaded: webhooksHost
         ? (cfg) => webhooksHost!.sync(cfg, true)
         : undefined,
+      onLarkConfigReloaded:
+        options.enableLark !== false
+          ? (cfg) => larkHost?.sync(cfg, false)
+          : undefined,
+      onChannelEnabledChange:
+        options.enableLark !== false
+          ? (name, enabled) =>
+              name === 'lark' ? larkHost?.onEnabledChanged(enabled) : undefined
+          : undefined,
+      getKnownChannelInfo: () => larkHost?.knownChannelInfo() ?? {},
     })
-    await runtime.recover()
-    if (webhooksHost) {
-      await webhooksHost.sync(runtime.getWebhookConfig(), false)
+    if (options.enableLark !== false) {
+      larkHost = new DaemonLarkHost(runtime, {
+        agentDir: paths.agentDir,
+        hostEnv,
+        logger,
+        transport: options.larkTransport,
+      })
     }
   } catch (error) {
+    await larkHost?.stop().catch(() => {})
     await webhooksHost?.stop().catch(() => {})
     releaseOwner()
     throw error
@@ -256,6 +190,83 @@ export async function startDaemonServer(
   const clients = new Set<ConnectedClient>()
   let nextPromptId = 1
   let closing: Promise<void> | undefined
+  let configWatcher: ReturnType<typeof startDaemonConfigWatcher> | undefined
+
+  const onSigHup = () => {
+    void runtime.reloadConfig().catch((err) => {
+      logger.warn(
+        `[daemon] SIGHUP config reload failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    })
+  }
+  const onSigInt = () => {
+    void close('SIGINT')
+  }
+  const onSigTerm = () => {
+    void close('SIGTERM')
+  }
+
+  const close = (reason = 'dispose'): Promise<void> => {
+    closing ??= (async () => {
+      if (options.registerSignalHandlers !== false) {
+        process.off('SIGHUP', onSigHup)
+        process.off('SIGINT', onSigInt)
+        process.off('SIGTERM', onSigTerm)
+      }
+      configWatcher?.stop()
+      unsubEvents()
+      unsubDeltas()
+      for (const client of clients) {
+        for (const active of client.activeLogins.values()) {
+          active.controller.abort(
+            new DOMException('Daemon closing', 'AbortError'),
+          )
+        }
+        for (const ctrl of client.activeLogouts.values()) {
+          ctrl.abort(new DOMException('Daemon closing', 'AbortError'))
+        }
+        client.socket.end()
+        client.socket.destroy()
+      }
+      clients.clear()
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve())
+      }).catch(() => {})
+      try {
+        const sessions = await runtime.sessions
+          .list({ includeArchived: true })
+          .catch(() => [])
+        await Promise.all(
+          sessions.map(async (session) => {
+            const jobs = await runtime.jobs.list(session.id).catch(() => [])
+            await Promise.all(
+              jobs
+                .filter((job) => job.snapshot.state === 'running')
+                .map((job) =>
+                  runtime.jobs
+                    .stop(session.id, job.snapshot.id)
+                    .catch(() => {}),
+                ),
+            )
+          }),
+        )
+        await larkHost?.stop().catch(() => {})
+        await webhooksHost?.stop().catch(() => {})
+        await runtime.dispose()
+      } finally {
+        const pidInfo = readOwnerRecord(paths.pidPath)
+        const stillOwnsFiles =
+          !pidInfo?.instanceId || pidInfo.instanceId === instanceId
+        if (stillOwnsFiles) {
+          removeStaleSocketFile(paths.socketPath)
+          rmSync(paths.pidPath, { force: true })
+        }
+        releaseOwner()
+        options.onClosed?.(reason)
+      }
+    })()
+    return closing
+  }
 
   const unsubEvents = runtime.events.subscribe((event) => {
     for (const c of clients) {
@@ -270,7 +281,6 @@ export async function startDaemonServer(
 
   // biome-ignore lint/suspicious/noExplicitAny: RPC params decoded dynamically from NDJSON
   type Handler = (p: any, client: ConnectedClient) => Promise<unknown> | unknown
-  let configWatcher: ReturnType<typeof startDaemonConfigWatcher> | undefined
   const handlers: Record<string, Handler> = {
     'daemon.hello': () => hello,
     'daemon.status': async (): Promise<DaemonStatus> => {
@@ -681,95 +691,70 @@ export async function startDaemonServer(
   })
   renameSync(tmpPidPath, paths.pidPath)
 
-  configWatcher = startDaemonConfigWatcher(
-    paths.agentDir,
-    () => runtime.reloadConfig(),
-    undefined,
-    (err) => {
-      logger.warn(
-        `[daemon] Automatic config reload failed: ${err instanceof Error ? err.message : String(err)}`,
-      )
-    },
-  )
-
-  const onSigHup = () => {
-    void runtime.reloadConfig().catch((err) => {
-      logger.warn(
-        `[daemon] SIGHUP config reload failed: ${err instanceof Error ? err.message : String(err)}`,
-      )
-    })
-  }
-  const onSigInt = () => {
-    void close('SIGINT')
-  }
-  const onSigTerm = () => {
-    void close('SIGTERM')
-  }
-  if (options.registerSignalHandlers !== false) {
-    process.on('SIGHUP', onSigHup)
-    process.on('SIGINT', onSigInt)
-    process.on('SIGTERM', onSigTerm)
-  }
-
-  const close = (reason = 'dispose'): Promise<void> => {
-    closing ??= (async () => {
-      if (options.registerSignalHandlers !== false) {
-        process.off('SIGHUP', onSigHup)
-        process.off('SIGINT', onSigInt)
-        process.off('SIGTERM', onSigTerm)
-      }
-      configWatcher?.stop()
-      unsubEvents()
-      unsubDeltas()
-      for (const client of clients) {
-        for (const active of client.activeLogins.values()) {
-          active.controller.abort(
-            new DOMException('Daemon closing', 'AbortError'),
-          )
-        }
-        for (const ctrl of client.activeLogouts.values()) {
-          ctrl.abort(new DOMException('Daemon closing', 'AbortError'))
-        }
-        client.socket.end()
-        client.socket.destroy()
-      }
-      clients.clear()
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve())
-      }).catch(() => {})
-      try {
-        const sessions = await runtime.sessions
-          .list({ includeArchived: true })
-          .catch(() => [])
-        await Promise.all(
-          sessions.map(async (session) => {
-            const jobs = await runtime.jobs.list(session.id).catch(() => [])
-            await Promise.all(
-              jobs
-                .filter((job) => job.snapshot.state === 'running')
-                .map((job) =>
-                  runtime.jobs
-                    .stop(session.id, job.snapshot.id)
-                    .catch(() => {}),
-                ),
-            )
-          }),
+  // Start Lark synchronization after the IPC socket is already accepting CLI clients,
+  // while gating crash recovery & default-target webhooks until Lark readiness settles (up to 5s).
+  let larkInitTimer: ReturnType<typeof setTimeout> | undefined
+  const larkInitPromise = larkHost
+    ? larkHost.sync(runtime.getLarkConfig(), false).catch((error) => {
+        logger.warn(
+          `[daemon] Initial Lark sync failed: ${error instanceof Error ? error.message : String(error)}`,
         )
-        await webhooksHost?.stop().catch(() => {})
-        await runtime.dispose()
-      } finally {
-        const pidInfo = readOwnerRecord(paths.pidPath)
-        const stillOwnsFiles =
-          !pidInfo?.instanceId || pidInfo.instanceId === instanceId
-        if (stillOwnsFiles) {
-          removeStaleSocketFile(paths.socketPath)
-          rmSync(paths.pidPath, { force: true })
-        }
-        releaseOwner()
-        options.onClosed?.(reason)
+      })
+    : Promise.resolve()
+  try {
+    if (larkHost) {
+      await Promise.race([
+        larkInitPromise,
+        new Promise<void>((resolve) => {
+          larkInitTimer = setTimeout(resolve, 5_000)
+          larkInitTimer.unref()
+        }),
+      ])
+    }
+    if (!closing) {
+      await runtime.recover()
+      if (webhooksHost) {
+        await webhooksHost.sync(runtime.getWebhookConfig(), false)
       }
-    })()
-    return closing
+    }
+  } catch (error) {
+    clearTimeout(larkInitTimer)
+    unsubEvents()
+    unsubDeltas()
+    await larkHost?.stop().catch(() => {})
+    await webhooksHost?.stop().catch(() => {})
+    await runtime.dispose().catch(() => {})
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve())
+    }).catch(() => {})
+    const pidInfo = readOwnerRecord(paths.pidPath)
+    if (!pidInfo?.instanceId || pidInfo.instanceId === instanceId) {
+      removeStaleSocketFile(paths.socketPath)
+      rmSync(paths.pidPath, { force: true })
+    }
+    releaseOwner()
+    throw error
+  } finally {
+    clearTimeout(larkInitTimer)
+  }
+
+  if (!closing) {
+    configWatcher = startDaemonConfigWatcher(
+      paths.agentDir,
+      () => runtime.reloadConfig(),
+      undefined,
+      (err) => {
+        logger.warn(
+          `[daemon] Automatic config reload failed: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      },
+    )
+
+    if (options.registerSignalHandlers !== false) {
+      process.on('SIGHUP', onSigHup)
+      process.on('SIGINT', onSigInt)
+      process.on('SIGTERM', onSigTerm)
+    }
   }
 
   return {

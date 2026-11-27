@@ -6,6 +6,7 @@ import type {
   ChannelAdapter,
   ChannelBinding,
   ChannelInboundMessage,
+  ChannelIngestReceipt,
 } from './channels.ts'
 import type {
   ChannelBindingStore,
@@ -18,6 +19,43 @@ import { enqueueInboxEvent } from './inbox.ts'
 import { type ControlShortcut, parseControlShortcut } from './shortcuts.ts'
 
 const CHANNEL_ENABLED_PREFIX = 'channel_enabled:'
+const HOST_POST_AUTHOR_PREFIX = 'host_post_author:'
+
+export function persistHostPostAuthorInTx(
+  db: VelaDatabase,
+  channel: string,
+  externalMessageId: string,
+  authorName: string,
+): void {
+  if (!channel || !externalMessageId || !authorName) return
+  db.run(
+    `INSERT INTO kv_meta (key, value_json, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+    `${HOST_POST_AUTHOR_PREFIX}${channel}:${externalMessageId}`,
+    JSON.stringify(authorName),
+    new Date().toISOString(),
+  )
+}
+
+export function getHostPostAuthorInDb(
+  db: VelaDatabase,
+  channel: string,
+  externalMessageId: string,
+): string | undefined {
+  if (!channel || !externalMessageId) return undefined
+  const row = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    `${HOST_POST_AUTHOR_PREFIX}${channel}:${externalMessageId}`,
+  )
+  if (!row) return undefined
+  try {
+    const parsed = JSON.parse(row.value_json) as unknown
+    return typeof parsed === 'string' && parsed ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export function isChannelEnabledInDb(db: VelaDatabase, name: string): boolean {
   const row = db.get<{ value_json: string }>(
@@ -45,6 +83,19 @@ export function setChannelEnabledInDb(
     JSON.stringify(enabled),
     new Date().toISOString(),
   )
+}
+
+export function isChannelBindingActive(
+  db: VelaDatabase,
+  bindings: ChannelBindingStore,
+  binding: ChannelBinding,
+): boolean {
+  if (!binding.enabled || !isChannelEnabledInDb(db, binding.channel)) {
+    return false
+  }
+  if (!binding.threadId) return true
+  const root = bindings.findByExternal(binding.channel, binding.externalId)
+  return !(root && !root.enabled)
 }
 
 export function getActiveHubSession(
@@ -95,14 +146,40 @@ function resolveChannelTargetInDb(params: {
       const root = bindings.findByExternal(msg.channel, msg.externalChatId)
       if (root && !root.enabled) return undefined
     }
-    const session = exact.sessionId
-      ? sessions.get(exact.sessionId)
-      : exact.projectId
+    const effectiveBinding =
+      msg.threadId &&
+      msg.threadRootId &&
+      exact.config?.rootId !== msg.threadRootId
+        ? bindings.upsert({
+            id: exact.id,
+            channel: exact.channel,
+            externalId: exact.externalId,
+            threadId: exact.threadId,
+            kind: exact.kind,
+            projectId: exact.projectId,
+            sessionId: exact.sessionId,
+            enabled: exact.enabled,
+            config: { ...(exact.config ?? {}), rootId: msg.threadRootId },
+          })
+        : exact
+    const session = effectiveBinding.sessionId
+      ? sessions.get(effectiveBinding.sessionId)
+      : effectiveBinding.projectId
         ? allowCreateTopic
-          ? getOrCreateHubSession(db, projects, sessions, exact.projectId)
-          : getActiveHubSession(db, projects, sessions, exact.projectId)
+          ? getOrCreateHubSession(
+              db,
+              projects,
+              sessions,
+              effectiveBinding.projectId,
+            )
+          : getActiveHubSession(
+              db,
+              projects,
+              sessions,
+              effectiveBinding.projectId,
+            )
         : undefined
-    return session ? { binding: exact, session } : undefined
+    return session ? { binding: effectiveBinding, session } : undefined
   }
   if (msg.kind === 'direct' && !msg.threadId) {
     if (!allowCreateTopic) return undefined
@@ -137,6 +214,7 @@ function resolveChannelTargetInDb(params: {
     projectId: root.projectId,
     sessionId: topicSession.id,
     enabled: true,
+    ...(msg.threadRootId ? { config: { rootId: msg.threadRootId } } : {}),
   })
   return { binding: topicBinding, session: topicSession }
 }
@@ -213,7 +291,7 @@ export async function ingestChannelMessageInRuntime(params: {
     projectId?: string | null
   }) => Promise<{ text: string; stopped?: boolean }>
   scheduleSession: (sessionId: string) => void
-}): Promise<void> {
+}): Promise<ChannelIngestReceipt> {
   const {
     db,
     blobs,
@@ -228,7 +306,7 @@ export async function ingestChannelMessageInRuntime(params: {
   } = params
 
   if (!isChannelEnabledInDb(db, msg.channel)) {
-    return
+    return { admitted: false, reason: 'channel-disabled' }
   }
 
   const inFlight = params.inFlightDeliveries
@@ -236,7 +314,9 @@ export async function ingestChannelMessageInRuntime(params: {
     ? `${msg.channel}:${msg.dedupeKey}`
     : undefined
   if (channelDedupeKey && inFlight) {
-    if (inFlight.has(channelDedupeKey)) return
+    if (inFlight.has(channelDedupeKey)) {
+      return { admitted: false, reason: 'duplicate' }
+    }
     inFlight.add(channelDedupeKey)
   }
 
@@ -256,7 +336,7 @@ export async function ingestChannelMessageInRuntime(params: {
         msg,
         allowCreateTopic: false,
       })
-      if (!resolved) return
+      if (!resolved) return { admitted: false, reason: 'no-target' }
       const { binding, session } = resolved
       const shortcutKey = channelDedupeKey
         ? `channel_shortcut:${channelDedupeKey}`
@@ -268,7 +348,9 @@ export async function ingestChannelMessageInRuntime(params: {
           JSON.stringify({ sessionId: session.id }),
           new Date().toISOString(),
         )
-        if (claimed.changes === 0) return
+        if (claimed.changes === 0) {
+          return { admitted: false, reason: 'duplicate' }
+        }
       }
       const outcome = await executeShortcut({
         command: shortcut,
@@ -293,19 +375,22 @@ export async function ingestChannelMessageInRuntime(params: {
           throw error
         }
       }
-      return
+      return { admitted: true, sessionId: session.id, shortcut: true }
     }
 
     if (channelDedupeKey) {
-      if (
-        findExistingChannelInboxId(
-          db,
-          msg.channel,
-          channelDedupeKey,
-          msg.dedupeKey,
-        )
-      ) {
-        return
+      const existingId = findExistingChannelInboxId(
+        db,
+        msg.channel,
+        channelDedupeKey,
+        msg.dedupeKey,
+      )
+      if (existingId) {
+        return {
+          admitted: false,
+          reason: 'duplicate',
+          inboxEventId: existingId,
+        }
       }
     }
 
@@ -317,7 +402,7 @@ export async function ingestChannelMessageInRuntime(params: {
       msg,
       allowCreateTopic: msg.requireExistingSession !== true,
     })
-    if (!resolved) return
+    if (!resolved) return { admitted: false, reason: 'no-target' }
     const { binding, session } = resolved
 
     const attachments: Array<{
@@ -350,16 +435,14 @@ export async function ingestChannelMessageInRuntime(params: {
       const passive = msg.passive === true
       const wake = msg.wake ?? !passive
       const result = db.transaction(() => {
-        if (
-          channelDedupeKey &&
-          findExistingChannelInboxId(
+        if (channelDedupeKey) {
+          const existingId = findExistingChannelInboxId(
             db,
             msg.channel,
             channelDedupeKey,
             msg.dedupeKey,
           )
-        ) {
-          return undefined
+          if (existingId) return { existingId }
         }
         const enqueued = enqueueInboxEvent(db, {
           sessionId: session.id,
@@ -390,6 +473,19 @@ export async function ingestChannelMessageInRuntime(params: {
             ...(attachments.length ? { attachments } : {}),
           },
         })
+        if (
+          enqueued.inserted &&
+          msg.senderId.startsWith('sdk:') &&
+          msg.messageId &&
+          msg.senderName
+        ) {
+          persistHostPostAuthorInTx(
+            db,
+            msg.channel,
+            msg.messageId,
+            msg.senderName,
+          )
+        }
         if (enqueued.inserted && wake && !passive && eventBus) {
           resolveWaitForInputOnUserReplyInTx(db, eventBus, {
             sessionId: session.id,
@@ -397,12 +493,32 @@ export async function ingestChannelMessageInRuntime(params: {
             decidedBy: msg.senderName,
           })
         }
-        return enqueued
+        return { enqueued }
       })
-      inserted = Boolean(result?.inserted)
-      if (result?.inserted && result.event.wake) {
+      if ('existingId' in result && result.existingId) {
+        return {
+          admitted: false,
+          reason: 'duplicate',
+          inboxEventId: result.existingId,
+        }
+      }
+      const enqueued = result.enqueued
+      inserted = Boolean(enqueued?.inserted)
+      if (enqueued?.inserted && enqueued.event.wake) {
         scheduleSession(session.id)
       }
+      return inserted
+        ? {
+            admitted: true,
+            sessionId: session.id,
+            inboxEventId: enqueued!.event.id,
+          }
+        : {
+            admitted: false,
+            sessionId: session.id,
+            inboxEventId: enqueued?.event.id,
+            reason: 'duplicate',
+          }
     } finally {
       if (!inserted && attachments.length > 0) {
         for (const att of attachments) {

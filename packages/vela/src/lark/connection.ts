@@ -1,4 +1,4 @@
-import type { ChannelConnection } from '../legacy-channels/index.ts'
+import type { ChannelConnectionState as ChannelConnection } from '../runtime/channels.ts'
 import {
   type LarkChatNames,
   type LarkTransport,

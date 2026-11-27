@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { extname } from 'node:path'
 import type { Readable } from 'node:stream'
 import type * as LarkSdk from '@larksuiteoapi/node-sdk'
-import type { ChannelConnection } from '../legacy-channels/index.ts'
+import type { ChannelConnectionState as ChannelConnection } from '../runtime/channels.ts'
 import type { LarkCard, LarkCardAction, LarkCardResponse } from './cards.ts'
 
 let larkSdkPromise: Promise<typeof LarkSdk> | undefined
@@ -56,7 +56,11 @@ export interface LarkTransport {
     title: string,
     uuid?: string,
   ): Promise<LarkSentMessage & { rootId: string; threadId: string }>
-  forward(messageId: string, threadId: string): Promise<LarkSentMessage>
+  forward(
+    messageId: string,
+    threadId: string,
+    uuid?: string,
+  ): Promise<LarkSentMessage>
   send(
     chatId: string,
     text: string,
@@ -236,12 +240,15 @@ export function larkTransport(
         threadId: data.thread_id,
       }
     },
-    async forward(messageId, threadId) {
+    async forward(messageId, threadId, uuid) {
       const client = await getClient()
       const { data } = checked(
         await client.im.message.forward({
           path: { message_id: messageId },
-          params: { receive_id_type: 'thread_id' },
+          params: {
+            receive_id_type: 'thread_id',
+            ...(uuid === undefined ? {} : { uuid }),
+          },
           data: { receive_id: threadId },
         }),
       )

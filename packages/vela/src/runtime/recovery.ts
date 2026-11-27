@@ -55,6 +55,48 @@ export function recoverRuntimeState(params: {
     )
     for (const run of staleRuns) {
       if (isOwnerLive(run.owner_token, activeOwners)) continue
+      const runInboxStats = db.get<{ total: number; non_passive: number }>(
+        `SELECT count(*) AS total,
+                sum(CASE WHEN passive = 0 THEN 1 ELSE 0 END) AS non_passive
+         FROM inbox_events
+         WHERE run_id = ?`,
+        run.id,
+      )
+      const isPassiveOnlyRun =
+        (runInboxStats?.total ?? 0) > 0 &&
+        (runInboxStats?.non_passive ?? 0) === 0
+      if (isPassiveOnlyRun) {
+        db.run(
+          `UPDATE runs
+           SET status = 'interrupted', owner_token = NULL, finished_at = COALESCE(finished_at, ?), updated_at = ?
+           WHERE id = ?`,
+          nowIso,
+          nowIso,
+          run.id,
+        )
+        db.run(
+          `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ? WHERE id = ? AND state = 'running'`,
+          nowIso,
+          run.session_id,
+        )
+        db.run(
+          `UPDATE inbox_events
+           SET status = 'dropped', processed_at = COALESCE(processed_at, ?)
+           WHERE run_id = ? AND status IN ('pending', 'processing')`,
+          nowIso,
+          run.id,
+        )
+        db.run(
+          'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
+          `run_target:${run.id}`,
+          `stop_requested:${run.id}`,
+          `run_silent:${run.id}`,
+          `run_handoff_depth:${run.id}`,
+          `run_input_meta:${run.id}`,
+        )
+        requeuedInboxRuns.push(run.id)
+        continue
+      }
       const hasProgress = Boolean(
         db.get<{ ok: number }>(
           `SELECT 1 AS ok FROM vela_messages WHERE session_id = ? AND run_id = ? LIMIT 1`,
@@ -158,8 +200,9 @@ export function recoverRuntimeState(params: {
       id: string
       session_id: string | null
       run_id: string | null
+      passive: number
     }>(
-      `SELECT id, session_id, run_id FROM inbox_events WHERE status = 'processing'`,
+      `SELECT id, session_id, run_id, passive FROM inbox_events WHERE status = 'processing'`,
     )
     for (const row of orphanedProcessing) {
       const liveRun = row.run_id
@@ -173,6 +216,14 @@ export function recoverRuntimeState(params: {
         liveRun.status === 'running' &&
         (!liveRun.owner_token || isOwnerLive(liveRun.owner_token, activeOwners))
       ) {
+        continue
+      }
+      if (row.passive === 1) {
+        db.run(
+          `UPDATE inbox_events SET status = 'dropped', processed_at = COALESCE(processed_at, ?) WHERE id = ?`,
+          nowIso,
+          row.id,
+        )
         continue
       }
       if (liveRun && liveRun.status === 'waiting_human' && row.session_id) {
@@ -205,6 +256,12 @@ export function recoverRuntimeState(params: {
         sessionsToWake.add(row.session_id)
       }
     }
+    db.run(
+      `UPDATE inbox_events
+       SET status = 'dropped', processed_at = COALESCE(processed_at, ?)
+       WHERE passive = 1 AND wake = 1 AND status = 'pending'`,
+      nowIso,
+    )
   })
 
   timers.tick(nowMs)
@@ -212,6 +269,24 @@ export function recoverRuntimeState(params: {
     sessionsToWake.add(sessionId)
   }
   return { interruptedJobs, recoveredRuns, requeuedInboxRuns, sessionsToWake }
+}
+
+export function computeNextWakeDelayMs(
+  db: VelaDatabase,
+  outboxDue: string | undefined,
+): number | undefined {
+  if (!db.open) return undefined
+  const timerDue = db.get<{ next_at: string | null }>(
+    `SELECT min(next_fire_at) AS next_at FROM timers WHERE enabled = 1 AND next_fire_at IS NOT NULL`,
+  )?.next_at
+  let earliestMs = Number.POSITIVE_INFINITY
+  for (const candidate of [timerDue, outboxDue]) {
+    if (!candidate) continue
+    const ms = Date.parse(candidate)
+    if (Number.isFinite(ms) && ms < earliestMs) earliestMs = ms
+  }
+  if (!Number.isFinite(earliestMs)) return undefined
+  return Math.max(0, Math.min(earliestMs - Date.now(), 2_147_483_647))
 }
 
 export function recordChildStatusNoteForHubInTx(

@@ -1,7 +1,17 @@
 import { z } from 'zod'
 import { THINKING_LEVELS } from '../driver/diagnostics.ts'
 import type { ThinkingLevel } from '../driver/index.ts'
-import { handoffToolNames, topicToolNames } from '../legacy-channels/index.ts'
+
+const LEGACY_GROUP_CONTROL_TOOLS = [
+  'channel_start_topic',
+  'channel_forward_to_topic',
+  'channel_list_topics',
+  'channel_read_topic',
+  'channel_skip_reply',
+  'channel_routines',
+  'channel_message_topic',
+  'channel_message_group',
+] as const
 
 const chatSchema = z
   .object({
@@ -80,11 +90,26 @@ export function groupSessionOptions(
         : [
             ...new Set([
               ...chat.tools,
-              ...topicToolNames,
-              ...handoffToolNames,
+              ...LEGACY_GROUP_CONTROL_TOOLS,
               ...(topic ? ['channel_wait_for_input'] : []),
             ]),
           ],
+  }
+}
+
+export function larkChatBindingConfig(chat: LarkChat): Record<string, unknown> {
+  return {
+    ...(chat.environment ? { environment: chat.environment } : {}),
+    ...(chat.tools ? { tools: [...chat.tools] } : {}),
+    ...(chat.readUntagged !== undefined
+      ? { readUntagged: chat.readUntagged }
+      : {}),
+    ...(chat.model ? { model: chat.model } : {}),
+    ...(chat.thinkingLevel ? { thinkingLevel: chat.thinkingLevel } : {}),
+    ...(chat.topicModel ? { topicModel: chat.topicModel } : {}),
+    ...(chat.topicThinkingLevel
+      ? { topicThinkingLevel: chat.topicThinkingLevel }
+      : {}),
   }
 }
 

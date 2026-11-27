@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'node:fs'
-import { mkdir, readdir, readFile, realpath } from 'node:fs/promises'
+import { mkdir, readdir, readFile, readlink, realpath } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LanguageModelV4, LanguageModelV4Usage } from '@ai-sdk/provider'
@@ -17,6 +17,7 @@ import {
 } from './graders.ts'
 import { runtimePaths } from './layout.ts'
 import { type Attempt, emptyUsage, pricing } from './report.ts'
+import { runRuntimeLarkAttempt } from './runtime-lark.ts'
 import {
   burstDiscussion,
   compactionFixture,
@@ -179,24 +180,11 @@ export async function runAttempt(
       },
     })
   const paths = runtimePaths(config.runtime)
-  const { createTestVela } = await load<
-    typeof import('@glows777/vela/testing')
-  >(config.runtime, paths.testing)
+  const useRuntimeLark =
+    paths.hasRuntimeLarkAdapter && config.scenario.startsWith('G')
   const { loadModels } = await load<
     typeof import('../../packages/vela/src/providers/models-config.ts')
   >(config.runtime, paths.models)
-  const channelTesting = existsSync(join(config.runtime, paths.channelTesting))
-    ? await load<
-        typeof import('../../packages/vela/src/legacy-channels/testing.ts')
-      >(config.runtime, paths.channelTesting)
-    : undefined
-  const historicalVela = channelTesting
-    ? undefined
-    : await load<{
-        velaInternals(vela: unknown): {
-          gateway: { queues: Map<string, Promise<void>> }
-        }
-      }>(config.runtime, paths.legacyVela)
   const providerDir = join(config.artifactDir, 'provider')
   await mkdir(providerDir, { recursive: true })
   const providerConfig = JSON.stringify({
@@ -245,6 +233,115 @@ export async function runAttempt(
   const createModel = definition.createModel.bind(definition)
   definition.createModel = (id, context) =>
     wrap(injectedModel ?? createModel(id, context))
+
+  const files = fixtures(config.scenario)
+  if (useRuntimeLark) {
+    let phase = 0
+    const controller = new AbortController()
+    const runtimeDeadline = setTimeout(() => {
+      controller.abort(new Error('Scenario deadline exceeded'))
+    }, 300_000)
+    try {
+      const workspaceDir = join(
+        config.artifactDir,
+        'data',
+        'projects',
+        `${paths.channelName}-oc_group`,
+        'workspace',
+      )
+      const baseline = new Map<string, string>()
+      for (const [path, content] of Object.entries(files)) {
+        baseline.set(path, content)
+      }
+      await runRuntimeLarkAttempt({
+        runtimePath: config.runtime,
+        artifactDir: config.artifactDir,
+        scenario: config.scenario,
+        thinking: config.thinking,
+        dream: config.dream,
+        providers,
+        runtimeSdkPath: paths.runtimeSdk,
+        runtimeLarkAdapterPath: paths.runtimeLarkAdapter,
+        helpersPath: paths.helpers,
+        channelName: paths.channelName,
+        memoryStorePath: paths.runtimeMemoryStore,
+        evidence,
+        getPhase: () => phase,
+        setPhase: (p) => {
+          phase = p
+        },
+        signal: controller.signal,
+      })
+      const observedFiles = new Map<string, string>()
+      if (existsSync(workspaceDir)) {
+        const walk = async (dir: string): Promise<void> => {
+          for (const entry of await readdir(dir, { withFileTypes: true })) {
+            const full = join(dir, entry.name)
+            if (entry.isSymbolicLink()) {
+              observedFiles.set(
+                relative(workspaceDir, full),
+                `symlink:${await readlink(full)}`,
+              )
+            } else if (entry.isDirectory()) {
+              await walk(full)
+            } else if (entry.isFile()) {
+              observedFiles.set(
+                relative(workspaceDir, full),
+                await readFile(full, 'utf8'),
+              )
+            }
+          }
+        }
+        await walk(workspaceDir)
+      }
+      const changed = new Set<string>()
+      for (const [rel, content] of observedFiles) {
+        if (baseline.get(rel) !== content) changed.add(rel)
+      }
+      for (const rel of baseline.keys()) {
+        if (!observedFiles.has(rel)) changed.add(rel)
+      }
+      evidence.changed = [...changed].sort()
+      evidence.modelRequests = usage.requests
+      result.checks = grade(config.scenario, evidence)
+      result.status = result.checks.every((check) => check.pass)
+        ? 'pass'
+        : 'fail'
+    } catch (error) {
+      result.reason = errorReason(error)
+    } finally {
+      clearTimeout(runtimeDeadline)
+      const dbFile = join(config.artifactDir, 'data', 'vela.db')
+      if (existsSync(dbFile)) {
+        result.sessionFiles.push(relative(config.artifactDir, dbFile))
+      }
+      result.finalChars = chars(evidence.answers.at(-1) ?? '')
+      result.toolCalls = evidence.calls.length
+      result.durationMs = performance.now() - started
+      await checkpoint()
+      await Bun.write(
+        join(config.artifactDir, 'result.json'),
+        JSON.stringify(result, null, 2),
+      )
+    }
+    return result
+  }
+
+  const { createTestVela } = await load<
+    typeof import('@glows777/vela/testing')
+  >(config.runtime, paths.testing)
+  const channelTesting = existsSync(join(config.runtime, paths.channelTesting))
+    ? await load<
+        typeof import('../../packages/vela/src/legacy-channels/testing.ts')
+      >(config.runtime, paths.channelTesting)
+    : undefined
+  const historicalVela = channelTesting
+    ? undefined
+    : await load<{
+        velaInternals(vela: unknown): {
+          gateway: { queues: Map<string, Promise<void>> }
+        }
+      }>(config.runtime, paths.legacyVela)
   const extensions: NonNullable<
     Parameters<typeof createTestVela>[0]
   >['extensions'] = []
@@ -353,7 +450,6 @@ export async function runAttempt(
       ])
     }
   }
-  const files = fixtures(config.scenario)
   const exitScenario = ['G6', 'G7', 'G8'].includes(config.scenario)
   // A group session runs in the chat's workspace, so a scenario that needs files there seeds them itself.
   const workspaceScenario = config.scenario === 'G10'

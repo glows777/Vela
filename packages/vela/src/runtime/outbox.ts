@@ -14,19 +14,41 @@ function leaseKey(outboxId: string): string {
   return `outbox_lease:${outboxId}`
 }
 
+function mergeBindingConfigJson(
+  existingJson: string | null | undefined,
+  rootId: string | undefined,
+): string | null {
+  if (!rootId) return existingJson ?? null
+  let parsed: Record<string, unknown> = {}
+  if (existingJson) {
+    try {
+      const candidate = JSON.parse(existingJson) as unknown
+      if (
+        candidate &&
+        typeof candidate === 'object' &&
+        !Array.isArray(candidate)
+      ) {
+        parsed = candidate as Record<string, unknown>
+      }
+    } catch {}
+  }
+  return JSON.stringify({ ...parsed, rootId })
+}
+
 function syncTopicBindingOnDeliveryInTx(
   db: VelaDatabase,
   row: OutboxRecord,
   threadId: string,
   now: string,
+  rootId?: string,
 ): void {
   const session = db.get<{ project_id: string | null }>(
     'SELECT project_id FROM sessions WHERE id = ?',
     row.sessionId,
   )
   const projectId = session?.project_id ?? null
-  const existingByThread = db.get<{ id: string }>(
-    `SELECT id FROM channel_bindings WHERE channel = ? AND external_id = ? AND thread_id = ?`,
+  const existingByThread = db.get<{ id: string; config_json: string | null }>(
+    `SELECT id, config_json FROM channel_bindings WHERE channel = ? AND external_id = ? AND thread_id = ?`,
     row.channel,
     row.externalChatId,
     threadId,
@@ -34,17 +56,18 @@ function syncTopicBindingOnDeliveryInTx(
   if (existingByThread) {
     db.run(
       `UPDATE channel_bindings
-       SET project_id = COALESCE(?, project_id), session_id = ?, enabled = 1, updated_at = ?
+       SET project_id = COALESCE(?, project_id), session_id = ?, enabled = 1, config_json = ?, updated_at = ?
        WHERE id = ?`,
       projectId,
       row.sessionId,
+      mergeBindingConfigJson(existingByThread.config_json, rootId),
       now,
       existingByThread.id,
     )
     return
   }
-  const existingBySession = db.get<{ id: string }>(
-    `SELECT id FROM channel_bindings WHERE session_id = ? AND channel = ? AND external_id = ?`,
+  const existingBySession = db.get<{ id: string; config_json: string | null }>(
+    `SELECT id, config_json FROM channel_bindings WHERE session_id = ? AND channel = ? AND external_id = ?`,
     row.sessionId,
     row.channel,
     row.externalChatId,
@@ -52,10 +75,11 @@ function syncTopicBindingOnDeliveryInTx(
   if (existingBySession) {
     db.run(
       `UPDATE channel_bindings
-       SET thread_id = ?, project_id = COALESCE(?, project_id), enabled = 1, updated_at = ?
+       SET thread_id = ?, project_id = COALESCE(?, project_id), enabled = 1, config_json = ?, updated_at = ?
        WHERE id = ?`,
       threadId,
       projectId,
+      mergeBindingConfigJson(existingBySession.config_json, rootId),
       now,
       existingBySession.id,
     )
@@ -64,14 +88,15 @@ function syncTopicBindingOnDeliveryInTx(
   db.run(
     `INSERT INTO channel_bindings (
        id, channel, external_id, thread_id, kind, project_id, session_id,
-       enabled, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, 'group', ?, ?, 1, ?, ?)`,
+       enabled, config_json, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, 'group', ?, ?, 1, ?, ?, ?)`,
     randomUUID(),
     row.channel,
     row.externalChatId,
     threadId,
     projectId,
     row.sessionId,
+    mergeBindingConfigJson(null, rootId),
     now,
     now,
   )
@@ -422,6 +447,12 @@ export class OutboxDispatcher {
               stepNowIso,
               row.id,
             )
+            this.getAdapter(row.channel)?.onDeliverySettled?.({
+              outboxId: row.id,
+              ...(row.run_id ? { runId: row.run_id } : {}),
+              kind: row.kind,
+              status: 'failed',
+            })
             continue
           }
           const adapter = this.getAdapter(row.channel)
@@ -452,6 +483,7 @@ export class OutboxDispatcher {
       const { row, adapter, leaseToken } = candidate
       const message: ChannelOutboundMessage = {
         outboxId: row.id,
+        ...(row.runId ? { runId: row.runId } : {}),
         kind: row.kind,
         channel: row.channel,
         externalChatId: row.externalChatId,
@@ -528,6 +560,7 @@ export class OutboxDispatcher {
                 row,
                 topicThreadId,
                 sentAt,
+                result.rootId,
               )
             }
             this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
@@ -535,6 +568,12 @@ export class OutboxDispatcher {
           })
           if (applied) {
             delivered++
+            adapter.onDeliverySettled?.({
+              outboxId: row.id,
+              ...(row.runId ? { runId: row.runId } : {}),
+              kind: row.kind,
+              status: 'sent',
+            })
             if (row.kind === 'topic_start') {
               this.onTopicBound?.(row.sessionId)
             }
@@ -634,7 +673,17 @@ export class OutboxDispatcher {
             this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
             return ok
           })
-          if (applied) failed++
+          if (applied) {
+            failed++
+            if (attempt >= MAX_OUTBOX_ATTEMPTS) {
+              adapter.onDeliverySettled?.({
+                outboxId: row.id,
+                ...(row.runId ? { runId: row.runId } : {}),
+                kind: row.kind,
+                status: 'failed',
+              })
+            }
+          }
         } finally {
           if (LIVE_OUTBOX_LEASES.get(row.id) === leaseToken) {
             LIVE_OUTBOX_LEASES.delete(row.id)

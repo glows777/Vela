@@ -18,7 +18,6 @@ import {
 import {
   inferImageMimeFromBytes,
   inferImageMimeFromName,
-  preserveChannelControlTools,
 } from './runtime-prompt.ts'
 import {
   formatRuntimeMemoryContent,
@@ -28,7 +27,6 @@ import type { SessionStore } from './session/index.ts'
 import { messageText } from './session/message-queue.ts'
 import { expandEnvironmentSkill } from './skills/environment-skills.ts'
 import type { SkillDefinition } from './skills/loader.ts'
-import type { ToolRegistry } from './tools/registry.ts'
 import type { TokenTracker } from './usage/tracker.ts'
 
 export function assistantText(msg: AssistantModelMessage | undefined): string {
@@ -179,27 +177,30 @@ function resolvePrimaryChannelRoute(inputs: readonly DriverInboxItem[]):
       threadId?: string
     }
   | undefined {
-  for (const requireWake of [true, false]) {
-    for (let i = inputs.length - 1; i >= 0; i--) {
-      const item = inputs[i]!
-      const isRouteSource =
-        item.source === 'channel' ||
-        item.source === 'timer' ||
-        item.source === 'webhook' ||
-        (item.source === 'approval' && item.payload.waitForInput === true)
-      if (!isRouteSource || item.passive) {
-        continue
-      }
-      if (requireWake && !item.wake) continue
-      const p = item.payload
-      if (
-        typeof p.channel === 'string' &&
-        typeof p.externalChatId === 'string'
-      ) {
-        return {
-          channel: p.channel,
-          externalChatId: p.externalChatId,
-          ...(typeof p.threadId === 'string' ? { threadId: p.threadId } : {}),
+  for (const allowPassive of [false, true]) {
+    for (const requireWake of [true, false]) {
+      if (allowPassive && !requireWake) continue
+      for (let i = inputs.length - 1; i >= 0; i--) {
+        const item = inputs[i]!
+        const isRouteSource =
+          item.source === 'channel' ||
+          item.source === 'timer' ||
+          item.source === 'webhook' ||
+          (item.source === 'approval' && item.payload.waitForInput === true)
+        if (!isRouteSource) continue
+        if (!allowPassive && item.passive) continue
+        if (allowPassive && !item.passive) continue
+        if (requireWake && !item.wake) continue
+        const p = item.payload
+        if (
+          typeof p.channel === 'string' &&
+          typeof p.externalChatId === 'string'
+        ) {
+          return {
+            channel: p.channel,
+            externalChatId: p.externalChatId,
+            ...(typeof p.threadId === 'string' ? { threadId: p.threadId } : {}),
+          }
         }
       }
     }
@@ -220,9 +221,18 @@ function extractInputMeta(
     blobId: string
     name: string
     mimeType?: string
+    inlineOnly?: boolean
   }> = []
+  const hasNonPassiveRoute = inputs.some(
+    (item) =>
+      !item.passive &&
+      (item.source === 'channel' ||
+        item.source === 'timer' ||
+        item.source === 'webhook' ||
+        (item.source === 'approval' && item.payload.waitForInput === true)),
+  )
   for (const item of inputs) {
-    if (item.passive) continue
+    if (item.passive && (hasNonPassiveRoute || !item.wake)) continue
     const p = item.payload
     if (item.source === 'channel' && channelTarget) {
       if (
@@ -240,8 +250,9 @@ function extractInputMeta(
       replyToMessageId = p.messageId
     }
     if (
-      item.source === 'user' ||
-      (item.source === 'channel' && p.type !== 'session_forward')
+      !item.passive &&
+      (item.source === 'user' ||
+        (item.source === 'channel' && p.type !== 'session_forward'))
     ) {
       humanProvenance = {
         inboxEventId: item.id,
@@ -686,7 +697,11 @@ export function flushUnconsumedSteering(options: {
   if (options.unconsumed.length === 0) return
   let insertedAny = false
   for (const msg of options.unconsumed) {
-    const text = messageText(msg).trim()
+    const rawText = messageText(msg).trim()
+    const hasImages =
+      Array.isArray(msg.content) &&
+      msg.content.some((part) => part.type === 'image')
+    const text = rawText || (hasImages ? '[Image attachment]' : '')
     if (!text) continue
     const res = enqueueInboxEvent(options.db, {
       sessionId: options.sessionId,
@@ -701,46 +716,6 @@ export function flushUnconsumedSteering(options: {
   if (insertedAny && options.wake && options.shouldWakeSession) {
     options.wakeSession?.(options.sessionId)
   }
-}
-
-/** Applies persisted per-project tool overrides onto `registry` on top of runtime base modifiers. */
-export function applyRuntimeProjectToolSelection(
-  db: VelaDatabase,
-  registry: ToolRegistry,
-  projectId: string | null,
-  baseModifiers: readonly string[],
-  options: { hasChannelBinding?: boolean; sessionKind?: string } = {},
-): void {
-  if (projectId) {
-    const proj = db.get<{ default_tools_json: string | null }>(
-      'SELECT default_tools_json FROM projects WHERE id = ?',
-      projectId,
-    )
-    if (proj?.default_tools_json) {
-      const list = JSON.parse(proj.default_tools_json) as unknown
-      if (
-        !Array.isArray(list) ||
-        !list.every((item) => typeof item === 'string')
-      ) {
-        throw new Error(
-          `Invalid default_tools_json for project ${projectId}: expected a JSON array of tool names`,
-        )
-      }
-      if (
-        list.length > 0 &&
-        list.every((name) => name.startsWith('+') || name.startsWith('-'))
-      ) {
-        registry.setDefaultToolModifiers([...baseModifiers, ...list])
-      } else {
-        registry.setDefaultToolModifiers(baseModifiers)
-        registry.setSelection(
-          preserveChannelControlTools(list, { ...options, projectId }),
-        )
-      }
-      return
-    }
-  }
-  registry.setDefaultToolModifiers([...baseModifiers])
 }
 
 /** Reads persisted human-turn metadata for an already-started run during recovery/resume. */

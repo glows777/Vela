@@ -84,32 +84,48 @@ function createLazyRuntimeMcpAdapter(
 function loadOwnerRuntimeConfig(
   agentDir: string,
   hostEnv: Record<string, string | undefined>,
-): VelaSettings {
+): { settings: VelaSettings; larkError?: string } {
   assertNoLegacyConfigFiles(agentDir)
   const file = join(agentDir, 'config.json')
-  if (!existsSync(file)) return {}
+  if (!existsSync(file)) return { settings: {} }
   const text = readFileSync(file, 'utf8')
   let invalidWebhooks: unknown
   let hasInvalidWebhooks = false
+  let larkError: string | undefined
   let parseText = text
   try {
     const raw = JSON.parse(text) as unknown
-    if (
-      raw &&
-      typeof raw === 'object' &&
-      !Array.isArray(raw) &&
-      Object.hasOwn(raw, 'webhooks')
-    ) {
-      const value = (raw as Record<string, unknown>).webhooks
-      if (
-        value !== undefined &&
-        (!value || typeof value !== 'object' || Array.isArray(value))
-      ) {
-        hasInvalidWebhooks = true
-        invalidWebhooks = value
-        const { webhooks: _omitted, ...rest } = raw as Record<string, unknown>
-        parseText = JSON.stringify(rest)
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const stripped: Record<string, unknown> = {
+        ...(raw as Record<string, unknown>),
       }
+      let changed = false
+      if (Object.hasOwn(raw, 'webhooks')) {
+        const value = stripped.webhooks
+        if (
+          value !== undefined &&
+          (!value || typeof value !== 'object' || Array.isArray(value))
+        ) {
+          hasInvalidWebhooks = true
+          invalidWebhooks = value
+          delete stripped.webhooks
+          changed = true
+        }
+      }
+      if (Object.hasOwn(raw, 'lark')) {
+        const larkValue = stripped.lark
+        if (
+          larkValue !== undefined &&
+          (!larkValue ||
+            typeof larkValue !== 'object' ||
+            Array.isArray(larkValue))
+        ) {
+          larkError = `${file}: lark must be an object`
+          delete stripped.lark
+          changed = true
+        }
+      }
+      if (changed) parseText = JSON.stringify(stripped)
     }
   } catch {
     /* Let parseConfig raise its normal malformed JSON error */
@@ -118,12 +134,15 @@ function loadOwnerRuntimeConfig(
     parseConfig(parseText, file),
     hostEnv,
   )
-  return hasInvalidWebhooks
-    ? {
-        ...interpolated,
-        webhooks: invalidWebhooks as Record<string, unknown>,
-      }
-    : interpolated
+  return {
+    settings: hasInvalidWebhooks
+      ? {
+          ...interpolated,
+          webhooks: invalidWebhooks as Record<string, unknown>,
+        }
+      : interpolated,
+    ...(larkError ? { larkError } : {}),
+  }
 }
 
 function statSignature(file: string): string {
@@ -147,6 +166,18 @@ function mergeExtensionConfig(
     merged[key] = { ...(base[key] ?? {}), ...(override?.[key] ?? {}) }
   }
   return merged
+}
+
+function isLarkExtensionDisabled(
+  extensions: readonly string[] | undefined,
+): boolean {
+  let disabled = false
+  for (const entry of extensions ?? []) {
+    if (entry === '-builtin:lark') disabled = true
+    else if (entry === '+builtin:lark' || entry === 'builtin:lark')
+      disabled = false
+  }
+  return disabled
 }
 
 function createSpecialModelResolver(): ResolveSpecialModelFn {
@@ -264,9 +295,10 @@ export function createRuntime(
     let lastAuthSig = isEphemeral ? 'ephemeral' : statSignature(authPath)
 
     const computeConfigState = () => {
-      const ownerConfig: VelaSettings = isEphemeral
-        ? {}
+      const loadedOwner = isEphemeral
+        ? { settings: {} as VelaSettings }
         : loadOwnerRuntimeConfig(agentDir, hostEnv)
+      const ownerConfig: VelaSettings = loadedOwner.settings
       const configProviders = isEphemeral ? {} : (ownerConfig.providers ?? {})
       const loadedProviders = loadModels({
         agentDir,
@@ -295,6 +327,7 @@ export function createRuntime(
           : undefined)
       return {
         ownerConfig,
+        larkError: loadedOwner.larkError,
         configProviders,
         providers,
         extensionConfig,
@@ -379,6 +412,7 @@ export function createRuntime(
       ),
       getChannelTools: (sid, runId) =>
         engine.getChannelToolsForSession(sid, runId),
+      getChannelTimezone: (channel) => engine.channelAdapter(channel)?.timezone,
       hostEnv,
       contextFiles: options.contextFiles,
       skills: options.skills,
@@ -401,6 +435,17 @@ export function createRuntime(
       webhooks: initial.ownerConfig.webhooks,
       eventDefaultTarget: initial.ownerConfig.eventDefaultTarget,
     }
+    let currentLarkConfig: {
+      lark?: Record<string, unknown>
+      larkError?: string
+      disabledByExtension?: boolean
+    } = {
+      lark: initial.ownerConfig.lark,
+      ...(initial.larkError ? { larkError: initial.larkError } : {}),
+      disabledByExtension: isLarkExtensionDisabled(
+        initial.ownerConfig.extensions,
+      ),
+    }
     let reloadQueue: Promise<void> = Promise.resolve()
     const reloadConfigInternal = (force: boolean): Promise<void> => {
       if (isEphemeral) return Promise.resolve()
@@ -421,6 +466,13 @@ export function createRuntime(
           webhooks: updated.ownerConfig.webhooks,
           eventDefaultTarget: updated.ownerConfig.eventDefaultTarget,
         }
+        currentLarkConfig = {
+          lark: updated.ownerConfig.lark,
+          ...(updated.larkError ? { larkError: updated.larkError } : {}),
+          disabledByExtension: isLarkExtensionDisabled(
+            updated.ownerConfig.extensions,
+          ),
+        }
         await velaDriver.control.reloadConfig({
           defaultModel: options.defaultModel ?? updated.ownerConfig.model,
           defaultThinkingLevel:
@@ -440,6 +492,7 @@ export function createRuntime(
         })
         if (disposing) return
         await options.onConfigReloaded?.(currentWebhookConfig)
+        await options.onLarkConfigReloaded?.(currentLarkConfig)
         lastConfigSig = nextConfigSig
         lastAuthSig = nextAuthSig
       })
@@ -551,7 +604,9 @@ export function createRuntime(
         const res = engine.submitPrompt({ ...input, sessionId })
         return { eventId: res.event.id, inserted: res.inserted }
       },
-      steer: (sessionId, text) => engine.steerSession(sessionId, text),
+      steer: async (sessionId, text) => {
+        await engine.steerSession(sessionId, text)
+      },
       stop: (sessionId, reason) => engine.stopSession(sessionId, reason),
       waitForIdle: (sessionId) => engine.waitForIdle(sessionId),
       jobs: {
@@ -662,6 +717,20 @@ export function createRuntime(
       ingestWebhookEvent: async (event, defaultTarget) =>
         engine.ingestWebhookEvent(event, defaultTarget),
       getWebhookConfig: () => ({ ...currentWebhookConfig }),
+      getLarkConfig: () => ({ ...currentLarkConfig }),
+      reconcileProjectSessions: async (
+        projectId: string,
+        fields?: {
+          location?: boolean
+          model?: boolean
+          thinkingLevel?: boolean
+          topicModel?: boolean
+          topicThinkingLevel?: boolean
+        },
+      ) => {
+        const project = engine.projects.get(projectId)
+        if (project) engine.sessions.reconcileProjectDefaults(project, fields)
+      },
       dispose() {
         disposing ??= (async () => {
           try {

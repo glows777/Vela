@@ -158,10 +158,22 @@ export function createVelaAgentDriver(
       steer: true,
       approval: true,
     },
-    steer(sessionId, text) {
+    steer(sessionId, text, images) {
       const list = state.activeSteering.get(sessionId)
       if (!list) return false
-      list.push({ role: 'user', content: text })
+      if (images && images.length > 0) {
+        const parts: Array<
+          | { type: 'text'; text: string }
+          | { type: 'image'; data: string; mimeType: string }
+        > = []
+        if (text) parts.push({ type: 'text', text })
+        for (const img of images) {
+          parts.push({ type: 'image', data: img.data, mimeType: img.mimeType })
+        }
+        list.push({ role: 'user', content: parts })
+      } else {
+        list.push({ role: 'user', content: text })
+      }
       return true
     },
     abort(sessionId) {

@@ -206,6 +206,7 @@ export interface VelaAgentDriverOptions {
   ) =>
     | { binding: ChannelBinding; tools: readonly ChannelToolSpec[] }
     | undefined
+  getChannelTimezone?: (channel: string) => string | undefined
   hostEnv?: Record<string, string | undefined>
   docsPaths?: DocsPaths | false
   systemPrompt?: string

@@ -51,9 +51,9 @@ import {
 } from './runtime-resources.ts'
 import {
   adaptChannelTools,
+  applyRuntimeProjectToolSelection,
   createRuntimeSessionToolRegistry,
 } from './runtime-tools.ts'
-import { applyRuntimeProjectToolSelection } from './runtime-turn.ts'
 import type {
   ActiveRunMeta,
   RuntimeMcpLease,
@@ -593,6 +593,7 @@ export async function prepareSessionSetup(params: {
             scheduleSession:
               wakeSession ?? state.options.wakeSession ?? (() => {}),
             flushOutbox: flushOutbox ?? state.options.flushOutbox,
+            getChannelTimezone: state.options.getChannelTimezone,
             getRunContext: (sid) => state.activeRunMeta.get(sid),
           },
         }
@@ -681,6 +682,22 @@ export async function prepareSessionSetup(params: {
     } else if (loadout?.modifiers) {
       registry.setDefaultToolModifiers([...baseModifiers, ...loadout.modifiers])
     }
+  }
+  // Project defaultTools (e.g. per-chat Lark `tools`) takes precedence over global/workspace tool lists
+  // unless an explicit per-run override selected tools, while keeping explicit excludeTools intact.
+  if (override?.tools === undefined && !override?.noTools) {
+    applyRuntimeProjectToolSelection(
+      state.db,
+      registry,
+      projectId,
+      baseModifiers,
+      {
+        hasChannelBinding,
+        sessionKind,
+        onlyIfConfigured: true,
+        excludeTools: override?.excludeTools,
+      },
+    )
   }
 
   if (state.sessionActiveTools.has(sessionId)) {

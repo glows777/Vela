@@ -2,9 +2,7 @@
 
 `vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, serving CLI clients and SDK `connectRuntime()` callers over `<VELA_DIR>/vela.sock`.
 
-> **Channel gateway transition note (S4b-1 -> S4b-2):** `vela serve` is retired. `vela daemon run` now hosts `webhooks` (`POST /events/github` and `POST /events/generic`) directly with automatic `config.json` / `SIGHUP` reload and delivers to Runtime SQLite `subscriptions` + Runtime `ChannelAdapter`s. **Lark and Local HTTP/SSE channels** remain on the legacy SDK host (`createVela()` + `startChannels()`, which reads legacy channel subscriptions) until S4b-2 migrates them into `vela daemon`. During this step:
-> - **Using legacy Lark / Local channels:** keep `webhooks` hosted on your SDK gateway below (and stop or omit `webhooks` on `vela daemon` on that port, since daemon webhooks do not route to the SDK host's legacy subscriptions).
-> - **Using Runtime (`createRuntime()` / `connectRuntime()`) webhooks:** let `vela daemon` host `webhooks` and omit `eventReceiver` on any separate SDK host.
+> **Channel gateway transition note (`S4b-2`):** `vela serve` is retired. `vela daemon run` now hosts **Lark (`config.json` `lark`)** and **`webhooks` (`POST /events/github` and `POST /events/generic`)** natively with automatic `config.json` / `SIGHUP` reload and live enablement via `vela.db`. Only the transitional **Local HTTP/SSE** listener remains on the legacy SDK host (`createVela()` + `startChannels()`, omitting `lark`) until `S4b-3` retires `legacy-channels`. Do not run both `vela daemon` and a separate legacy SDK host with the same Lark app credentials or webhook port.
 
 The daemon has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
 
@@ -124,7 +122,7 @@ The running process keeps the old code until the restart. A run in progress is s
 
 ## Serving channels during the transition
 
-Until S4b-2 migrates **Lark and Local HTTP/SSE channels** onto `vela daemon`, run legacy Lark / Local adapters (and webhooks targeting legacy Lark subscriptions) on the legacy SDK host (`createVela()` + `startChannels()`). If `vela daemon` is running on the same host with `webhooks` configured, remove `webhooks` from `config.json` for that daemon or pass `extensionConfig: { ...config.extensionConfig, channel: undefined }` on one of the two processes so only the intended subscription store owns the port.
+`vela daemon run` already hosts Lark and `webhooks` (`#595`). Only if you still rely on the legacy Local HTTP/SSE listener (`local`) until `S4b-3` retires `legacy-channels`, run a separate Local-only SDK host (`createVela()` + `startChannels()`, without `lark()`). Do not load `lark()` or duplicate `webhooks` in this script when `vela daemon` runs on the same host.
 
 Node.js ESM does **not** resolve bare package imports (`import ... from '@glows777/vela'`) from a global `npm install -g` installation. Create a dedicated directory with a local `@glows777/vela` install under the `vela` user:
 
@@ -136,18 +134,15 @@ sudo -u vela sh -c 'cd /home/vela/gateway && npm init -y && npm install @glows77
 Write `/home/vela/gateway/gateway.mjs`:
 
 ```js
-import { createVela, lark, larkConfig, local, loadConfig } from '@glows777/vela'
+import { createVela, loadConfig, local } from '@glows777/vela'
 
 const config = loadConfig({
   cwd: process.cwd(),
   agentDir: process.env.VELA_DIR,
   env: process.env,
-  extensionConfigs: [larkConfig],
 })
-const larkCfg = config.extensionConfig.lark
 const localCfg = config.settings.local
 const extensions = [
-  ...(larkCfg?.appId && larkCfg?.appSecret ? [lark()] : []),
   ...(localCfg?.enabled && typeof localCfg.token === 'string' && localCfg.token
     ? [
         local({
@@ -160,6 +155,8 @@ const extensions = [
       ]
     : []),
 ]
+const { eventReceiver: _eventReceiver, ...localChannelConfig } =
+  config.extensionConfig?.channel ?? {}
 const vela = createVela({
   cwd: config.cwd,
   agentDir: config.agentDir,
@@ -170,7 +167,10 @@ const vela = createVela({
   credentials: config.credentials,
   limits: config.settings.limits,
   extensions,
-  extensionConfig: config.extensionConfig,
+  extensionConfig: {
+    ...config.extensionConfig,
+    channel: localChannelConfig,
+  },
   eventDefaultTarget: config.settings.eventDefaultTarget,
 })
 let shuttingDown = false
@@ -190,7 +190,7 @@ await vela.ready()
 await vela.startChannels()
 ```
 
-`loadConfig()` already maps top-level `webhooks` from `config.json` into `config.extensionConfig.channel.eventReceiver`, so forwarding `extensionConfig: config.extensionConfig` enables both GitHub and generic webhooks on this host as well.
+Omitting `extensionConfig.channel.eventReceiver` ensures this temporary Local-only host does not start a duplicate webhook listener alongside `vela daemon`, which already hosts top-level `webhooks` and `lark`.
 
 In `/etc/systemd/system/vela.service`, keep `WorkingDirectory=/home/vela/workspace`, `Environment=VELA_DIR=/home/vela/.vela`, and `EnvironmentFile=/etc/vela/vela.env`, and set:
 

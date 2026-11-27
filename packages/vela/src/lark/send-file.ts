@@ -9,7 +9,7 @@ import {
 } from './transport.ts'
 
 /** Feishu's native IM image limits. Other pictures can still be delivered as files. */
-function nativeImage(bytes: Uint8Array): boolean {
+function isNativeLarkImage(bytes: Uint8Array): boolean {
   if (bytes.byteLength > 10_000_000) return false
   const header = Buffer.from(
     bytes.buffer,
@@ -44,6 +44,48 @@ function nativeImage(bytes: Uint8Array): boolean {
   return false
 }
 
+export async function sendLarkFile(
+  transport: LarkTransport,
+  params: {
+    chatId: string
+    name: string
+    bytes: Uint8Array
+    replyToId?: string
+    replyInThread?: boolean
+    uuid?: string
+  },
+): Promise<{ messageId: string }> {
+  if (!transport.sendFile) {
+    throw new Error('Lark transport does not support file uploads')
+  }
+  const kind = isNativeLarkImage(params.bytes) ? 'image' : 'file'
+  try {
+    const receipt = await transport.sendFile(
+      params.chatId,
+      { kind, name: basename(params.name) || 'file', bytes: params.bytes },
+      {
+        replyToId: params.replyToId,
+        replyInThread: params.replyInThread,
+        uuid: params.uuid,
+      },
+    )
+    if (!receipt?.messageId) throw new Error('Missing message receipt')
+    return receipt
+  } catch (error) {
+    if (error instanceof LarkUploadError) throw error
+    if (error instanceof LarkResponseError) {
+      // Only the bounded first line belongs in the conversation.
+      throw new Error(
+        error.message.split(/[\p{Cc}\u2028\u2029]/u, 1)[0]!.slice(0, 300),
+      )
+    }
+    throw new Error(
+      'Lark did not confirm delivery. Check this conversation before asking me to resend.',
+      { cause: error },
+    )
+  }
+}
+
 export function channelFileSender(
   transport: LarkTransport,
   changed: (
@@ -51,32 +93,14 @@ export function channelFileSender(
   ) => void,
 ): NonNullable<ChannelDefinition['sendFile']> {
   return async (route, file) => {
-    const name = basename(file.path)
-    const kind = nativeImage(file.bytes) ? 'image' : 'file'
-    try {
-      const receipt = await transport.sendFile!(
-        route.channelId,
-        { kind, name, bytes: file.bytes },
-        {
-          replyToId: route.topic?.rootId ?? route.replyToId,
-          replyInThread: route.topic ? true : undefined,
-          uuid: route.deliveryId,
-        },
-      )
-      if (!receipt?.messageId) throw new Error('Missing message receipt')
-    } catch (error) {
-      if (error instanceof LarkUploadError) throw error
-      if (error instanceof LarkResponseError) {
-        // Only the bounded first line belongs in the conversation.
-        throw new Error(
-          error.message.split(/[\p{Cc}\u2028\u2029]/u, 1)[0]!.slice(0, 300),
-        )
-      }
-      throw new Error(
-        'Lark did not confirm delivery. Check this conversation before asking me to resend.',
-        { cause: error },
-      )
-    }
+    await sendLarkFile(transport, {
+      chatId: route.channelId,
+      name: basename(file.path),
+      bytes: file.bytes,
+      replyToId: route.topic?.rootId ?? route.replyToId,
+      replyInThread: route.topic ? true : undefined,
+      uuid: route.deliveryId,
+    })
     changed(route)
   }
 }

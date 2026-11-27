@@ -176,10 +176,38 @@ function inboxRouteInfo(row: InboxRow): {
   return { routeKey, mentionSig, needsAnnouncement }
 }
 
+const PASSIVE_BATCH_MAX_BYTES = 400 * 1024
+
+function passivePreparedTextBytes(row: InboxRow): number {
+  try {
+    const parsed = JSON.parse(row.payload_json) as { text?: unknown }
+    if (typeof parsed.text === 'string') {
+      return Buffer.byteLength(parsed.text, 'utf8')
+    }
+  } catch {}
+  return Buffer.byteLength(row.payload_json, 'utf8')
+}
+
+export function cancelPendingInboxEventInDb(
+  db: VelaDatabase,
+  inboxEventId: string,
+  now = new Date().toISOString(),
+): boolean {
+  const res = db.run(
+    `UPDATE inbox_events
+     SET status = 'done', processed_at = COALESCE(processed_at, ?)
+     WHERE id = ? AND status = 'pending'`,
+    now,
+    inboxEventId,
+  )
+  return res.changes > 0
+}
+
 /**
  * Claims pending events for `sessionId` into `runId` iff at least one pending event
  * has `wake = 1`. Anchors on the oldest runnable wake event so non-waking inputs for
  * another route cannot stall the worker, isolates announcement wakes individually,
+ * partitions waking passive batches from explicit requests (capped at 400 KB),
  * prevents passive inputs from crossing routes, and keeps recipient attribution uniform.
  */
 export function claimInboxBatchInTx(
@@ -200,15 +228,63 @@ export function claimInboxBatchInTx(
 
   const anchor = rows[firstWakeIdx]!
   const anchorInfo = inboxRouteInfo(anchor)
+  const anchorPassive = anchor.passive === 1
 
   let selected: InboxRow[]
   if (anchorInfo.needsAnnouncement) {
     selected = [anchor]
+  } else if (anchorPassive) {
+    const anchorBytes = passivePreparedTextBytes(anchor)
+    const prefix: InboxRow[] = []
+    let batchBytes = anchorBytes
+    for (let i = firstWakeIdx - 1; i >= 0; i--) {
+      const row = rows[i]!
+      if (row.passive !== 1) continue
+      const info = inboxRouteInfo(row)
+      if (
+        anchorInfo.routeKey &&
+        info.routeKey &&
+        info.routeKey !== anchorInfo.routeKey
+      ) {
+        continue
+      }
+      const bytes = passivePreparedTextBytes(row)
+      if (batchBytes + bytes > PASSIVE_BATCH_MAX_BYTES) {
+        break
+      }
+      prefix.unshift(row)
+      batchBytes += bytes
+    }
+    selected = [...prefix, anchor]
+    for (let i = firstWakeIdx + 1; i < rows.length; i++) {
+      const row = rows[i]!
+      if (row.passive !== 1) {
+        // Explicit waking inputs cannot join a passive batch, and passive tail rows behind
+        // an explicit request must wait behind it in chronological order.
+        if (row.wake === 1) break
+        continue
+      }
+      const info = inboxRouteInfo(row)
+      if (
+        anchorInfo.routeKey &&
+        info.routeKey &&
+        info.routeKey !== anchorInfo.routeKey
+      ) {
+        break
+      }
+      const bytes = passivePreparedTextBytes(row)
+      if (batchBytes + bytes > PASSIVE_BATCH_MAX_BYTES) {
+        break
+      }
+      selected.push(row)
+      batchBytes += bytes
+    }
   } else {
     selected = []
     let activeRouteKey = anchorInfo.routeKey
     let activeMentionSig = anchorInfo.mentionSig
     for (const row of rows) {
+      if (row.passive === 1 && row.wake === 1) continue
       const info = inboxRouteInfo(row)
       if (info.needsAnnouncement) continue
       if (info.routeKey) {

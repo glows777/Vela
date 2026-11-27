@@ -9,7 +9,7 @@
     readonly capabilities: AgentDriverCapabilities
     readonly name: string
     runTurn: (request: DriverTurnRequest) => Promise<DriverTurnResult>
-    steer?: ((sessionId: string, text: string) => boolean | Promise<boolean>) | undefined
+    steer?: ((sessionId: string, text: string, images?: Array<{ data: string; mimeType: string; }>) => boolean | Promise<boolean>) | undefined
     waitForBackground?: (() => Promise<void>) | undefined
   interface AgentDriverCapabilities
     readonly approval: boolean
@@ -142,17 +142,24 @@
     getTools?: ((binding: ChannelBinding) => readonly ChannelToolSpec[]) | undefined
     listChats?: (() => Promise<ChannelChatInfo[]>) | undefined
     listMessages?: ((input: { sessionId: string; externalChatId: string; threadId?: string | null; kind: ChannelBindingKind; cursor?: string; limit?: number; }) => Promise<RuntimeMessagePage>) | undefined
+    onDeliverySettled?: ((info: { outboxId: string; runId?: string; kind: string; status: "sent" | "failed"; }) => void) | undefined
     readonly description?: string | undefined
     readonly name: string
+    readonly timezone?: string | undefined
     start: (ctx: ChannelAdapterContext) => Promise<void>
     status?: (() => ChannelConnectionState) | undefined
     stop: () => Promise<void>
     submitFromHost?: ((input: ChannelHostSubmitInput) => Promise<ChannelHostSubmitResult>) | undefined
   interface ChannelAdapterContext
+    discardInboxEvent?: ((inboxEventId: string) => boolean) | undefined
+    getHostPostAuthor?: ((externalMessageId: string) => string | undefined) | undefined
     getProject?: ((id: string) => ProjectRecord | undefined) | undefined
     getSession?: ((id: string) => SessionRecord | undefined) | undefined
     ingest: (message: ChannelInboundMessage) => Promise<void>
+    ingestWithReceipt?: ((message: ChannelInboundMessage) => Promise<ChannelIngestReceipt>) | undefined
     listBindings?: ((filter?: { channel?: string; projectId?: string; enabledOnly?: boolean; }) => ChannelBinding[]) | undefined
+    recordHostPostAuthor?: ((externalMessageId: string, authorName: string) => void) | undefined
+    steerInboxEvent?: ((sessionId: string, inboxEventId: string, text: string) => Promise<boolean>) | undefined
     steerSession?: ((sessionId: string, text: string) => Promise<void>) | undefined
     stopSession?: ((sessionId: string, reason?: string) => Promise<boolean>) | undefined
     subscribeDeltas?: ((listener: StreamDeltaListener) => () => void) | undefined
@@ -247,6 +254,7 @@
     senderName: string
     text: string
     threadId?: string | undefined
+    threadRootId?: string | undefined
     timestamp: string
     wake?: boolean | undefined
   interface ChannelOutboundMessage
@@ -261,6 +269,7 @@
     outboxId: string
     recipientId?: string | undefined
     replyToMessageId?: string | undefined
+    runId?: string | undefined
     text: string
     threadId?: string | undefined
     title?: string | undefined
@@ -318,6 +327,7 @@
     content: string
     path: string
   function createJsonSchema: <T = unknown>(schema: JsonSchemaObject | (() => JsonSchemaObject | PromiseLike<JsonSchemaObject>), options?: { validate?: VelaJsonSchema<T>["validate"]; }) => VelaJsonSchema<T>
+  function createLarkChannelAdapter: (options?: LarkChannelAdapterOptions) => LarkChannelAdapter
   function createLocalExecutionEnv: (options: { cwd: string; shellPath?: string; }) => ExecutionEnv
   interface CreateProjectInput
     config?: Record<string, unknown> | null | undefined
@@ -658,6 +668,30 @@
     operator?: { open_id?: string; } | undefined
   interface LarkCardResponse
     toast: { type: "success" | "info"; content: string; }
+  class LarkChannelAdapter
+    announce: (input: ChannelAnnouncementInput) => Promise<ChannelAnnouncementResult | undefined>
+    deliver: (message: ChannelOutboundMessage) => Promise<ChannelDeliveryResult>
+    fetchAttachment: (ref: string, signal?: AbortSignal) => Promise<Uint8Array>
+    getTools: (binding: ChannelBinding) => readonly ChannelToolSpec[]
+    listChats: () => Promise<ChannelChatInfo[]>
+    listMessages: (input: { sessionId: string; externalChatId: string; threadId?: string | null; kind: "group" | "direct"; cursor?: string; limit?: number; }) => Promise<RuntimeMessagePage>
+    onDeliverySettled: (info: { outboxId: string; runId?: string; kind: string; status: "sent" | "failed"; }) => void
+    readonly description: "Lark bot message channel (long-connection mode)"
+    readonly name: "lark"
+    readonly timezone?: string | undefined
+    start: (ctx: ChannelAdapterContext) => Promise<void>
+    status: () => ChannelConnectionState
+    stop: () => Promise<void>
+    submitFromHost: (input: ChannelHostSubmitInput) => Promise<ChannelHostSubmitResult>
+  interface LarkChannelAdapterOptions
+    appId?: string | undefined
+    appSecret?: string | undefined
+    chats?: unknown
+    hostEnv?: Record<string, string | undefined> | undefined
+    logger?: VelaLogger | undefined
+    owners?: string | readonly string[] | undefined
+    timezone?: unknown
+    transport?: LarkTransport | undefined
   const larkConfig: ExtensionConfigDefinition
   interface LarkHistoryMessage
     body?: { content?: string; } | undefined
@@ -695,7 +729,7 @@
     messageId: string
   interface LarkTransport
     addReaction: (messageId: string, emoji: "OnIt" | "DONE" | "CrossMark") => Promise<string>
-    forward: (messageId: string, threadId: string) => Promise<LarkSentMessage>
+    forward: (messageId: string, threadId: string, uuid?: string) => Promise<LarkSentMessage>
     getBotId: () => Promise<string>
     getResource: (messageId: string, key: string, type: "image" | "file") => Promise<Readable>
     getSenderName: (openId: string) => Promise<string | undefined>
@@ -819,6 +853,7 @@
   interface LocalVelaRuntime
     dispose: () => Promise<void>
     extensionErrors: () => Promise<string[]>
+    getLarkConfig: () => { lark?: Record<string, unknown>; larkError?: string; disabledByExtension?: boolean; }
     getWebhookConfig: () => { webhooks?: Record<string, unknown>; eventDefaultTarget?: { channel: string; chatId: string; }; }
     ingestWebhookEvent: (event: RuntimeWebhookEvent, defaultTarget?: { channel: string; chatId: string; }) => Promise<{ matchedSessionIds: string[]; defaultTargetSessionId?: string; enqueuedCount: number; }>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
@@ -1085,6 +1120,7 @@
       | 'job'
       | 'handoff'
       | 'session'
+      inboxEventIds?: string[]
       }
       | {
       type: 'message_committed'
@@ -1181,6 +1217,8 @@
       type: 'run_finished'
       runId: string
       status: RunEndStatus
+      silent?: boolean
+      replyPending?: boolean
       error?: string
       errorKind?: AgentErrorKind
       errorHint?: string

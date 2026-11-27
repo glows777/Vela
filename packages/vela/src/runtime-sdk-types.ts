@@ -381,6 +381,22 @@ export interface LocalVelaRuntime extends VelaRuntime {
     webhooks?: Record<string, unknown>
     eventDefaultTarget?: { channel: string; chatId: string }
   }
+  getLarkConfig(): {
+    lark?: Record<string, unknown>
+    larkError?: string
+    disabledByExtension?: boolean
+  }
+  /** @internal Syncs active `hub`/`topic` session defaults after daemon project config changes. */
+  reconcileProjectSessions?(
+    projectId: string,
+    fields?: {
+      location?: boolean
+      model?: boolean
+      thinkingLevel?: boolean
+      topicModel?: boolean
+      topicThinkingLevel?: boolean
+    },
+  ): Promise<void>
 }
 
 export interface CreateRuntimeOptions {
@@ -424,6 +440,12 @@ export interface CreateRuntimeOptions {
   onConfigReloaded?: (config: {
     webhooks?: Record<string, unknown>
     eventDefaultTarget?: { channel: string; chatId: string }
+  }) => Promise<void> | void
+  /** @internal Daemon hook invoked after `config.json` reloads Lark settings. */
+  onLarkConfigReloaded?: (config: {
+    lark?: Record<string, unknown>
+    larkError?: string
+    disabledByExtension?: boolean
   }) => Promise<void> | void
   /** @internal Daemon hook invoked when `channels.setEnabled()` toggles a channel. */
   onChannelEnabledChange?: (
