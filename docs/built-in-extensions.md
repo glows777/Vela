@@ -8,16 +8,8 @@ Vela ships six selectable built-in extensions in `@glows777/vela`: `background`,
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
 | `todo` | Task checklist: the `todo` tool, shown on the Lark progress card |
 | `web` | `web_fetch`, and `web_search` with a supported hosted search or a search API key |
-| `lark` | The Lark bot channel (see [Channels](channels.md)) |
+| `lark` | The Lark bot channel (run via `vela daemon` / `createLarkChannelAdapter`, see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
-
-## Local transport
-
-Vela also ships `local` in `@glows777/vela`. It is an explicitly enabled transport, not another `builtin:*` selector or a default CLI extension. It provides authenticated loopback HTTP/SSE for project hubs, task sessions, visible history and run-bound Stop. Lark and Local share the channel gateway and topic tools.
-
-In the SDK, add `local({ token, port: 8788 })` explicitly with `createVela()`, then call `await vela.ready()` and `await vela.startChannels()`. (In the CLI, `vela serve` was retired in v0.9; channel adapters are migrating to the Runtime daemon.) Unlike the factories below, Local requires its token as a factory option and does not read it implicitly from extension configuration.
-
-Local binds only `127.0.0.1`, with Bearer authentication and no CORS/cookie support. Its token grants the daemon's tool authority. Do not tunnel it or share the webhook listener's port (8787). See [Local](channels.md#local) for setup, security, the HTTP/SSE protocol and runnable client examples.
 
 ## Loading
 
@@ -51,7 +43,7 @@ For the selectable built-ins below, factory options take precedence. An option y
 
 ## Configuration
 
-In the CLI, each built-in reads its top-level section (`web`, `memory`, `lark`, `mcpServers`, `webhooks`, `local`) from [settings](settings.md) (`config.json`). String values support `$VAR` and `${VAR}`. When a key is not set in settings, the CLI falls back to an environment variable such as `TAVILY_API_KEY`; [CLI](cli.md#environment-variables) lists each variable and the key it fills. An empty string counts as unset. `memory` supports `dream` (`true` by default).
+In `vela daemon` and the CLI, each built-in reads its top-level section (`web`, `memory`, `lark`, `mcpServers`, `webhooks`) from [settings](settings.md) (`config.json`). String values support `$VAR` and `${VAR}`. When a key is not set in settings, the CLI falls back to an environment variable such as `TAVILY_API_KEY`; [CLI](cli.md#environment-variables) lists each variable and the key it fills. An empty string counts as unset. `memory` supports `dream` (`true` by default).
 
 ```json
 {

@@ -1,23 +1,47 @@
 import { afterEach, expect, test } from 'bun:test'
-import { lark } from '../../packages/vela/src/lark/index.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
+  createRuntime,
+  DaemonLarkHost,
+} from '../../packages/vela/src/legacy-desktop.ts'
+import {
+  createFauxModel,
   fauxText,
   fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
-import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
-afterEach(cleanupTestVelas)
+const dirs: string[] = []
+const disposers: (() => Promise<void>)[] = []
+
+afterEach(async () => {
+  for (const dispose of disposers.splice(0).reverse()) {
+    await dispose().catch(() => {})
+  }
+  for (const dir of dirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  dirs.push(dir)
+  return dir
+}
+
 async function until(condition: () => boolean) {
-  const deadline = Date.now() + 2000
+  const deadline = Date.now() + 5000
   while (!condition()) {
     if (Date.now() > deadline)
       throw new Error('Timed out waiting for history search')
-    await new Promise((resolve) => setTimeout(resolve, 1))
+    await Bun.sleep(5)
   }
 }
 
 test('history search bounds pages, matches and characters and uses the logical group in channels and restarted topics', async () => {
+  const agentDir = tempDir('vela-search-hist-')
   const fake = fakeLark()
   const calls: {
     chatId: string
@@ -71,7 +95,8 @@ test('history search bounds pages, matches and characters and uses the logical g
   const answer = (
     req: import('../../packages/vela/src/testing/core/faux.ts').FauxRequest,
   ) => fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
-  const t = createTestVela({
+
+  const model = createFauxModel({
     responses: [
       search(),
       answer,
@@ -86,18 +111,35 @@ test('history search bounds pages, matches and characters and uses the logical g
       search(),
       answer,
     ],
-    allowPendingResponses: true,
-    extensions: [
-      lark({
+  })
+  const runtime = createRuntime({
+    agentDir,
+    defaultModel: model,
+    hostEnv: {},
+    mcp: false,
+  })
+  const host = new DaemonLarkHost(runtime, {
+    agentDir,
+    hostEnv: {},
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    transport: fake.transport,
+  })
+  disposers.push(async () => {
+    await host.stop()
+    await runtime.dispose()
+  })
+  await runtime.ready()
+  await host.sync(
+    {
+      lark: {
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group', 'oc_other'],
-        transport: fake.transport,
-      }),
-    ],
-  })
-  await t.vela.ready()
-  await t.vela.startChannels()
+      },
+    },
+    true,
+  )
+
   let serial = 0
   async function run(chatId = 'oc_group', topic = false) {
     const count = fake.sent.length
@@ -169,14 +211,19 @@ test('history search bounds pages, matches and characters and uses the logical g
   const restarted = JSON.parse(await run('oc_other', true))
   expect(restarted.matches[0].text).toBe('oc_other cobalt')
   expect(calls.every((call) => call.chatId === 'oc_other')).toBe(true)
+  const topicBindings = await runtime.bindings.list({ channel: 'lark' })
   expect(
-    t.vela.sessions().some((session) => session.id.startsWith('channel-')),
+    topicBindings.some(
+      (b) =>
+        b.externalId === 'oc_other' && b.threadId === 'thread' && b.sessionId,
+    ),
   ).toBe(true)
   mode = 'denied'
   expect(await run()).toContain('history permission denied')
 })
 
 test('history reports exact returned sender counts and ISO times without implying thread-reply coverage', async () => {
+  const agentDir = tempDir('vela-search-counts-')
   const fake = fakeLark()
   fake.transport.searchMessages = async () => ({
     items: [
@@ -192,22 +239,39 @@ test('history reports exact returned sender counts and ISO times without implyin
       historyMessage('nonmatch', 'ou_bob', 'other', '1792340068000'),
     ],
   })
-  const t = createTestVela({
+  const model = createFauxModel({
     responses: [
       fauxToolCall('lark_search_history', { keyword: 'cobalt' }),
       (req) => fauxText(req.toolResults.at(-1)!.output),
     ],
-    extensions: [
-      lark({
+  })
+  const runtime = createRuntime({
+    agentDir,
+    defaultModel: model,
+    hostEnv: {},
+    mcp: false,
+  })
+  const host = new DaemonLarkHost(runtime, {
+    agentDir,
+    hostEnv: {},
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    transport: fake.transport,
+  })
+  disposers.push(async () => {
+    await host.stop()
+    await runtime.dispose()
+  })
+  await runtime.ready()
+  await host.sync(
+    {
+      lark: {
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
-        transport: fake.transport,
-      }),
-    ],
-  })
-  await t.vela.ready()
-  await t.vela.startChannels()
+      },
+    },
+    true,
+  )
   fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => fake.sent.length === 1)
   const result = JSON.parse(fake.sent[0]!.text.replace(/^<at[^>]*><\/at> /, ''))

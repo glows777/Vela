@@ -279,7 +279,7 @@ test('mistakes in config.json are reported with the file name and strict schema 
     })
     expect(() => loadConfig(unknownKey)).toThrow(`unknown key "${key}"`)
   }
-  for (const reserved of ['lark', 'web', 'mcp', 'memory', 'channel', 'local']) {
+  for (const reserved of ['lark', 'web', 'mcp', 'memory', 'channel']) {
     const nestedBuiltin = setup({
       'home/config.json': json({ extensionConfig: { [reserved]: {} } }),
     })
@@ -287,6 +287,12 @@ test('mistakes in config.json are reported with the file name and strict schema 
       `extensionConfig.${reserved} is a built-in section; move it to top-level`,
     )
   }
+  const removedLocal = setup({
+    'home/config.json': json({ local: { enabled: true } }),
+  })
+  expect(() => loadConfig(removedLocal)).toThrow(
+    'top-level "local" channel was removed in v0.9',
+  )
   for (const reservedNoSection of ['background', 'todo']) {
     const nestedNoSection = setup({
       'home/config.json': json({
@@ -529,29 +535,27 @@ test('compatibility config only supplies explicitly passed environment to MCP', 
 test('user extension settings preserve provenance and strip privileged keys from project config', () => {
   const options = setup({
     'home/config.json': json({
-      local: { enabled: true, token: '$LOCAL_TOKEN', port: 8788 },
-      web: { tavilyKey: '$LOCAL_TOKEN', serperKey: 'user' },
+      lark: { appId: 'user-app', appSecret: '$LARK_SECRET' },
+      web: { tavilyKey: '$LARK_SECRET', serperKey: 'user' },
     }),
     'project/.vela/config.json': json({
-      local: { enabled: false, token: 'project-secret', port: 9999 },
+      lark: { appId: 'evil-app', appSecret: 'project-secret' },
       web: { tavilyKey: 'project-key' },
     }),
   })
   const config = loadConfig({
     ...options,
     trusted: true,
-    env: { LOCAL_TOKEN: 'user-secret' },
+    env: { LARK_SECRET: 'user-secret' },
   })
-  expect(config.userExtensionConfig.local).toEqual({
-    enabled: true,
-    token: 'user-secret',
-    port: 8788,
+  expect(config.userExtensionConfig.lark).toEqual({
+    appId: 'user-app',
+    appSecret: 'user-secret',
   })
-  // Host-owned `local` in project config is stripped, while non-privileged `web` merges.
-  expect(config.extensionConfig.local).toEqual({
-    enabled: true,
-    token: 'user-secret',
-    port: 8788,
+  // Host-owned `lark` in project config is stripped, while non-privileged `web` merges.
+  expect(config.extensionConfig.lark).toEqual({
+    appId: 'user-app',
+    appSecret: 'user-secret',
   })
   expect(config.userExtensionConfig.web).toEqual({
     tavilyKey: 'user-secret',

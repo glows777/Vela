@@ -1,9 +1,16 @@
 import { expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { createTestVela } from '@glows777/vela/testing'
-import { lark } from '../../packages/vela/src/lark/index.ts'
-import { channelSessionId } from '../../packages/vela/src/legacy-channels/index.ts'
-import { fauxText } from '../../packages/vela/src/testing/core/index.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  createRuntime,
+  DaemonLarkHost,
+} from '../../packages/vela/src/legacy-desktop.ts'
+import {
+  createFauxModel,
+  fauxText,
+} from '../../packages/vela/src/testing/core/index.ts'
 
 const live = process.env.VELA_LARK_HOST_LIVE === '1'
 
@@ -18,27 +25,39 @@ test.skipIf(!live)(
         'Set the test bot credentials and VELA_LARK_TEST_CHAT_ID for an authorized test group',
       )
 
+    const agentDir = mkdtempSync(join(tmpdir(), 'vela-lark-live-'))
     const tag = randomUUID().slice(0, 8)
     const author = { id: 'sdk-live-check', name: 'Vela SDK test' }
     const opening = `#416 ${tag}: opening`
     const following = `#416 ${tag}: continuing`
     const firstAnswer = `#416 ${tag}: first faux reply`
     const secondAnswer = `#416 ${tag}: second faux reply`
-    const t = createTestVela({
+    const model = createFauxModel({
       responses: [fauxText(firstAnswer), fauxText(secondAnswer)],
-      allowPendingResponses: true,
-      extensions: [
-        lark({
-          appId,
-          appSecret,
-          chats: [{ id: chatId, readUntagged: false }],
-        }),
-      ],
+    })
+    const runtime = createRuntime({
+      agentDir,
+      defaultModel: model,
+      hostEnv: {},
+      mcp: false,
+    })
+    const host = new DaemonLarkHost(runtime, {
+      agentDir,
+      hostEnv: {},
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
     })
     try {
-      await t.vela.ready()
-      const host = t.vela.channel('lark')
-      await t.vela.startChannels()
+      await runtime.ready()
+      await host.sync(
+        {
+          lark: {
+            appId,
+            appSecret,
+            chats: [{ id: chatId, readUntagged: false }],
+          },
+        },
+        true,
+      )
       async function poll(
         check: () => boolean | Promise<boolean>,
         label: string,
@@ -49,20 +68,39 @@ test.skipIf(!live)(
           await Bun.sleep(250)
         }
       }
-      const group = { chatId, sessionId: channelSessionId('lark', chatId) }
-      await poll(() => host.connection().connected, 'Lark connection')
+      await poll(
+        async () =>
+          Boolean(
+            (await runtime.channels.list()).find((c) => c.name === 'lark')
+              ?.connected,
+          ),
+        'Lark connection',
+      )
+      const rootBinding = (
+        await runtime.bindings.list({ channel: 'lark' })
+      ).find((b) => b.externalId === chatId && !b.threadId)
+      const project = rootBinding?.projectId
+        ? await runtime.projects.get(rootBinding.projectId)
+        : undefined
+      const groupSessionId = project!.hubSessionId!
+
       // Real API call before any writes: verify the full time-range query is accepted.
-      await host.messages({ ...group, limit: 5 })
-      const receipt = await host.submit({
+      await runtime.sessions.messages({ sessionId: groupSessionId, limit: 5 })
+      const receipt = await runtime.channels.submit('lark', {
         chatId,
         author,
         newTopic: { title: `SDK check ${tag}` },
         text: opening,
       })
-      const topic = { chatId, sessionId: receipt.sessionId }
+      const topicSessionId = receipt.sessionId!
       await poll(
         async () =>
-          (await host.messages({ ...group, limit: 10 })).messages.some(
+          (
+            await runtime.sessions.messages({
+              sessionId: groupSessionId,
+              limit: 10,
+            })
+          ).messages.some(
             (row) =>
               row.id === receipt.messageId &&
               row.role === 'assistant' &&
@@ -72,16 +110,25 @@ test.skipIf(!live)(
       )
       await poll(
         async () =>
-          (await host.messages(topic)).messages.some(
+          (
+            await runtime.sessions.messages({ sessionId: topicSessionId })
+          ).messages.some(
             (row) => row.role === 'assistant' && row.text === firstAnswer,
           ),
         'first model reply appears in topic history',
       )
 
-      const followup = await host.submit({ ...topic, author, text: following })
-      expect(followup.sessionId).toBe(receipt.sessionId)
+      const followup = await runtime.channels.submit('lark', {
+        chatId,
+        sessionId: topicSessionId,
+        author,
+        text: following,
+      })
+      expect(followup.sessionId).toBe(topicSessionId)
       await poll(async () => {
-        const { messages } = await host.messages(topic)
+        const { messages } = await runtime.sessions.messages({
+          sessionId: topicSessionId,
+        })
         return (
           messages.some(
             (row) =>
@@ -94,16 +141,18 @@ test.skipIf(!live)(
           )
         )
       }, 'signed follow-up and its reply appear in the same topic')
-      expect(
-        host.sessions(chatId).find((s) => s.sessionId === receipt.sessionId)
-          ?.topic,
-      ).toEqual(receipt.topic)
-      expect(t.model.calls).toHaveLength(2)
+      const topicBinding = (
+        await runtime.bindings.list({ channel: 'lark' })
+      ).find((b) => b.sessionId === topicSessionId)
+      expect(topicBinding?.threadId).toBe(receipt.topic?.threadId)
+      expect(model.calls).toHaveLength(2)
       console.log(
         `Verified signed group root, owned topic and follow-up for run ${tag}`,
       )
     } finally {
-      await t.cleanup()
+      await host.stop()
+      await runtime.dispose()
+      rmSync(agentDir, { recursive: true, force: true })
     }
   },
   90_000,

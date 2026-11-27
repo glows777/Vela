@@ -27,7 +27,6 @@ export async function checkExecutionBoundaries(
     'packages/vela/src/driver/runtime-*.ts',
     'packages/vela/src/driver/session/user-bash.ts',
     'packages/vela/src/driver/context/compressor.ts',
-    'packages/vela/src/legacy-channels/attachments.ts',
   ]) {
     for await (const path of new Glob(pattern).scan(root))
       paths.push(join(root, path))

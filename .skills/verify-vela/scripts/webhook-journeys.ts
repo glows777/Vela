@@ -1,13 +1,12 @@
-// Offline product journey: real HTTP/signature/GitHub adapter/SDK/storage, fake model and Lark transport.
+// Offline product journey: real HTTP/signature/GitHub adapter/Runtime/SQLite storage, fake model & Lark transport.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { createVela } from '@glows777/vela'
-import { lark } from '../../../packages/vela/src/lark/index.ts'
-import { drainChannels } from '../../../packages/vela/src/legacy-channels/testing.ts'
+import { createRuntime, RuntimeWebhookReceiver } from '@glows777/vela'
+import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
 import {
   createFauxModel,
   fauxText,
@@ -21,9 +20,15 @@ prepareWorkspace()
 const secret = 'offline-webhook-fixture'
 const fake = fakeLark()
 const logs: string[] = []
+const logger = {
+  debug: (s: string) => logs.push(s),
+  info: (s: string) => logs.push(s),
+  warn: (s: string) => logs.push(s),
+  error: (s: string) => logs.push(s),
+}
 const model = createFauxModel({
   responses: [
-    fauxToolCall('channel_subscriptions', {
+    fauxToolCall('subscriptions', {
       action: 'create',
       source: 'github',
       key: 'github:owner/repo#pr/171',
@@ -34,33 +39,62 @@ const model = createFauxModel({
     fauxText('Fixture review handled'),
   ],
 })
-const vela = createVela({
-  dataDir: '.vela-data',
-  model,
-  extensionConfig: {
-    channel: {
-      eventReceiver: {
-        port: 0,
-        github: { secret, repositories: ['owner/repo'] },
-        generic: { secret: 'generic-fixture-secret', source: 'sentry' },
-      },
-    },
-  },
-  logger: {
-    debug: (s) => logs.push(s),
-    info: (s) => logs.push(s),
-    warn: (s) => logs.push(s),
-    error: (s) => logs.push(s),
-  },
-  extensions: [
-    lark({
-      owners: ['ou_alice'],
-      chats: ['oc_group'],
-      transport: fake.transport,
-    }),
-  ],
+const agentDir = join(process.cwd(), '.vela-data-webhook')
+const runtime = createRuntime({
+  agentDir,
+  defaultModel: model,
+  mcp: false,
+  logger,
 })
+const host = new DaemonLarkHost(runtime, {
+  agentDir,
+  hostEnv: {},
+  logger,
+  transport: fake.transport,
+})
+const receiver = new RuntimeWebhookReceiver(
+  {
+    port: 0,
+    github: { secret, repositories: ['owner/repo'] },
+    generic: { secret: 'generic-fixture-secret', source: 'sentry' },
+  },
+  async (event) => {
+    await runtime.ingestWebhookEvent(event)
+  },
+  logger,
+)
+
 let url = ''
+type Fake = ReturnType<typeof fakeLark>
+function lastTopicOrSent(target: Fake) {
+  const top = target.topics.at(-1)
+  const sent = target.sent.at(-1)
+  return {
+    topics: target.topics,
+    sent: target.sent,
+    has(text: string, messageId?: string) {
+      return (
+        target.sent.some(
+          (m) =>
+            m.text.includes(text) && (!messageId || m.messageId === messageId),
+        ) ||
+        target.topics.some(
+          (t) =>
+            t.title.includes(text) && (!messageId || t.messageId === messageId),
+        )
+      )
+    },
+    top,
+    sentMsg: sent,
+  }
+}
+async function until(what: string, ok: () => boolean, ms = 5000) {
+  const deadline = Date.now() + ms
+  while (!ok()) {
+    if (Date.now() > deadline) throw new Error(`timeout: ${what}`)
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
 async function send(
   payload: unknown,
   event: string,
@@ -132,15 +166,21 @@ async function proveIssueLabelAllowlist(
   slug: string,
 ): Promise<void> {
   const feedLogs: string[] = []
+  const feedLogger = {
+    debug: (s: string) => feedLogs.push(s),
+    info: (s: string) => feedLogs.push(s),
+    warn: (s: string) => feedLogs.push(s),
+    error: (s: string) => feedLogs.push(s),
+  }
   const feedModel = createFauxModel({
     responses: [
-      fauxToolCall('channel_subscriptions', {
+      fauxToolCall('subscriptions', {
         action: 'create',
         source: 'github',
         key: 'github:owner/repo#issues',
       }),
       fauxText(`Subscribed ${slug} issue feed`),
-      fauxToolCall('channel_subscriptions', {
+      fauxToolCall('subscriptions', {
         action: 'create',
         source: 'github',
         key: 'github:owner/repo#pr/171',
@@ -149,44 +189,47 @@ async function proveIssueLabelAllowlist(
     ],
   })
   const feedFake = fakeLark()
-  const feed = createVela({
-    dataDir: `.vela-data-labels-${slug}`,
-    model: feedModel,
-    extensionConfig: {
-      channel: {
-        eventReceiver: {
-          port: 0,
-          github: {
-            secret,
-            repositories: ['owner/repo'],
-            issueLabels,
-          },
-        },
-      },
-    },
-    logger: {
-      debug: (s) => feedLogs.push(s),
-      info: (s) => feedLogs.push(s),
-      warn: (s) => feedLogs.push(s),
-      error: (s) => feedLogs.push(s),
-    },
-    extensions: [
-      lark({
-        owners: ['ou_alice'],
-        chats: ['oc_group'],
-        transport: feedFake.transport,
-      }),
-    ],
+  const feedAgentDir = join(process.cwd(), `.vela-data-labels-${slug}`)
+  const feedRuntime = createRuntime({
+    agentDir: feedAgentDir,
+    defaultModel: feedModel,
+    mcp: false,
+    logger: feedLogger,
   })
+  const feedHost = new DaemonLarkHost(feedRuntime, {
+    agentDir: feedAgentDir,
+    hostEnv: {},
+    logger: feedLogger,
+    transport: feedFake.transport,
+  })
+  const feedReceiver = new RuntimeWebhookReceiver(
+    {
+      port: 0,
+      github: { secret, repositories: ['owner/repo'], issueLabels },
+    },
+    async (event) => {
+      await feedRuntime.ingestWebhookEvent(event)
+    },
+    feedLogger,
+  )
   const legacyVela =
     Array.isArray(issueLabels) && issueLabels.includes('to:vela')
   const strict = !Array.isArray(issueLabels)
   const prRoot = `${slug}-root`
   try {
-    await feed.startChannels()
-    const feedUrl = feedLogs
-      .join('\n')
-      .match(/http:\/\/127\.0\.0\.1:\d+\/events\/github/)![0]
+    await feedRuntime.ready()
+    await feedHost.sync(
+      {
+        lark: {
+          appId: 'bot',
+          owners: ['ou_alice'],
+          chats: ['oc_group'],
+        },
+      },
+      true,
+    )
+    await feedReceiver.start()
+    const feedUrl = `http://127.0.0.1:${feedReceiver.port}/events/github`
     const post = (payload: unknown, event: string, id: string) => {
       const body = JSON.stringify(payload)
       return fetch(feedUrl, {
@@ -199,31 +242,25 @@ async function proveIssueLabelAllowlist(
         body,
       })
     }
-    const waitFor = async (text: string, deliver: () => void) => {
-      const done = Promise.withResolvers<void>()
-      const stop = feed.subscribe((e) => {
-        if (e.type === 'channel_reply' && e.text === text) done.resolve()
-      })
+    const waitForText = async (text: string, deliver: () => void) => {
       deliver()
-      await done.promise
-      stop()
-      await drainChannels(feed)
+      await until(text, () => lastTopicOrSent(feedFake).has(text))
     }
-    await waitFor(`Subscribed ${slug} issue feed`, () => {
+    await waitForText(`Subscribed ${slug} issue feed`, () => {
       feedFake.deliver(
         larkEvent({
           message_id: `${slug}-group`,
-          content: `{"text":"Subscribe ${slug} issue feed"}`,
+          content: `{"text":"@_user_1 Subscribe ${slug} issue feed"}`,
         }),
       )
     })
-    await waitFor(`Subscribed ${slug} fixture PR`, () => {
+    await waitForText(`Subscribed ${slug} fixture PR`, () => {
       feedFake.deliver(
         larkEvent({
           message_id: `${slug}-topic`,
           root_id: prRoot,
-          thread_id: `${slug}-thread`,
-          content: `{"text":"Subscribe ${slug} fixture PR"}`,
+          thread_id: `thread_${prRoot}`,
+          content: `{"text":"@_user_1 Subscribe ${slug} fixture PR"}`,
         }),
       )
     })
@@ -334,9 +371,18 @@ async function proveIssueLabelAllowlist(
     }
     for (const row of rows) {
       if (row.wake) feedModel.push(fauxText(`${row.id} handled`))
+      const sentBefore = feedFake.sent.length
       assert.equal((await post(row.payload, row.event, row.id)).status, 202)
-      await drainChannels(feed)
-      if (row.wake) calls += 1
+      if (row.wake) {
+        await until(row.id, () =>
+          feedFake.sent
+            .slice(sentBefore)
+            .some((m) => m.text.includes(`${row.id} handled`)),
+        )
+        calls += 1
+      } else {
+        await feedRuntime.waitForIdle()
+      }
       assert.equal(feedModel.calls.length, calls)
       if (!row.wake) continue
       assert(feedFake.sent.at(-1)?.text.includes(`${row.id} handled`))
@@ -348,12 +394,7 @@ async function proveIssueLabelAllowlist(
       )
     }
     assert.deepEqual(
-      JSON.parse(
-        await readFile(
-          join(feed.dataDir, 'channels/subscriptions.json'),
-          'utf8',
-        ),
-      ).subscriptions.map((record: { key: string }) => record.key),
+      (await feedRuntime.subscriptions.list()).map((s) => s.eventKey),
       ['github:owner/repo#issues', 'github:owner/repo#pr/171'],
     )
     feedModel.push(fauxText(`${slug} PR comment handled`))
@@ -381,10 +422,10 @@ async function proveIssueLabelAllowlist(
       ).status,
       202,
     )
-    await drainChannels(feed)
+    await until('pr comment reply', () =>
+      lastTopicOrSent(feedFake).has(`${slug} PR comment handled`, prRoot),
+    )
     assert.equal(feedModel.calls.length, calls + 1)
-    assert.equal(feedFake.sent.at(-1)?.messageId, prRoot)
-    assert(feedFake.sent.at(-1)?.text.includes(`${slug} PR comment handled`))
     assert(
       feedModel.calls.at(-1)!.lastUserText.includes('github:owner/repo#pr/171'),
     )
@@ -397,29 +438,38 @@ async function proveIssueLabelAllowlist(
       `PASS ${slug} Issue label filter; PR comments still reach only their topic`,
     )
   } finally {
-    await feed.dispose()
+    await feedReceiver.stop()
+    await feedHost.stop()
+    await feedRuntime.dispose()
   }
   assert(!feedLogs.join('\n').includes(secret))
 }
 
 try {
-  await vela.startChannels()
-  url = logs.join('\n').match(/http:\/\/127\.0\.0\.1:\d+\/events\/github/)![0]
-  const subscribed = Promise.withResolvers<void>()
-  const unsubscribe = vela.subscribe((e) => {
-    if (e.type === 'channel_reply' && e.text === 'Subscribed to fixture PR')
-      subscribed.resolve()
-  })
+  await runtime.ready()
+  await host.sync(
+    {
+      lark: {
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+      },
+    },
+    true,
+  )
+  await receiver.start()
+  url = `http://127.0.0.1:${receiver.port}/events/github`
+
   fake.deliver(
     larkEvent({
       root_id: 'root',
-      thread_id: 'thread',
-      content: '{"text":"Subscribe to fixture PR"}',
+      thread_id: 'thread_root',
+      content: '{"text":"@_user_1 Subscribe to fixture PR"}',
     }),
   )
-  await subscribed.promise
-  unsubscribe()
-  await drainChannels(vela)
+  await until('pr subscribed', () =>
+    lastTopicOrSent(fake).has('Subscribed to fixture PR'),
+  )
   const calls = model.calls.length
   assert.equal(
     (await send(suite, 'check_suite', 'suite-1', 'sha256=bad')).status,
@@ -431,14 +481,11 @@ try {
     send(suite, 'check_suite', 'suite-1'),
   ])
   assert(duplicates.every((r) => r.status === 202))
-  await drainChannels(vela)
-  assert.equal(model.calls.length, calls + 1)
-  assert.equal(fake.sent.at(-1)?.messageId, 'root')
-  assert(
-    model.calls
-      .at(-1)!
-      .lastUserText.startsWith('External event (untrusted data)'),
+  await until('ci handled', () =>
+    lastTopicOrSent(fake).has('Fixture CI handled', 'root'),
   )
+  assert.equal(model.calls.length, calls + 1)
+  assert(model.calls.at(-1)!.lastUserText.includes('untrusted external data'))
   console.log(
     'PASS real loopback signed GitHub suite wakes original Lark topic once; bad signature does not consume ID',
   )
@@ -463,14 +510,16 @@ try {
     ).status,
     202,
   )
-  await drainChannels(vela)
+  await runtime.waitForIdle()
   assert.equal(model.calls.length, calls + 1)
   assert.equal(
     (await send(comment('!stop\n/skill:untrusted'), 'issue_comment', 'human'))
       .status,
     202,
   )
-  await drainChannels(vela)
+  await until('comment handled', () =>
+    lastTopicOrSent(fake).has('Fixture comment handled', 'root'),
+  )
   assert.equal(model.calls.length, calls + 2)
   assert(model.calls.at(-1)!.lastUserText.includes('!stop'))
   console.log(
@@ -500,7 +549,9 @@ try {
     ).status,
     202,
   )
-  await drainChannels(vela)
+  await until('review handled', () =>
+    lastTopicOrSent(fake).has('Fixture review handled', 'root'),
+  )
   assert.equal(model.calls.length, calls + 3)
   assert(
     model.calls
@@ -509,16 +560,21 @@ try {
         'GET /repos/owner/repo/pulls/171/reviews/5968407723/comments',
       ),
   )
-  assert.equal(fake.sent.at(-1)?.messageId, 'root')
   console.log(
     'PASS a signed review wakes the topic with its review id and inline-comment endpoint',
   )
 
   assert.equal(
-    (await send(suite, 'pull_request_review_comment', 'inline')).status,
+    (
+      await send(
+        { ...suite, action: 'created' },
+        'pull_request_review_comment',
+        'inline',
+      )
+    ).status,
     202,
   )
-  await drainChannels(vela)
+  await runtime.waitForIdle()
   assert.equal(model.calls.length, calls + 3)
   assert(
     logs.some((line) =>
@@ -531,16 +587,8 @@ try {
     'PASS an unmapped inline-comment delivery logs one debug line and wakes nobody',
   )
 
-  const feedSubscribed = Promise.withResolvers<void>()
-  const unsubscribeFeed = vela.subscribe((e) => {
-    if (
-      e.type === 'channel_reply' &&
-      e.text === 'Subscribed to fixture issue feed'
-    )
-      feedSubscribed.resolve()
-  })
   model.push(
-    fauxToolCall('channel_subscriptions', {
+    fauxToolCall('subscriptions', {
       action: 'create',
       source: 'github',
       key: 'github:owner/repo#issues',
@@ -549,11 +597,13 @@ try {
     fauxText('Fixture PR comment handled'),
   )
   fake.deliver(
-    larkEvent({ content: '{"text":"Subscribe this group to the issue feed"}' }),
+    larkEvent({
+      content: '{"text":"@_user_1 Subscribe this group to the issue feed"}',
+    }),
   )
-  await feedSubscribed.promise
-  unsubscribeFeed()
-  await drainChannels(vela)
+  await until('issue feed subscribed', () =>
+    fake.sent.some((m) => m.text === 'Subscribed to fixture issue feed'),
+  )
   const feedCalls = model.calls.length
   const feedSent = fake.sent.length
   const silentIssues = [
@@ -580,17 +630,17 @@ try {
   ] as const
   for (const [payload, event, id] of silentIssues)
     assert.equal((await send(payload, event, id)).status, 202)
-  await drainChannels(vela)
+  await runtime.waitForIdle()
   assert.equal(model.calls.length, feedCalls)
   assert.equal(fake.sent.length, feedSent)
   assert.equal(
     (await send(comment('PR feedback'), 'issue_comment', 'pr-comment')).status,
     202,
   )
-  await drainChannels(vela)
+  await until('pr comment reply', () =>
+    lastTopicOrSent(fake).has('Fixture PR comment handled', 'root'),
+  )
   assert.equal(model.calls.length, feedCalls + 1)
-  assert.equal(fake.sent.at(-1)?.messageId, 'root')
-  assert(fake.sent.at(-1)?.text.includes('Fixture PR comment handled'))
   assert(model.calls.at(-1)!.lastUserText.includes('github:owner/repo#pr/171'))
   console.log(
     'PASS omitted issueLabels accepts Issue events with 202 and no model turn; a PR comment stays in its topic',
@@ -622,18 +672,17 @@ try {
     202,
   )
   assert.deepEqual(
-    JSON.parse(
-      await readFile(join(vela.dataDir, 'channels/subscriptions.json'), 'utf8'),
-    ).subscriptions.map((record: { key: string }) => record.key),
+    (await runtime.subscriptions.list()).map((record) => record.eventKey),
     ['github:owner/repo#issues'],
   )
-  await drainChannels(vela)
-  assert(fake.sent.at(-1)?.text.includes('Fixture closure handled'))
+  await until('closure reply', () =>
+    lastTopicOrSent(fake).has('Fixture closure handled', 'root'),
+  )
   console.log(
     'PASS signed closure enqueues final notification before persisted subscription cleanup',
   )
   model.push(
-    fauxToolCall('channel_subscriptions', {
+    fauxToolCall('subscriptions', {
       action: 'create',
       source: 'sentry',
       key: 'sentry:project',
@@ -641,22 +690,17 @@ try {
     fauxText('Subscribed to fixture alert'),
     fauxText('Fixture generic alert handled'),
   )
-  const alertSubscribed = Promise.withResolvers<void>()
-  const unsubscribeAlert = vela.subscribe((e) => {
-    if (e.type === 'channel_reply' && e.text === 'Subscribed to fixture alert')
-      alertSubscribed.resolve()
-  })
   fake.deliver(
     larkEvent({
       message_id: 'generic-human',
       root_id: 'root',
-      thread_id: 'thread',
-      content: '{"text":"Subscribe to fixture alert"}',
+      thread_id: 'thread_root',
+      content: '{"text":"@_user_1 Subscribe to fixture alert"}',
     }),
   )
-  await alertSubscribed.promise
-  unsubscribeAlert()
-  await drainChannels(vela)
+  await until('alert subscribed', () =>
+    lastTopicOrSent(fake).has('Subscribed to fixture alert', 'generic-human'),
+  )
   const genericURL = url.replace('/events/github', '/events/generic')
   const alert = JSON.stringify({
     key: 'sentry:project',
@@ -706,65 +750,58 @@ curl --fail-with-body --silent --show-error -o response.txt -w '%{http_code}' \
     },
   )
   assert.equal(status, '202')
-  await drainChannels(vela)
-  const alertCalls = model.calls.length
-  assert(
-    model.calls
-      .at(-1)!
-      .lastUserText.startsWith('External event (untrusted data) from "sentry"'),
+  await until('generic alert handled', () =>
+    lastTopicOrSent(fake).has('Fixture generic alert handled'),
   )
-  assert.equal(fake.sent.at(-1)?.messageId, 'root')
+  const alertCalls = model.calls.length
+  assert(model.calls.at(-1)!.lastUserText.includes('untrusted external data'))
   assert.equal((await postAlert(alert, 'suite-1')).status, 202)
-  await drainChannels(vela)
+  await runtime.waitForIdle()
   assert.equal(model.calls.length, alertCalls)
-  const remaining = JSON.parse(
-    await readFile(join(vela.dataDir, 'channels/subscriptions.json'), 'utf8'),
-  ).subscriptions
+  const remaining = await runtime.subscriptions.list()
   assert.deepEqual(
-    remaining.map((record: { key: string }) => record.key),
+    remaining.map((record) => record.eventKey),
     ['github:owner/repo#issues'],
   )
   console.log(
     'PASS generic openssl+curl HMAC/namespace/queue/final cleanup; same delivery ID isolated from GitHub, duplicate ignored',
   )
 
-  const listed = Promise.withResolvers<void>()
-  const unsubscribeList = vela.subscribe((e) => {
-    if (e.type === 'channel_reply' && e.text === 'Listed fixture feed')
-      listed.resolve()
-  })
   model.push(
-    fauxToolCall('channel_subscriptions', { action: 'list' }),
+    fauxToolCall('subscriptions', { action: 'list' }),
     fauxText('Listed fixture feed'),
-    fauxToolCall('channel_subscriptions', {
+    fauxToolCall('subscriptions', {
       action: 'remove',
-      id: remaining[0].id,
+      id: remaining[0]!.id,
     }),
     fauxText('Removed fixture feed'),
   )
-  fake.deliver(larkEvent({ content: '{"text":"List the issue feed"}' }))
-  await listed.promise
-  unsubscribeList()
-  await drainChannels(vela)
+  fake.deliver(
+    larkEvent({ content: '{"text":"@_user_1 List the issue feed"}' }),
+  )
+  await until('listed feed', () =>
+    fake.sent.some((m) => m.text === 'Listed fixture feed'),
+  )
   assert(
     model.calls
       .at(-1)!
       .toolResults.at(-1)!
       .output.includes('github:owner/repo#issues'),
   )
-  fake.deliver(larkEvent({ content: '{"text":"Remove the issue feed"}' }))
-  await drainChannels(vela)
-  assert.deepEqual(
-    JSON.parse(
-      await readFile(join(vela.dataDir, 'channels/subscriptions.json'), 'utf8'),
-    ).subscriptions,
-    [],
+  fake.deliver(
+    larkEvent({ content: '{"text":"@_user_1 Remove the issue feed"}' }),
   )
+  await until('removed feed', () =>
+    fake.sent.some((m) => m.text === 'Removed fixture feed'),
+  )
+  assert.deepEqual(await runtime.subscriptions.list(), [])
   console.log(
     'PASS the group lists and removes its own repository feed subscription',
   )
 } finally {
-  await vela.dispose()
+  await receiver.stop()
+  await host.stop()
+  await runtime.dispose()
 }
 assert.equal(await fetch(url).catch(() => undefined), undefined)
 assert(!logs.join('\n').includes(secret))

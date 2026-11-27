@@ -18,8 +18,7 @@ const LAYER_ALLOWED: Record<string, readonly string[]> = {
   providers: ['shared', 'config'],
   driver: ['shared', 'config', 'db', 'providers', 'runtime'],
   mcp: ['shared', 'config', 'runtime', 'driver'],
-  lark: ['shared', 'config', 'runtime', 'driver', 'legacy-channels'],
-  'legacy-channels': ['shared', 'config', 'providers', 'driver'],
+  lark: ['shared', 'config', 'runtime', 'driver'],
   daemon: [
     'shared',
     'config',
@@ -39,19 +38,10 @@ const LAYER_ALLOWED: Record<string, readonly string[]> = {
     'driver',
     'mcp',
     'lark',
-    'legacy-channels',
     'config',
     'testing',
   ],
-  testing: [
-    'shared',
-    'config',
-    'db',
-    'runtime',
-    'providers',
-    'driver',
-    'legacy-channels',
-  ],
+  testing: ['shared', 'config', 'db', 'runtime', 'providers', 'driver'],
 }
 
 /** Heavy packages must stay off the eager cold-start graph and confined to their owning layer. */

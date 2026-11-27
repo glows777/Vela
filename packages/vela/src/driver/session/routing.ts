@@ -1,9 +1,4 @@
-import type {
-  InternalSessionOptions,
-  SessionHost,
-  SessionOptions,
-} from './options.ts'
-import type { SessionScope } from './scope.ts'
+import type { SessionOptions } from './options.ts'
 
 interface RoutableSession {
   readonly id: string
@@ -13,23 +8,14 @@ interface RoutableSession {
 }
 
 interface Routing {
-  scope?: Readonly<SessionScope>
   channel?: string
-  /** The host's queue for results produced outside a turn; transient, never written to a session */
-  host?: SessionHost
 }
 
 const bindings = new WeakMap<object, Routing>()
 
-export const sessionScope = (session: object) => bindings.get(session)?.scope
-
-export const sessionHost = (session: object) => bindings.get(session)?.host
-
 /** The options that bind a session to a route; a copy must not inherit them. */
-export function unroutedOptions(
-  options: InternalSessionOptions,
-): SessionOptions {
-  const { scope: _scope, channel: _channel, host: _host, ...rest } = options
+export function unroutedOptions(options: SessionOptions): SessionOptions {
+  const { channel: _channel, ...rest } = options
   return rest
 }
 
@@ -38,25 +24,15 @@ export function applySessionRouting(
   session: RoutableSession,
   options?: Routing,
 ): void {
-  if (
-    options?.scope === undefined &&
-    options?.channel === undefined &&
-    options?.host === undefined
-  )
-    return
+  if (options?.channel === undefined) return
   const previous = bindings.get(session)
   const next: Routing = {
-    scope: options.scope ?? previous?.scope,
     channel: options.channel ?? previous?.channel,
-    host: options.host ?? previous?.host,
   }
   if (
     previous &&
-    ((previous.channel !== undefined && previous.channel !== next.channel) ||
-      (previous.scope !== undefined &&
-        (previous.scope.id !== next.scope?.id ||
-          previous.scope.kind !== next.scope?.kind ||
-          previous.scope.dataDir !== next.scope?.dataDir)))
+    previous.channel !== undefined &&
+    previous.channel !== next.channel
   )
     throw routingConflict(session, previous, next)
   writeRouting(session, next)
@@ -69,9 +45,7 @@ export function bindSavedChannel(
 ): void {
   const previous = bindings.get(session)
   const next: Routing = {
-    scope: previous?.scope,
     channel,
-    host: previous?.host,
   }
   writeRouting(session, next)
   if (previous?.channel !== undefined && previous.channel !== channel)
@@ -79,7 +53,6 @@ export function bindSavedChannel(
 }
 
 function writeRouting(session: RoutableSession, next: Routing): void {
-  if (next.scope) next.scope = Object.freeze({ ...next.scope })
   bindings.set(session, next)
   if (next.channel !== undefined) {
     session.channel = next.channel

@@ -692,17 +692,7 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
       remove: async () => false,
     },
     bindings: {
-      list: async () =>
-        vela.channels().map((ch, idx) => ({
-          id: `legacy-${idx}`,
-          projectId: 'legacy',
-          channel: ch.name,
-          externalId: ch.description,
-          threadId: null,
-          enabled: true,
-          createdAt: '',
-          updatedAt: '',
-        })),
+      list: async () => [],
       get: async () => undefined,
       upsert: async () => ({}) as never,
       setEnabled: async () => undefined,

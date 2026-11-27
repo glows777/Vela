@@ -72,7 +72,7 @@ test('the SDK testing entry and replay use a core-only assembly', async () => {
   expect(t.lastAssistantText()).toBe('replayed')
 })
 
-test('the public publisher cannot forge agent events; ordinary inspection does not run extension hooks', async () => {
+test('ordinary inspection does not run extension hooks and removed channel publisher stays absent', async () => {
   const core = await import('../../packages/vela/src/driver/index.ts')
   let previews = 0
   const vela = core.createVela({
@@ -88,10 +88,6 @@ test('the public publisher cannot forge agent events; ordinary inspection does n
   })
   cleanups.push(() => vela.dispose())
   const session = vela.session('preview')
-  const events: string[] = []
-  session.subscribe((event) => {
-    events.push(event.type)
-  })
   await core.inspectSession(vela, session)
   expect(previews).toBe(0)
   const snapshot = await core.inspectSession(vela, session, {
@@ -99,17 +95,7 @@ test('the public publisher cannot forge agent events; ordinary inspection does n
   })
   expect(snapshot.extensionSections.probe).toBe('preview')
   expect(previews).toBe(1)
-  core.publishChannelEvent(session, {
-    type: 'channel_reply',
-    channel: 'fake',
-    recipientId: 'owner',
-    text: 'reply',
-  })
-  expect(() =>
-    // @ts-expect-error core agent events cannot be published by platforms
-    core.publishChannelEvent(session, { type: 'agent_start', input: 'forged' }),
-  ).toThrow('Only channel events')
-  expect(events).toEqual(['channel_reply'])
+  expect('publishChannelEvent' in core).toBe(false)
 })
 
 test('JSON Schema construction requires the SDK wrapper and leaves ordinary schema registration strict', async () => {

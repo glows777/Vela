@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { APICallError } from '@ai-sdk/provider'
 import { runPrintMode } from '../../packages/vela/src/cli/print-mode.ts'
-import type { OutgoingMessage } from '../../packages/vela/src/legacy-channels/index.ts'
 import {
   fauxError,
   fauxHang,
@@ -208,35 +207,6 @@ for (const scenario of cases) {
     expect(output.split(scenario.hint)).toHaveLength(2)
   })
 
-  test(`${scenario.name}: channel reply keeps the raw error and adds one hint`, async () => {
-    const t = fixture()
-    const sent: OutgoingMessage[] = []
-    t.internals.gateway.register({
-      name: 'fake',
-      description: 'test',
-      start() {},
-      stop() {},
-      async send(message) {
-        sent.push(message)
-      },
-    })
-    t.vela.session('fake-c1', { autoCompaction: false })
-    await t.internals.gateway.handleIncoming('fake', {
-      channelId: 'c1',
-      senderId: 'u1',
-      senderName: 'User',
-      text: 'hello',
-    })
-    const reply = sent.find((message) =>
-      message.text.startsWith('Task failed:'),
-    )
-    expect(reply?.text).toContain(scenario.error.message)
-    expect(reply?.text.split(scenario.hint)).toHaveLength(2)
-    expect(t.eventsIn('fake-c1')).toContainEqual(
-      expect.objectContaining({ type: 'agent_end', errorKind: scenario.kind }),
-    )
-  })
-
   test(`${scenario.name}: TUI keeps the raw error and displays the hint`, async () => {
     const t = fixture()
     const tui = await startTui(t.vela, { sessionId: 'default' })
@@ -271,63 +241,37 @@ test('successful and aborted runs do not acquire an error kind', async () => {
 })
 
 for (const followUpFails of [false, true]) {
-  for (const surface of ['print', 'channel'] as const) {
-    test(`${surface}: the first failure keeps its hint after a ${followUpFails ? 'failed' : 'successful'} queued follow-up`, async () => {
-      const error = apiError(401, 'Original invalid key')
-      const t = createTestVela({
-        responses: [
-          fauxError(error),
-          followUpFails
-            ? fauxError(apiError(402, 'Later billing error'))
-            : fauxText('Follow-up done'),
-        ],
-      })
-      const session =
-        surface === 'print' ? t.session : t.vela.session('fake-c1')
-      let queued = false
-      session.subscribe((event) => {
-        if (event.type === 'agent_start' && !queued) {
-          queued = true
-          session.steer('Queued steer')
-        }
-      })
-      let output: string
-      if (surface === 'print') {
-        const captured = await captureConsole(() =>
-          runPrintMode({
-            runtime: t.runtime,
-            session: t.clientFor(session),
-            messages: ['hello'],
-            mode: 'text',
-          }),
-        )
-        expect(captured.result).toBe(1)
-        output = captured.output
-      } else {
-        const sent: OutgoingMessage[] = []
-        t.internals.gateway.register({
-          name: 'fake',
-          description: 'test',
-          start() {},
-          stop() {},
-          async send(message) {
-            sent.push(message)
-          },
-        })
-        await t.internals.gateway.handleIncoming('fake', {
-          channelId: 'c1',
-          senderId: 'u1',
-          senderName: 'User',
-          text: 'hello',
-        })
-        output = sent.find((message) =>
-          message.text.startsWith('Task failed:'),
-        )!.text
-      }
-      expect(t.model.calls).toHaveLength(2)
-      expect(output).toContain('Original invalid key')
-      expect(output).toContain('Check your API key: /login or vela setup.')
-      expect(output).not.toContain('Check your provider balance')
+  test(`print: the first failure keeps its hint after a ${followUpFails ? 'failed' : 'successful'} queued follow-up`, async () => {
+    const error = apiError(401, 'Original invalid key')
+    const t = createTestVela({
+      responses: [
+        fauxError(error),
+        followUpFails
+          ? fauxError(apiError(402, 'Later billing error'))
+          : fauxText('Follow-up done'),
+      ],
     })
-  }
+    const session = t.session
+    let queued = false
+    session.subscribe((event) => {
+      if (event.type === 'agent_start' && !queued) {
+        queued = true
+        session.steer('Queued steer')
+      }
+    })
+    const captured = await captureConsole(() =>
+      runPrintMode({
+        runtime: t.runtime,
+        session: t.clientFor(session),
+        messages: ['hello'],
+        mode: 'text',
+      }),
+    )
+    expect(captured.result).toBe(1)
+    const output = captured.output
+    expect(t.model.calls).toHaveLength(2)
+    expect(output).toContain('Original invalid key')
+    expect(output).toContain('Check your API key: /login or vela setup.')
+    expect(output).not.toContain('Check your provider balance')
+  })
 }

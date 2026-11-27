@@ -1,22 +1,13 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { DocsPaths } from './driver/index.ts'
-import type { LarkHost } from './lark/index.ts'
 import {
-  type ChannelHost,
-  type ChannelVela,
-  type ChannelVelaOptions,
-  createChannelVela,
-  type LocalHost,
-} from './legacy-channels/index.ts'
+  createVela as createCoreVela,
+  type DocsPaths,
+  type Vela,
+  type VelaOptions,
+} from './driver/index.ts'
 
-export type { ChannelVelaOptions as VelaOptions }
-
-export interface Vela extends ChannelVela {
-  channel(name: 'local'): LocalHost
-  channel(name: 'lark'): LarkHost
-  channel(name: string): ChannelHost
-}
+export type { Vela, VelaOptions }
 
 /**
  * Vela's own README, docs and examples, next to this package (`bun run build` copies docs and examples into
@@ -37,12 +28,12 @@ function docsPaths(): DocsPaths {
 }
 
 /**
- * The SDK entry point: core Vela plus channels. The system prompt's docs section points at this package, so
+ * The SDK entry point. The system prompt's docs section points at this package, so
  * "how do I write an extension" starts from the installed documentation.
  */
-export function createVela(options: ChannelVelaOptions = {}): Vela {
-  return createChannelVela({
+export function createVela(options: VelaOptions = {}): Vela {
+  return createCoreVela({
     ...options,
     docs: options.docs ?? docsPaths(),
-  }) as Vela
+  })
 }

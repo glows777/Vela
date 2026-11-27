@@ -1,8 +1,6 @@
 # Deploy `vela daemon` and channel gateways
 
-`vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, serving CLI clients and SDK `connectRuntime()` callers over `<VELA_DIR>/vela.sock`.
-
-> **Channel gateway transition note (`S4b-2`):** `vela serve` is retired. `vela daemon run` now hosts **Lark (`config.json` `lark`)** and **`webhooks` (`POST /events/github` and `POST /events/generic`)** natively with automatic `config.json` / `SIGHUP` reload and live enablement via `vela.db`. Only the transitional **Local HTTP/SSE** listener remains on the legacy SDK host (`createVela()` + `startChannels()`, omitting `lark`) until `S4b-3` retires `legacy-channels`. Do not run both `vela daemon` and a separate legacy SDK host with the same Lark app credentials or webhook port.
+`vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, serving CLI clients, SDK `connectRuntime()` callers over `<VELA_DIR>/vela.sock`, **Lark (`config.json` `lark`)**, and **`webhooks` (`POST /events/github` and `POST /events/generic`)** with automatic `config.json` / `SIGHUP` reload and live enablement via `vela.db`. (`vela serve` and the legacy SDK channel gateway are retired.)
 
 The daemon has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
 
@@ -110,95 +108,17 @@ sudo systemctl restart vela
 systemctl status --no-pager vela
 ```
 
-If you are running the transitional SDK gateway under `/home/vela/gateway` (below), upgrade its local `@glows777/vela` dependency instead (and upgrade the global CLI separately with `sudo npm install -g @glows777/vela@latest` if installed):
+The running process keeps the old code until the restart. A run in progress is stopped: SIGTERM saves and closes the sessions. Conversations are stored in `$VELA_DIR/vela.db`, so they remain available after the restart.
 
-```sh
-sudo -u vela npm --prefix /home/vela/gateway install @glows777/vela@latest
-sudo systemctl restart vela
-systemctl status --no-pager vela
-```
+### Upgrading Docker / group workspaces (`<projectDataDir>` → `<VELA_DIR>`)
 
-The running process keeps the old code until the restart. A run in progress is stopped: SIGTERM saves and closes the sessions. Conversations are stored on disk, so they are still there after the restart.
+If a group or Docker environment previously kept files under an older `<projectDataDir>/channels/.../workspace` path (or if you changed `$VELA_DIR` / `dataDir` or the configured Docker `environment` name), copy those workspace files into `<VELA_DIR>` before starting the daemon; otherwise `/workspace` in the container will mount a fresh empty directory.
 
-## Serving channels during the transition
+To verify the cutover cleanly (do not only check that `/workspace` exists):
 
-`vela daemon run` already hosts Lark and `webhooks` (`#595`). Only if you still rely on the legacy Local HTTP/SSE listener (`local`) until `S4b-3` retires `legacy-channels`, run a separate Local-only SDK host (`createVela()` + `startChannels()`, without `lark()`). Do not load `lark()` or duplicate `webhooks` in this script when `vela daemon` runs on the same host.
-
-Node.js ESM does **not** resolve bare package imports (`import ... from '@glows777/vela'`) from a global `npm install -g` installation. Create a dedicated directory with a local `@glows777/vela` install under the `vela` user:
-
-```sh
-sudo -u vela mkdir -p /home/vela/gateway
-sudo -u vela sh -c 'cd /home/vela/gateway && npm init -y && npm install @glows777/vela'
-```
-
-Write `/home/vela/gateway/gateway.mjs`:
-
-```js
-import { createVela, loadConfig, local } from '@glows777/vela'
-
-const config = loadConfig({
-  cwd: process.cwd(),
-  agentDir: process.env.VELA_DIR,
-  env: process.env,
-})
-const localCfg = config.settings.local
-const extensions = [
-  ...(localCfg?.enabled && typeof localCfg.token === 'string' && localCfg.token
-    ? [
-        local({
-          token: localCfg.token,
-          ...(typeof localCfg.port === 'number' ? { port: localCfg.port } : {}),
-          ...(typeof localCfg.timezone === 'string'
-            ? { timezone: localCfg.timezone }
-            : {}),
-        }),
-      ]
-    : []),
-]
-const { eventReceiver: _eventReceiver, ...localChannelConfig } =
-  config.extensionConfig?.channel ?? {}
-const vela = createVela({
-  cwd: config.cwd,
-  agentDir: config.agentDir,
-  dataDir: config.dataDir,
-  model: config.settings.model,
-  thinkingLevel: config.settings.thinkingLevel,
-  providers: config.providers,
-  credentials: config.credentials,
-  limits: config.settings.limits,
-  extensions,
-  extensionConfig: {
-    ...config.extensionConfig,
-    channel: localChannelConfig,
-  },
-  eventDefaultTarget: config.settings.eventDefaultTarget,
-})
-let shuttingDown = false
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
-    if (shuttingDown) process.exit(130)
-    shuttingDown = true
-    const timer = setTimeout(() => process.exit(143), 30_000)
-    timer.unref()
-    void vela.dispose({ graceful: true }).finally(() => {
-      clearTimeout(timer)
-      process.exit(0)
-    })
-  })
-}
-await vela.ready()
-await vela.startChannels()
-```
-
-Omitting `extensionConfig.channel.eventReceiver` ensures this temporary Local-only host does not start a duplicate webhook listener alongside `vela daemon`, which already hosts top-level `webhooks` and `lark`.
-
-In `/etc/systemd/system/vela.service`, keep `WorkingDirectory=/home/vela/workspace`, `Environment=VELA_DIR=/home/vela/.vela`, and `EnvironmentFile=/etc/vela/vela.env`, and set:
-
-```ini
-ExecStart=/usr/bin/node /home/vela/gateway/gateway.mjs
-```
-
-When upgrading later, follow the `/home/vela/gateway` commands in [Upgrade](#6-upgrade).
+1. Place a known marker file in the migrated group workspace under `<VELA_DIR>` and confirm the test group reads that marker file.
+2. Restart `vela daemon` (`sudo systemctl restart vela` or `vela daemon stop && vela daemon start`).
+3. Confirm the test group reads the same marker file a second time after the restart.
 
 ## 7. Data and backups
 

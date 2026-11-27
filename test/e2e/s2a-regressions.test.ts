@@ -766,51 +766,6 @@ test('scoped hook targets only extension canonical tool, before_agent_start setM
     globalThis.fetch = originalFetch
     dir.cleanup()
   }
-
-  // Ctrl+B suspends short 150ms foreground deadline while host acknowledgment takes 120ms after update (~100ms)
-  let ackEvents = 0
-  const bgResults: string[] = []
-  const tRace = createTestVela({
-    responses: [
-      fauxToolCall('bash', {
-        command: 'echo RACE_START; sleep 0.3; echo RACE_DONE',
-        timeout: 0.15,
-      }),
-      fauxText('detached cleanly'),
-    ],
-    extensions: [background()],
-    session: {
-      host: {
-        deliver: () => {},
-        background: async (event) => {
-          if (event.type === 'started') {
-            ackEvents++
-            await Bun.sleep(120)
-          } else if (event.type === 'result') {
-            bgResults.push(event.text)
-          }
-        },
-      },
-    },
-  })
-  const running = tRace.run('race')
-  const raceDeadline = Date.now() + 5000
-  while (tRace.eventsOf('tool_execution_update').length === 0) {
-    if (Date.now() > raceDeadline)
-      throw new Error('Timed out waiting for bash output')
-    await Bun.sleep(5)
-  }
-  expect(await tRace.session.backgroundTasks('faux-call-1-1')).toEqual(['bg-1'])
-  await running
-  expect(ackEvents).toBe(1)
-  while (bgResults.length === 0) {
-    if (Date.now() > raceDeadline)
-      throw new Error('Timed out waiting for background job completion')
-    await Bun.sleep(10)
-  }
-  expect(bgResults[0]).toContain(
-    'Background command bg-1 finished with exit code 0',
-  )
 })
 
 test('session loop normalizes toolCallIds on custom anthropic-messages provider through withProviderHooks', async () => {

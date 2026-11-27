@@ -3,7 +3,7 @@ import {
   latestOccurrence,
   nextOccurrence,
   routineTimezone,
-} from '../../../src/legacy-channels/routine-time.ts'
+} from '../../../src/shared/routine-time.ts'
 
 test('the deployment timezone accepts IANA names and rejects offsets and unknown zones', () => {
   expect(routineTimezone('UTC')).toBe('UTC')

@@ -26,7 +26,6 @@ const MAX_LIMIT_MS = 2 * 60 * 60_000
 
 interface Job {
   token: string
-  stoppedNotice?: Promise<void>
   id: string
   command: string
   startedAt: number
@@ -159,12 +158,6 @@ export class BackgroundJobs implements BackgroundCommands {
     const abort = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', abort, { once: true })
     const prepared = Promise.resolve().then(async () => {
-      await this.session.host?.background?.({
-        type: 'started',
-        token: job.token,
-        id,
-        commandHead: commandHead(command),
-      })
       this.persistJobStart(job)
       controller.signal.throwIfAborted()
     })
@@ -185,11 +178,6 @@ export class BackgroundJobs implements BackgroundCommands {
     } catch (error) {
       // A failed/cancelled admission never launches a process or claims it started.
       job.silent = true
-      await this.notifyStopped(job).catch((cleanupError) =>
-        this.logger.error(
-          `[background] Could not clear ${id}: ${errorMessage(cleanupError)}`,
-        ),
-      )
       if (!job.stopped) this.jobs.delete(id)
       this.syncStatus()
       throw error
@@ -295,21 +283,7 @@ export class BackgroundJobs implements BackgroundCommands {
       finished: Promise.resolve(),
     }
     this.jobs.set(id, job)
-    try {
-      await this.session.host?.background?.({
-        type: 'started',
-        token: job.token,
-        id,
-        commandHead: commandHead(entry.command),
-      })
-      this.persistJobStart(job)
-    } catch (error) {
-      // The host may already hold a start record it could not acknowledge, so clear it before
-      // handing the command back to its call.
-      await this.discard(job)
-      entry.follow()
-      throw error
-    }
+    this.persistJobStart(job)
     if (entry.settled) {
       // The command ended while its start record was being saved, so the call already returned
       // its own result. Promise no job: clear the record and say the move was too late.
@@ -447,7 +421,6 @@ export class BackgroundJobs implements BackgroundCommands {
       job.stopped = true
       await this.terminate(job)
     }
-    await this.notifyStopped(job)
     const snapshot = this.snapshot(id)
     // The result has been handed to the caller; the tail and its memory go with the job.
     this.jobs.delete(id)
@@ -465,36 +438,17 @@ export class BackgroundJobs implements BackgroundCommands {
       job.stopped = true
       job.silent = true
     }
-    // Admit the clear at the Stop boundary, before termination awaits: the host's
-    // serialized writes then keep jobs started by a later run. This also clears
-    // results already queued outside this in-memory map. A synchronous host error
-    // must not prevent termination of the captured jobs.
-    const cleared = (async () => {
-      await this.session.host?.background?.({ type: 'stopped' })
-    })()
-    await Promise.all([cleared, ...running.map((job) => this.terminate(job))])
+    await Promise.all(running.map((job) => this.terminate(job)))
     for (const job of running) this.jobs.delete(job.id)
     this.syncStatus()
   }
 
-  /** Drop a job that never existed as far as the model is concerned, clearing its start record. */
+  /** Drop a job that never existed as far as the model is concerned. */
   private async discard(job: Job): Promise<void> {
     job.silent = true
     job.state = 'exited'
     this.jobs.delete(job.id)
     this.syncStatus()
-    await this.notifyStopped(job).catch((cleanupError) =>
-      this.logger.error(
-        `[background] Could not clear ${job.id}: ${errorMessage(cleanupError)}`,
-      ),
-    )
-  }
-
-  private notifyStopped(job: Job): Promise<void> {
-    job.stoppedNotice ??= Promise.resolve().then(() =>
-      this.session.host?.background?.({ type: 'stopped', token: job.token }),
-    )
-    return job.stoppedNotice
   }
 
   private persistJobStart(job: Job): void {
@@ -572,22 +526,13 @@ export class BackgroundJobs implements BackgroundCommands {
       ? `\nFull output: ${job.fullOutputPath}`
       : ''
     const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}${fullOutput}`
-    const host = this.session.host
     const send = async () => {
       try {
         if (job.silent) return
-        if (host?.background)
-          await host.background({
-            type: 'result',
-            token: job.token,
-            text: message,
-          })
-        else if (host) await host.deliver(message)
-        else
-          await this.session.sendMessage(
-            { customType: 'background', content: message, display: false },
-            { triggerTurn: true, deliverAs: 'steer' },
-          )
+        await this.session.sendMessage(
+          { customType: 'background', content: message, display: false },
+          { triggerTurn: true, deliverAs: 'steer' },
+        )
       } catch (error) {
         this.logger.error(
           `[background] Could not deliver ${job.id}: ${errorMessage(error)}`,
@@ -597,7 +542,6 @@ export class BackgroundJobs implements BackgroundCommands {
         this.jobs.delete(job.id)
       }
     }
-    if (host) void Promise.resolve().then(send)
-    else this.session.backgroundWork.deliver(send)
+    this.session.backgroundWork.deliver(send)
   }
 }

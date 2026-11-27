@@ -39,34 +39,10 @@ Project settings are applied on top of user settings:
 - `mcpServers` entries follow replacement/override semantics: a project entry with `command`, `url`, or `type` replaces the owner entry of that name outright; an entry without those keys overrides only `enabled`, `exposure`, and `toolExposure` (missing `${VAR}` references in `mcpServers` fail strict validation rather than expanding to empty strings; see [MCP servers](mcp.md)).
 - `extensions`, `skills` and `prompts` lists are concatenated: user entries first, then project entries.
 - `tools` with plain names replaces the user list; a list of only `+name` / `-name` entries is appended, and an empty list replaces it with no tools (see [tools](#tools)).
-- Host-owned keys (`environments`, `location`, `providers`, `lark`, `local`, `webhooks`, `eventDefaultTarget`) are stripped from `<project>/.vela/config.json` before merging.
+- Host-owned keys (`environments`, `location`, `providers`, `lark`, `webhooks`, `eventDefaultTarget`) are stripped from `<project>/.vela/config.json` before merging.
 - Every other value is replaced by the project's value.
 
 Relative paths in `extensions`, `skills` and `prompts` resolve from the directory of the config file that lists them. `~` expands to the home directory.
-
-## Local listener settings
-
-Local is opt-in through **user-level** `local` in `~/.vela/config.json` (or `$VELA_DIR/config.json`) when using the SDK (`local({ token })`). Project config cannot enable, disable or override this listener, and `--no-extensions` disables it. (Standalone `vela serve` was retired in v0.9.)
-
-```json
-{
-  "local": {
-    "enabled": true,
-    "token": "$VELA_LOCAL_TOKEN",
-    "port": 8788,
-    "timezone": "UTC"
-  }
-}
-```
-
-- `enabled`: defaults to off; must be `true` to start Local.
-- `token`: required when enabled, after the usual `$VAR` / `${VAR}` expansion. Must be nonempty, not whitespace-only and contain no CR/LF. There is no implicit token environment fallback; reference your chosen variable explicitly.
-- `port`: integer 0–65535, default 8788. Use a fixed port for an app; 0 asks the OS for an ephemeral port reported in startup diagnostics.
-- `timezone`: optional valid IANA timezone for channel routines, otherwise the process timezone.
-
-Local always binds `127.0.0.1` and requires Bearer authentication, including SSE and info. It has no cookie authentication or CORS support. The token grants the daemon's configured tool authority. **Do not tunnel Local**; keep it separate from the webhook listener on 8787. Restart the daemon after changes.
-
-An opened Local project's canonical cwd selects its tool directory and trusted project settings, resources and extension snapshot when its session prepares; a denied project uses the user baseline, never the daemon startup project's layer. It does not change the daemon listener configuration or data directory and is not a sandbox. Registry, deployment identity and visible history live under the daemon's `<dataDir>/local`; channel sessions use the existing stores. Keep the serve working directory/data directory stable across restarts because the CLI default data directory is cwd-specific. See [Local startup and protocol](channels.md#local) for client examples, SDK explicit-token configuration and persistence boundaries. No existing channel-data migration is required.
 
 ## Keys
 

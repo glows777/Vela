@@ -189,36 +189,10 @@
   interface ChannelConnectionState
     connected: boolean
     error?: string | undefined
-  interface ChannelDefinition
-    canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
-    connect?: ((runtime: ChannelRuntime) => void) | undefined
-    description: string
-    host?: ((base: ChannelHost) => ChannelHost) | undefined
-    name: string
-    onConnection?: ((listener: (connection: ChannelConnection) => void) => () => void) | undefined
-    onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
-    prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
-    prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
-    send: (message: OutgoingMessage) => Promise<void>
-    sendFile?: ((route: Omit<OutgoingMessage, "text">, file: { path: string; bytes: Uint8Array; }) => Promise<void>) | undefined
-    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
-    start: () => Promise<boolean | void> | boolean | void
-    startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
-    stop: () => Promise<void> | void
-    timezone?: unknown
-    topicCapabilities?: ChannelTopicCapabilities | undefined
-    validateTools?: ((names: readonly string[]) => void) | undefined
   interface ChannelDeliveryResult
     externalMessageId?: string | undefined
     rootId?: string | undefined
     threadId?: string | undefined
-  interface ChannelEvent
-    deliveryId: string
-    details?: string | undefined
-    final?: boolean | undefined
-    key: string
-    source: string
-    summary: string
   interface ChannelHostSubmitInput
     author: { id: string; name: string; }
     chatId: string
@@ -361,6 +335,7 @@
     offline?: boolean | undefined
     promptTemplates?: readonly PromptTemplate[] | undefined
     providers?: Record<string, ProviderDefinition> | undefined
+    shellPath?: string | undefined
     skills?: readonly SkillDefinition[] | undefined
     toolApprovalCheck?: ((toolName: string, input: unknown, sessionId: string) => Promise<{ requireApproval?: boolean; summary?: string; } | undefined> | { requireApproval?: boolean; summary?: string; } | undefined) | undefined
     tools?: ToolDefinition[] | undefined
@@ -376,7 +351,7 @@
     parentSessionId?: string | null | undefined
     projectId?: string | null | undefined
     thinkingLevel?: string | null | undefined
-  function createVela: (options?: ChannelVelaOptions) => Vela
+  function createVela: (options?: VelaOptions) => Vela
   type Credential = ApiKeyCredential | OAuthCredential
   interface CredentialStore
     delete: (provider: string) => Promise<void>
@@ -533,7 +508,6 @@
     readonly cwd: string
     readonly dataDir: string
     readonly logger: VelaLogger
-    registerChannel: (channel: ChannelDefinition) => void
     registerCommand: (name: string, command: ExtensionCommand) => void
     registerProvider: (name: string, provider: ProviderDefinition) => void
     registerTool: (tool: ToolDefinition) => string
@@ -621,23 +595,6 @@
     providerOptions?: ProviderOptions | undefined
     type: "image"
   function importExtension: (path: string, name: string) => Promise<VelaExtension>
-  interface IncomingMessage
-    channelId: string
-    chatKind?: "group" | "direct" | undefined
-    externalEvent?: ChannelEvent | undefined
-    files?: { name: string; hostPath: string; }[] | undefined
-    handoff?: { id: string; from: string; depth: number; } | undefined
-    images?: ImageContent[] | undefined
-    isNewTopic?: boolean | undefined
-    passive?: boolean | undefined
-    raw?: unknown
-    replyToId?: string | undefined
-    requireExistingSession?: boolean | undefined
-    routine?: { id: string; scheduledAt: string; } | undefined
-    senderId: string
-    senderName: string
-    text: string
-    topic?: { rootId: string; threadId: string; } | undefined
   interface InputEvent
     images?: ImageContent[] | undefined
     source: InputSource
@@ -656,7 +613,6 @@
   function inspectSession: (vela: Vela, session: VelaSession, options?: { previewExtensions?: boolean; }) => Promise<SessionInspection>
   @experimental
   function inspectVela: (vela: Vela) => VelaInspection
-  function lark: (options?: LarkOptions) => VelaExtension
   interface LarkCard
     body: { elements: { tag: "markdown" | "column_set"; content?: string; columns?: { tag: "column"; width: "weighted"; weight: number; elements: { tag: "button"; text: { tag: "plain_text"; content: string; }; type: "primary" | "default" | "danger"; behaviors: { type: "callback"; value: { action: string; token: string; }; }[]; }[]; }[]; }[]; }
     config?: { update_multi: true; } | undefined
@@ -701,29 +657,9 @@
     message_id?: string | undefined
     msg_type?: string | undefined
     sender?: { id?: string; sender_type?: string; } | undefined
-  interface LarkHost
-    chats: () => Promise<{ chatId: string; name?: string; }[]>
-    connection: () => ChannelConnection
-    messages: (input: { chatId: string; sessionId: string; cursor?: string; limit?: number; }) => Promise<{ messages: LarkVisibleMessage[]; nextCursor?: string; }>
-    onConnection: (listener: (connection: ChannelConnection) => void) => () => void
-    onEvent: (listener: (event: LarkHostEvent) => void) => () => void
-    onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
-    onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
-    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
-    sessions: (chatId?: string) => ChannelSessionSnapshot[]
-    stop: (target: ChannelTarget, runId: string) => Promise<boolean>
-    submit: { (message: IncomingMessage): Promise<{ sessionId: string; }>; (input: SubmitInput & { sessionId: string; }): Promise<{ sessionId: string; messageId: string; }>; (input: SubmitInput & { newTopic: { title: string; }; }): Promise<{ sessionId: string; messageId: string; topic: { rootId: string; threadId: string; }; }>; }
-  type LarkHostEvent = | { type: 'reset' }
-      | { type: 'history_changed'; chatId: string; sessionId?: string }
   interface LarkMessageEvent
     message: { message_id?: string; root_id?: string; thread_id?: string; create_time?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; id?: { open_id?: string; }; }[]; }
     sender: { sender_id?: { open_id?: string; }; sender_type: string; }
-  interface LarkOptions
-    appId?: string | undefined
-    appSecret?: string | undefined
-    chats?: (string | { id: string; tools?: string[]; readUntagged?: boolean; model?: string; thinkingLevel?: ThinkingLevel; topicModel?: string; topicThinkingLevel?: ThinkingLevel; })[] | undefined
-    owners?: string[] | undefined
-    transport?: LarkTransport | undefined
   interface LarkSentMessage
     createTime: string
     messageId: string
@@ -745,13 +681,6 @@
     start: (onMessage: (event: LarkMessageEvent) => void, onAction: (event: LarkCardAction) => LarkCardResponse) => Promise<void>
     startTopic: (messageId: string, title: string, uuid?: string) => Promise<LarkSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
-  interface LarkVisibleMessage
-    createdAt: string
-    id: string
-    role: "user" | "assistant"
-    senderName: string
-    sessionId: string
-    text: string
   function lastCustomMessage: (session: VelaSession, customType: string) => ModelMessage | undefined
   interface LineScan
     end: number
@@ -773,83 +702,6 @@
     trusted?: boolean | undefined
   function loadContextFiles: (options: { cwd: string; agentDir?: string; }) => ContextFile[]
   function loadModels: (options: { agentDir: string; env?: Env; providers?: Record<string, ProviderConfig>; overrides?: Record<string, ProviderConfig>; }) => Record<string, ProviderDefinition>
-  function local: (options: LocalOptions) => ChannelExtension
-  class LocalError
-    cause?: unknown
-    message: string
-    name: string
-    readonly code: "unavailable" | "not_found" | "invalid_request"
-    stack?: string | undefined
-  type LocalEvent = LocalEventData & {
-      version: 1
-      id: string
-      time: string
-      projectId?: string
-      sessionId?: string
-      runId?: string
-      }
-  type LocalEventData = | {
-      type: 'reset'
-      data: { reason: 'connected'; reload: ['sessions', 'messages'] }
-      }
-      | { type: 'message'; data: LocalMessage }
-      | { type: 'session'; data: LocalSession }
-      | { type: 'run_started'; data: Record<string, never> }
-      | {
-      type: 'run_finished'
-      data: { outcome: 'done' | 'failed' | 'stopped' | 'silent' }
-      }
-      | { type: 'progress'; data: LocalProgress }
-      | { type: 'status'; data: { text: string } }
-      | { type: 'error'; data: { code: string; message: string } }
-  interface LocalHost
-    connection: () => ChannelConnection
-    messages: (input: { projectId: string; sessionId: string; after?: string; limit?: number; }) => { messages: LocalMessage[]; nextCursor?: string; }
-    onConnection: (listener: (connection: ChannelConnection) => void) => () => void
-    onEvent: (listener: (event: LocalEvent) => void, options?: { projectId?: string; }) => () => void
-    onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
-    onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
-    openProject: (input: { cwd: string; name?: string; }) => Promise<LocalProject>
-    projects: () => LocalProject[]
-    readAttachment: (input: { projectId: string; sessionId: string; messageId: string; }) => Promise<Uint8Array>
-    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
-    sessions: (projectId?: string) => LocalSession[]
-    stop: (target: ChannelTarget, runId: string) => Promise<boolean>
-    submit: { (message: IncomingMessage): Promise<{ sessionId: string; }>; (input: { projectId: string; sessionId: string; text: string; clientMessageId?: string; }): Promise<{ sessionId: string; messageId: string; }>; }
-  interface LocalMessage
-    clientMessageId?: string | undefined
-    createdAt: string
-    file?: { name: string; size: number; } | undefined
-    id: string
-    role: "user" | "assistant" | "system"
-    sessionId: string
-    text: string
-  interface LocalOptions
-    port?: number | undefined
-    timezone?: string | undefined
-    token?: string | undefined
-  interface LocalProgress
-    stage: "compaction" | "tool" | "retry"
-    state?: "failed" | "started" | "finished" | undefined
-    tool?: string | undefined
-  interface LocalProject
-    channel: "local"
-    cwd: string
-    id: string
-    name: string
-    sessionId: string
-  interface LocalSession
-    channel: "local"
-    chatId: string
-    chatKind: "group" | "direct"
-    requester: { id: string; name: string; }
-    runId?: string | undefined
-    sessionId: string
-    state: "stopped" | "running" | "queued" | "waiting" | "done"
-    task: string
-    topic?: { rootId: string; threadId: string; } | undefined
-    updatedAt: string
-    waitingReason?: string | undefined
   interface LocalVelaRuntime
     dispose: () => Promise<void>
     extensionErrors: () => Promise<string[]>
@@ -991,15 +843,6 @@
     planLabel?: string | undefined
     refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
     usageUrl?: string | undefined
-  interface OutgoingMessage
-    channelId: string
-    deliveryId?: string | undefined
-    handoff?: { id: string; from: string; depth: number; } | undefined
-    recipientId?: string | undefined
-    replyToId?: string | undefined
-    routine?: { id: string; scheduledAt: string; } | undefined
-    text: string
-    topic?: { rootId: string; threadId: string; } | undefined
   interface PendingApprovalInfo
     createdAt: string
     id: string
@@ -1069,7 +912,6 @@
     outputTokens?: number | undefined
     raw?: unknown
     totalTokens?: number | undefined
-  function publishChannelEvent: (session: VelaSession, event: Extract<VelaEvent, { type: "channel_message" | "channel_reply" | "channel_error"; }>) => void
   type QueueMode = 'one-at-a-time' | 'all'
   interface ReasoningFilePart
     data: string | Uint8Array<ArrayBufferLike> | URL
@@ -1235,7 +1077,7 @@
     id: string
     kind: string
     producedBy?: string | undefined
-    role: "user" | "assistant" | "system" | "tool" | null
+    role: "user" | "assistant" | "tool" | "system" | null
     runId: string | null
     senderId?: string | undefined
     senderName?: string | undefined
@@ -1248,7 +1090,7 @@
     dedupeKey?: string | undefined
     metadata?: Record<string, unknown> | undefined
     passive?: boolean | undefined
-    source?: "handoff" | "user" | "session" | undefined
+    source?: "user" | "handoff" | "session" | undefined
     text: string
     wake?: boolean | undefined
   interface RuntimeRecoverySummary
@@ -1686,30 +1528,25 @@
   type UserContent = string | UserContentPart[]
   type UserContentPart = TextPart | ImageContent | FilePart
   interface Vela
-    channel: { (name: "local"): LocalHost; (name: "lark"): LarkHost; (name: string): ChannelHost; }
-    channels: () => { name: string; description: string; }[]
     commands: (sessionId?: string) => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void
-    dispose: (options?: { graceful?: boolean; }) => Promise<void>
-    extensions: (sessionId?: string) => LoadedChannelExtension[]
+    dispose: () => Promise<void>
+    extensions: (sessionId?: string) => LoadedExtension[]
     listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
     loginProviders: () => LoginProvider[]
     logout: (provider: string, options?: LogoutOptions) => Promise<LogoutResult>
     models: (options?: { all?: boolean; channel?: string; }) => ModelInfo[]
-    publishEvent: (event: ChannelEvent) => Promise<void>
     readonly cwd: string
     readonly dataDir: string
     readonly limits: VelaLimits
     readonly model: ModelInput
     ready: () => Promise<void>
-    runningChannels: () => string[]
     searchSessions: (query: string, options?: SavedSessionOptions) => Promise<SessionSearchHit[]>
     session: (id?: string, options?: SessionOptions) => VelaSession
     sessions: () => VelaSession[]
     setDefaults: (model: ModelInput, thinkingLevel: ThinkingLevel) => void
     setSessionArchived: (id: string, archived: boolean) => Promise<void>
-    startChannels: () => Promise<void>
     subscribe: (listener: VelaSessionEventListener) => () => void
   interface VelaAssistantMessage
     content: AssistantContent
@@ -1849,9 +1686,7 @@
       source?: 'feedback'
       }
   type VelaEventListener = (event: VelaEvent) => void
-  type VelaExtension = (
-      api: ChannelExtensionAPI,
-      ) => void | Promise<void>
+  type VelaExtension = (vela: ExtensionAPI) => void | Promise<void>
   @experimental
   interface VelaInspection
     contextFiles: readonly Readonly<ContextFile>[]
@@ -1883,7 +1718,6 @@
     autoCompaction?: boolean | undefined
     beforeDispose?: (() => void | Promise<void>) | undefined
     binDir?: string | undefined
-    channelIdleMs?: number | undefined
     contextFiles?: false | ContextFile[] | undefined
     credentials?: CredentialStore | undefined
     cwd?: string | undefined
@@ -1891,9 +1725,8 @@
     docs?: false | DocsPaths | undefined
     env?: ((target: { sessionId: string; location: ExecutionLocation; }) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>) | undefined
     ephemeralSessions?: boolean | undefined
-    eventDefaultTarget?: { channel: string; chatId: string; } | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
-    extensions?: ChannelExtension[] | undefined
+    extensions?: VelaExtension[] | undefined
     limits?: Partial<VelaLimits> | undefined
     logger?: VelaLogger | undefined
     model?: ModelInput | undefined
@@ -2016,7 +1849,6 @@
     extensions?: string[] | undefined
     lark?: Record<string, unknown> | undefined
     limits?: Partial<VelaLimits> | undefined
-    local?: Record<string, unknown> | undefined
     location?: { environment: string; cwd?: string; } | undefined
     mcpServers?: Record<string, unknown> | undefined
     memory?: Record<string, unknown> | undefined
@@ -2056,7 +1888,6 @@
   interface AfterProviderResponseEvent
     headers: Record<string, string>
     type: "after_provider_response"
-  function agentErrorHint: (kind: AgentErrorKind | undefined) => string | undefined
   type AgentErrorKind = | 'auth'
       | 'billing'
       | 'rate_limit'
@@ -2129,7 +1960,6 @@
       | ExtensionEvents[K][1]
       | undefined
       | Promise<ExtensionEvents[K][1] | undefined>
-  function failureHint: (kind: AgentErrorKind | undefined, error: unknown) => string | undefined
   interface ImageContent
     data: string
     mimeType: string
@@ -2157,7 +1987,6 @@
     model: string
     provider: string
     type: "provider_stream_event"
-  function publishChannelEvent: (session: VelaSession, event: Extract<VelaEvent, { type: "channel_message" | "channel_reply" | "channel_error"; }>) => void
   interface SendMessageOptions
     deliverAs?: "steer" | "nextTurn" | undefined
     triggerTurn?: boolean | undefined
@@ -2599,13 +2428,12 @@
   type TestVela = ReturnType<typeof createTestVela>
   interface TestVelaOptions
     allowPendingResponses?: boolean | undefined
-    channelIdleMs?: number | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
     db?: VelaDatabase | undefined
     ephemeralSessions?: boolean | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
-    extensions?: ChannelExtension[] | undefined
+    extensions?: VelaExtension[] | undefined
     faux?: Omit<FauxModelOptions, "generate" | "responses"> | undefined
     files?: Record<string, string> | undefined
     generate?: FauxStep[] | undefined

@@ -112,6 +112,7 @@ export function createVelaAgentDriver(
       defaultThinkingLevel: options.defaultThinkingLevel,
       providers: options.providers,
       rawConfigProviders: options.rawConfigProviders,
+      shellPath: options.shellPath,
       limits: options.limits,
       defaultTools: options.defaultTools,
       extensionConfig: options.extensionConfig,
@@ -209,12 +210,14 @@ export function createVelaAgentDriver(
     }
     const override = state.sessionOverrides.get(sessionId)
     const envRecord = override?.recordPath ?? options.hostEnv?.VELA_RECORD
+    const explicitDefaultModel = state.reloadable.defaultModel !== undefined
     const defaultModelStr =
       typeof state.reloadable.defaultModel === 'string'
         ? state.reloadable.defaultModel
         : undefined
     const envModel =
-      override?.model ?? defaultModelStr ?? options.hostEnv?.VELA_MODEL
+      override?.model ??
+      (explicitDefaultModel ? defaultModelStr : options.hostEnv?.VELA_MODEL)
     if (!envRecord && envModel !== 'mock' && !envModel?.startsWith('faux:')) {
       return
     }

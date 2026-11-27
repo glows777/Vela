@@ -185,49 +185,6 @@ test('assistant-only keywords cannot select dream notes over the budget', async 
   expect(sentNotes[0]?.filename).toBe('project_legacy-000.md')
 })
 
-test('shared groups consolidate only their own inbox and never modify global or another group', async () => {
-  const t = createTestVela({
-    responses: [
-      fauxText('A noted'),
-      fauxText('B noted'),
-      fauxText('Global noted'),
-    ],
-    generate: [
-      (req) => {
-        const prompt = JSON.stringify(req.prompt)
-        expect(prompt).toContain('A-private-correction')
-        expect(prompt).not.toContain('B-private-correction')
-        expect(prompt).not.toContain('Global-private-correction')
-        expect(prompt).not.toContain('Global-secret-note')
-        return result([update('group-a')])
-      },
-    ],
-  })
-  const aDir = t.dataPath('groups/a')
-  const bDir = t.dataPath('groups/b')
-  const a = t.vela.session('group-a', {
-    scope: { id: 'a', kind: 'shared', dataDir: aDir },
-  } as import('../../packages/vela/src/driver/session/options.ts').InternalSessionOptions)
-  const b = t.vela.session('group-b', {
-    scope: { id: 'b', kind: 'shared', dataDir: bDir },
-  } as import('../../packages/vela/src/driver/session/options.ts').InternalSessionOptions)
-  new MemoryStore(join(aDir, 'memory')).save(deploy)
-  new MemoryStore(join(bDir, 'memory')).save(deploy)
-  new MemoryStore(t.dataPath('memory')).save({
-    ...deploy,
-    content: 'Global-secret-note',
-  })
-  await a.prompt('A-private-correction: Monday')
-  await b.prompt('B-private-correction: Tuesday')
-  await t.run('Global-private-correction')
-  const otherBefore = text(join(bDir, 'memory/project_deploy-day.md'))
-  const globalBefore = await t.readData('memory/project_deploy-day.md')
-  await a.prompt('/dream')
-  expect(text(join(aDir, 'memory/project_deploy-day.md'))).toContain('Monday')
-  expect(text(join(bDir, 'memory/project_deploy-day.md'))).toBe(otherBefore)
-  expect(await t.readData('memory/project_deploy-day.md')).toBe(globalBefore)
-})
-
 test('a live save during an isolated dream is preserved and the skipped overwrite is reported', async () => {
   const t = createTestVela({
     responses: [

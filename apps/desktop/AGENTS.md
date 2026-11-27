@@ -6,7 +6,7 @@ Vela desktop brings Local projects, Local sessions, Lark projects, and Lark sess
 
 ## Process ownership
 
-- `src/main/` owns Electron lifecycle and the in-process SDK host. Run `createChannelVela` with Local and Lark here. Sessions and events use function calls rather than a CLI subprocess, RPC, or HTTP service.
+- `src/main/` owns Electron lifecycle and the in-process SDK host. Run `createRuntime` with Local projects and Lark here. Sessions and events use function calls rather than a CLI subprocess, RPC, or HTTP service.
 - `src/renderer/` owns the browser-only UI. It reaches main through one constrained `contextBridge` preload API so Node, Electron, and SDK privileges stay outside the page.
 - `src/preload/` owns that bridge and imports no SDK. Expose typed operations rather than generic IPC access. No other IPC channels.
 - `src/shared/` owns the bridge contract in one TypeScript file. It stays browser-safe and imports no main, preload, Node, Electron, or SDK code, so shared types cannot carry privileges into the renderer.

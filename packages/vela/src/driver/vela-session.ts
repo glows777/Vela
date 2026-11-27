@@ -46,19 +46,16 @@ import type { MessageQueue } from './session/message-queue.ts'
 import {
   assertSessionId,
   type ForkOptions,
-  type InternalSessionOptions,
   type NavigateTreeOptions,
   type PromptOptions,
   type QueueMode,
   type SendMessageOptions,
-  type SessionHost,
   type SessionOptions,
   type SessionPersistence,
   type SessionUsage,
 } from './session/options.ts'
 import { assertInterruptedTurn } from './session/recovery.ts'
 import type { SessionResources } from './session/resources.ts'
-import * as routing from './session/routing.ts'
 import {
   cloneSessionBranch,
   exportSessionBranch,
@@ -165,7 +162,6 @@ export class VelaSession {
 
   /** @internal Created by vela.session() */
   constructor(id: string, deps: SessionDeps, options: SessionOptions = {}) {
-    const internalOptions = options as InternalSessionOptions
     assertSessionId(id)
     this.id = id
     this.position = resolveLocation(options.location, deps.cwd, options.cwd)
@@ -181,14 +177,13 @@ export class VelaSession {
       cwd: this.cwd,
       location: this.position,
       deps,
-      options: internalOptions,
+      options,
       messages: this.messages,
       busy: this.busy,
       emit: this.emit,
       save: () => this.save(),
       prepare: (signal) => this.execEnv(signal),
       start: (signal) => this.start(signal),
-      getScope: () => routing.sessionScope(this),
       isClosed: () => this.closed,
       isDraining: () => this.draining,
       isMoving: () => this.moving,
@@ -204,13 +199,13 @@ export class VelaSession {
     this.timestamps = parts.contextManager.state.timestamps
     this.userBash = parts.userBash
     this.messageQueue = parts.messageQueue
-    bindInitialRouting(this, internalOptions)
+    bindInitialRouting(this, options)
     this.hosts = buildSessionHosts<VelaSession>({
       ...parts,
       id,
       session: this,
       deps,
-      options: internalOptions,
+      options,
       messages: this.messages,
       toolDetails: this.toolDetails,
       busy: this.busy,
@@ -397,10 +392,6 @@ export class VelaSession {
     this.defaults.thinking = level
     const after = this.thinkingLevel
     if (after !== before) this.store.setThinkingLevelChoice(after)
-  }
-  /** @internal The host's queue for results produced outside a turn (channels bind it at open). */
-  get host(): SessionHost | undefined {
-    return routing.sessionHost(this)
   }
   /** @internal */
   trackWork(work: Promise<unknown>): void {

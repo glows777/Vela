@@ -1,55 +1,4 @@
-import type { ThinkingLevel } from '../driver/index.ts'
 import type { ExtensionConfigDefinition } from '../extension-api.ts'
-import { configString, configStrings } from '../extension-api.ts'
-import type { ChannelExtension as VelaExtension } from '../legacy-channels/index.ts'
-import { LarkChannel } from './channel.ts'
-import type { LarkTransport } from './transport.ts'
-
-export interface LarkOptions {
-  appId?: string
-  appSecret?: string
-  /**
-   * open_ids whose direct chats are always enabled. This does not enable their group chats.
-   */
-  owners?: string[]
-  /** Enabled chat_ids. Every member has full access; the group and each topic have separate sessions. */
-  chats?: (
-    | string
-    | {
-        id: string
-        tools?: string[]
-        readUntagged?: boolean
-        /** `provider/id` for the group session. */
-        model?: string
-        thinkingLevel?: ThinkingLevel
-        /** `provider/id` for the group's topics; defaults to `model`. */
-        topicModel?: string
-        topicThinkingLevel?: ThinkingLevel
-      }
-  )[]
-  /** The connection to Lark; default lark's long connection with appId / appSecret (tests pass a fake) */
-  transport?: LarkTransport
-}
-
-/** Lark bot channel (long-connection mode), one shared session per enabled chat and topic. Options not passed are read from the config section (`extensionConfig.lark`). */
-export function lark(options: LarkOptions = {}): VelaExtension {
-  const extension: VelaExtension = (vela) => {
-    const channel = new LarkChannel({
-      appId: options.appId ?? configString(vela.config, 'appId') ?? '',
-      appSecret:
-        options.appSecret ?? configString(vela.config, 'appSecret') ?? '',
-      owners: options.owners ?? configStrings(vela.config, 'owners') ?? [],
-      chats: options.chats ?? vela.config.chats,
-      logger: vela.logger,
-      dataDir: vela.dataDir,
-      transport: options.transport,
-      timezone: vela.config.timezone,
-    })
-    vela.registerChannel(channel)
-    channel.topics.register(vela)
-  }
-  return Object.defineProperty(extension, 'name', { value: 'lark' })
-}
 
 export const larkConfig: ExtensionConfigDefinition = {
   name: 'lark',
@@ -74,8 +23,6 @@ export {
   parseChats,
   validateChatTools,
 } from './chats.ts'
-export type { LarkHost, LarkHostEvent, LarkVisibleMessage } from './host.ts'
-export { LarkSubmitError } from './host.ts'
 export {
   createLarkChannelAdapter,
   LarkChannelAdapter,

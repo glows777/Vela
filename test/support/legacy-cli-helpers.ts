@@ -11,11 +11,11 @@ import {
   background,
   memory,
   todo,
+  type VelaExtension,
   web,
   webConfig,
 } from '../../packages/vela/src/driver/index.ts'
-import { lark, larkConfig } from '../../packages/vela/src/lark/index.ts'
-import type { ChannelExtension as VelaExtension } from '../../packages/vela/src/legacy-channels/index.ts'
+import { larkConfig } from '../../packages/vela/src/lark/index.ts'
 import {
   type ExtensionEntry,
   extensionName,
@@ -23,9 +23,8 @@ import {
   type VelaConfig,
 } from '../../packages/vela/src/load-config.ts'
 import { McpPool, mcp, mcpConfig } from '../../packages/vela/src/mcp/index.ts'
-import { EnvironmentRegistry } from '../../packages/vela/src/runtime/index.ts'
 
-export const BUILTIN_EXTENSIONS: Record<
+const BUILTIN_EXTENSIONS: Record<
   string,
   (settings: VelaSettings, options?: { mcpPool?: McpPool }) => VelaExtension
 > = {
@@ -33,7 +32,6 @@ export const BUILTIN_EXTENSIONS: Record<
     background({ shellPath: resolveShellPath(settings.shellPath) }),
   memory: () => memory(),
   web: () => web(),
-  lark: () => lark(),
   mcp: (_settings, options) =>
     mcp(options?.mcpPool ? { pool: options.mcpPool } : {}),
   todo: () => todo(),
@@ -330,27 +328,6 @@ export async function loadCliExtensions(
     }
   }
   return out
-}
-
-export function ownerDocker(config: Pick<VelaConfig, 'dataDir' | 'settings'>) {
-  const environments = config.settings.environments
-  if (!environments || Object.keys(environments).length === 0) return undefined
-  const registry = new EnvironmentRegistry({
-    dataDir: config.dataDir,
-    environments,
-    hostEnv: process.env,
-  })
-  return {
-    environments: registry,
-    env: ({
-      sessionId,
-      location,
-    }: {
-      sessionId: string
-      location: { environment: string; cwd: string }
-    }) => registry.resolve({ sessionId, location }),
-    beforeDispose: () => registry.dispose(),
-  }
 }
 
 export function cliWorkspaceModeAt(options: {

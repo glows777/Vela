@@ -1,13 +1,9 @@
-// Run with vela-verify.sh exec in its isolated fixture. Only the model and Lark network are fake.
+// Isolated Runtime + DaemonLarkHost verification. Only the model and Lark transport are fake.
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { lark } from '../../../packages/vela/src/lark/index.ts'
-import {
-  createChannelVela,
-  local,
-} from '../../../packages/vela/src/legacy-channels/index.ts'
-import { drainChannels } from '../../../packages/vela/src/legacy-channels/testing.ts'
+import { createRuntime } from '@glows777/vela'
+import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
+import { silentLogger } from '../../../packages/vela/src/shared/logger.ts'
 import {
   createFauxModel,
   fauxHang,
@@ -19,197 +15,156 @@ import { prepareWorkspace } from './workspace.ts'
 
 prepareWorkspace()
 
-async function until(check: () => boolean) {
+async function until(check: () => boolean, label = 'condition') {
   const deadline = Date.now() + 5000
   while (!check()) {
-    assert(Date.now() < deadline, 'SDK condition timed out')
-    await new Promise((resolve) => setTimeout(resolve, 1))
+    assert(Date.now() < deadline, `timed out: ${label}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
+
 const network = fakeLark()
-const logs: string[] = []
+const transitions: string[] = []
 const model = createFauxModel({
   responses: [
     fauxText('Existing topic ready'),
-    fauxToolCall('channel_wait_for_input', { reason: 'Choose a color' }),
+    fauxToolCall('wait_for_input', { reason: 'Choose a color' }),
     fauxText('Which color?'),
-    fauxText('Local reply'),
+    fauxText('Direct prompt reply'),
     fauxHang(),
     fauxText('Queued work completed'),
   ],
 })
-const vela = createChannelVela({
+const agentDir = resolve('host-data')
+const runtime = createRuntime({
+  agentDir,
   cwd: process.cwd(),
-  dataDir: resolve('host-data'),
-  contextFiles: false,
-  model,
-  extensions: [
-    lark({
-      owners: ['ou_alice'],
-      chats: ['oc_group'],
-      transport: network.transport,
-    }),
-    local({ token: 'offline-host-fixture', port: 0 }),
-  ],
-  logger: {
-    debug() {},
-    info(line) {
-      logs.push(line)
-    },
-    warn(line) {
-      logs.push(line)
-    },
-    error(line) {
-      logs.push(line)
-    },
-  },
+  defaultModel: model,
+  mcp: false,
 })
-await vela.ready()
-const host = vela.channel('lark')
-const localHost = vela.channel('local')
-const connections: boolean[] = []
-const transitions: string[] = []
-const statuses: string[] = []
-host.onConnection((value) => connections.push(value.connected))
-host.onSession((update) => {
-  if (update.run) transitions.push(update.run.type)
+const host = new DaemonLarkHost(runtime, {
+  agentDir,
+  hostEnv: {},
+  logger: silentLogger,
+  transport: network.transport,
 })
-host.onStatus((line) => statuses.push(line.text))
-assert.deepEqual(host.connection(), { connected: false })
+const unsub = runtime.events.subscribe((event) => {
+  if (event.type === 'run_started' || event.type === 'run_finished') {
+    transitions.push(event.type)
+  }
+})
+
 try {
-  await vela.startChannels()
-  assert(host.connection().connected && localHost.connection().connected)
+  await runtime.ready()
+  await host.sync(
+    {
+      lark: {
+        appId: 'app_host',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+      },
+    },
+    true,
+  )
+  const statuses = await runtime.channels.list()
+  assert.equal(statuses.find((s) => s.name === 'lark')?.connected, true)
+
   network.deliver(
     larkEvent({
       message_id: 'owned-root',
       root_id: 'owned-root',
-      thread_id: 'owned-thread',
+      thread_id: 'thread_owned-root',
     }),
   )
-  await drainChannels(vela)
-  const topic = host.sessions()[0]!
-  const receipt = await host.submit({
-    channelId: topic.chatId,
-    topic: topic.topic,
-    replyToId: 'host-service-anchor',
-    senderId: 'ou_alice',
-    senderName: 'Alice',
+  await until(
+    () =>
+      network.sent.some((m) => m.text.includes('Existing topic ready')) ||
+      network.topics.some((m) => m.title.includes('Existing topic ready')),
+    'existing topic ready',
+  )
+  const topicSession = (await runtime.sessions.list({ kind: 'topic' }))[0]!
+  const receipt = await runtime.channels.submit('lark', {
+    chatId: 'oc_group',
+    sessionId: topicSession.id,
+    author: { id: 'ou_alice', name: 'Alice' },
     text: 'Continue the topic',
   })
-  assert.equal(receipt.sessionId, topic.sessionId)
-  await drainChannels(vela)
-  assert.equal(host.sessions()[0]!.waitingReason, 'Choose a color')
+  assert.equal(receipt.sessionId, topicSession.id)
+  await until(
+    () =>
+      network.sent.some((m) => m.text.includes('Which color?')) ||
+      network.topics.some((m) => m.title.includes('Which color?')),
+    'which color reply',
+  )
+  assert.equal(
+    (await runtime.sessions.get(topicSession.id))?.waitingReason,
+    'Choose a color',
+  )
   assert(
-    statuses.length &&
-      transitions.includes('started') &&
-      transitions.includes('finished'),
+    transitions.includes('run_started') && transitions.includes('run_finished'),
   )
-  assert.equal(network.sent.at(-1)!.messageId, 'host-service-anchor')
-  console.log(
-    'Lark host: owned topic replied at the fixture anchor; waiting reason and status observed',
-  )
-  const localURL = logs.join(' ').match(/http:\/\/127\.0\.0\.1:\d+/)![0]
-  const request = async (path: string, body: unknown) => {
-    const response = await fetch(localURL + path, {
-      method: 'POST',
-      headers: {
-        authorization: 'Bearer offline-host-fixture',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    })
-    assert(response.ok, await response.clone().text())
-    return response.json()
-  }
-  const project = (await request('/v1/projects', { cwd: process.cwd() })) as {
-    id: string
-    sessionId: string
-  }
-  await request(
-    `/v1/projects/${project.id}/sessions/${project.sessionId}/messages`,
-    { text: 'Local hello' },
-  )
-  await drainChannels(vela)
-  assert.equal(localHost.sessions()[0]!.chatId, project.id)
-  assert.equal(host.sessions().length, 1)
-  console.log(
-    'Host lists Lark and Local independently; existing Local HTTP composer remains usable',
-  )
-  const target = { chatId: topic.chatId, rootId: topic.topic!.rootId }
-  const reminder = await host.routines.create(target, {
+  console.log('Lark host: topic continued, wait_for_input recorded')
+
+  const proj = await runtime.projects.create({
+    name: 'Local check',
+    cwd: process.cwd(),
+    hubSessionId: true,
+  })
+  await runtime.prompt(proj.hubSessionId!, { text: 'Direct hello' })
+  await until(() => model.calls.length >= 4)
+  await runtime.waitForIdle(proj.hubSessionId!)
+  console.log('Direct project session coexists with Lark bindings cleanly')
+
+  const binding = (await runtime.bindings.list({ channel: 'lark' })).find(
+    (b) => b.threadId === 'thread_owned-root',
+  )!
+  const reminder = await runtime.timers.createRoutine({
+    projectId: binding.projectId,
+    sessionId: binding.sessionId,
     message: 'Review report',
     schedule: { time: '09:00' },
-    creator: { id: 'ou_alice', name: 'Alice' },
+    timezone: 'UTC',
+    creatorId: 'ou_alice',
+    creatorName: 'Alice',
   })
   assert.equal(
-    host.routines.list({ chatId: target.chatId }).routines[0]!.id,
-    reminder.id,
+    (await runtime.timers.list()).some((t) => t.id === reminder.id),
+    true,
   )
-  const edited = await host.routines.edit(
-    { chatId: target.chatId },
-    reminder.id,
-    { message: 'Review the updated report', schedule: { time: '10:00' } },
-  )
-  assert.equal(edited?.id, reminder.id)
+  const edited = await runtime.timers.update(reminder.id, {
+    message: 'Review the updated report',
+    schedule: { time: '10:00' },
+  })
   assert.equal(edited?.message, 'Review the updated report')
-  assert.deepEqual(edited?.schedule, { time: '10:00' })
-  assert.equal(
-    host.routines.list({ chatId: target.chatId }).routines[0]!.message,
-    'Review the updated report',
-  )
-  assert.equal(
-    await host.routines.edit({ chatId: target.chatId }, 'missing', {
-      message: 'x',
+  assert.equal(await runtime.timers.delete(reminder.id), true)
+  console.log('Host timer created, edited, listed, and cancelled via Runtime')
+
+  network.deliver(
+    larkEvent({
+      message_id: 'busy-anchor',
+      content: JSON.stringify({ text: '@_user_1 Hold this run' }),
     }),
-    undefined,
   )
-  assert(await host.routines.cancel({ chatId: target.chatId }, reminder.id))
-  console.log(
-    'Idle host routine created, edited, listed and cancelled using the shared scheduler',
+  await until(() => model.calls.length === 5, 'held run')
+  const hubSession = (await runtime.sessions.list({ kind: 'hub' })).find(
+    (s) => s.name === 'oc_group' || s.projectId === topicSession.projectId,
+  )!
+  network.deliver(
+    larkEvent({
+      message_id: 'queued-anchor',
+      content: JSON.stringify({ text: '@_user_1 Queued request' }),
+    }),
   )
-  const groupInput = {
-    channelId: 'oc_group',
-    replyToId: 'busy-anchor',
-    senderId: 'ou_alice',
-    senderName: 'Alice',
-    text: 'Hold this run',
-  }
-  await host.submit(groupInput)
-  await until(() => model.calls.length === 5)
-  const active = host.sessions('oc_group').find((session) => !session.topic)!
-  await host.submit({
-    ...groupInput,
-    replyToId: 'queued-anchor',
-    text: 'Queued request',
-  })
-  assert.equal(await host.stop({ chatId: 'oc_group' }, 'expired'), false)
-  assert(await host.stop({ chatId: 'oc_group' }, active.runId!))
-  await drainChannels(vela)
-  assert(
+  assert.equal(await runtime.stop(hubSession.id, 'host-stop'), true)
+  await until(() =>
     network.sent.some((message) => message.text === 'Queued work completed'),
   )
-  assert.equal(await host.stop({ chatId: 'oc_group' }, active.runId!), false)
-  console.log(
-    'Exact Stop ended the held run, rejected stale Stop and preserved later queued input',
-  )
-  const directory = JSON.parse(
-    await readFile(resolve('host-data/channels/index.json'), 'utf8'),
-  )
-  assert(
-    directory.records.some(
-      (record: { channel: string }) => record.channel === 'local',
-    ),
-  )
-  assert(
-    directory.records.some(
-      (record: { waitingReason?: string }) =>
-        record.waitingReason === 'Choose a color',
-    ),
-  )
+  assert.equal(await runtime.stop(hubSession.id, 'stale-stop'), false)
   assert.equal(model.pending(), 0)
+  console.log('Stop ended held run and preserved later queued input')
 } finally {
-  await vela.dispose()
+  unsub()
+  await host.stop()
+  await runtime.dispose()
 }
-assert.deepEqual(connections, [true, false])
-assert.deepEqual(host.connection(), { connected: false })
-console.log('Disposed: host reports disconnected')
+console.log('Disposed: host and runtime stopped cleanly')

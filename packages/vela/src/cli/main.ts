@@ -73,7 +73,6 @@ registerExtensionHostModules({
       import('../driver/diagnostics.ts'),
       import('../extension-api.ts'),
       import('../lark/index.ts'),
-      import('../legacy-channels/index.ts'),
       import('../load-config.ts'),
       import('../mcp/index.ts'),
       import('../runtime/index.ts'),

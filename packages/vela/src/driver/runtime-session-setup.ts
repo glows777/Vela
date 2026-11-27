@@ -21,6 +21,7 @@ import {
 } from '../runtime/memory/index.ts'
 import type { VelaLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
+import { resolveShellPath } from '../shared/shell-path.ts'
 import { mergeDefaultTools, selectTools } from '../shared/tool-selection.ts'
 import {
   loadProjectSettings,
@@ -343,6 +344,10 @@ export async function prepareSessionSetup(params: {
     if (location.environment === 'local') {
       return createSessionLocalExecutionEnv({
         cwd: location.cwd,
+        shellPath: resolveShellPath(state.reloadable.shellPath, {
+          env: effectiveEnv,
+          platform: process.platform,
+        }),
         tempRoot: spillDir,
       })
     }

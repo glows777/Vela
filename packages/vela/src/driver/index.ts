@@ -154,7 +154,6 @@ export {
   loadContextFiles,
 } from './prompt/context-files.ts'
 export type { DocsPaths } from './prompt/index.ts'
-export { publishChannelEvent } from './session/channel-events.ts'
 export {
   type BashExecutionEntry,
   type BranchSummaryEntry,

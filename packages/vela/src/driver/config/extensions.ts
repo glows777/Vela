@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { VelaExtension } from '../extensions/types.ts'
 
-const require = createRequire(import.meta.url)
+const nodeRequire = createRequire(import.meta.url)
 const HOST_MODULES_KEY = Symbol.for('vela.jiti.hostModules')
 const hostLoaders: Record<string, () => Promise<unknown>> = {
   zod: () => import('zod'),
@@ -29,7 +29,7 @@ export function registerExtensionHostModules(
 
 function resolveOptional(id: string): string | undefined {
   try {
-    return require.resolve(id)
+    return nodeRequire.resolve(id)
   } catch {
     return undefined
   }

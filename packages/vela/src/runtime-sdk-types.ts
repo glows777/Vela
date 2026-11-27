@@ -414,6 +414,7 @@ export interface CreateRuntimeOptions {
   credentials?: CredentialStore
   defaultModel?: ModelInput
   defaultThinkingLevel?: ThinkingLevel
+  shellPath?: string
   limits?: Partial<VelaLimits>
   tools?: ToolDefinition[]
   extensionConfig?: Record<string, Record<string, unknown>>

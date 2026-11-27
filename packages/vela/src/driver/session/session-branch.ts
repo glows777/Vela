@@ -23,8 +23,8 @@ import { exportBranch } from './export.ts'
 import type { SessionStore } from './index.ts'
 import type {
   ForkOptions,
-  InternalSessionOptions,
   NavigateTreeOptions,
+  SessionOptions,
 } from './options.ts'
 import * as routing from './routing.ts'
 
@@ -36,7 +36,7 @@ export interface SessionBranchHost<Session> {
   registry: ToolRegistry
   contextManager: ContextManager
   defaults: SessionDefaultState
-  options: InternalSessionOptions
+  options: SessionOptions
   location: Readonly<ExecutionLocation>
   name: string | undefined
   channel: string | undefined

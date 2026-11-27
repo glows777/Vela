@@ -162,6 +162,7 @@ export interface RuntimeReloadableConfig {
   defaultThinkingLevel?: ThinkingLevel
   providers?: Record<string, ProviderDefinition>
   rawConfigProviders?: Record<string, ProviderConfig>
+  shellPath?: string
   limits?: Partial<VelaLimits>
   defaultTools?: readonly string[]
   extensionConfig?: Record<string, Record<string, unknown>>
@@ -193,6 +194,7 @@ export interface VelaAgentDriverOptions {
   registrations?: OAuthRegistrationStore
   /** @internal Shared ModelRegistry (for live OAuth registrations & planLabel consistency). */
   models?: ModelRegistry
+  shellPath?: string
   limits?: Partial<VelaLimits>
   tools?: ToolDefinition[]
   defaultTools?: readonly string[]

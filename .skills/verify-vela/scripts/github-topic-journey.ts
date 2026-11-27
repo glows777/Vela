@@ -1,15 +1,15 @@
-// Real SDK/topic/subscription/loopback ingress; simulated PR tool, model and channel transport.
+// Real Runtime/topic/subscription/loopback ingress; simulated PR tool, model and channel transport.
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { z } from 'zod'
 import {
-  channelSessionId,
-  createChannelVela,
-  type IncomingMessage,
-} from '../../../packages/vela/src/legacy-channels/index.ts'
-import { drainChannels } from '../../../packages/vela/src/legacy-channels/testing.ts'
+  type ChannelAdapter,
+  type ChannelAdapterContext,
+  createRuntime,
+  RuntimeWebhookReceiver,
+} from '@glows777/vela'
+import { z } from 'zod'
 import {
   createFauxModel,
   fauxText,
@@ -24,19 +24,19 @@ const secret = 'isolated-topic-fixture'
 const key = `github:${repo}#pr/274`
 const logs: string[] = []
 const replies: string[] = []
-let receive!: (message: IncomingMessage) => void | Promise<void>
+let adapterCtx!: ChannelAdapterContext
+
 const model = createFauxModel({
   responses: [
     (request) => {
       assert(request.system.includes('After opening or taking over a PR'))
-      assert(request.system.includes('PR metadata'))
       assert(request.system.includes(repo))
       assert(!request.system.includes(secret))
       return fauxToolCall('githubFixture_open_pr', {})
     },
     (request) => {
       assert(JSON.stringify(request.toolResults).includes(repo))
-      return fauxToolCall('channel_subscriptions', {
+      return fauxToolCall('subscriptions', {
         action: 'create',
         source: 'github',
         key,
@@ -44,73 +44,119 @@ const model = createFauxModel({
     },
     fauxText('Opened and subscribed in this topic'),
     (request) => {
-      assert(request.lastUserText.startsWith('External event (untrusted data)'))
+      assert(request.lastUserText.includes('untrusted external data'))
       return fauxText('Closure handled in this topic')
     },
   ],
 })
-const vela = createChannelVela({
+
+const agentDir = join(process.cwd(), 'topic-data')
+await mkdir(agentDir, { recursive: true })
+await writeFile(
+  join(agentDir, 'config.json'),
+  JSON.stringify({ webhooks: { github: { secret, repositories: [repo] } } }),
+)
+
+const runtime = createRuntime({
+  agentDir,
   cwd: process.cwd(),
-  dataDir: 'topic-data',
-  contextFiles: false,
-  model,
-  extensionConfig: {
-    channel: {
-      eventReceiver: { port: 0, github: { secret, repositories: [repo] } },
-    },
-  },
+  defaultModel: model,
+  mcp: false,
   logger: {
     debug: (s) => logs.push(s),
     info: (s) => logs.push(s),
     warn: (s) => logs.push(s),
     error: (s) => logs.push(s),
   },
-  extensions: [
-    function githubFixture(api) {
-      api.registerTool({
-        name: 'open_pr',
-        description: 'Simulate approved PR creation',
-        inputSchema: z.object({}),
-        execute: async () => ({ number: 274, repository: { full_name: repo } }),
-      })
+  tools: [
+    {
+      name: 'githubFixture_open_pr',
+      description: 'Simulate approved PR creation',
+      inputSchema: z.object({}),
+      execute: async () => ({ number: 274, repository: { full_name: repo } }),
     },
-    (api) =>
-      api.registerChannel({
-        name: 'fixture',
-        description: 'offline topic transport',
-        start() {},
-        stop() {},
-        onMessage(next) {
-          receive = next
-        },
-        canRecover: () => true,
-        async send(message) {
-          assert.equal(message.topic?.rootId, 'topic-root')
-          replies.push(message.text)
-        },
-      }),
   ],
 })
+
+const fixtureAdapter: ChannelAdapter = {
+  name: 'fixture',
+  async start(ctx) {
+    adapterCtx = ctx
+  },
+  async stop() {},
+  async deliver(message) {
+    assert.equal(message.threadId, 'topic-thread')
+    replies.push(message.text)
+    return {
+      externalMessageId: `out_${replies.length}`,
+      threadId: 'topic-thread',
+    }
+  },
+}
+
+const receiver = new RuntimeWebhookReceiver(
+  { port: 0, github: { secret, repositories: [repo] } },
+  async (event) => {
+    await runtime.ingestWebhookEvent(event)
+  },
+  {
+    debug: (s) => logs.push(s),
+    info: (s) => logs.push(s),
+    warn: (s) => logs.push(s),
+    error: (s) => logs.push(s),
+  },
+)
+
+const until = async (what: string, ok: () => boolean) => {
+  const deadline = Date.now() + 5000
+  while (!ok()) {
+    if (Date.now() > deadline) throw new Error(`timeout: ${what}`)
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
 let url = ''
 try {
-  await vela.startChannels()
-  url = logs.join('\n').match(/http:\/\/127\.0\.0\.1:\d+\/events\/github/)![0]
-  await receive({
-    channelId: 'chat',
+  await runtime.ready()
+  const project = await runtime.projects.create({
+    name: 'chat',
+    cwd: process.cwd(),
+    hubSessionId: true,
+  })
+  await runtime.bindings.upsert({
+    channel: 'fixture',
+    externalId: 'chat',
+    threadId: null,
+    kind: 'group',
+    projectId: project.id,
+    enabled: true,
+  })
+  await runtime.registerChannel(fixtureAdapter)
+  await receiver.start()
+  url = `http://127.0.0.1:${receiver.port}/events/github`
+  assert.ok(receiver.port, 'GitHub receiver port missing')
+
+  const receipt = await adapterCtx.ingestWithReceipt!({
+    channel: 'fixture',
+    dedupeKey: 'open-pr-1',
+    externalChatId: 'chat',
+    kind: 'group',
+    threadId: 'topic-thread',
+    threadRootId: 'topic-root',
     senderId: 'human',
     senderName: 'Fixture',
     text: 'Open the approved PR and watch its feedback here',
-    topic: { rootId: 'topic-root', threadId: 'topic-thread' },
+    timestamp: new Date().toISOString(),
   })
-  const path = join(process.cwd(), 'topic-data/channels/subscriptions.json')
-  const subscribed = JSON.parse(await readFile(path, 'utf8'))
-  assert.equal(subscribed.subscriptions.length, 1)
-  assert.equal(subscribed.subscriptions[0].key, key)
-  assert.equal(
-    subscribed.subscriptions[0].targetKey,
-    channelSessionId('fixture', 'chat', 'topic-root'),
-  )
+  assert.equal(receipt.admitted, true)
+  await until('opened reply', () => replies.length === 1)
+
+  const subscribed = await runtime.subscriptions.list()
+  assert.equal(subscribed.length, 1)
+  assert.equal(subscribed[0]!.eventKey, key)
+  assert.equal(subscribed[0]!.sessionId, receipt.sessionId)
   await writeFile('topic-subscribed.json', JSON.stringify(subscribed, null, 2))
+
   const body = JSON.stringify({
     action: 'closed',
     repository: { full_name: repo },
@@ -137,21 +183,19 @@ try {
     ).status,
     202,
   )
-  await drainChannels(vela)
+  await until('closure reply', () => replies.length === 2)
   assert.deepEqual(replies, [
     'Opened and subscribed in this topic',
     'Closure handled in this topic',
   ])
-  assert.equal(JSON.parse(await readFile(path, 'utf8')).subscriptions.length, 0)
+  assert.equal((await runtime.subscriptions.list()).length, 0)
   assert.equal(model.pending(), 0)
   console.log(
-    'PASS SDK PR metadata -> exact persisted topic subscription -> signed closure -> same topic reply -> final subscription removal',
-  )
-  console.log(
-    'LIMITS: scripted model, PR tool and channel transport; no live GitHub, tunnel, Lark or autonomous model behavior verified.',
+    'PASS Runtime PR metadata -> exact persisted topic subscription -> signed closure -> same topic reply -> final subscription removal',
   )
 } finally {
-  await vela.dispose()
+  await receiver.stop()
+  await runtime.dispose()
   await writeFile('topic-logs.json', JSON.stringify(logs, null, 2))
   await writeFile('topic-replies.json', JSON.stringify(replies, null, 2))
 }

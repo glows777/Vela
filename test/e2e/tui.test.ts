@@ -787,37 +787,6 @@ test('terminal control sequences in tool output are not written to the terminal'
   expect(tui.screen()).toContain('xyred')
 })
 
-test('the TUI neither starts channels nor shows their traffic', async () => {
-  const t = createTestVela({ responses: [fauxText('reply')] })
-  let started = false
-  const sent: string[] = []
-  t.internals.gateway.register({
-    name: 'fake',
-    description: 'test channel',
-    start: () => {
-      started = true
-    },
-    stop: () => {},
-    send: async (message) => {
-      sent.push(message.text)
-    },
-  })
-  const tui = await startTui(t.vela)
-  await tui.started
-  expect(started).toBe(false)
-  // Channel traffic still works through the SDK gateway; it just has no UI here
-  await t.internals.gateway.handleIncoming('fake', {
-    channelId: 'c1',
-    senderId: 'visitor',
-    senderName: 'visitor',
-    text: 'hello from the group',
-  })
-  await tui.until(() => sent.length === 1)
-  expect(sent).toEqual(['reply'])
-  expect(tui.screen()).not.toContain('visitor')
-  expect(tui.screen()).not.toContain('hello from the group')
-})
-
 test('SIGTERM shuts the TUI down like Ctrl+D', async () => {
   const t = createTestVela()
   const tui = await startTui(t.vela)

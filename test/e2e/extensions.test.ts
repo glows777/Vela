@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { VelaExtension } from '@glows777/vela'
 import { jsonSchema } from 'ai'
@@ -19,7 +20,7 @@ import {
   fauxText,
   fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
-import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
+import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
@@ -91,7 +92,7 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
   })
   await t.run('Say hi')
   expect(t.lastAssistantText()).toBe('Hello, Liam!')
-  // Like the CLI, createTestVela loads the built-in memory extension first
+  // Like the CLI, createTestVela loads built-in extensions before user extensions
   expect(
     t.vela.extensions().filter((e) => !['memory', 'auditLog'].includes(e.name)),
   ).toEqual([
@@ -100,26 +101,6 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
       tools: ['hello_greet'],
       providers: [],
       commands: [],
-      channels: [],
-    },
-    {
-      name: 'channel',
-      tools: [
-        'channel_subscriptions',
-        'channel_message_topic',
-        'channel_message_group',
-        'channel_routines',
-        'channel_skip_reply',
-        'channel_wait_for_input',
-        'channel_start_topic',
-        'channel_forward_to_topic',
-        'channel_read_topic',
-        'channel_list_topics',
-        'channel_send_file',
-      ],
-      providers: [],
-      commands: [],
-      channels: [],
     },
   ])
 })
@@ -215,37 +196,57 @@ test('read-only-session: setActiveTools narrows the tools of one session only', 
 })
 
 test('echo-channel: senders in one chat share its session and tools', async () => {
-  const channel = echoChannel()
-  const t = createTestVela({
-    extensions: [channel.extension],
-    files: { 'notes.txt': 'shared notes' },
-    responses: [
-      fauxToolCall('read', { path: 'notes.txt' }),
-      (req) => fauxText(req.toolResults[0]!.output),
-      fauxToolCall('read', { path: 'notes.txt' }),
-      (req) => fauxText(req.toolResults[0]!.output),
-    ],
+  const { createRuntime } = await import('@glows777/vela')
+  const { createFauxModel } = await import(
+    '../../packages/vela/src/testing/core/index.ts'
+  )
+  const dir = tempDir('vela-echo-channel-')
+  writeFileSync(join(dir.path, 'notes.txt'), 'shared notes')
+  const echo = echoChannel()
+  const runtime = createRuntime({
+    ephemeral: true,
+    defaultModel: createFauxModel({
+      responses: [
+        fauxToolCall('read', { path: 'notes.txt' }),
+        (req) => fauxText(req.toolResults[0]!.output),
+        fauxToolCall('read', { path: 'notes.txt' }),
+        (req) => fauxText(req.toolResults[0]!.output),
+      ],
+    }),
   })
-  await t.internals.gateway.handleIncoming('echo', {
-    channelId: 'demo',
-    senderId: 'alice',
-    senderName: 'alice',
-    text: 'Read notes.txt',
+  const project = await runtime.projects.create({
+    name: 'demo',
+    cwd: dir.path,
+    hubSessionId: true,
   })
-  await t.internals.gateway.handleIncoming('echo', {
-    channelId: 'demo',
-    senderId: 'bob',
-    senderName: 'bob',
-    text: 'Read notes.txt',
-  })
-  const [toAlice, toBob] = channel.sent
-  expect(toAlice?.recipientId).toBe('alice')
-  expect(toAlice?.text).toContain('shared notes')
-  expect(toBob?.recipientId).toBe('bob')
-  expect(toBob?.text).toContain('shared notes')
-  expect(t.vela.channels()).toEqual([
-    { name: 'echo', description: 'In-memory demo channel' },
-  ])
+  try {
+    await runtime.ready()
+    await runtime.bindings.upsert({
+      channel: 'echo',
+      externalId: 'demo',
+      kind: 'group',
+      projectId: project.id,
+      enabled: true,
+    })
+    await runtime.registerChannel(echo.adapter)
+    await echo.receive('demo', 'alice', 'Read notes.txt')
+    await runtime.waitForIdle()
+    await echo.receive('demo', 'bob', 'Read notes.txt')
+    await runtime.waitForIdle()
+    const deadline = Date.now() + 5000
+    while (echo.sent.length < 2 && Date.now() < deadline) {
+      await Bun.sleep(10)
+    }
+    const [toAlice, toBob] = echo.sent
+    expect(toAlice?.text).toContain('shared notes')
+    expect(toBob?.text).toContain('shared notes')
+    expect(await runtime.channels.list()).toEqual([
+      { name: 'echo', enabled: true, connected: true },
+    ])
+  } finally {
+    await runtime.dispose()
+    dir.cleanup()
+  }
 })
 
 // ---------- Runtime contracts ----------

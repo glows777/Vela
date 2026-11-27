@@ -20,11 +20,10 @@ import type { SessionDeps } from './deps.ts'
 import type { SessionContext } from './entries.ts'
 import { SessionStore } from './index.ts'
 import { MessageQueue } from './message-queue.ts'
-import type { InternalSessionOptions, PromptOptions } from './options.ts'
+import type { PromptOptions, SessionOptions } from './options.ts'
 import { pendingToolCalls } from './recovery.ts'
 import { busyLocationError } from './relocation.ts'
 import * as routing from './routing.ts'
-import { type SessionScope, setRegistryScope } from './scope.ts'
 import type { SessionBranchHost } from './session-branch.ts'
 import type { SessionInputHost } from './session-input.ts'
 import type { SessionLocationHost } from './session-location.ts'
@@ -44,14 +43,13 @@ export function createSessionComponents<
   cwd: string
   location: Readonly<ExecutionLocation>
   deps: SessionDeps<Session>
-  options: InternalSessionOptions
+  options: SessionOptions
   messages: ModelMessage[]
   busy: { locked: boolean; controller?: AbortController }
   emit: (event: VelaEvent) => void
   save: () => Promise<void>
   prepare: (signal?: AbortSignal) => Promise<ExecutionEnv>
   start: (signal?: AbortSignal) => Promise<void>
-  getScope: () => Readonly<SessionScope> | undefined
   isClosed: () => boolean
   isDraining: () => boolean
   isMoving: () => boolean
@@ -76,7 +74,6 @@ export function createSessionComponents<
       sessionId: id,
     },
   )
-  setRegistryScope(registry, params.getScope)
   registry.isDraining = () => params.isDraining() || params.isMoving()
   const toolListError = options.tools
     ? getToolListError(options.tools)
@@ -137,7 +134,7 @@ export function createSessionComponents<
 
 export function bindInitialRouting<
   Session extends Parameters<typeof routing.applySessionRouting>[0],
->(session: Session, options: InternalSessionOptions): void {
+>(session: Session, options: SessionOptions): void {
   routing.applySessionRouting(session, options)
 }
 
@@ -249,7 +246,7 @@ export interface SessionAdapterAccess<Session> {
   messageQueue: MessageQueue
   userBash: UserBash
   defaults: SessionDefaultState
-  options: InternalSessionOptions
+  options: SessionOptions
   messages: ModelMessage[]
   limits: VelaLimits
   toolDetails: Map<string, unknown>

@@ -11,15 +11,13 @@ import {
 } from '../../extension-api.ts'
 import { resolveMemoryDatabase } from '../../memory/db-registry.ts'
 import { MemoryDream } from '../../memory/dream.ts'
-import { sharedScopeDataDir } from '../../memory/legacy-scope.ts'
 import { createMemoryTool } from './tool.ts'
 
 const EMPTY_MEMORY =
   '[memory] No memories stored yet. Use the memory tool to save important information.'
 
 /**
- * Cross-session memory: local/direct sessions use `<dataDir>/memory`; groups use their own store
- * plus shared global read/search. The same scope applies to the prompt and /memory /dream.
+ * Cross-session memory: sessions use `<dataDir>/memory` for prompt injection and `/memory` `/dream`.
  * Sessions without the memory tool get no index or memory commands.
  */
 export function memory(): VelaExtension {
@@ -27,13 +25,6 @@ export function memory(): VelaExtension {
     const registry = new MemoryRegistry(vela.logger)
     const store = registry.get(join(vela.dataDir, 'memory'), vela.cwd)
     const db = resolveMemoryDatabase(vela.dataDir)
-    const forSession = (
-      target?: Parameters<typeof sharedScopeDataDir>[0],
-    ): MemoryStore => {
-      const dir = sharedScopeDataDir(target)
-      if (!dir) return store
-      return registry.get(join(dir, 'memory'), join(dir, 'workspace'))
-    }
     const dreams = new Map<MemoryStore, MemoryDream>()
     const dreamFor = (local: MemoryStore): MemoryDream => {
       let dream = dreams.get(local)
@@ -48,7 +39,7 @@ export function memory(): VelaExtension {
     }
     vela.on('agent_end', (event, ctx) => {
       if (!ctx.session.getActiveTools().includes('memory')) return
-      dreamFor(forSession(ctx.session)).collect(ctx.session, event.messages)
+      dreamFor(store).collect(ctx.session, event.messages)
     })
     vela.on('agent_settled', (_event, ctx) => {
       if (
@@ -56,27 +47,15 @@ export function memory(): VelaExtension {
         !ctx.session.getActiveTools().includes('memory')
       )
         return
-      dreamFor(forSession(ctx.session)).schedule(ctx.session, vela.logger)
+      dreamFor(store).schedule(ctx.session, vela.logger)
     })
     vela.onShutdown(async () => {
       await Promise.all([...dreams.values()].map((dream) => dream.stop()))
     })
-    vela.registerTool(createMemoryTool(store, (context) => forSession(context)))
+    vela.registerTool(createMemoryTool(store, () => store))
 
     const contentFor = (session: VelaSession): string | null => {
-      const local = forSession(session)
-      const index =
-        local === store
-          ? local.buildIndex()
-          : [
-              promptLayer('Group memory', local),
-              promptLayer(
-                'Global notes (read/search with scope: global; group writes stay in group memory)',
-                store,
-              ),
-            ]
-              .filter(Boolean)
-              .join('\n\n')
+      const index = store.buildIndex()
       // Deleting the last entry must replace the old index; a session that never had one stays quiet
       return (
         index || (lastCustomMessage(session, 'memory') ? EMPTY_MEMORY : null)
@@ -99,18 +78,17 @@ export function memory(): VelaExtension {
       handler: (args, ctx) => {
         if (!ctx.session.getActiveTools().includes('memory'))
           return ctx.notify('Memory is not enabled for this session.')
-        const local = forSession(ctx.session)
-        if (args === 'lint') return ctx.notify(lintReport(local))
+        if (args === 'lint') return ctx.notify(lintReport(store))
         if (args.startsWith('search ')) {
           const query = args.slice('search '.length).trim()
-          return ctx.notify(searchReport(local, query))
+          return ctx.notify(searchReport(store, query))
         }
-        const entries = local.list()
-        const reports = local.lint()
+        const entries = store.list()
+        const reports = store.lint()
         const lines = [
           `[memory] ${entries.length} memories, ${reports.length} with warnings`,
-          dreamFor(local).status(),
-          ...local.indexWarnings(),
+          dreamFor(store).status(),
+          ...store.indexWarnings(),
         ]
         for (const e of entries) {
           const flag = reports.some((r) => r.entry.filePath === e.filePath)
@@ -132,10 +110,7 @@ export function memory(): VelaExtension {
           return ctx.notify('Memory is not enabled for this session.')
         ctx.notify('[dream] Starting memory consolidation...')
         try {
-          const report = await dreamFor(forSession(ctx.session)).run(
-            ctx.session,
-            ctx.signal,
-          )
+          const report = await dreamFor(store).run(ctx.session, ctx.signal)
           ctx.notify(report)
         } catch (error) {
           if (ctx.signal?.aborted) throw error
@@ -147,11 +122,6 @@ export function memory(): VelaExtension {
     })
   }
   return Object.defineProperty(extension, 'name', { value: 'memory' })
-}
-
-function promptLayer(label: string, store: MemoryStore): string | null {
-  const index = store.buildIndex(4000 - label.length - 2)
-  return index ? `${label}:\n${index}` : null
 }
 
 function lintReport(store: MemoryStore): string {

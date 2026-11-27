@@ -5,7 +5,6 @@ import { createRuntime, createVela, type RuntimeEvent } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { extensionCommands } from '../../packages/vela/src/cli/commands/extensions.ts'
 import { loadConfig } from '../../packages/vela/src/driver/index.ts'
-import { local } from '../../packages/vela/src/legacy-channels/index.ts'
 import { legacyVelaAsRuntime } from '../support/legacy-vela-runtime.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 
@@ -42,7 +41,6 @@ function setup() {
       workspaceModeAt: () => 'all',
     },
     model,
-    extensions: [local({})],
   })
   return { dir, vela, model, projects }
 }
@@ -70,9 +68,6 @@ test('/extensions prepares and lists only the active project', async () => {
       expect(lines.join('\n')).toContain(`Commands: /${own}-only`)
       expect(lines.join('\n')).not.toContain(`/${other}-only`)
       const loaded = await runtime.sessions.inspect(session.id)
-      expect(
-        loaded.extensions.find((entry) => entry.name === 'local'),
-      ).toBeDefined()
       expect(
         loaded.extensions.find((entry) => entry.name === own)?.commands,
       ).toEqual([`${own}-only`])

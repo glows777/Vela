@@ -1,5 +1,5 @@
 import type { VelaOptions as CoreVelaOptions } from '../driver/index.ts'
-import type { ChannelExtension } from '../legacy-channels/index.ts'
+import type { VelaExtension } from '../extension-api.ts'
 import { resolveShellPath } from '../shared/shell-path.ts'
 import { createVela, type Vela } from '../vela.ts'
 import {
@@ -15,18 +15,17 @@ export {
 } from './core/index.ts'
 
 export interface TestVelaOptions extends Omit<CoreOptions, 'extensions'> {
-  extensions?: ChannelExtension[]
-  channelIdleMs?: number
+  extensions?: VelaExtension[]
 }
 
 type TestVelaAssembler = (options: CoreVelaOptions) => Vela
 
-/** Compatibility fixture retains memory and channels. */
+/** Compatibility fixture retains memory extension. */
 export function createTestVela(
   options: TestVelaOptions = {},
   assemble?: TestVelaAssembler,
 ): Omit<CoreTestVela, 'vela'> & { vela: Vela } {
-  const { extensions, channelIdleMs, ...base } = options
+  const { extensions, ...base } = options
   let vela!: Vela
   const create: TestVelaAssembler =
     assemble ??
@@ -39,7 +38,6 @@ export function createTestVela(
             platform: process.platform,
             env: process.env,
           }),
-        channelIdleMs,
         extensions: [...(coreOptions.extensions ?? []), ...(extensions ?? [])],
       }))
   const fixture = createCoreTestVela(base, (coreOptions) => {

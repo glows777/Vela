@@ -293,6 +293,7 @@ export function createRuntimeControl(
       }
       state.reloadable = {
         ...state.reloadable,
+        ...('shellPath' in next ? { shellPath: next.shellPath } : {}),
         ...('limits' in next ? { limits: next.limits } : {}),
         ...('defaultTools' in next ? { defaultTools: next.defaultTools } : {}),
         ...('extensionConfig' in next

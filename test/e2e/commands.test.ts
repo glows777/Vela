@@ -4,12 +4,10 @@ import { join } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { z } from 'zod'
 import { createCliDispatcher } from '../../packages/vela/src/cli/dispatcher.ts'
-import type { ProviderDefinition } from '../../packages/vela/src/driver/index.ts'
 import type {
-  IncomingMessage,
-  OutgoingMessage,
-  ChannelExtension as VelaExtension,
-} from '../../packages/vela/src/legacy-channels/index.ts'
+  ProviderDefinition,
+  VelaExtension,
+} from '../../packages/vela/src/driver/index.ts'
 import {
   createFauxModel,
   fauxText,
@@ -372,52 +370,4 @@ test('an extension registers tools the model can call, listed by /extensions', a
   const { output } = await captureConsole(() => t.dispatch('/extensions'))
   expect(output).toContain('db')
   expect(output).toContain('db_list_tables')
-})
-
-test('a message from a channel runs through the same model and tools, and the reply is sent back', async () => {
-  const sent: OutgoingMessage[] = []
-  let deliver!: (msg: IncomingMessage) => void
-  const t = createTestVela({
-    files: { 'faq.md': 'Opening hours: 9:00-18:00' },
-    responses: [
-      fauxToolCall('read', { path: 'faq.md' }),
-      fauxText('We are open from 9 to 6'),
-    ],
-    extensions: [
-      (vela) =>
-        vela.registerChannel({
-          name: 'fake',
-          description: 'test channel',
-          start: () => {},
-          stop: () => {},
-          send: async (message) => {
-            sent.push(message)
-          },
-          onMessage: (handler) => {
-            deliver = handler
-          },
-        }),
-    ],
-  })
-
-  await captureConsole(async () => {
-    deliver({
-      channelId: 'c1',
-      senderId: 'u1',
-      senderName: 'Wang',
-      text: 'When are you open?',
-    })
-    while (sent.length === 0) await Bun.sleep(1)
-  })
-
-  expect(sent).toEqual([
-    { channelId: 'c1', recipientId: 'u1', text: 'We are open from 9 to 6' },
-  ])
-  expect(t.eventsOf('tool_execution_start')[0]).toMatchObject({
-    toolName: 'read',
-  })
-  // Channel sessions are separate from the CLI session
-  expect(t.messages).toEqual([])
-  const { output } = await captureConsole(() => t.dispatch('/channel list'))
-  expect(output).toContain('[fake] test channel')
 })

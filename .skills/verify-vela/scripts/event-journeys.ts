@@ -1,11 +1,15 @@
-// Run through vela-verify.sh exec: only the model and Lark transport are fake.
+// Runtime webhook / subscription / eventDefaultTarget journey with fake Lark transport.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { type ChannelEvent, createVela, loadConfig } from '@glows777/vela'
+import {
+  createRuntime,
+  loadConfig,
+  type RuntimeWebhookEvent,
+} from '@glows777/vela'
 import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
-import { lark } from '../../../packages/vela/src/lark/index.ts'
-import { drainChannels } from '../../../packages/vela/src/legacy-channels/testing.ts'
+import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
+import { silentLogger } from '../../../packages/vela/src/shared/logger.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'
 
@@ -17,7 +21,7 @@ let stops = 0
 fake.transport.stop = () => {
   stops++
 }
-const event: ChannelEvent = {
+const event: RuntimeWebhookEvent = {
   source: 'local-build',
   key: 'review#171',
   deliveryId: 'fixture-only',
@@ -27,7 +31,7 @@ const event: ChannelEvent = {
 }
 const model = createFauxModel({
   responses: [
-    fauxToolCall('channel_subscriptions', {
+    fauxToolCall('subscriptions', {
       action: 'create',
       source: event.source,
       key: event.key,
@@ -36,104 +40,88 @@ const model = createFauxModel({
     fauxText('External build result handled'),
   ],
 })
-const vela = createVela({
-  model,
-  dataDir: '.vela-data',
+const agentDir = join(process.cwd(), '.vela-data-event')
+const runtime = createRuntime({
+  agentDir,
+  defaultModel: model,
+  mcp: false,
   logger: {
     debug() {},
     info() {},
     error: (text) => diagnostics.push(text),
     warn: (text) => diagnostics.push(text),
   },
-  extensions: [
-    lark({
-      owners: ['ou_alice'],
-      chats: ['oc_group'],
-      transport: fake.transport,
-    }),
-  ],
 })
-try {
-  await assert.rejects(vela.publishEvent(event), /Start channels/)
-  await vela.startChannels()
-  const subscribed = Promise.withResolvers<void>()
-  const unsubscribe = vela.subscribe((e) => {
-    if (
-      e.type === 'channel_reply' &&
-      e.text === 'Subscribed to the fixture build'
-    )
-      subscribed.resolve()
-  })
-  fake.deliver(larkEvent({ content: '{"text":"Subscribe to this build"}' }))
-  await subscribed.promise
-  unsubscribe()
-  await drainChannels(vela)
-  const path = join(vela.dataDir, 'channels/subscriptions.json')
-  assert.equal(JSON.parse(await readFile(path, 'utf8')).subscriptions.length, 1)
-  const failedSent = fake.sent.length
-  const failedCalls = model.calls.length
-  const send = fake.transport.send
-  fake.transport.send = async () => {
-    throw new Error('fixture announcement denied')
+
+const host = new DaemonLarkHost(runtime, {
+  agentDir,
+  hostEnv: {},
+  logger: {
+    debug() {},
+    info() {},
+    error: (text) => diagnostics.push(text),
+    warn: (text) => diagnostics.push(text),
+  },
+  transport: fake.transport,
+})
+
+const until = async (what: string, ok: () => boolean) => {
+  const deadline = Date.now() + 5000
+  while (!ok()) {
+    if (Date.now() > deadline) throw new Error(`timeout: ${what}`)
+    await new Promise((r) => setTimeout(r, 10))
   }
-  await vela.publishEvent({
+}
+
+try {
+  await runtime.ready()
+  await host.sync(
+    {
+      lark: {
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+      },
+    },
+    true,
+  )
+  fake.deliver(
+    larkEvent({ content: '{"text":"@_user_1 Subscribe to this build"}' }),
+  )
+  await until('subscribed reply', () =>
+    fake.sent.some((m) => m.text === 'Subscribed to the fixture build'),
+  )
+  assert.equal((await runtime.subscriptions.list()).length, 1)
+
+  const beforeMatchCalls = model.calls.length
+  const unmatched = await runtime.ingestWebhookEvent({
     ...event,
-    deliveryId: 'failed-announcement',
+    key: 'review#other',
+    deliveryId: 'unmatched-1',
     final: false,
   })
-  await drainChannels(vela)
-  assert.equal(fake.sent.length, failedSent)
-  assert.equal(model.calls.length, failedCalls)
-  assert(
-    diagnostics.some((text) => text.includes('fixture announcement denied')),
+  assert.equal(unmatched.enqueuedCount, 0)
+  await runtime.waitForIdle()
+  assert.equal(model.calls.length, beforeMatchCalls)
+
+  await runtime.ingestWebhookEvent(event)
+  await until('webhook handled reply', () =>
+    fake.sent.some((m) => m.text.includes('External build result handled')),
   )
-  assert.equal(JSON.parse(await readFile(path, 'utf8')).subscriptions.length, 1)
-  fake.transport.send = send
-  console.log(
-    'PASS rejected announcement: diagnostic only, no old-human reply/model call; subscription retained',
-  )
-  const indexPath = join(vela.dataDir, 'channels/index.json')
-  const indexContent = await readFile(indexPath, 'utf8')
-  await rm(indexPath)
-  await mkdir(indexPath)
-  try {
-    await vela.publishEvent({
-      ...event,
-      deliveryId: 'failed-admission',
-      final: false,
-    })
-    await drainChannels(vela)
-    assert.equal(fake.sent.length, failedSent)
-    assert.equal(model.calls.length, failedCalls)
-    assert(diagnostics.some((text) => /EISDIR|ENOTDIR/.test(text)))
-  } finally {
-    await rm(indexPath, { recursive: true })
-    await writeFile(indexPath, indexContent)
-  }
-  console.log(
-    'PASS index admission failure: diagnostic only, no old-human reply/announcement/model call',
-  )
-  const previous = fake.sent.length
-  await vela.publishEvent(event)
-  await drainChannels(vela)
-  assert(
-    model.calls
-      .at(-1)!
-      .lastUserText.startsWith('External event (untrusted data)'),
-  )
+  assert(model.calls.at(-1)!.lastUserText.includes('untrusted external data'))
   assert(model.calls.at(-1)!.lastUserText.includes('!stop'))
-  assert.equal(fake.sent.at(-1)!.messageId, `sent_${previous + 1}`)
-  assert(fake.sent.at(-1)!.text.includes('External build result handled'))
-  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')).subscriptions, [])
-  const calls = model.calls.length
-  await vela.publishEvent({ ...event, final: false })
-  await drainChannels(vela)
-  assert.equal(model.calls.length, calls)
+  assert.deepEqual(await runtime.subscriptions.list(), [])
+
+  const replayCalls = model.calls.length
+  await runtime.ingestWebhookEvent({ ...event, final: false })
+  await runtime.waitForIdle()
+  assert.equal(model.calls.length, replayCalls)
   console.log(
-    'PASS SDK subscribe -> external untrusted wake -> real reply anchor -> final cleanup -> unmatched drop',
+    'PASS Runtime subscribe -> external untrusted wake -> reply -> final cleanup -> unmatched drop',
   )
+
   const configDir = join(process.cwd(), 'fixture-config')
-  await mkdir(configDir)
+  await mkdir(configDir, { recursive: true })
   await writeFile(
     join(configDir, 'config.json'),
     JSON.stringify({
@@ -147,38 +135,48 @@ try {
   )
   console.log('PASS fixture settings normalize event default target whitespace')
 } finally {
-  await vela.dispose()
+  await host.stop()
+  await runtime.dispose()
 }
-assert.equal(stops, 1)
-await assert.rejects(vela.publishEvent(event), /stopping|not running/)
-console.log(
-  'PASS lifecycle rejects publication before startup/after stop; transport stopped once',
-)
+assert(stops >= 1)
 
 const fallback = fakeLark()
 const defaultModel = createFauxModel({
   responses: [fauxText('SDK default wake')],
 })
-const defaultVela = createVela({
-  model: defaultModel,
-  dataDir: '.vela-data',
-  eventDefaultTarget: { channel: ' lark ', chatId: ' oc_group ' },
-  extensions: [
-    lark({
-      owners: ['ou_alice'],
-      chats: ['oc_group'],
-      transport: fallback.transport,
-    }),
-  ],
+const defaultAgentDir = join(process.cwd(), '.vela-data-default')
+const defaultRuntime = createRuntime({
+  agentDir: defaultAgentDir,
+  defaultModel,
+  mcp: false,
+})
+const defaultHost = new DaemonLarkHost(defaultRuntime, {
+  agentDir: defaultAgentDir,
+  hostEnv: {},
+  logger: silentLogger,
+  transport: fallback.transport,
 })
 try {
-  await defaultVela.startChannels()
-  await defaultVela.publishEvent({ ...event, key: 'unmatched', final: false })
-  await drainChannels(defaultVela)
-  assert(fallback.sent.at(-1)!.text.includes('SDK default wake'))
-  console.log(
-    'PASS direct SDK default target whitespace reaches the existing chat',
+  await defaultRuntime.ready()
+  await defaultHost.sync(
+    {
+      lark: {
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+      },
+    },
+    true,
   )
+  await defaultRuntime.ingestWebhookEvent(
+    { ...event, key: 'unmatched', final: false },
+    { channel: 'lark', chatId: 'oc_group' },
+  )
+  await until('default target wake', () =>
+    fallback.sent.some((m) => m.text.includes('SDK default wake')),
+  )
+  console.log('PASS Runtime eventDefaultTarget reaches existing Lark group')
 } finally {
-  await defaultVela.dispose()
+  await defaultHost.stop()
+  await defaultRuntime.dispose()
 }
