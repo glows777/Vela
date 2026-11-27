@@ -1,6 +1,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+import { pathToFileURL } from 'node:url'
 import { types } from 'node:util'
 import { applyMigrations } from './migrations.ts'
 
@@ -373,38 +374,18 @@ function repairV1InboxAndSubscriptions(db: VelaDatabase): void {
   }
 }
 
-/**
- * Opens `vela.db` (or `':memory:'`), configures WAL + foreign keys + busy timeout,
- * enforces `0600` file permissions on disk, and applies forward schema migrations.
- */
-export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
-  const isMemory = options.path === ':memory:'
-  const readonly = options.readonly === true
+function isSqliteCantOpenError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const errcode = (error as { errcode?: unknown }).errcode
+  return errcode === 14 || /unable to open database file/i.test(error.message)
+}
 
-  if (!isMemory && !readonly) {
-    if (options.mustExist) {
-      const fd = openSync(options.path, 'r+')
-      closeSync(fd)
-      chmodSync(options.path, 0o600)
-    } else {
-      ensurePrivateDir(dirname(options.path))
-      if (!existsSync(options.path)) {
-        try {
-          const fd = openSync(options.path, 'wx', 0o600)
-          closeSync(fd)
-          chmodSync(options.path, 0o600)
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
-        }
-      } else {
-        chmodSync(options.path, 0o600)
-      }
-    }
-  }
-
-  const raw = readonly
-    ? new DatabaseSync(options.path, { readOnly: true })
-    : new DatabaseSync(options.path)
+function initializeOpenedDatabase(
+  raw: DatabaseSync,
+  options: OpenDatabaseOptions,
+  isMemory: boolean,
+  readonly: boolean,
+): VelaDatabase {
   const db = new VelaDatabase(raw, options.path, readonly)
 
   try {
@@ -443,6 +424,62 @@ export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
         `[config] ${options.path} is not a valid SQLite database: ${msg}`,
         { cause: error },
       )
+    }
+    throw error
+  }
+}
+
+/**
+ * Opens `vela.db` (or `':memory:'`), configures WAL + foreign keys + busy timeout,
+ * enforces `0600` file permissions on disk, and applies forward schema migrations.
+ */
+export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
+  const isMemory = options.path === ':memory:'
+  const readonly = options.readonly === true
+
+  if (!isMemory && !readonly) {
+    if (options.mustExist) {
+      const fd = openSync(options.path, 'r+')
+      closeSync(fd)
+      chmodSync(options.path, 0o600)
+    } else {
+      ensurePrivateDir(dirname(options.path))
+      if (!existsSync(options.path)) {
+        try {
+          const fd = openSync(options.path, 'wx', 0o600)
+          closeSync(fd)
+          chmodSync(options.path, 0o600)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
+        }
+      } else {
+        chmodSync(options.path, 0o600)
+      }
+    }
+  }
+
+  const raw = readonly
+    ? new DatabaseSync(options.path, { readOnly: true })
+    : new DatabaseSync(options.path)
+
+  try {
+    return initializeOpenedDatabase(raw, options, isMemory, readonly)
+  } catch (error) {
+    // Cleanly checkpointed + closed WAL databases unlink -wal/-shm; readonly open then hits
+    // SQLITE_CANTOPEN unless SQLite skips shm creation via immutable=1 when no sidecars exist.
+    if (
+      readonly &&
+      !isMemory &&
+      isSqliteCantOpenError(error) &&
+      existsSync(options.path) &&
+      !existsSync(`${options.path}-wal`) &&
+      !existsSync(`${options.path}-shm`)
+    ) {
+      const immutableUri = pathToFileURL(resolve(options.path))
+      immutableUri.searchParams.set('mode', 'ro')
+      immutableUri.searchParams.set('immutable', '1')
+      const immutableRaw = new DatabaseSync(immutableUri, { readOnly: true })
+      return initializeOpenedDatabase(immutableRaw, options, isMemory, readonly)
     }
     throw error
   }
