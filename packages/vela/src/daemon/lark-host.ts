@@ -48,7 +48,8 @@ export class DaemonLarkHost {
   private lastConfig: DaemonLarkConfig = {}
   private lastFingerprint = ''
   private registered = false
-  private lastError?: string
+  private lastConfigError?: string
+  private lastStartError?: string
   private configured = false
   private stopped = false
   private currentAdapter?: ReturnType<typeof createLarkChannelAdapter>
@@ -67,10 +68,15 @@ export class DaemonLarkHost {
     names: string[]
     errors: Map<string, string>
   } {
+    const err = this.lastConfigError ?? this.lastStartError
     return {
       names: this.configured ? ['lark'] : [],
-      errors: this.lastError ? new Map([['lark', this.lastError]]) : new Map(),
+      errors: err ? new Map([['lark', err]]) : new Map(),
     }
+  }
+
+  configError(): string | undefined {
+    return this.lastConfigError
   }
 
   sync(config: DaemonLarkConfig, force = false): Promise<void> {
@@ -315,15 +321,19 @@ export class DaemonLarkHost {
 
     if (!hasLarkConfig) {
       this.configured = false
-      this.lastError = undefined
+      this.lastConfigError = undefined
+      this.lastStartError = undefined
       await this.unregisterIfRegistered()
       return
     }
 
     this.configured = true
     if (config.larkError) {
-      this.lastError = config.larkError
-      logger.warn(`[daemon] Invalid Lark configuration: ${this.lastError}`)
+      this.lastConfigError = config.larkError
+      this.lastStartError = undefined
+      logger.warn(
+        `[daemon] Invalid Lark configuration: ${this.lastConfigError}`,
+      )
       await this.unregisterIfRegistered()
       return
     }
@@ -344,8 +354,11 @@ export class DaemonLarkHost {
         validatedTimezone = routineTimezone(config.lark.timezone)
       }
     } catch (error) {
-      this.lastError = errorMessage(error)
-      logger.warn(`[daemon] Invalid Lark configuration: ${this.lastError}`)
+      this.lastConfigError = errorMessage(error)
+      this.lastStartError = undefined
+      logger.warn(
+        `[daemon] Invalid Lark configuration: ${this.lastConfigError}`,
+      )
       await this.unregisterIfRegistered()
       return
     }
@@ -355,7 +368,8 @@ export class DaemonLarkHost {
       statuses.find((s) => s.name === 'lark')?.enabled !== false
 
     if (config.disabledByExtension || !enabledInDb) {
-      this.lastError = undefined
+      this.lastConfigError = undefined
+      this.lastStartError = undefined
       await this.unregisterIfRegistered()
       return
     }
@@ -363,9 +377,10 @@ export class DaemonLarkHost {
     try {
       await this.syncProjectAndBindings(chats, validatedTimezone)
     } catch (error) {
-      this.lastError = errorMessage(error)
+      this.lastConfigError = errorMessage(error)
+      this.lastStartError = undefined
       logger.warn(
-        `[daemon] Lark project/binding sync failed: ${this.lastError}`,
+        `[daemon] Lark project/binding sync failed: ${this.lastConfigError}`,
       )
       await this.unregisterIfRegistered()
       return
@@ -391,11 +406,12 @@ export class DaemonLarkHost {
       hasCustomTransport: Boolean(transport),
     })
 
+    this.lastConfigError = undefined
     if (!force && this.registered && nextFingerprint === this.lastFingerprint) {
       return
     }
 
-    this.lastError = undefined
+    this.lastStartError = undefined
     const adapter = createLarkChannelAdapter({
       appId,
       appSecret,
@@ -417,10 +433,12 @@ export class DaemonLarkHost {
       this.registered = true
       this.lastFingerprint = nextFingerprint
     } catch (error) {
-      this.lastError = errorMessage(error)
+      this.lastStartError = errorMessage(error)
       this.registered = false
       this.lastFingerprint = ''
-      logger.warn(`[daemon] Lark channel could not start: ${this.lastError}`)
+      logger.warn(
+        `[daemon] Lark channel could not start: ${this.lastStartError}`,
+      )
     }
   }
 

@@ -265,9 +265,9 @@ export async function openHost(
         ...(transport ? { transport } : {}),
       })
       await larkHost.sync(runtime.getLarkConfig(), true)
-      const knownError = larkHost.knownChannelInfo().errors.get('lark')
-      if (knownError) {
-        throw new Error(knownError)
+      const configError = larkHost.configError()
+      if (configError) {
+        throw new Error(configError)
       }
     }
 
