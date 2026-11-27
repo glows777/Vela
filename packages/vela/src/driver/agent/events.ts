@@ -1,3 +1,4 @@
+import type { AgentErrorKind } from '../../shared/provider-types.ts'
 import type {
   AssistantModelMessage,
   ModelMessage,
@@ -14,15 +15,7 @@ import type { StepRecord, StepUsage } from '../usage/tracker.ts'
 /** Why an assistant message ended (like pi's `stopReason`; on the event because `ModelMessage` has no such field). */
 export type StopReason = 'stop' | 'length' | 'toolUse' | 'aborted' | 'error'
 
-/** A terminal failure category for hosts; it does not decide retries. */
-export type AgentErrorKind =
-  | 'auth'
-  | 'billing'
-  | 'rate_limit'
-  | 'network'
-  | 'context_overflow'
-  | 'provider'
-  | 'unknown'
+export type { AgentErrorKind }
 
 /** Why earlier history is summarized (pi's compaction reasons). */
 export type CompactionReason = 'manual' | 'threshold' | 'overflow'

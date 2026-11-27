@@ -137,7 +137,8 @@ export class ChatLog {
 
   /** The request behind the streaming text failed: that text stays, marked, and a retry starts anew. */
   markFailed(): void {
-    if (this.answer?.hasContent) this.answer.markFailed()
+    const target = this.answer ?? this.lastAnswer
+    if (target?.hasContent) target.markFailed()
   }
 
   /** A new assistant message: the previous one's thinking and answer references end here. */

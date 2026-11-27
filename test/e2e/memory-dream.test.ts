@@ -109,7 +109,7 @@ test('a real memory save and later correction consolidate offline with provenanc
     db.close()
   }
   const { output } = await captureConsole(() => {
-    t.ctx.session = second
+    t.ctx.session = t.clientFor(second)
     return t.command('/usage')
   })
   expect(output).toContain('2 steps total')

@@ -1,41 +1,85 @@
-import type { VelaSession } from '../../driver/index.ts'
+import type { RuntimeSessionInspection } from '../../driver/runtime-types.ts'
+import type { VelaRuntime } from '../../runtime-sdk-types.ts'
+import { CliSessionClient, ensureCliProject } from '../runtime-client.ts'
 import { errorMessage } from './components.ts'
 import { isModelUsable } from './model-availability.ts'
 import type { InteractiveOptions } from './types.ts'
 
-/** Validate the candidate before replacing the active TUI session. */
+/** Opens or creates the target session on `VelaRuntime`, applies CLI config, and checks model readiness. */
 export async function prepareInteractiveSession(
-  session: VelaSession,
+  runtime: VelaRuntime,
   options: InteractiveOptions,
+  sessionId: string,
   resume: boolean,
   startup: boolean,
 ): Promise<{
-  resources: Awaited<ReturnType<VelaSession['resources']>>
+  session: CliSessionClient
+  inspection: RuntimeSessionInspection
   resumed: boolean
   resumeFailure?: string
   setupNext: boolean
 }> {
+  const projectId = options.noSession
+    ? undefined
+    : await ensureCliProject(runtime, options.cwd)
   let resumed = false
   let resumeFailure: string | undefined
-  if (resume) {
-    try {
-      resumed = await session.resume()
-    } catch (error) {
-      resumeFailure = errorMessage(error)
+  try {
+    const existing = await runtime.sessions.get(sessionId)
+    if (resume) {
+      if (existing) {
+        resumed = true
+      } else {
+        resumeFailure = `Session ${sessionId} not found`
+        await runtime.sessions.create({
+          id: sessionId,
+          ...(projectId ? { projectId } : {}),
+          location: { environment: 'local', cwd: options.cwd },
+        })
+      }
+    } else if (!existing) {
+      await runtime.sessions.create({
+        id: sessionId,
+        ...(projectId ? { projectId } : {}),
+        location: { environment: 'local', cwd: options.cwd },
+      })
+    }
+  } catch (error) {
+    resumeFailure = errorMessage(error)
+    const fallbackExisting = await runtime.sessions
+      .get(sessionId)
+      .catch(() => undefined)
+    if (!fallbackExisting) {
+      await runtime.sessions.create({
+        id: sessionId,
+        ...(projectId ? { projectId } : {}),
+        location: { environment: 'local', cwd: options.cwd },
+      })
     }
   }
+
+  const session = new CliSessionClient(
+    runtime,
+    sessionId,
+    undefined,
+    options.modelEnv,
+  )
   try {
-    const resources = await session.resources()
     const setupNext = startup && Boolean(options.agentDir)
-    const quiet = setupNext && !isModelUsable(session, options.hasUsableModel)
-    options.configure(session, {
-      quiet,
-      startup,
-      defaultTools: resources.defaultTools,
-    })
-    return { resources, resumed, resumeFailure, setupNext }
+    await options.configure(session, { quiet: setupNext, startup })
+    const inspection = await session.refresh({ includeEntries: true })
+    if (!isModelUsable(session, options.hasUsableModel) && !setupNext) {
+      await options.configure(session, { quiet: false, startup })
+    }
+    return {
+      session,
+      inspection,
+      resumed,
+      resumeFailure,
+      setupNext,
+    }
   } catch (error) {
-    if (!startup) await session.close()
+    session.dispose()
     throw error
   }
 }

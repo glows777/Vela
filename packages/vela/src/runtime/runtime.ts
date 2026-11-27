@@ -195,7 +195,12 @@ export class VelaRuntimeEngine {
     source?: 'user' | 'handoff' | 'session'
     wake?: boolean
     passive?: boolean
-    attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
+    attachments?: Array<{
+      blobId: string
+      name: string
+      mimeType?: string
+      inlineOnly?: boolean
+    }>
     metadata?: Record<string, unknown>
   }): { event: InboxEventRecord; inserted: boolean } {
     if (this.disposed) throw new Error('Runtime has been disposed')
@@ -423,6 +428,12 @@ export class VelaRuntimeEngine {
 
   bufferedDeltas(sessionId: string): StreamDeltaEvent[] {
     return this.eventBus.bufferedDeltas(sessionId)
+  }
+
+  isSessionBusy(sessionId: string): boolean {
+    return (
+      this.activeWorkers.has(sessionId) || this.stoppingSessions.has(sessionId)
+    )
   }
 
   subscribeEvents(listener: RuntimeEventListener): () => void {

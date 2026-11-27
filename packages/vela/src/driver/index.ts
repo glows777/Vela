@@ -186,6 +186,7 @@ export type {
   PendingApprovalInfo,
   ResolvedApprovalInfo,
 } from './step-recovery.ts'
+export { createBinaryResolver } from './tools/binaries.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export { defineJsonSchemaTool } from './tools/json-schema.ts'
 export type { ToolContext, ToolDefinition } from './tools/registry.ts'

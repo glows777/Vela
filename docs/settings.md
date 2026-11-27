@@ -46,7 +46,7 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 
 ## Local listener settings
 
-Local is opt-in through **user-level** `local` in `~/.vela/config.json` (or `$VELA_DIR/config.json`). Project config cannot enable, disable or override this listener. It starts only in real `vela serve`, never interactive, print, JSON, RPC or `--list-models` mode; `--no-extensions` disables it.
+Local is opt-in through **user-level** `local` in `~/.vela/config.json` (or `$VELA_DIR/config.json`) when using the SDK (`local({ token })`). Project config cannot enable, disable or override this listener, and `--no-extensions` disables it. (Standalone `vela serve` was retired in v0.9.)
 
 ```json
 {

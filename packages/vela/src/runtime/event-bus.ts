@@ -138,19 +138,26 @@ export class RuntimeEventBus {
   }
 
   emitDelta(delta: StreamDeltaEvent): void {
+    const deltaChars =
+      'delta' in delta
+        ? delta.delta.length
+        : JSON.stringify(delta.toolCall).length
     let entry = this.activeDeltaBuffer.get(delta.sessionId)
     if (!entry) {
       entry = { events: [], chars: 0 }
       this.activeDeltaBuffer.set(delta.sessionId, entry)
     }
     entry.events.push(delta)
-    entry.chars += delta.delta.length
+    entry.chars += deltaChars
     while (
       entry.events.length > MAX_DELTA_BUFFER_EVENTS ||
       (entry.chars > MAX_DELTA_BUFFER_CHARS && entry.events.length > 1)
     ) {
       const removed = entry.events.shift()!
-      entry.chars -= removed.delta.length
+      entry.chars -=
+        'delta' in removed
+          ? removed.delta.length
+          : JSON.stringify(removed.toolCall).length
     }
     for (const listener of this.deltaListeners) {
       try {

@@ -432,6 +432,18 @@ export function openDatabase(options: OpenDatabaseOptions): VelaDatabase {
     return db
   } catch (error) {
     db.close()
+    const msg = error instanceof Error ? error.message : String(error)
+    if (
+      !isMemory &&
+      /not a database|database disk image is malformed|encrypted or is not a database/i.test(
+        msg,
+      )
+    ) {
+      throw new Error(
+        `[config] ${options.path} is not a valid SQLite database: ${msg}`,
+        { cause: error },
+      )
+    }
     throw error
   }
 }

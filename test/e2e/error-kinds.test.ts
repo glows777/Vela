@@ -197,8 +197,8 @@ for (const scenario of cases) {
     const t = fixture()
     const { result, output } = await captureConsole(() =>
       runPrintMode({
-        vela: t.vela,
-        session: t.session,
+        runtime: t.runtime,
+        session: t.clientFor(t.session),
         messages: ['hello'],
         mode: 'text',
       }),
@@ -295,8 +295,8 @@ for (const followUpFails of [false, true]) {
       if (surface === 'print') {
         const captured = await captureConsole(() =>
           runPrintMode({
-            vela: t.vela,
-            session,
+            runtime: t.runtime,
+            session: t.clientFor(session),
             messages: ['hello'],
             mode: 'text',
           }),

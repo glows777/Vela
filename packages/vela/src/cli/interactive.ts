@@ -1,5 +1,6 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
+import { rmSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   type Component,
@@ -12,38 +13,20 @@ import {
   type TuiAltScreen,
 } from '@earendil-works/pi-tui'
 import {
-  branchSummaryMessageText,
-  contextEntries,
-  inspectSession,
-  isToolResultError,
-  summaryMessageText,
-} from '../driver/diagnostics.ts'
-import type {
-  ImageContent,
-  ModelMessage,
-  ThinkingLevel,
-  VelaEvent,
-  VelaSession,
+  createBinaryResolver,
+  type ImageContent,
+  type SessionEntry,
+  type ThinkingLevel,
 } from '../driver/index.ts'
-import { resolveBinary, type SessionEntry } from '../driver/index.ts'
-import type { Vela } from '../vela.ts'
-import {
-  clipboardFilesText,
-  clipboardImageText,
-  copyToClipboard,
-  readClipboardFilePaths,
-  readClipboardImage,
-  readClipboardText,
-} from './clipboard.ts'
+import type { VelaRuntime } from '../runtime-sdk-types.ts'
+import { copyToClipboard } from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
+import type { CliSessionClient } from './runtime-client.ts'
 import { formatContextFileList, headerSessionLabel } from './status-display.ts'
-import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
-import { backgroundRunning } from './tui/background.ts'
 import { ChatLog } from './tui/chat-log.ts'
+import { submitInteractiveInput } from './tui/command-router.ts'
 import { commandCompletions, HOTKEYS } from './tui/commands.ts'
 import {
-  agentEndNotice,
-  compactionLine,
   errorMessage,
   isDeadTerminalError,
   lastAnswer,
@@ -51,8 +34,15 @@ import {
   sanitize,
 } from './tui/components.ts'
 import { keyLabel, VelaEditor } from './tui/editor.ts'
+import {
+  handleRuntimeDeltaForTui,
+  handleRuntimeEventForTui,
+  type InteractiveEventHost,
+  renderSessionBranchHistory,
+} from './tui/event-bridge.ts'
 import { Footer } from './tui/footer.ts'
 import { inputDialog, selectDialog } from './tui/input-dialogs.ts'
+import { wireInteractiveKeys } from './tui/keybindings.ts'
 import { larkSetup } from './tui/lark-setup.ts'
 import { createInteractiveTui } from './tui/layout.ts'
 import { StartupHeader } from './tui/logo.ts'
@@ -60,7 +50,6 @@ import { captureCliLogs } from './tui/logs.ts'
 import { isModelUsable } from './tui/model-availability.ts'
 import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
 import { prepareInteractiveSession } from './tui/session-open.ts'
-import { forkCommand, treeCommand } from './tui/session-tree.ts'
 import { setupWizard } from './tui/setup-wizard.ts'
 import { StatusLine } from './tui/status-line.ts'
 import { editorTheme, theme } from './tui/theme.ts'
@@ -68,14 +57,12 @@ import type { InteractiveOptions, LogLevel } from './tui/types.ts'
 
 export type { InteractiveOptions } from './tui/types.ts'
 
-/** The one refusal every command that needs an idle session gives. */
 const BUSY =
   'A task is running; press Esc to interrupt or wait for it to finish'
 
 /**
  * Interactive mode (TUI, like pi's interactive mode): pi-tui provides components and rendering.
- * Layout: header → chat log → queued messages → status line → editor → footer.
- * The returned Promise resolves on exit.
+ * Layout: header -> chat log -> queued messages -> status line -> editor -> footer.
  */
 export async function runInteractive(
   options: InteractiveOptions,
@@ -99,16 +86,15 @@ export class InteractiveMode {
   setupSummary?: string
   readonly tui: TuiAltScreen
   private readonly terminal: Terminal
-  private readonly vela: Vela
+  private readonly runtime: VelaRuntime
   private readonly options: InteractiveOptions
   private fdPath?: string
   private refreshCompletion?: () => void
-  private session!: VelaSession
+  private session?: CliSessionClient
 
   private readonly header = new Container()
   private readonly transcript = new Container()
   private readonly log = new ChatLog(() => this.tui.requestRender())
-  /** `!` commands run while the agent works; they move to the chat when it stops, where they are recorded (like pi) */
   private readonly pendingBash = new Container()
   private readonly pending = new Container()
   private readonly status = new Container()
@@ -117,9 +103,13 @@ export class InteractiveMode {
   private readonly editor: VelaEditor
   private readonly dispatch: ReturnType<typeof createCliDispatcher>
   private readonly statusLine: StatusLine
+  private readonly bashOutputListeners = new Map<
+    string,
+    (chunk: string) => void
+  >()
 
   private lastCtrlC = 0
-  private shownError?: unknown
+  private shownError?: string
   private dialogs = Promise.resolve()
   private restoreLogs?: () => void
   private readonly cleanups: (() => void)[] = []
@@ -132,9 +122,9 @@ export class InteractiveMode {
 
   constructor(options: InteractiveOptions) {
     this.options = options
-    this.vela = options.vela
+    this.runtime = options.runtime
     this.terminal = options.terminal ?? new ProcessTerminal()
-    this.footer = new Footer(this.vela.cwd, () => this.session)
+    this.footer = new Footer(options.cwd, () => this.session)
     this.tui = createInteractiveTui(
       this.terminal,
       this.header,
@@ -143,7 +133,7 @@ export class InteractiveMode {
       this.footer,
     )
     this.editor = new VelaEditor(this.tui, editorTheme, { paddingX: 1 })
-    this.dispatch = createCliDispatcher(this.vela)
+    this.dispatch = createCliDispatcher(this.runtime)
     this.statusLine = new StatusLine(this.tui, this.status)
     for (const child of [
       this.log.container,
@@ -156,14 +146,52 @@ export class InteractiveMode {
     this.setupKeys()
   }
 
+  private eventHost(): InteractiveEventHost {
+    return {
+      log: this.log,
+      statusLine: this.statusLine,
+      requestRender: () => this.tui.requestRender(),
+      addNotice: this.addNotice.bind(this),
+      setShownError: (err) => {
+        this.shownError = err
+      },
+      movePendingBash: this.movePendingBash.bind(this),
+      onRunFinished: () => {
+        if (!this.session || this.shuttingDown) return
+        void this.session
+          .refresh()
+          .then(() => {
+            this.updatePending()
+            this.tui.requestRender()
+          })
+          .catch(() => {})
+      },
+    }
+  }
+
   async start(): Promise<void> {
-    const { vela, options } = this
+    const { runtime, options } = this
     this.tui.start()
     this.tui.setFocus(this.editor)
     this.captureLogs()
     this.registerSignalHandlers()
     options.attachLogger?.((level, message) => this.addNotice(message, level))
-    vela.subscribe((event, sessionId) => this.onEvent(event, sessionId))
+
+    const host = this.eventHost()
+    const unsubEvents = runtime.events.subscribe((event) => {
+      if (!this.session) return
+      handleRuntimeEventForTui(host, event, this.session.id)
+    })
+    const unsubDeltas = runtime.events.subscribeDeltas((delta) => {
+      if (!this.session) return
+      handleRuntimeDeltaForTui(
+        host,
+        delta,
+        this.session.id,
+        this.bashOutputListeners,
+      )
+    })
+    this.cleanups.push(unsubEvents, unsubDeltas)
 
     let sessionId = options.sessionId
     let resume = options.resume
@@ -175,12 +203,16 @@ export class InteractiveMode {
       }
     }
     try {
-      await vela.ready()
+      await runtime.ready()
     } catch (error) {
       this.addNotice(errorMessage(error), 'error')
     }
-    // Like pi: @ file completion needs fd; find (or download) it after the UI is up so startup doesn't block
-    resolveBinary(vela, 'fd')
+
+    const resolveFd = createBinaryResolver({
+      binDir: options.agentDir ? join(options.agentDir, 'bin') : undefined,
+      offline: options.offline,
+    })
+    resolveFd('fd')
       .then((fdPath) => {
         this.fdPath = fdPath
         this.refreshCompletion?.()
@@ -191,11 +223,12 @@ export class InteractiveMode {
           'warning',
         ),
       )
+
     const modelOk = await this.openSession(sessionId, resume, true)
-    if ((options.setupOnly || !modelOk) && options.agentDir) {
+    if ((options.setupOnly || !modelOk) && options.agentDir && this.session) {
       try {
-        const host: Parameters<typeof setupWizard>[0] = {
-          vela: this.vela,
+        const wizardHost: Parameters<typeof setupWizard>[0] = {
+          runtime: this.runtime,
           session: this.session,
           agentDir: options.agentDir,
           projectSettingsPath: options.projectSettingsPath,
@@ -228,8 +261,8 @@ export class InteractiveMode {
         }
         const saved =
           options.setupTarget === 'lark'
-            ? await larkSetup(host)
-            : await setupWizard(host)
+            ? await larkSetup(wizardHost)
+            : await setupWizard(wizardHost)
         if (!this.shuttingDown) this.renderHeader(saved || modelOk)
       } catch (error) {
         if (this.shuttingDown) return
@@ -245,47 +278,59 @@ export class InteractiveMode {
     this.tui.requestRender()
   }
 
-  // ---------------------------------------------------------------- Sessions
-
   private async openSession(id: string, resume: boolean, startup = false) {
-    const session = this.vela.session(id)
-    const { resources, resumed, resumeFailure, setupNext } =
-      await prepareInteractiveSession(session, this.options, resume, startup)
+    const { session, inspection, resumed, resumeFailure, setupNext } =
+      await prepareInteractiveSession(
+        this.runtime,
+        this.options,
+        id,
+        resume,
+        startup,
+      )
     this.session = session
     this.resetChat()
-    if (resumeFailure)
+    if (resumeFailure) {
       this.addNotice(`Failed to resume session: ${resumeFailure}`, 'error')
+    }
+    if (inspection.extensionErrors.length > 0 && startup) {
+      for (const err of inspection.extensionErrors) {
+        this.addNotice(err, 'error')
+      }
+    }
     const modelOk = isModelUsable(session, this.options.hasUsableModel)
     this.refreshCompletion = () =>
       this.editor.setAutocompleteProvider(
-        commandCompletions(this.vela, session, resources, this.fdPath),
+        commandCompletions(session, inspection, this.fdPath),
       )
     this.refreshCompletion()
     if (startup) {
-      const contextFiles = formatContextFileList(resources.contextFiles, {
-        cwd: session.cwd,
-        homeDir: homedir(),
-        agentDir: this.options.agentDir,
-      })
+      const contextFiles = formatContextFileList(
+        inspection.resources.contextFiles,
+        {
+          cwd: inspection.cwd,
+          homeDir: homedir(),
+          agentDir: this.options.agentDir,
+        },
+      )
       if (contextFiles) this.addNotice(`[context] ${contextFiles}`)
     }
     this.renderHeader(modelOk || setupNext)
     if (resumed) {
-      this.renderHistory(session.getBranch())
+      this.renderHistory(inspection.branch)
       this.addNotice(
-        `Resumed session ${session.name ?? session.id}, ${session.messages.length} messages`,
+        `Resumed session ${inspection.name ?? inspection.sessionId}, ${inspection.entries.length} entries`,
         'dim',
       )
-    } else if (session.parentSession && session.messages.length) {
-      // A fork / clone opens with the copied branch
-      this.renderHistory(session.getBranch())
+    } else if (inspection.parentSession && inspection.branch.length) {
+      this.renderHistory(inspection.branch)
       this.addNotice(
-        `Session ${session.id}, copied from ${session.parentSession}`,
+        `Session ${inspection.sessionId}, copied from ${inspection.parentSession}`,
         'dim',
       )
     }
     if (process.env.VELA_DEBUG === '1') {
-      const lines = (await inspectSession(this.vela, session)).stages.map(
+      const debugSnap = await session.refresh({ previewPrompt: true })
+      const lines = (debugSnap.promptSnapshot?.stages ?? []).map(
         ({ name, chars }) =>
           `  ${name}: ${chars === null ? '[OFF]' : `[ON] ${chars} chars`}`,
       )
@@ -297,6 +342,7 @@ export class InteractiveMode {
   }
 
   private async switchSession(id: string, resume: boolean): Promise<void> {
+    if (!this.session) return
     if (this.session.isRunning) {
       this.addNotice(BUSY, 'warning')
       return
@@ -304,11 +350,14 @@ export class InteractiveMode {
     const previous = this.session
     if (id === previous.id) return
     await this.openSession(id, resume)
-    await previous.close()
+    previous.dispose()
   }
 
   private async pickSession(): Promise<string | undefined> {
-    const saved = await this.vela.listSessions()
+    const saved = await this.runtime.sessions.listSummaries({
+      cwd: this.options.cwd,
+      excludeChannels: true,
+    })
     if (!saved.length) {
       this.addNotice('No saved sessions', 'dim')
       return undefined
@@ -330,6 +379,7 @@ export class InteractiveMode {
   }
 
   private renderHeader(modelOk: boolean): void {
+    if (!this.session) return
     this.header.clear()
     const lines = [
       `${theme.bold('Vela')} ${theme.fg('dim', headerSessionLabel(this.session.id))}`,
@@ -338,7 +388,6 @@ export class InteractiveMode {
         `${keyLabel('interrupt')} interrupt · ${keyLabel('clear')} clear · ${keyLabel('exit')} exit · / commands · /hotkeys for more`,
       ),
     ]
-    // Loaded extensions are not listed here (#558): /extensions names each one with what it registered.
     if (!modelOk)
       lines.push(
         theme.fg(
@@ -350,204 +399,44 @@ export class InteractiveMode {
     this.header.addChild(new StartupHeader(() => lines, this.tui))
   }
 
-  /**
-   * Render history when resuming, forking or moving in the tree (like pi, from the current branch's entries):
-   * the summary and what the model still sees, with the original tool output, edit diffs, nested calls and
-   * `!` commands.
-   */
   private renderHistory(branch: SessionEntry[]): void {
-    const { compaction, entries: shown } = contextEntries(branch)
-    if (compaction)
-      this.renderMessage({
-        role: 'user',
-        content: summaryMessageText(compaction.summary),
-      })
-    for (const entry of shown) {
-      if (entry.type === 'bash_execution') {
-        this.log.endTurn()
-        this.log
-          .addBash(entry.command, !!entry.excludeFromContext)
-          .setResult(entry)
-        continue
-      }
-      if (entry.type === 'branch_summary') {
-        if (entry.summary)
-          this.renderMessage({
-            role: 'user',
-            content: branchSummaryMessageText(entry.summary),
-          })
-        continue
-      }
-      if (entry.type === 'custom_message') {
-        this.renderMessage({ role: 'user', content: entry.content }, true, {
-          customType: entry.customType,
-          display: entry.display,
-        })
-        continue
-      }
-      if (entry.type !== 'message' || entry.stopReason) continue
-      const { message } = entry
-      if (message.role !== 'tool') this.renderMessage(message, true)
-      if (message.role === 'user' || typeof message.content === 'string')
-        continue
-      for (const part of message.content) {
-        if (part.type !== 'tool_result') continue
-        const block = this.log.tool(part.toolCallId)
-        if (!block) continue
-        this.log.settleTool(
-          block,
-          part.output,
-          isToolResultError(part.output),
-          entry.details?.[part.toolCallId],
-        )
-      }
-    }
-    this.log.endTurn()
+    renderSessionBranchHistory(this.log, branch)
   }
 
-  // ---------------------------------------------------------------- Events
-
-  private onEvent(event: VelaEvent, sessionId: string): void {
-    if (sessionId !== this.session.id) return
-    switch (event.type) {
-      case 'agent_start':
-        this.log.endTurn()
-        this.shownError = undefined
-        this.statusLine.start('Thinking…')
-        break
-      case 'message_start':
-        if (event.message.role === 'user')
-          this.renderMessage(event.message, false, event.custom)
-        break
-      case 'turn_start':
-        this.log.nextMessage()
-        this.statusLine.start('Thinking…')
-        break
-      case 'message_update': {
-        const update = event.assistantMessageEvent
-        if (update.type === 'thinking_delta') {
-          this.log.appendThinking(update.delta)
-        } else if (update.type === 'text_delta') {
-          this.log.appendText(update.delta)
-          this.statusLine.set('Answering…')
-        } else if (update.type === 'toolcall_end') {
-          // Like pi: the tool block appears once the call is written; its result arrives with tool_execution_end
-          this.log.addTool(
-            update.toolCall.toolCallId,
-            update.toolCall.toolName,
-            update.toolCall.input,
-          )
-        }
-        break
-      }
-      case 'message_end':
-        if (event.message.role !== 'assistant') break
-        // Like pi: a failed attempt keeps its partial text, marked as failed; a retry starts a new message
-        if (event.stopReason === 'error') this.log.markFailed()
-        this.log.nextMessage()
-        break
-      case 'tool_execution_start':
-        if (!this.log.hasTool(event.toolCallId))
-          this.log.addTool(event.toolCallId, event.toolName, event.args)
-        this.log.startTool(event.toolCallId)
-        this.statusLine.set(`Running ${event.toolName}…`)
-        break
-      case 'tool_execution_update':
-        this.log.updateTool(event.toolCallId, event.partialResult)
-        break
-      case 'tool_execution_end':
-        this.log.settleTool(
-          this.log.tool(event.toolCallId),
-          event.result,
-          event.isError,
-          event.details,
-          event.durationMs,
-        )
-        break
-      case 'auto_retry_start':
-        // Like pi: a retry is a status line, and it ends with its backoff, not in the transcript (#566)
-        this.statusLine.retry(
-          `Request failed, retrying in ${Math.round(event.delayMs / 1000)}s (${event.attempt}/${event.maxAttempts}): ${sanitize(oneLine(event.errorMessage))}`,
-          event.delayMs,
-        )
-        break
-      case 'agent_end': {
-        this.log.endTurn()
-        this.log.stopTools()
-        if (event.reason === 'error') this.shownError = event.error
-        const ended = agentEndNotice(event)
-        if (ended) this.addNotice(ended.message, ended.level)
-        break
-      }
-      case 'agent_settled':
-        this.statusLine.stop()
-        this.movePendingBash()
-        break
-      case 'queue_update':
-        this.updatePending()
-        break
-      case 'compaction_start':
-        this.statusLine.set('Compacting context…')
-        break
-      case 'compaction_end':
-        // The request that waited on this summary is starting now (#570)
-        this.statusLine.set('Thinking…')
-        if (event.result) this.addNotice(compactionLine(event), 'dim')
-        else if (event.errorMessage)
-          this.addNotice(
-            `[context] Compaction failed: ${event.errorMessage}`,
-            'error',
-          )
-        break
-      case 'audit':
-        // An SDK record, not chat: the tool block and the fold line already show the write (#553).
-        break
-      case 'notify':
-        this.addNotice(event.message, event.level)
-        break
-    }
-    this.tui.requestRender()
-  }
-
-  /** An extension's custom message, or a session message, goes to the chat log as it was recorded. */
-  private renderMessage(
-    message: ModelMessage,
-    history = false,
-    custom = this.session.customMessageOf(message),
-  ): void {
-    this.log.renderMessage(message, history, custom)
-  }
-
-  /** The agent stopped: `!` blocks run meanwhile go to the chat, where their results are now recorded */
   private movePendingBash(): void {
     for (const child of [...this.pendingBash.children]) this.log.add(child)
     this.pendingBash.clear()
   }
 
-  /** `!cmd` / `!!cmd` (like pi): runs the command; its output goes to the model with the next message unless `!!` */
   private async runBash(command: string, excludeFromContext: boolean) {
     const session = this.session
+    if (!session) return
     const running = session.isRunning
     const block = this.log.addBash(
       command,
       excludeFromContext,
       running ? this.pendingBash : this.log.container,
     )
-    // A command run mid-turn gets its own block below the log; the turn keeps its one fold
     if (!running) this.log.endTurn()
     this.tui.requestRender()
+    const bashId = randomUUID()
+    let output = ''
+    this.bashOutputListeners.set(bashId, (chunk) => {
+      output += chunk
+      block.update(output)
+      this.tui.requestRender()
+    })
     try {
-      const result = await session.executeBash(command, {
+      const result = await session.execBash(command, {
         excludeFromContext,
-        onUpdate: (output) => {
-          block.update(output)
-          this.tui.requestRender()
-        },
+        id: bashId,
       })
       block.setResult(result)
     } catch (error) {
       block.setFailed()
       this.addNotice(`Shell command failed: ${errorMessage(error)}`, 'error')
+    } finally {
+      this.bashOutputListeners.delete(bashId)
     }
     this.tui.requestRender()
   }
@@ -562,7 +451,7 @@ export class InteractiveMode {
 
   private updatePending(): void {
     this.pending.clear()
-    const { steering } = this.session.queue
+    const steering = this.session?.snapshot?.queuedSteering ?? []
     if (!steering.length) return
     this.pending.addChild(new Spacer(1))
     for (const text of steering)
@@ -579,314 +468,109 @@ export class InteractiveMode {
   }
 
   private updateBorder(): void {
-    // Bash mode (input starts with `!`) has its own border color, like pi
     this.editor.borderColor = this.editor.getText().trimStart().startsWith('!')
       ? theme.bashBorder
-      : theme.thinkingBorder(this.session.thinkingLevel)
+      : theme.thinkingBorder(this.session?.thinkingLevel ?? 'medium')
     this.tui.requestRender()
   }
 
-  // ---------------------------------------------------------------- Input
-
   private setupKeys(): void {
-    const { editor } = this
-    editor.onSubmit = (text) => void this.submit(text)
-    let bashMode = false
-    editor.onChange = (text) => {
-      const next = text.trimStart().startsWith('!')
-      if (next === bashMode) return
-      bashMode = next
-      this.updateBorder()
-    }
-    const actions = editor.actions
-    actions.set('interrupt', () => {
-      // Like pi: a running `!` command first, then the agent, then leave bash mode
-      if (this.session.isBashRunning) this.session.abortBash()
-      else if (this.session.isRunning) this.restoreQueue({ abort: true })
-      else if (editor.getText().trimStart().startsWith('!')) editor.setText('')
-    })
-    actions.set('dequeue', () => {
-      if (!this.restoreQueue()) this.addNotice('No queued messages', 'dim')
-    })
-    actions.set('clear', () => {
-      const now = Date.now()
-      if (now - this.lastCtrlC < 500) void this.shutdown()
-      else {
-        editor.setText('')
-        this.lastCtrlC = now
-      }
-    })
-    actions.set('exit', () => void this.shutdown())
-    actions.set('pasteImage', () => void this.pasteClipboard())
-    actions.set(
-      'background',
-      () => void backgroundRunning(this.session, this.addNotice.bind(this)),
+    wireInteractiveKeys(
+      {
+        runtime: this.runtime,
+        editor: this.editor,
+        log: this.log,
+        options: this.options,
+        getSession: () => this.session,
+        isShuttingDown: () => this.shuttingDown,
+        getClipboardDir: () => this.clipboardDir,
+        setClipboardDir: (dir) => {
+          this.clipboardDir = dir
+        },
+        getLastCtrlC: () => this.lastCtrlC,
+        setLastCtrlC: (ts) => {
+          this.lastCtrlC = ts
+        },
+        addNotice: this.addNotice.bind(this),
+        updateBorder: this.updateBorder.bind(this),
+        restoreQueue: this.restoreQueue.bind(this),
+        shutdown: () => this.shutdown(),
+        setThinking: this.setThinking.bind(this),
+        selectModel: this.selectModel.bind(this),
+        cycleModel: this.cycleModel.bind(this),
+        requestRender: () => this.tui.requestRender(),
+      },
+      (text) => void this.submit(text),
     )
-    actions.set('cycleThinking', () => {
-      // Like pi: only the levels the model supports
-      const levels = this.session.availableThinkingLevels()
-      if (levels.length < 2) {
-        this.addNotice(
-          'This model has no thinking levels to cycle through',
-          'dim',
-        )
-        return
-      }
-      const next =
-        levels[
-          (levels.indexOf(this.session.thinkingLevel) + 1) % levels.length
-        ]!
-      this.setThinking(next)
-    })
-    actions.set('selectModel', () => void this.selectModel())
-    actions.set('cycleModelForward', () => this.cycleModel(1))
-    actions.set('cycleModelBackward', () => this.cycleModel(-1))
-    actions.set('expandTools', () => this.log.toggleExpanded())
-    actions.set('toggleThinking', () => this.log.toggleThinking())
   }
 
-  /** Move queued messages back to the editor (like pi); with abort, also interrupt the current task. Returns how many were moved. */
-  private restoreQueue(options: { abort?: boolean } = {}): number {
-    const { steering } = this.session.clearQueue()
-    const queued = [...steering]
-    if (queued.length) {
-      const text = [...queued, this.editor.getText()]
+  private async restoreQueue(
+    options: { abort?: boolean } = {},
+  ): Promise<number> {
+    if (!this.session) return 0
+    const { steering } = await this.runtime.sessions.clearQueue(this.session.id)
+    if (steering.length) {
+      const text = [...steering, this.editor.getText()]
         .filter((t) => t.trim())
         .join('\n\n')
       this.editor.setText(text)
     }
+    await this.session.refresh().catch(() => {})
     this.updatePending()
-    if (options.abort) void this.session.abort()
-    this.tui.requestRender()
-    return queued.length
-  }
-
-  private isExtensionCommand(text: string): boolean {
-    if (!text.startsWith('/')) return false
-    const name = text.slice(1).split(/\s/, 1)[0]
-    return this.vela.commands(this.session.id).some((c) => c.name === name)
-  }
-
-  private async queue(text: string, behavior: 'steer') {
-    try {
-      await this.session.prompt(text, {
-        streamingBehavior: behavior,
-        source: 'interactive',
-      })
-    } catch (error) {
-      this.addNotice(this.describeError(error), 'error')
+    if (options.abort) {
+      await this.runtime.stop(this.session.id).catch(() => {})
     }
-    this.updatePending()
     this.tui.requestRender()
-  }
-
-  private async pasteClipboard(): Promise<void> {
-    if (this.shuttingDown) return
-    try {
-      const files = await (
-        this.options.readClipboardFilePaths ?? readClipboardFilePaths
-      )()
-      const bytes = files?.length
-        ? undefined
-        : await (this.options.readClipboardImage ?? readClipboardImage)()
-      if (this.shuttingDown) return
-      const { line, col } = this.editor.getCursor()
-      const current = this.editor.getLines()[line] ?? ''
-      const before = current.slice(0, col)
-      const pasted = files?.length
-        ? clipboardFilesText(files, {
-            bash: this.editor.getText().trimStart().startsWith('!'),
-            before,
-            after: current.slice(col),
-          })
-        : bytes?.length
-          ? clipboardImageText(bytes, this.clipboardImageDir(), before)
-          : await (this.options.readClipboardText ?? readClipboardText)()
-      if (!pasted) return
-      this.editor.insertTextAtCursor(pasted)
-      this.tui.requestRender()
-    } catch (error) {
-      if (this.shuttingDown) return
-      this.addNotice(
-        `Clipboard paste failed: ${errorMessage(error)}`,
-        'warning',
-      )
-    }
-  }
-
-  /** One private temporary directory for pasted images, removed when the TUI exits */
-  private clipboardImageDir(): string {
-    this.clipboardDir ??= mkdtempSync(join(tmpdir(), 'vela-clipboard-'))
-    return this.clipboardDir
+    return steering.length
   }
 
   async submit(raw: string, images?: ImageContent[]): Promise<void> {
-    const text = raw.trim()
-    if (!text && !images?.length) return
-    this.editor.addToHistory(text)
-    this.editor.setText('')
-    if (text.startsWith('!')) {
-      const excluded = text.startsWith('!!')
-      const command = text.slice(excluded ? 2 : 1).trim()
-      if (command) {
-        if (this.session.isBashRunning) {
-          this.addNotice(
-            'A shell command is already running; press Esc to cancel it first',
-            'warning',
-          )
-          this.editor.setText(text)
-          return
-        }
-        await this.runBash(command, excluded)
-        return
-      }
-    }
-    const name = text.split(/\s+/, 1)[0] ?? ''
-    const args = text.slice(name.length).trim()
-    switch (name) {
-      case '/exit':
-      case '/quit':
-        await this.shutdown()
-        return
-      case '/hotkeys':
-        this.addNotice(HOTKEYS.join('\n'))
-        return
-      case '/copy':
-        await this.copyLastAnswer()
-        return
-      case '/new':
-        await this.switchSession(this.options.newSessionId(), false).catch(
-          (error) => this.addNotice(errorMessage(error), 'error'),
-        )
-        return
-      case '/resume': {
-        if (this.session.isRunning) {
-          this.addNotice(BUSY, 'warning')
-          return
-        }
-        const id = await this.pickSession()
-        if (id)
-          await this.switchSession(id, true).catch((error) =>
-            this.addNotice(errorMessage(error), 'error'),
-          )
-        return
-      }
-      case '/name':
-        if (!args) {
-          this.addNotice(`Session name: ${this.session.name ?? '(unnamed)'}`)
-          return
-        }
-        this.session.setName(args)
-        await this.session.save()
-        this.addNotice(`Session name: ${args}`, 'dim')
-        this.tui.requestRender()
-        return
-      case '/model':
-        if (!args) {
-          await this.selectModel()
-          return
-        }
-        break
-      case '/login':
-        await this.loginCommand(args)
-        return
-      case '/logout':
-        await this.logoutCommand(args)
-        return
-      case '/thinking':
-        if (!args) {
-          const level = await this.select(
-            'Thinking level',
-            this.session.availableThinkingLevels().map((l) => ({
-              value: l,
-              label: l === this.session.thinkingLevel ? `${l} ✓` : l,
-            })),
-            this.session.thinkingLevel,
-          )
-          if (level) this.setThinking(level as ThinkingLevel)
-          return
-        }
-        break
-      case '/tree':
-        await this.treeCommand()
-        return
-      case '/fork':
-        await this.forkCommand()
-        return
-      case '/clone':
-        await this.forkCommand(true)
-        return
-      case '/export':
-        try {
-          const path = args.endsWith('.jsonl')
-            ? await this.session.exportJsonl(args)
-            : await this.session.exportHtml(args || undefined)
-          this.addNotice(`Exported to ${path}`, 'dim')
-        } catch (error) {
-          this.addNotice(`Export failed: ${errorMessage(error)}`, 'error')
-        }
-        return
-      case '/compact':
-        if (this.session.isRunning) {
-          this.addNotice(BUSY, 'warning')
-          return
-        }
-        this.statusLine.start('Compacting context…')
-        try {
-          await this.session.compact(args || undefined)
-        } catch (error) {
-          this.addNotice(`Compaction failed: ${errorMessage(error)}`, 'error')
-        } finally {
-          this.statusLine.stop()
-          this.tui.requestRender()
-        }
-        return
-    }
-    // Slash commands run as usual (also while running); other input while running steers (like pi)
-    const running = this.session.isRunning
-    if (!running || text.startsWith('/')) {
-      const handled = this.dispatch(text, {
-        vela: this.vela,
+    await submitInteractiveInput(
+      {
+        runtime: this.runtime,
         session: this.session,
-        print: this.commandOutput(),
+        cwd: this.options.cwd,
         agentDir: this.options.agentDir,
-      })
-      if (handled instanceof Promise)
-        await handled.catch((error) =>
-          this.addNotice(errorMessage(error), 'error'),
-        )
-      if (handled) {
-        this.updateBorder()
-        return
-      }
-    }
-    // Extension commands run immediately, even while running
-    if (running && !this.isExtensionCommand(text)) {
-      await this.queue(text, 'steer')
-      return
-    }
-    try {
-      await this.session.prompt(text, { source: 'interactive', images })
-    } catch (error) {
-      // Loop errors were already shown at agent_end
-      if (error !== this.shownError)
-        this.addNotice(`Error: ${this.describeError(error)}`, 'error')
-    }
-    this.tui.requestRender()
+        newSessionId: this.options.newSessionId,
+        shownError: this.shownError,
+        dispatch: this.dispatch,
+        addNotice: this.addNotice.bind(this),
+        busyNotice: this.busyNotice.bind(this),
+        describeError: this.describeError.bind(this),
+        commandOutput: this.commandOutput.bind(this),
+        editorAddHistory: (t) => this.editor.addToHistory(t),
+        editorSetText: (t) => this.editor.setText(t),
+        requestRender: () => this.tui.requestRender(),
+        runBash: this.runBash.bind(this),
+        shutdown: () => this.shutdown(),
+        copyLastAnswer: this.copyLastAnswer.bind(this),
+        pickSession: this.pickSession.bind(this),
+        switchSession: this.switchSession.bind(this),
+        selectModel: this.selectModel.bind(this),
+        setThinking: this.setThinking.bind(this),
+        updateBorder: this.updateBorder.bind(this),
+        updatePending: this.updatePending.bind(this),
+        startLoader: (t) => this.statusLine.start(t),
+        stopLoader: () => this.statusLine.stop(),
+        select: this.select.bind(this),
+        authHost: () => this.authHost(),
+        treeHost: () => this.treeHost(),
+        hotkeys: () => HOTKEYS,
+      },
+      raw,
+      images,
+    )
   }
 
-  // ---------------------------------------------------------------- Session tree
-
   private busyNotice(): boolean {
-    if (!this.session.isRunning) return false
+    if (!this.session?.isRunning) return false
     this.addNotice(BUSY, 'warning')
     return true
   }
 
-  /** `/tree` (like pi): pick an entry, choose whether to summarize the branch being left, then move. */
   private treeHost() {
     return {
-      session: this.session,
+      session: this.session!,
       options: this.options,
       select: this.select.bind(this),
       input: this.input.bind(this),
@@ -902,16 +586,14 @@ export class InteractiveMode {
       tui: this.tui,
     }
   }
-  private treeCommand(): Promise<void> {
-    return treeCommand(this.treeHost())
-  }
-  private forkCommand(clone = false): Promise<void> {
-    return forkCommand(this.treeHost(), clone)
-  }
 
-  /** `/copy` (like pi): the last assistant answer with text goes to the clipboard */
   private async copyLastAnswer(): Promise<void> {
-    const text = lastAnswer(this.session.messages)
+    if (!this.session) return
+    const snap = await this.session.refresh({ includeEntries: true })
+    const msgs = snap.branch.flatMap((e) =>
+      e.type === 'message' ? [e.message] : [],
+    )
+    const text = lastAnswer(msgs)
     if (!text) {
       this.addNotice('No answer to copy yet', 'error')
       return
@@ -934,7 +616,6 @@ export class InteractiveMode {
     return this.options.describeError?.(error) ?? errorMessage(error)
   }
 
-  /** Commands print line by line: lines from one synchronous call merge into one notice so there's no blank line between them; the command's own colors are kept */
   private commandOutput(): (text: string) => void {
     const lines: string[] = []
     return (text) => {
@@ -946,10 +627,11 @@ export class InteractiveMode {
     }
   }
 
-  private setThinking(level: ThinkingLevel): void {
+  private async setThinking(level: ThinkingLevel): Promise<void> {
+    if (!this.session) return
     try {
-      this.session.setThinkingLevel(level)
-      this.addNotice(`thinking: ${level}`, 'dim')
+      const next = await this.session.setThinkingLevel(level)
+      this.addNotice(`thinking: ${next}`, 'dim')
     } catch (error) {
       this.addNotice(errorMessage(error), 'error')
     }
@@ -959,9 +641,9 @@ export class InteractiveMode {
   private modelHost() {
     const mode = this
     return {
-      vela: this.vela,
+      runtime: this.runtime,
       get session() {
-        return mode.session
+        return mode.session!
       },
       options: this.options,
       addNotice: this.addNotice.bind(this),
@@ -970,16 +652,18 @@ export class InteractiveMode {
       updateBorder: this.updateBorder.bind(this),
     }
   }
+
   private selectModel(): Promise<void> {
     return selectModel(this.modelHost())
   }
+
   private cycleModel(direction: 1 | -1): void {
     void cycleModel(this.modelHost(), direction)
   }
 
   private authHost() {
     return {
-      vela: this.vela,
+      runtime: this.runtime,
       options: this.options,
       select: this.select.bind(this),
       input: this.input.bind(this),
@@ -987,16 +671,7 @@ export class InteractiveMode {
       renderHeader: this.renderHeader.bind(this),
     }
   }
-  private loginCommand(args: string): Promise<void> {
-    return loginCommand(this.authHost(), args)
-  }
-  private logoutCommand(args: string): Promise<void> {
-    return logoutCommand(this.authHost(), args)
-  }
 
-  // ---------------------------------------------------------------- Dialogs
-
-  /** Show a dialog in place of the editor (like pi's ExtensionSelector); one at a time, the rest queue. */
   private dialog<T>(
     build: (done: (value: T) => void) => {
       component: Component
@@ -1037,7 +712,6 @@ export class InteractiveMode {
     )
   }
 
-  /** A one-line input dialog; signal closes it, and secret masks the input. */
   input(
     title: string,
     placeholder?: string,
@@ -1050,19 +724,12 @@ export class InteractiveMode {
     )
   }
 
-  // ---------------------------------------------------------------- Exit
-
-  /** console output and AI SDK warnings would garble the screen: turn them into notice lines in the chat log */
   private captureLogs(): void {
     this.restoreLogs = captureCliLogs((text, level) =>
       this.addNotice(text, level),
     )
   }
 
-  /**
-   * Like pi: SIGTERM / SIGHUP exit cleanly (session wrap-up, extension session_shutdown);
-   * on a real terminal, an uncaught exception restores the terminal before exiting so it isn't left in raw mode with the cursor hidden.
-   */
   private registerSignalHandlers(): void {
     const signals: NodeJS.Signals[] =
       process.platform === 'win32' ? ['SIGTERM'] : ['SIGTERM', 'SIGHUP']
@@ -1072,8 +739,6 @@ export class InteractiveMode {
       this.cleanups.push(() => process.off(signal, handler))
     }
     if (this.options.terminal) return
-    // Like pi: once the terminal is gone, reads, writes and setRawMode fail with EIO / EPIPE / ENOTTY.
-    // Without a listener those errors are uncaught; exit without touching the terminal again.
     const terminalError = (error: Error) => {
       if (isDeadTerminalError(error)) this.emergencyExit()
       throw error
@@ -1095,12 +760,6 @@ export class InteractiveMode {
     this.cleanups.push(() => process.off('uncaughtException', crash))
   }
 
-  /**
-   * Exit: restore the terminal, then wrap up the sessions (`onExit`). After SIGHUP / SIGTERM the
-   * sessions are wrapped up first (like pi), since the terminal may already be gone. Restoring a
-   * terminal that is gone throws (setRawMode fails with EIO); that must not stop the exit, or the
-   * process stays alive polling a dead terminal and spins a CPU.
-   */
   async shutdown(options: { fromSignal?: boolean } = {}): Promise<void> {
     if (this.shuttingDown) return
     this.shuttingDown = true
@@ -1114,6 +773,7 @@ export class InteractiveMode {
     }
     try {
       if (!options.fromSignal) restore()
+      this.session?.dispose()
       await this.options.onExit()
     } finally {
       if (this.clipboardDir)
@@ -1125,7 +785,6 @@ export class InteractiveMode {
     }
   }
 
-  /** The terminal is gone (like pi's emergencyTerminalExit): exit without writing restore sequences. */
   private emergencyExit(): never {
     this.shuttingDown = true
     process.exit(129)

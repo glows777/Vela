@@ -1,22 +1,15 @@
-import type { VelaEvent } from '../driver/index.ts'
-import type { Vela } from '../vela.ts'
-import { errorMessage } from './error.ts'
-import { sanitize } from './tui/components.ts'
+import { errorMessage } from '../../../packages/vela/src/cli/error.ts'
+import { sanitize } from '../../../packages/vela/src/cli/tui/components.ts'
+import type { VelaEvent } from '../../../packages/vela/src/driver/index.ts'
+import type { ChannelVela as Vela } from '../../../packages/vela/src/legacy-channels/index.ts'
 
-/** Channel text is cut to one line of this many characters, like the TUI cut replies */
 const LINE_LIMIT = 80
-
 const pad = (value: number) => String(value).padStart(2, '0')
 
-/** `YYYY-MM-DD HH:MM:SS` in the deployment's local time, so a line can be matched to other logs */
 function localTime(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-/**
- * One log line for untrusted text (chat messages, sender names): terminal sequences are stripped first,
- * because a participant could otherwise write the operator's clipboard or repaint the terminal this logs to.
- */
 function oneLine(text: string): string {
   const collapsed = sanitize(text).replace(/\s+/g, ' ').trim()
   return collapsed.length > LINE_LIMIT
@@ -24,8 +17,7 @@ function oneLine(text: string): string {
     : collapsed
 }
 
-/** The stderr line for a channel event; `undefined` for every other event */
-export function formatChannelEvent(
+function formatChannelEvent(
   event: VelaEvent,
   at = new Date(),
 ): string | undefined {
@@ -48,20 +40,13 @@ export function formatChannelEvent(
   }
 }
 
-/**
- * Runs the registered channels until SIGINT / SIGTERM, which stop them through `dispose()`.
- * stdout stays empty: one line per channel event goes to `write` (stderr), like a service log.
- * Returns 1 when nothing started, so a misconfigured daemon does not idle for days.
- */
+/** Local legacy-channel test harness replacing removed `cli/serve.ts` inside S4a recovery fixtures until S4b migrates channels. */
 export async function runServe(options: {
   vela: Vela
   write: (line: string) => void
 }): Promise<number> {
   const { vela, write } = options
-  // Before starting: a stop request while a transport is still connecting must reach dispose() too
   const shutdown = shutdownSignals(() => {
-    // Bound the entire shutdown, including non-cooperative tools and cleanup hooks.
-    // The last durable assistant/tool checkpoints are recovered on the next start.
     const deadline = setTimeout(() => {
       write(
         '[serve] Shutdown exceeded 30 seconds; unfinished work will recover as interrupted.',
@@ -79,7 +64,6 @@ export async function runServe(options: {
       .dispose({ graceful: true })
       .finally(() => clearTimeout(deadline))
   })
-  // Also before starting: a recovered message can be answered while later channels are still connecting
   const unsubscribe = vela.subscribe((event) => {
     const line = formatChannelEvent(event)
     if (line !== undefined) write(line)
@@ -108,10 +92,6 @@ export async function runServe(options: {
   return stop()
 }
 
-/**
- * Installs the stop handlers and returns the first stop request. They stay installed for the rest of
- * the run, so a second signal exits right away instead of waiting for a slow shutdown.
- */
 function shutdownSignals(shutdown: () => Promise<void>): {
   stopped: Promise<void>
   requested: () => boolean
@@ -128,7 +108,7 @@ function shutdownSignals(shutdown: () => Promise<void>): {
   const stopped = new Promise<void>((resolve) => {
     stop = resolve
   })
-  for (const [signal, code] of signals)
+  for (const [signal, code] of signals) {
     process.on(signal, () => {
       if (stopping) process.exit(code)
       stopping = true
@@ -139,5 +119,6 @@ function shutdownSignals(shutdown: () => Promise<void>): {
         stop()
       })
     })
+  }
   return { stopped, requested: () => stopping }
 }

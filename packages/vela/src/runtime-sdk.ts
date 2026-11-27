@@ -1,4 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -8,295 +14,46 @@ import {
   toExtensionConfigView,
   type VelaSettings,
 } from './config/index.ts'
-import { openDatabase, type VelaDatabase } from './db/index.ts'
+import { openDatabase, withReadonlyDb } from './db/index.ts'
+import { savedTrust, saveTrust } from './db/trust.ts'
 import { defaultAgentDir } from './driver/config/paths.ts'
-import type { ExecutionLocation } from './driver/execution/types.ts'
-import type { ContextFile } from './driver/prompt/context-files.ts'
-import type { PromptTemplate } from './driver/prompt/templates.ts'
 import {
   createVelaAgentDriver,
   type RuntimeMcpAdapter,
 } from './driver/runtime-adapter.ts'
-import type { SkillDefinition } from './driver/skills/loader.ts'
-import type { ToolDefinition } from './driver/tools/registry.ts'
+import type { ResolveSpecialModelFn } from './driver/runtime-types.ts'
+import { listSessionSummariesFromDb } from './driver/session/db-queries.ts'
 import {
   fileCredentialStore,
   memoryCredentialStore,
 } from './providers/auth/store.ts'
-import type {
-  AuthInteraction,
-  CredentialStore,
-  LoginOptions,
-  LogoutOptions,
-  LogoutResult,
-} from './providers/auth/types.ts'
 import {
-  type LoginProvider,
-  type ModelInfo,
   ModelRegistry,
   type ProviderDefinition,
-  type ThinkingLevel,
 } from './providers/models/index.ts'
 import { loadModels } from './providers/models-config.ts'
 import {
-  type AgentDriver,
-  type ApprovalRecord,
-  type BlobDirection,
-  type BlobRecord,
-  type ChannelAdapter,
-  type ChannelBinding,
-  type CreateProjectInput,
-  type CreateSessionInput,
   EnvironmentRegistry,
   listRuntimeSessionMessages,
-  type ProjectRecord,
-  type RuntimeEvent,
-  type RuntimeEventListener,
-  type RuntimeMessagePage,
-  type SessionRecord,
-  type SessionStatusInfo,
   SqliteOAuthRegistrationStore,
-  type StreamDeltaEvent,
-  type StreamDeltaListener,
-  type SubscriptionRecord,
-  type TimerKind,
-  type TimerRecord,
-  type TimerTarget,
-  type UpdateProjectInput,
-  type UpsertChannelBindingInput,
   VelaRuntimeEngine,
 } from './runtime/index.ts'
-import type { VelaLimits } from './shared/limits.ts'
+import type {
+  CreateRuntimeOptions,
+  LocalVelaRuntime,
+  RuntimePromptInput,
+  RuntimeRecoverySummary,
+  VelaRuntime,
+} from './runtime-sdk-types.ts'
 import { silentLogger, type VelaLogger } from './shared/logger.ts'
 import type { ModelInput } from './shared/provider-types.ts'
-import type { RoutineSchedule } from './shared/routine-time.ts'
 
-export interface RuntimePromptInput {
-  text: string
-  dedupeKey?: string
-  source?: 'user' | 'handoff' | 'session'
-  wake?: boolean
-  passive?: boolean
-  attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
-  metadata?: Record<string, unknown>
-}
-
-export interface RuntimeRecoverySummary {
-  interruptedJobs: string[]
-  recoveredRuns: string[]
-  requeuedInboxRuns: string[]
-  wokenSessions: string[]
-}
-
-/**
- * Transport-compatible Runtime SDK contract implemented by in-process `createRuntime()`
- * and S4a's daemon IPC `connectRuntime()`. Domain records, cursors, events, and results
- * are plain JSON-serializable objects; `blobs.read`/`storeInbound` pass `Uint8Array`
- * buffers (base64 on the wire), `events.subscribe`/`subscribeDeltas` return sync
- * unsubscribe functions over the daemon stream, and `logout` supports `AbortSignal`.
- */
-export interface VelaRuntime {
-  readonly agentDir: string
-  readonly projects: {
-    list(options?: { includeArchived?: boolean }): Promise<ProjectRecord[]>
-    get(id: string): Promise<ProjectRecord | undefined>
-    getByCwd(cwd: string): Promise<ProjectRecord | undefined>
-    create(input: CreateProjectInput): Promise<ProjectRecord>
-    update(id: string, patch: UpdateProjectInput): Promise<ProjectRecord>
-    remove(id: string, options?: { deleteSessions?: boolean }): Promise<boolean>
-  }
-  readonly sessions: {
-    list(options?: {
-      projectId?: string | null
-      includeArchived?: boolean
-    }): Promise<SessionRecord[]>
-    get(id: string): Promise<SessionRecord | undefined>
-    create(input?: CreateSessionInput): Promise<SessionRecord>
-    rename(id: string, name: string | null): Promise<SessionRecord>
-    delete(id: string): Promise<boolean>
-    reset(id: string): Promise<SessionRecord>
-    status(id: string): Promise<SessionStatusInfo>
-    messages(input: {
-      sessionId: string
-      cursor?: string
-      limit?: number
-    }): Promise<RuntimeMessagePage>
-  }
-  prompt(
-    sessionId: string,
-    input: RuntimePromptInput,
-  ): Promise<{ eventId: string; inserted: boolean }>
-  steer(sessionId: string, text: string): Promise<void>
-  stop(sessionId: string, reason?: string): Promise<boolean>
-  waitForIdle(sessionId?: string): Promise<void>
-  readonly approvals: {
-    list(sessionId?: string): Promise<ApprovalRecord[]>
-    resolve(input: {
-      approvalId: string
-      decision: 'approved' | 'denied' | 'cancelled'
-      reason?: string
-      decidedBy?: string
-    }): Promise<{ approval: ApprovalRecord; shouldWake: boolean }>
-  }
-  readonly timers: {
-    list(filter?: {
-      projectId?: string
-      sessionId?: string
-      kind?: TimerKind
-      enabledOnly?: boolean
-    }): Promise<TimerRecord[]>
-    createRoutine(input: {
-      id?: string
-      projectId?: string | null
-      sessionId?: string | null
-      channel?: string | null
-      target?: TimerTarget
-      creatorId?: string | null
-      creatorName?: string | null
-      message: string
-      schedule: RoutineSchedule
-      timezone?: string
-      nowMs?: number
-    }): Promise<TimerRecord>
-    createFollowup(input: {
-      id?: string
-      sessionId: string
-      projectId?: string | null
-      channel?: string | null
-      target?: TimerTarget
-      message: string
-      fireAt: string
-      creatorId?: string | null
-      creatorName?: string | null
-    }): Promise<TimerRecord>
-    update(
-      id: string,
-      patch: {
-        message?: string
-        schedule?: RoutineSchedule
-        timezone?: string
-        enabled?: boolean
-        nowMs?: number
-      },
-    ): Promise<TimerRecord | undefined>
-    delete(id: string): Promise<boolean>
-  }
-  readonly subscriptions: {
-    list(filter?: {
-      sessionId?: string
-      projectId?: string
-      source?: string
-    }): Promise<SubscriptionRecord[]>
-    create(input: {
-      id?: string
-      source: string
-      eventKey: string
-      projectId?: string | null
-      sessionId: string
-      creatorId?: string | null
-      creatorName?: string | null
-    }): Promise<SubscriptionRecord>
-    remove(id: string): Promise<boolean>
-  }
-  readonly bindings: {
-    list(filter?: {
-      channel?: string
-      projectId?: string
-      enabledOnly?: boolean
-    }): Promise<ChannelBinding[]>
-    get(id: string): Promise<ChannelBinding | undefined>
-    upsert(input: UpsertChannelBindingInput): Promise<ChannelBinding>
-    setEnabled(
-      id: string,
-      enabled: boolean,
-    ): Promise<ChannelBinding | undefined>
-    remove(id: string): Promise<boolean>
-  }
-  readonly blobs: {
-    get(id: string): Promise<BlobRecord | undefined>
-    list(sessionId: string, direction?: BlobDirection): Promise<BlobRecord[]>
-    read(id: string): Promise<Uint8Array>
-    storeInbound(input: {
-      id?: string
-      sessionId?: string | null
-      projectId?: string | null
-      messageId?: string | null
-      filename: string
-      mimeType?: string
-      bytes?: Uint8Array
-      hostPath?: string
-    }): Promise<BlobRecord>
-  }
-  readonly events: {
-    list(options?: {
-      sessionId?: string
-      projectId?: string
-      afterSeq?: number
-      limit?: number
-    }): Promise<RuntimeEvent[]>
-    bufferedDeltas(sessionId: string): Promise<StreamDeltaEvent[]>
-    subscribe(listener: RuntimeEventListener): () => void
-    subscribeDeltas(listener: StreamDeltaListener): () => void
-  }
-  models(options?: { all?: boolean; channel?: string }): Promise<ModelInfo[]>
-  loginProviders(): Promise<LoginProvider[]>
-  logout(provider: string, options?: LogoutOptions): Promise<LogoutResult>
-  recover(): Promise<RuntimeRecoverySummary>
-  dispose(): Promise<void>
-}
-
-/**
- * In-process Runtime handle returned by `createRuntime()`, extending `VelaRuntime`
- * with host-local registration hooks that are not sent across daemon IPC.
- */
-export interface LocalVelaRuntime extends VelaRuntime {
-  registerChannel(adapter: ChannelAdapter): Promise<void>
-  unregisterChannel(name: string): Promise<void>
-  registerDriver(driver: AgentDriver): void
-  login(
-    provider: string,
-    method: 'oauth' | 'api_key',
-    interaction: AuthInteraction,
-    options?: LoginOptions,
-  ): Promise<void>
-}
-
-export interface CreateRuntimeOptions {
-  /** Root agent directory (`~/.vela`), owning `<agentDir>/vela.db` and `<agentDir>/blobs/`. */
-  agentDir?: string
-  /** Use an in-memory `:memory:` SQLite database instead of `<agentDir>/vela.db`. */
-  ephemeral?: boolean
-  /** @internal Pre-opened SQLite database for tests or daemon hosting. */
-  db?: VelaDatabase
-  /** Environment variables used for `$VAR` provider interpolation and default `VELA_DIR`. */
-  hostEnv?: Record<string, string | undefined>
-  providers?: Record<string, ProviderDefinition>
-  credentials?: CredentialStore
-  defaultModel?: ModelInput
-  defaultThinkingLevel?: ThinkingLevel
-  limits?: Partial<VelaLimits>
-  tools?: ToolDefinition[]
-  extensionConfig?: Record<string, Record<string, unknown>>
-  contextFiles?: readonly ContextFile[]
-  skills?: readonly SkillDefinition[]
-  promptTemplates?: readonly PromptTemplate[]
-  /** Enable per-project MCP pooling (lazy-loaded on first turn). Default `true`. */
-  mcp?: boolean
-  offline?: boolean
-  dreamEnabled?: boolean
-  /** Owner Docker environment definitions or a pre-constructed `EnvironmentRegistry`. Defaults to `<agentDir>/config.json` unless `ephemeral`. */
-  environments?: Record<string, unknown> | EnvironmentRegistry
-  drivers?: AgentDriver[]
-  trustOverride?: (location: ExecutionLocation) => boolean | Promise<boolean>
-  toolApprovalCheck?: (
-    toolName: string,
-    input: unknown,
-    sessionId: string,
-  ) =>
-    | Promise<{ requireApproval?: boolean; summary?: string } | undefined>
-    | { requireApproval?: boolean; summary?: string }
-    | undefined
-  logger?: VelaLogger
+export type {
+  CreateRuntimeOptions,
+  LocalVelaRuntime,
+  RuntimePromptInput,
+  RuntimeRecoverySummary,
+  VelaRuntime,
 }
 
 function createLazyRuntimeMcpAdapter(
@@ -337,6 +94,16 @@ function loadOwnerRuntimeConfig(
   )
 }
 
+function statSignature(file: string): string {
+  try {
+    const st = statSync(file)
+    return `${st.ino}:${st.mtimeMs}:${st.size}`
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+    throw error
+  }
+}
+
 function mergeExtensionConfig(
   base: Record<string, Record<string, unknown>>,
   override: Record<string, Record<string, unknown>> | undefined,
@@ -350,20 +117,64 @@ function mergeExtensionConfig(
   return merged
 }
 
+function createSpecialModelResolver(): ResolveSpecialModelFn {
+  return async ({ modelRef, recordPath, fallbackModel }) => {
+    const testing = await import('./testing/core/index.ts')
+    let baseModel: ModelInput | undefined
+    if (modelRef === 'mock') {
+      baseModel = testing.createMockModel()
+    } else if (modelRef?.startsWith('faux:')) {
+      baseModel = await testing.loadFauxScenario(modelRef.slice('faux:'.length))
+    } else {
+      baseModel = fallbackModel
+    }
+    if (!baseModel) return undefined
+    const maybeCache = baseModel as unknown as {
+      setCacheEnabled?: (enabled: boolean) => void
+    }
+    if (recordPath) {
+      const recorder = testing.recordModel(baseModel, { path: recordPath })
+      return {
+        model: recorder.model,
+        addInput: (input) => recorder.addInput(input),
+        flush: () => recorder.flush(),
+        ...(maybeCache.setCacheEnabled
+          ? {
+              setCacheEnabled: (enabled) =>
+                maybeCache.setCacheEnabled?.(enabled),
+            }
+          : {}),
+      }
+    }
+    return {
+      model: baseModel,
+      ...(maybeCache.setCacheEnabled
+        ? {
+            setCacheEnabled: (enabled) => maybeCache.setCacheEnabled?.(enabled),
+          }
+        : {}),
+    }
+  }
+}
+
 /**
  * Creates an in-process `LocalVelaRuntime` backed by `<agentDir>/vela.db` (or `:memory:` when `ephemeral: true`).
- * Implements the same `VelaRuntime` contract that S4a's `connectRuntime()` exposes over `vela.sock`.
+ * Implements the same `VelaRuntime` contract that `connectRuntime()` exposes over `vela.sock`.
  */
 export function createRuntime(
   options: CreateRuntimeOptions = {},
 ): LocalVelaRuntime {
   const logger = options.logger ?? silentLogger
   const isEphemeral = options.ephemeral === true
+  const isEphemeralDb = isEphemeral || options.ephemeralSessions === true
   const hostEnv = options.hostEnv ?? {}
   const transientAgentDir =
     isEphemeral && !options.agentDir
       ? mkdtempSync(join(tmpdir(), 'vela-runtime-'))
       : undefined
+  const transientSpillRoot = isEphemeralDb
+    ? mkdtempSync(join(tmpdir(), 'vela-spill-'))
+    : undefined
   const agentDir = resolve(
     options.agentDir ?? transientAgentDir ?? defaultAgentDir(hostEnv),
   )
@@ -371,27 +182,105 @@ export function createRuntime(
   const db =
     options.db ??
     openDatabase({
-      path: isEphemeral ? ':memory:' : join(agentDir, 'vela.db'),
+      path: isEphemeralDb ? ':memory:' : join(agentDir, 'vela.db'),
     })
+  if (isEphemeralDb && !isEphemeral && !options.db) {
+    try {
+      withReadonlyDb(join(agentDir, 'vela.db'), (ownerDb) => {
+        const trustRows = ownerDb.all<{
+          path: string
+          trusted: number
+          updated_at: string
+        }>('SELECT path, trusted, updated_at FROM trusted_paths')
+        for (const r of trustRows) {
+          db.run(
+            'INSERT OR REPLACE INTO trusted_paths (path, trusted, updated_at) VALUES (?, ?, ?)',
+            r.path,
+            r.trusted,
+            r.updated_at,
+          )
+        }
+        const oauthRows = ownerDb.all<{
+          provider: string
+          client_id: string
+          host_id: string | null
+          subject: string | null
+          updated_at: string
+        }>(
+          'SELECT provider, client_id, host_id, subject, updated_at FROM oauth_registrations',
+        )
+        for (const r of oauthRows) {
+          db.run(
+            'INSERT OR REPLACE INTO oauth_registrations (provider, client_id, host_id, subject, updated_at) VALUES (?, ?, ?, ?, ?)',
+            r.provider,
+            r.client_id,
+            r.host_id,
+            r.subject,
+            r.updated_at,
+          )
+        }
+      })
+    } catch {
+      /* ignore unreadable owner db when seeding ephemeral state */
+    }
+  }
 
   try {
-    const ownerConfig: VelaSettings = isEphemeral
-      ? {}
-      : loadOwnerRuntimeConfig(agentDir, hostEnv)
-    const credentials =
-      options.credentials ??
-      (isEphemeral
-        ? memoryCredentialStore()
-        : fileCredentialStore(join(agentDir, 'auth.json')))
-    const providers =
-      options.providers ??
-      loadModels({
+    const configPath = join(agentDir, 'config.json')
+    const authPath = join(agentDir, 'auth.json')
+    let lastConfigSig = isEphemeral ? 'ephemeral' : statSignature(configPath)
+    let lastAuthSig = isEphemeral ? 'ephemeral' : statSignature(authPath)
+
+    const computeConfigState = () => {
+      const ownerConfig: VelaSettings = isEphemeral
+        ? {}
+        : loadOwnerRuntimeConfig(agentDir, hostEnv)
+      const configProviders = isEphemeral ? {} : (ownerConfig.providers ?? {})
+      const loadedProviders = loadModels({
         agentDir,
         env: hostEnv,
-        providers: isEphemeral ? {} : (ownerConfig.providers ?? {}),
+        providers: configProviders,
       })
+      const providers: Record<string, ProviderDefinition> = {
+        ...loadedProviders,
+        ...(options.providers ?? {}),
+      }
+      const ownerExtensionConfig = isEphemeral
+        ? {}
+        : toExtensionConfigView(ownerConfig)
+      const extensionConfig = mergeExtensionConfig(
+        ownerExtensionConfig,
+        options.extensionConfig,
+      )
+      const limits =
+        ownerConfig.limits || options.limits
+          ? { ...ownerConfig.limits, ...options.limits }
+          : undefined
+      const dreamEnabled =
+        options.dreamEnabled ??
+        (typeof ownerConfig.memory?.dream === 'boolean'
+          ? ownerConfig.memory.dream
+          : undefined)
+      return {
+        ownerConfig,
+        configProviders,
+        providers,
+        extensionConfig,
+        limits,
+        dreamEnabled,
+      }
+    }
+
+    const initial = computeConfigState()
+    const credentials =
+      options.credentials ??
+      (isEphemeral ? memoryCredentialStore() : fileCredentialStore(authPath))
     const registrations = new SqliteOAuthRegistrationStore(db)
-    const models = new ModelRegistry(providers, credentials, registrations)
+    const models = new ModelRegistry(
+      initial.providers,
+      credentials,
+      registrations,
+    )
     const environments =
       options.environments instanceof EnvironmentRegistry
         ? options.environments
@@ -399,7 +288,7 @@ export function createRuntime(
             dataDir: agentDir,
             environments:
               options.environments ??
-              (isEphemeral ? undefined : ownerConfig.environments),
+              (isEphemeral ? undefined : initial.ownerConfig.environments),
             hostEnv,
           })
     const mcpAdapter =
@@ -415,22 +304,15 @@ export function createRuntime(
       logger,
     })
 
-    const ownerExtensionConfig = isEphemeral
-      ? {}
-      : toExtensionConfigView(ownerConfig)
-    const extensionConfig = mergeExtensionConfig(
-      ownerExtensionConfig,
-      options.extensionConfig,
-    )
-    const limits =
-      ownerConfig.limits || options.limits
-        ? { ...ownerConfig.limits, ...options.limits }
-        : undefined
-    const dreamEnabled =
-      options.dreamEnabled ??
-      (typeof ownerConfig.memory?.dream === 'boolean'
-        ? ownerConfig.memory.dream
-        : undefined)
+    const onBeforeExtensionImport = async () => {
+      const { registerExtensionHostModules } = await import(
+        './driver/config/extensions.ts'
+      )
+      registerExtensionHostModules({
+        '@glows777/vela/extension-api': () => import('./extension-api.ts'),
+        zod: () => import('zod'),
+      })
+    }
 
     const velaDriver = createVelaAgentDriver({
       db,
@@ -444,32 +326,89 @@ export function createRuntime(
       flushOutbox: () => {
         void engine.outbox.flushOnce().catch(() => {})
       },
+      isSessionBusy: (sid) => engine.isSessionBusy(sid),
       mcp: mcpAdapter,
-      defaultModel: options.defaultModel ?? ownerConfig.model,
+      defaultModel: options.defaultModel ?? initial.ownerConfig.model,
       defaultThinkingLevel:
-        options.defaultThinkingLevel ?? ownerConfig.thinkingLevel,
-      providers,
+        options.defaultThinkingLevel ?? initial.ownerConfig.thinkingLevel,
+      providers: initial.providers,
+      rawConfigProviders: initial.configProviders,
       credentials,
+      registrations,
       models,
-      limits,
+      limits: initial.limits,
       tools: options.tools,
-      extensionConfig,
+      defaultTools: initial.ownerConfig.tools,
+      extensionConfig: initial.extensionConfig,
+      extensions: initial.ownerConfig.extensions,
+      enabledModels: initial.ownerConfig.enabledModels,
       hostEnv,
       contextFiles: options.contextFiles,
       skills: options.skills,
       promptTemplates: options.promptTemplates,
       offline: options.offline,
-      dreamEnabled,
+      dreamEnabled: initial.dreamEnabled,
       trustOverride: options.trustOverride,
       toolApprovalCheck: options.toolApprovalCheck,
+      resolveSpecialModel: createSpecialModelResolver(),
+      spillRoot: transientSpillRoot,
+      onBeforeExtensionImport,
       logger,
     })
     engine.registerDriver(velaDriver)
+
+    let reloadQueue: Promise<void> = Promise.resolve()
+    const reloadConfigInternal = (force: boolean): Promise<void> => {
+      if (isEphemeral) return Promise.resolve()
+      const next = reloadQueue.then(async () => {
+        const nextConfigSig = statSignature(configPath)
+        const nextAuthSig = statSignature(authPath)
+        if (
+          !force &&
+          nextConfigSig === lastConfigSig &&
+          nextAuthSig === lastAuthSig
+        ) {
+          return
+        }
+        const updated = computeConfigState()
+        await velaDriver.control.reloadConfig({
+          defaultModel: options.defaultModel ?? updated.ownerConfig.model,
+          defaultThinkingLevel:
+            options.defaultThinkingLevel ?? updated.ownerConfig.thinkingLevel,
+          providers: updated.providers,
+          rawConfigProviders: updated.configProviders,
+          limits: updated.limits,
+          defaultTools: updated.ownerConfig.tools,
+          extensionConfig: updated.extensionConfig,
+          extensions: updated.ownerConfig.extensions,
+          enabledModels: updated.ownerConfig.enabledModels,
+          dreamEnabled: updated.dreamEnabled,
+          offline: options.offline,
+        })
+        lastConfigSig = nextConfigSig
+        lastAuthSig = nextAuthSig
+      })
+      reloadQueue = next.catch(() => {})
+      return next
+    }
+
+    const maybeRefreshConfig = (): Promise<void> => {
+      if (isEphemeral) return Promise.resolve()
+      const nextConfigSig = statSignature(configPath)
+      const nextAuthSig = statSignature(authPath)
+      if (nextConfigSig === lastConfigSig && nextAuthSig === lastAuthSig) {
+        return reloadQueue
+      }
+      return reloadConfigInternal(false)
+    }
 
     let disposing: Promise<void> | undefined
 
     return {
       agentDir: engine.agentDir,
+      ready: () => velaDriver.control.ready(),
+      extensionErrors: async () => velaDriver.control.extensionErrors(),
+      reloadConfig: () => reloadConfigInternal(true),
       projects: {
         list: async (opts) => engine.projects.list(opts),
         get: async (id) => engine.projects.get(id),
@@ -478,23 +417,95 @@ export function createRuntime(
         update: async (id, patch) => engine.projects.update(id, patch),
         remove: async (id, opts) => engine.projects.remove(id, opts),
       },
+      trust: {
+        check: async (location) =>
+          savedTrust(db, location, engine.environments.dataDir),
+        approve: async (location, trusted) => {
+          saveTrust(db, location, trusted, engine.environments.dataDir)
+        },
+      },
+      oauthRegistrations: {
+        get: async (provider) => registrations.get(provider),
+        set: async (provider, reg) => registrations.set(provider, reg),
+        delete: async (provider) => registrations.delete(provider),
+      },
       sessions: {
         list: async (opts) => engine.sessions.list(opts),
+        listSummaries: async (opts) =>
+          listSessionSummariesFromDb(db, opts?.includeArchived ?? false, {
+            ...(opts?.projectId ? { projectId: opts.projectId } : {}),
+            ...(opts?.cwd ? { cwd: opts.cwd } : {}),
+            ...(opts?.excludeChannels
+              ? { excludeChannels: opts.excludeChannels }
+              : {}),
+          }),
         get: async (id) => engine.sessions.get(id),
         create: async (input) => engine.sessions.create(input),
         rename: async (id, name) => engine.sessions.rename(id, name),
-        delete: async (id) => engine.sessions.delete(id),
-        reset: (id) => engine.restartSession(id),
+        delete: async (id) => {
+          await velaDriver.control.closeSession(id).catch(() => {})
+          return engine.sessions.delete(id)
+        },
+        reset: async (id) => {
+          await velaDriver.control.closeSession(id).catch(() => {})
+          return engine.restartSession(id)
+        },
         status: async (id) => engine.sessions.status(id),
         messages: async (input) => listRuntimeSessionMessages(db, input),
+        configure: async (sessionId, override) => {
+          await maybeRefreshConfig()
+          await velaDriver.control.configure(sessionId, override)
+        },
+        setModel: (sessionId, modelRef) =>
+          velaDriver.control.setModel(sessionId, modelRef),
+        setThinkingLevel: (sessionId, level) =>
+          velaDriver.control.setThinkingLevel(sessionId, level),
+        compact: (sessionId, instructions) =>
+          velaDriver.control.compact(sessionId, instructions),
+        tree: (sessionId) => velaDriver.control.tree(sessionId),
+        navigateTree: (sessionId, targetId, opts) =>
+          velaDriver.control.navigateTree(sessionId, targetId, opts),
+        setLabel: (sessionId, entryId, label) =>
+          velaDriver.control.setLabel(sessionId, entryId, label),
+        fork: (sessionId, entryId, opts) =>
+          velaDriver.control.fork(sessionId, entryId, opts),
+        clone: (sessionId, opts) => velaDriver.control.clone(sessionId, opts),
+        inspect: async (sessionId, opts) => {
+          await maybeRefreshConfig()
+          return velaDriver.control.inspect(sessionId, opts)
+        },
+        execBash: (sessionId, command, opts) =>
+          velaDriver.control.execBash(sessionId, command, opts),
+        abortBash: async (sessionId) => {
+          velaDriver.control.abortBash(sessionId)
+        },
+        runCommand: (sessionId, input) =>
+          velaDriver.control.runCommand(sessionId, input),
+        clearQueue: async (sessionId) =>
+          velaDriver.control.clearQueue(sessionId),
+        export: (sessionId, format, outputPath, baseCwd) =>
+          velaDriver.control.exportSession(
+            sessionId,
+            format,
+            outputPath,
+            baseCwd,
+          ),
       },
       prompt: async (sessionId, input) => {
+        await maybeRefreshConfig()
         const res = engine.submitPrompt({ ...input, sessionId })
         return { eventId: res.event.id, inserted: res.inserted }
       },
       steer: (sessionId, text) => engine.steerSession(sessionId, text),
       stop: (sessionId, reason) => engine.stopSession(sessionId, reason),
       waitForIdle: (sessionId) => engine.waitForIdle(sessionId),
+      jobs: {
+        list: async (sessionId) => velaDriver.control.listJobs(sessionId),
+        stop: (sessionId, jobId) =>
+          velaDriver.control.stopJob(sessionId, jobId),
+        promoteForeground: (sessionId, toolCallId) =>
+          velaDriver.control.promoteForeground(sessionId, toolCallId),
+      },
       approvals: {
         list: async (sessionId) => engine.listPendingApprovals(sessionId),
         resolve: async (input) => engine.resolveApproval(input),
@@ -532,13 +543,40 @@ export function createRuntime(
         subscribe: (listener) => engine.subscribeEvents(listener),
         subscribeDeltas: (listener) => engine.subscribeDeltas(listener),
       },
-      models: async (opts) =>
-        opts?.all ? models.list(opts.channel) : models.available(opts?.channel),
-      loginProviders: async () => models.loginProviders(),
-      login: (provider, method, interaction, loginOptions) =>
-        models.login(provider, method, interaction, loginOptions),
-      logout: (provider, logoutOptions) =>
-        models.logout(provider, logoutOptions),
+      models: async (opts) => {
+        await maybeRefreshConfig()
+        let registry = models
+        if (opts?.env) {
+          const updated = computeConfigState()
+          const effectiveEnv = { ...hostEnv, ...opts.env }
+          const overlaid = loadModels({
+            agentDir,
+            env: effectiveEnv,
+            providers: updated.configProviders,
+          })
+          registry = new ModelRegistry(
+            { ...models.providerDefinitions(), ...overlaid },
+            credentials,
+            registrations,
+          )
+        }
+        return opts?.all
+          ? registry.list(opts.channel)
+          : registry.available(opts?.channel)
+      },
+      loginProviders: async () => {
+        await maybeRefreshConfig()
+        return models.loginProviders()
+      },
+      login: async (provider, method, interaction, loginOptions) => {
+        await models.login(provider, method, interaction, loginOptions)
+        lastAuthSig = isEphemeral ? 'ephemeral' : statSignature(authPath)
+      },
+      logout: async (provider, logoutOptions) => {
+        const res = await models.logout(provider, logoutOptions)
+        lastAuthSig = isEphemeral ? 'ephemeral' : statSignature(authPath)
+        return res
+      },
       recover: () => engine.recover(),
       registerChannel: (adapter) => engine.registerChannel(adapter),
       unregisterChannel: (name) => engine.unregisterChannel(name),
@@ -552,6 +590,9 @@ export function createRuntime(
             if (transientAgentDir) {
               rmSync(transientAgentDir, { recursive: true, force: true })
             }
+            if (transientSpillRoot) {
+              rmSync(transientSpillRoot, { recursive: true, force: true })
+            }
           }
         })()
         return disposing
@@ -561,6 +602,9 @@ export function createRuntime(
     if (ownsDb && db.open) db.close()
     if (transientAgentDir) {
       rmSync(transientAgentDir, { recursive: true, force: true })
+    }
+    if (transientSpillRoot) {
+      rmSync(transientSpillRoot, { recursive: true, force: true })
     }
     throw error
   }

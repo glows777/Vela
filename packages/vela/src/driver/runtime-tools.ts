@@ -489,26 +489,39 @@ export function createRuntimeSessionToolRegistry(options: {
   webConfig?: Record<string, unknown>
   hostEnv?: Record<string, string | undefined>
   offline?: boolean
+  disabledBuiltins?: ReadonlySet<string>
   runtimeToolDeps?: RuntimeToolDeps
   extraTools?: readonly ToolDefinition[]
+  parentRegistry?: ToolRegistry
 }): ToolRegistry {
-  const registry = new ToolRegistry(options.spillDir)
+  const registry = new ToolRegistry(
+    options.spillDir,
+    undefined,
+    options.parentRegistry,
+  )
   registry.setLogger(options.logger)
+  const disabled = options.disabledBuiltins
   registry.register(
     ...createCoreTools({ cwd: options.cwd }),
-    ...createBackgroundTools((ctx) => {
-      if (!ctx?.background) {
-        throw new Error('Background commands require an open session')
-      }
-      return ctx.background
-    }).map((tool) => ({ ...tool, name: `background_${tool.name}` })),
-    createTodoTool(),
-    createMemoryTool(options.memoryGlobal, options.memoryLocal),
-    ...createRuntimeWebTools({
-      webConfig: options.webConfig,
-      hostEnv: options.hostEnv,
-      offline: options.offline,
-    }),
+    ...(disabled?.has('background')
+      ? []
+      : createBackgroundTools((ctx) => {
+          if (!ctx?.background) {
+            throw new Error('Background commands require an open session')
+          }
+          return ctx.background
+        }).map((tool) => ({ ...tool, name: `background_${tool.name}` }))),
+    ...(disabled?.has('todo') ? [] : [createTodoTool()]),
+    ...(disabled?.has('memory')
+      ? []
+      : [createMemoryTool(options.memoryGlobal, options.memoryLocal)]),
+    ...(disabled?.has('web')
+      ? []
+      : createRuntimeWebTools({
+          webConfig: options.webConfig,
+          hostEnv: options.hostEnv,
+          offline: options.offline,
+        })),
   )
   if (options.runtimeToolDeps) {
     registry.register(...createRuntimeTools(options.runtimeToolDeps))

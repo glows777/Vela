@@ -1,17 +1,13 @@
-import type { VelaSession } from '../../driver/index.ts'
+import type { CliSessionClient } from '../runtime-client.ts'
 
 /**
  * Whether a session has a usable model: its name resolves and, when the provider defines one, its
  * credential is configured (`check` is the CLI's credential rule).
  */
 export function isModelUsable(
-  session: VelaSession,
-  check?: (session: VelaSession) => boolean,
+  session: CliSessionClient,
+  check?: (session: CliSessionClient) => boolean,
 ): boolean {
-  try {
-    void session.modelInfo
-    return check?.(session) ?? true
-  } catch {
-    return false
-  }
+  if (!session.modelInfo) return false
+  return check?.(session) ?? true
 }

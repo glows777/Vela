@@ -371,7 +371,7 @@ test('/hooks lists registered hooks', async () => {
     ],
   })
   const log = quiet('log')
-  expect(t.dispatch('/hooks')).toBe(true)
+  expect(await t.command('/hooks')).toBe(true)
   expect(log.mock.calls.flat().join(' ')).toContain('acceptancePre')
   expect(log.mock.calls.flat().join(' ')).toContain('acceptancePost')
   expect(t.dispatch('/unrelated')).toBe(false)

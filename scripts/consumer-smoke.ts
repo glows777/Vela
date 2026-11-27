@@ -9,6 +9,7 @@
  */
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { $ } from 'bun'
@@ -30,6 +31,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  connectRuntime,
   createRuntime,
   createVela,
   EnvironmentRegistry,
@@ -45,7 +47,9 @@ import {
   type AgentDriverCapabilities,
   type ApprovalDecision,
   type ApprovalStatus,
+  type ConnectRuntimeOptions,
   type CreateRuntimeOptions,
+  type DaemonStatus,
   type ImageContent,
   type LarkMessageEvent,
   type LarkOptions,
@@ -77,11 +81,15 @@ if (typeof SpilledToolOutput !== 'function')
   throw new Error('missing SpilledToolOutput export')
 if (typeof lark !== 'function' || typeof local !== 'function')
   throw new Error('missing built-in channel factories')
+if (typeof connectRuntime !== 'function')
+  throw new Error('missing connectRuntime export')
 const _approvalTypeCheck = (
   _d?: ApprovalDecision,
   _p?: PendingApprovalInfo,
   _r?: ResolvedApprovalInfo,
-) => void [_d, _p, _r]
+  _c?: ConnectRuntimeOptions,
+  _s?: DaemonStatus,
+) => void [_d, _p, _r, _c, _s]
 void _approvalTypeCheck
 
 const hello: VelaExtension = (vela) => {
@@ -381,83 +389,313 @@ async function cli(app: string, runtime: string, version: string) {
     VELA_MODEL: 'mock',
     VELA_OFFLINE: '1',
   }
-  const output =
-    await $`${runtime} ./node_modules/.bin/vela -p hello < /dev/null`
+  try {
+    const output =
+      await $`${runtime} ./node_modules/.bin/vela -p hello < /dev/null`
+        .cwd(app)
+        .env(env)
+        .text()
+    if (!output.trim()) throw new Error('CLI printed no answer')
+    const actual = (
+      await $`${runtime} ./node_modules/.bin/vela --version`
+        .cwd(app)
+        .env(env)
+        .text()
+    ).trim()
+    if (actual !== version)
+      throw new Error(`CLI version ${actual}, expected ${version}`)
+    const file = join(app, 'node_modules/@glows777/vela/dist/cli/main.js')
+    if (!((await Bun.file(file).stat()).mode & 0o111))
+      throw new Error('CLI bin lost executable mode')
+    const retired = await $`${runtime} ./node_modules/.bin/vela serve`
       .cwd(app)
       .env(env)
-      .text()
-  if (!output.trim()) throw new Error('CLI printed no answer')
-  const actual = (
-    await $`${runtime} ./node_modules/.bin/vela --version`
+      .nothrow()
+      .quiet()
+    if (
+      retired.exitCode !== 2 ||
+      !retired.stderr.toString().includes('vela daemon')
+    )
+      throw new Error(
+        `retired serve check failed (${retired.exitCode}): ${retired.stderr.toString()}`,
+      )
+
+    const daemonDir = join(app, 'daemon-agent')
+    await mkdir(daemonDir, { recursive: true })
+    const scenario = join(app, 'daemon-faux.json')
+    await writeFile(
+      scenario,
+      JSON.stringify({ responses: [{ text: 'daemon received' }] }),
+    )
+    const daemonEnv = { ...env, VELA_MODEL: `faux:${scenario}` }
+    const proc = Bun.spawn(
+      [
+        runtime,
+        './node_modules/.bin/vela',
+        '--agent-dir',
+        daemonDir,
+        'daemon',
+        'run',
+      ],
+      {
+        cwd: app,
+        env: daemonEnv,
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    let stderr = ''
+    const reading = (async () => {
+      for await (const chunk of proc.stderr)
+        stderr += new TextDecoder().decode(chunk)
+    })()
+    const stdout = new Response(proc.stdout).text()
+    try {
+      const deadline = Date.now() + 20000
+      while (true) {
+        if (Date.now() > deadline || proc.exitCode !== null)
+          throw new Error(`packed daemon failed to start: ${stderr}`)
+        const status =
+          await $`${runtime} ./node_modules/.bin/vela --agent-dir ${daemonDir} daemon status`
+            .cwd(app)
+            .env(daemonEnv)
+            .nothrow()
+            .quiet()
+        if (
+          status.exitCode === 0 &&
+          status.stdout.toString().includes('running')
+        )
+          break
+        await new Promise((done) => setTimeout(done, 50))
+      }
+      const reply = (
+        await $`${runtime} ./node_modules/.bin/vela --agent-dir ${daemonDir} -p ping < /dev/null`
+          .cwd(app)
+          .env(daemonEnv)
+          .text()
+      ).trim()
+      if (reply !== 'daemon received')
+        throw new Error(`packed daemon reply mismatch: ${reply}`)
+      proc.kill('SIGTERM')
+      const code = await proc.exited
+      await reading
+      if (code !== 0 || (await stdout) !== '')
+        throw new Error(`packed daemon lifecycle failed (${code}): ${stderr}`)
+      console.log('packaged daemon signal/disposal ok')
+    } finally {
+      if (proc.exitCode === null) proc.kill('SIGKILL')
+      await proc.exited
+      await reading
+      await stdout
+      await $`${runtime} ./node_modules/.bin/vela --agent-dir ${daemonDir} daemon stop`
+        .cwd(app)
+        .env(daemonEnv)
+        .nothrow()
+        .quiet()
+    }
+  } finally {
+    await $`${runtime} ./node_modules/.bin/vela daemon stop`
       .cwd(app)
       .env(env)
-      .text()
-  ).trim()
-  if (actual !== version)
-    throw new Error(`CLI version ${actual}, expected ${version}`)
-  const file = join(app, 'node_modules/@glows777/vela/dist/cli/main.js')
-  if (!((await Bun.file(file).stat()).mode & 0o111))
-    throw new Error('CLI bin lost executable mode')
-  const reply = join(app, 'serve-reply.txt')
-  const stopped = join(app, 'serve-stopped.txt')
-  const extension = join(app, 'serve-channel.mjs')
-  const scenario = join(app, 'serve-faux.json')
+      .nothrow()
+      .quiet()
+  }
+}
+
+async function reserveFreePort(): Promise<number> {
+  return await new Promise<number>((resolvePort, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      server.close((error) => {
+        if (error) reject(error)
+        else resolvePort(port)
+      })
+    })
+  })
+}
+
+async function nodeGatewaySmoke(app: string) {
+  const localPort = await reserveFreePort()
+  let webhookPort = await reserveFreePort()
+  while (webhookPort === localPort) webhookPort = await reserveFreePort()
+
+  const gatewayDir = join(app, 'gateway-agent')
+  await mkdir(gatewayDir, { recursive: true })
+  const token = 'smoke-local-token'
+  const webhookSecret = 'smoke-webhook-secret'
   await writeFile(
-    scenario,
-    JSON.stringify({ responses: [{ text: 'serve received' }] }),
+    join(gatewayDir, 'config.json'),
+    JSON.stringify({
+      local: { enabled: true, token: '$VELA_LOCAL_TOKEN', port: localPort },
+      webhooks: {
+        port: webhookPort,
+        generic: { secret: '$VELA_WEBHOOK_SECRET', source: 'smoke' },
+      },
+    }),
   )
   await writeFile(
-    extension,
-    `import {appendFileSync} from 'node:fs';export default api=>{let receive,connection;api.registerChannel({name:'probe',description:'packed serve',start(){connection=setInterval(()=>{},1000);setTimeout(()=>receive({channelId:'room',senderId:'u',senderName:'Visitor',text:'ping'}),0)},stop(){clearInterval(connection);appendFileSync(${JSON.stringify(stopped)},'stop\\n')},onMessage(next){receive=next},async send(m){appendFileSync(${JSON.stringify(reply)},m.text+'\\n')}})}`,
-  )
-  const proc = Bun.spawn(
+    join(app, 'gateway.mjs'),
     [
-      runtime,
-      './node_modules/.bin/vela',
-      'serve',
-      '--no-extensions',
-      '-e',
-      extension,
-    ],
-    {
-      cwd: app,
-      env: { ...env, VELA_MODEL: 'faux:' + scenario },
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
+      "import { createVela, lark, larkConfig, local, loadConfig } from '@glows777/vela'",
+      '',
+      'const config = loadConfig({',
+      '  cwd: process.cwd(),',
+      '  agentDir: process.env.VELA_DIR,',
+      '  env: process.env,',
+      '  extensionConfigs: [larkConfig],',
+      '})',
+      'const larkCfg = config.extensionConfig.lark',
+      'const localCfg = config.settings.local',
+      'const extensions = [',
+      '  ...(larkCfg?.appId && larkCfg?.appSecret ? [lark()] : []),',
+      "  ...(localCfg?.enabled && typeof localCfg.token === 'string' && localCfg.token",
+      '    ? [',
+      '        local({',
+      '          token: localCfg.token,',
+      "          ...(typeof localCfg.port === 'number' ? { port: localCfg.port } : {}),",
+      "          ...(typeof localCfg.timezone === 'string'",
+      '            ? { timezone: localCfg.timezone }',
+      '            : {}),',
+      '        }),',
+      '      ]',
+      '    : []),',
+      ']',
+      'const vela = createVela({',
+      '  cwd: config.cwd,',
+      '  agentDir: config.agentDir,',
+      '  dataDir: config.dataDir,',
+      '  model: config.settings.model,',
+      '  thinkingLevel: config.settings.thinkingLevel,',
+      '  providers: config.providers,',
+      '  credentials: config.credentials,',
+      '  limits: config.settings.limits,',
+      '  extensions,',
+      '  extensionConfig: config.extensionConfig,',
+      '  eventDefaultTarget: config.settings.eventDefaultTarget,',
+      '})',
+      'let shuttingDown = false',
+      "for (const sig of ['SIGINT', 'SIGTERM']) {",
+      '  process.on(sig, () => {',
+      '    if (shuttingDown) process.exit(130)',
+      '    shuttingDown = true',
+      '    const timer = setTimeout(() => process.exit(143), 30_000)',
+      '    timer.unref()',
+      '    void vela.dispose({ graceful: true }).finally(() => {',
+      '      clearTimeout(timer)',
+      '      process.exit(0)',
+      '    })',
+      '  })',
+      '}',
+      'await vela.ready()',
+      'await vela.startChannels()',
+      '',
+    ].join('\n'),
   )
+
+  const proc = Bun.spawn(['node', 'gateway.mjs'], {
+    cwd: app,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: join(app, 'home'),
+      VELA_DIR: gatewayDir,
+      VELA_LOCAL_TOKEN: token,
+      VELA_WEBHOOK_SECRET: webhookSecret,
+    },
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  let stdout = ''
   let stderr = ''
-  const reading = (async () => {
+  const readingStdout = (async () => {
+    for await (const chunk of proc.stdout)
+      stdout += new TextDecoder().decode(chunk)
+  })()
+  const readingStderr = (async () => {
     for await (const chunk of proc.stderr)
       stderr += new TextDecoder().decode(chunk)
   })()
-  const stdout = new Response(proc.stdout).text()
   try {
-    const deadline = Date.now() + 20000
-    while (
-      !(stderr.includes('channel_reply') && (await Bun.file(reply).exists()))
-    ) {
-      if (Date.now() > deadline || proc.exitCode !== null)
-        throw new Error('packed serve failed: ' + stderr)
-      await new Promise((done) => setTimeout(done, 20))
+    const deadline = Date.now() + 20_000
+    let localReady = false
+    while (Date.now() < deadline) {
+      if (proc.exitCode !== null)
+        throw new Error(
+          `packaged gateway.mjs exited early (${proc.exitCode}): ${stderr || stdout}`,
+        )
+      try {
+        const res = await fetch(`http://127.0.0.1:${localPort}/v1/info`, {
+          headers: { authorization: `Bearer ${token}` },
+        })
+        if (res.status === 200) {
+          const info = (await res.json()) as { channel?: string }
+          if (info.channel !== 'local')
+            throw new Error(
+              `unexpected gateway /v1/info payload: ${JSON.stringify(info)}`,
+            )
+          localReady = true
+          break
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.startsWith('unexpected gateway')
+        )
+          throw error
+      }
+      await new Promise((done) => setTimeout(done, 50))
     }
+    if (!localReady)
+      throw new Error(
+        `packaged gateway.mjs local listener did not become ready: ${stderr || stdout}`,
+      )
+
+    let webhookStatus = 0
+    while (Date.now() < deadline) {
+      if (proc.exitCode !== null)
+        throw new Error(
+          `packaged gateway.mjs exited before webhook check (${proc.exitCode}): ${stderr || stdout}`,
+        )
+      try {
+        const res = await fetch(
+          `http://127.0.0.1:${webhookPort}/events/generic`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-vela-delivery': 'smoke-1',
+              'x-vela-signature-256': 'sha256=deadbeef',
+            },
+            body: JSON.stringify({ key: 'smoke:test', summary: 'hi' }),
+          },
+        )
+        webhookStatus = res.status
+        break
+      } catch {
+        await new Promise((done) => setTimeout(done, 50))
+      }
+    }
+    if (webhookStatus !== 403)
+      throw new Error(
+        `packaged gateway.mjs webhook listener expected 403 on bad signature, got ${webhookStatus}: ${stderr || stdout}`,
+      )
+
     proc.kill('SIGTERM')
     const code = await proc.exited
-    await reading
-    if (
-      code !== 0 ||
-      (await stdout) !== '' ||
-      (await readFile(stopped, 'utf8')) !== 'stop\n' ||
-      (await readFile(reply, 'utf8')).trim() !== 'serve received'
-    )
-      throw new Error('packed serve lifecycle failed: ' + stderr)
-    console.log('packaged serve signal/disposal ok')
+    await Promise.all([readingStdout, readingStderr])
+    if (code !== 0)
+      throw new Error(
+        `packaged gateway.mjs SIGTERM exit failed (${code}): ${stderr || stdout}`,
+      )
+    console.log('packaged gateway.mjs local+webhook lifecycle ok')
   } finally {
     if (proc.exitCode === null) proc.kill('SIGKILL')
     await proc.exited
-    await reading
-    await stdout
+    await Promise.all([readingStdout, readingStderr])
   }
 }
 
@@ -544,6 +782,8 @@ try {
       }
       await $`${runtime} smoke.ts`.cwd(app)
       await cli(app, runtime, pkg.version)
+      if (pkg.name === '@glows777/vela' && runtime === 'node')
+        await nodeGatewaySmoke(app)
       console.log(`PASS ${pkg.name} on ${runtime}`)
     }
   console.log('packed @glows777/vela consumer checks passed on Node and Bun')

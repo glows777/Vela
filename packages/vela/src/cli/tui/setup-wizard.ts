@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SelectItem } from '@earendil-works/pi-tui'
 import { formatJsonParseError } from '../../config/index.ts'
-import { openDatabase, withReadonlyDb } from '../../db/index.ts'
 import { THINKING_LEVELS } from '../../driver/diagnostics.ts'
 import {
   type AuthInteraction,
@@ -13,21 +12,20 @@ import {
   type ProviderApi,
   type ProviderConfig,
   type ThinkingLevel,
-  type VelaSession,
   verifyProviderModel,
 } from '../../driver/index.ts'
 import type { OAuthRegistrationStore } from '../../providers/auth/types.ts'
-import { SqliteOAuthRegistrationStore } from '../../runtime/index.ts'
+import { ModelRegistry } from '../../providers/models/index.ts'
+import type { VelaRuntime } from '../../runtime-sdk-types.ts'
 import { saveModelSetup } from '../../settings.ts'
 import type { OAuthRegistration } from '../../shared/oauth-registration.ts'
-import type { Vela } from '../../vela.ts'
-import { createVela } from '../../vela.ts'
 import { openBrowser, readValidInstallationId } from '../login.ts'
+import type { CliSessionClient } from '../runtime-client.ts'
 import { larkSetup } from './lark-setup.ts'
 
 interface Host {
-  vela: Vela
-  session: VelaSession
+  runtime: VelaRuntime
+  session: CliSessionClient
   agentDir: string
   projectSettingsPath?: string
   select(
@@ -62,7 +60,7 @@ function readObject(path: string): Record<string, unknown> {
 
 /** One setup flow for first run and explicit `vela setup`. No credentials are persisted before verification. */
 export async function setupWizard(host: Host): Promise<boolean> {
-  const { agentDir } = host
+  const { agentDir, runtime } = host
   const configPath = join(agentDir, 'config.json')
   const authPath = join(agentDir, 'auth.json')
   const settings = readObject(configPath)
@@ -154,27 +152,23 @@ export async function setupWizard(host: Host): Promise<boolean> {
     env: process.env,
     ...(override ? { overrides: { [provider]: override } } : {}),
   })
-  const existing = host.vela
-    .loginProviders()
-    .find((p) => p.provider === provider)
+  const existing = (await runtime.loginProviders()).find(
+    (p) => p.provider === provider,
+  )
   const diskCredentials = (
     await import('../../driver/index.ts')
   ).fileCredentialStore(authPath)
   const stored = diskCredentials.get(provider)
   const memory = memoryCredentialStore(stored ? { [provider]: stored } : {})
-  const dbPath = join(agentDir, 'vela.db')
-  const readDiskRegistration = (name: string): OAuthRegistration | undefined =>
-    existsSync(dbPath)
-      ? withReadonlyDb(dbPath, (db) =>
-          new SqliteOAuthRegistrationStore(db).get(name),
-        )
-      : undefined
+  const existingReg = await runtime.oauthRegistrations.get(provider)
   const stagedRegistrations = new Map<string, OAuthRegistration | null>()
   const stagingRegistrations: OAuthRegistrationStore = {
-    get: (name) =>
-      stagedRegistrations.has(name)
-        ? (stagedRegistrations.get(name) ?? undefined)
-        : readDiskRegistration(name),
+    get: (name) => {
+      if (stagedRegistrations.has(name)) {
+        return stagedRegistrations.get(name) ?? undefined
+      }
+      return name === provider ? existingReg : undefined
+    },
     set: (name, registration) => {
       stagedRegistrations.set(name, registration)
     },
@@ -184,313 +178,299 @@ export async function setupWizard(host: Host): Promise<boolean> {
       return existed
     },
   }
-  const temporary = createVela({
+  const stagingModels = new ModelRegistry(
     providers,
-    credentials: memory,
-    cwd: host.vela.cwd,
-    registrations: stagingRegistrations,
-  })
+    memory,
+    stagingRegistrations,
+  )
   let newCredential = false
   let newInstallationId: string | undefined
-  try {
-    const matchingCredential =
-      stored &&
-      (choice === 'openai-oauth'
-        ? stored.type === 'oauth'
-        : choice === 'openai-key'
-          ? stored.type === 'api_key'
-          : true)
-    const keep = matchingCredential
-      ? await host.select(`Credential for ${provider} is configured`, [
-          { value: 'keep', label: 'Keep existing credential' },
-          { value: 'replace', label: 'Replace credential' },
-        ])
-      : 'replace'
-    if (!keep) return false
-    if (keep === 'replace') {
-      if (choice === 'custom') {
-        const key = await host.input(
-          `API key for ${provider}`,
-          undefined,
-          undefined,
-          true,
-        )
-        if (!key) return false
-        await memory.modify(provider, async () => ({ type: 'api_key', key }))
-      } else {
-        let method: 'api_key' | 'oauth' =
-          choice === 'openai-oauth' ? 'oauth' : 'api_key'
-        if (choice === 'openrouter' && existing?.oauth) {
-          const selected = await host.select('OpenRouter sign in', [
-            { value: 'api_key', label: 'Enter API key' },
-            { value: 'oauth', label: existing.oauth },
-          ])
-          if (!selected) return false
-          method = selected as 'api_key' | 'oauth'
-        }
-        const controller = new AbortController()
-        host.signal?.addEventListener('abort', () => controller.abort(), {
-          once: true,
-        })
-        const interaction: AuthInteraction = {
-          signal: controller.signal,
-          prompt: async (prompt) => {
-            const answer =
-              prompt.type === 'select'
-                ? await host.select(
-                    prompt.message,
-                    prompt.options.map((o) => ({
-                      value: o.id,
-                      label: o.label,
-                    })),
-                  )
-                : await host.input(
-                    prompt.message,
-                    prompt.placeholder,
-                    prompt.signal,
-                    prompt.type === 'secret',
-                  )
-            if (prompt.signal?.aborted) throw new Error('Prompt closed')
-            if (!answer) {
-              controller.abort()
-              throw new Error('Login cancelled')
-            }
-            return answer
-          },
-          notify: (event) => {
-            if (event.type === 'auth_url') {
-              host.addNotice(
-                `${event.instructions ?? 'Open this URL:'}\n${event.url}`,
-              )
-              ;(host.openBrowser ?? openBrowser)(event.url)
-            } else host.addNotice(event.message, 'dim')
-          },
-        }
-        await temporary.login(provider, method, interaction, {
-          getDeviceId: () => {
-            const valid = readValidInstallationId(agentDir)
-            if (valid) return valid
-            newInstallationId ??= randomUUID()
-            return newInstallationId
-          },
-        })
-      }
-      newCredential = true
-    }
-    let id: string | undefined
-    if (choice === 'custom')
-      id = await host.input('Model ID', 'e.g. model-name')
-    else {
-      const candidates = temporary
-        .models({ all: true })
-        .filter((m) => m.provider === provider)
-      const selected = await host.pickModel(
-        candidates,
-        typeof settings.model === 'string' ? settings.model : undefined,
+
+  const matchingCredential =
+    stored &&
+    (choice === 'openai-oauth'
+      ? stored.type === 'oauth'
+      : choice === 'openai-key'
+        ? stored.type === 'api_key'
+        : true)
+  const keep = matchingCredential
+    ? await host.select(`Credential for ${provider} is configured`, [
+        { value: 'keep', label: 'Keep existing credential' },
+        { value: 'replace', label: 'Replace credential' },
+      ])
+    : 'replace'
+  if (!keep) return false
+  if (keep === 'replace') {
+    if (choice === 'custom') {
+      const key = await host.input(
+        `API key for ${provider}`,
+        undefined,
+        undefined,
+        true,
       )
-      id = selected?.slice(provider.length + 1)
-    }
-    if (!id) return false
-    if (preset && choice === 'custom') {
-      const previous = prior.models ?? []
-      const model = { ...(previous.find((model) => model.id === id) ?? { id }) }
-      for (;;) {
-        const value = await host.input(
-          'Context window (optional)',
-          'Tokens · empty Enter keeps existing value (default if new)',
-          undefined,
-          false,
-          true,
-        )
-        if (value === undefined) return false
-        if (!value) break
-        const tokens = Number(value)
-        if (Number.isSafeInteger(tokens) && tokens > 0) {
-          model.contextWindow = tokens
-          break
-        }
-        host.addNotice('Context window must be a positive integer.', 'error')
-      }
-      for (const title of ['Image input', 'Reasoning support'] as const) {
-        const value = await host.select(title, [
-          {
-            value: 'keep',
-            label: 'Keep existing value (default for a new model)',
-          },
-          { value: 'yes', label: 'Yes' },
-          { value: 'no', label: 'No' },
+      if (!key) return false
+      await memory.modify(provider, async () => ({ type: 'api_key', key }))
+    } else {
+      let method: 'api_key' | 'oauth' =
+        choice === 'openai-oauth' ? 'oauth' : 'api_key'
+      if (choice === 'openrouter' && existing?.oauth) {
+        const selected = await host.select('OpenRouter sign in', [
+          { value: 'api_key', label: 'Enter API key' },
+          { value: 'oauth', label: existing.oauth },
         ])
-        if (!value) return false
-        if (value !== 'keep') {
-          if (title === 'Image input')
-            model.input = value === 'yes' ? ['text', 'image'] : ['text']
-          else model.reasoning = value === 'yes'
-        }
+        if (!selected) return false
+        method = selected as 'api_key' | 'oauth'
       }
-      preset.models = previous.some((entry) => entry.id === id)
-        ? previous.map((entry) => (entry.id === id ? model : entry))
-        : [...previous, model]
-    }
-    const finalOverride = preset ? { ...prior, ...preset } : undefined
-    const finalProviders = loadModels({
-      agentDir,
-      env: process.env,
-      ...(finalOverride ? { overrides: { [provider]: finalOverride } } : {}),
-    })
-    const ref = `${provider}/${id}`
-    const proceed = await host.select(
-      'Verification sends a minimal request and may incur a small charge',
-      [
-        { value: 'yes', label: 'Verify' },
-        { value: 'no', label: 'Cancel' },
-      ],
-    )
-    if (proceed !== 'yes') return false
-    for (;;) {
-      if (
-        !newCredential &&
-        stored?.type === 'oauth' &&
-        stored.expires <= Date.now() + 310_000
-      ) {
-        host.addNotice(
-          'The saved sign-in is close to expiry. Rerun setup and select Replace credential before verifying.',
-          'warning',
-        )
-        await host.select('Saved sign-in needs renewal', [
-          { value: 'cancel', label: 'Cancel and rerun setup' },
-        ])
-        return false
-      }
-      try {
-        await verifyProviderModel(ref, finalProviders, memory, host.signal)
-        break
-      } catch (error) {
-        if (host.signal?.aborted) return false
-        const message = error instanceof Error ? error.message : String(error)
-        host.addNotice(`Verification failed: ${message}`, 'error')
-        const retry = await host.select(`Verification failed: ${message}`, [
-          { value: 'retry', label: 'Retry verification' },
-          { value: 'cancel', label: 'Cancel and rerun setup' },
-        ])
-        if (retry !== 'retry') return false
-      }
-    }
-    const model = finalProviders[provider]?.models?.find((m) => m.id === id)
-    const levels =
-      model?.reasoning === false
-        ? ['off']
-        : THINKING_LEVELS.filter(
-            (level) =>
-              !model ||
-              model.reasoning === undefined ||
-              (model.thinkingLevelMap?.[level] !== null &&
-                (!['xhigh', 'max'].includes(level) ||
-                  model.thinkingLevelMap?.[level] !== undefined)),
-          )
-    const thinking = await host.select(
-      'Thinking level',
-      levels.map((level) => ({ value: level, label: level })),
-      typeof settings.thinkingLevel === 'string'
-        ? settings.thinkingLevel
-        : 'medium',
-    )
-    if (!thinking) return false
-    const lark = await host.select('Connect Lark?', [
-      { value: 'later', label: 'Not now' },
-      { value: 'yes', label: 'Yes, connect Lark' },
-    ])
-    if (!lark) return false
-    const larkNote = ''
-    const save = await host.select(
-      `Save configuration for ${ref}\nThinking: ${thinking}\nCredentials: ${authPath}\nConfig: ${configPath}`,
-      [
-        { value: 'yes', label: 'Save configuration' },
-        { value: 'no', label: 'Cancel' },
-      ],
-    )
-    if (save !== 'yes') return false
-    const written: string[] = []
-    let prevRegistration: ReturnType<SqliteOAuthRegistrationStore['get']>
-    let hasPrevRegistration = false
-    let registrationUpdated = false
-    const applyStagedRegistration = (mode: 'apply' | 'rollback'): void => {
-      const staged = stagedRegistrations.get(provider)
-      const next = mode === 'apply' ? staged : prevRegistration
-      if (!next && !existsSync(dbPath)) return
-      const db = openDatabase({ path: dbPath })
-      try {
-        const regStore = new SqliteOAuthRegistrationStore(db)
-        if (mode === 'apply') {
-          prevRegistration = regStore.get(provider)
-          hasPrevRegistration = true
-        }
-        if (next) regStore.set(provider, next)
-        else regStore.delete(provider)
-      } finally {
-        db.close()
-      }
-    }
-    try {
-      mkdirSync(agentDir, { recursive: true, mode: 0o700 })
-      if (newInstallationId) {
-        writeFileSync(
-          join(agentDir, 'installation-id'),
-          `${newInstallationId}\n`,
-        )
-        written.push(join(agentDir, 'installation-id'))
-      }
-      if (stagedRegistrations.has(provider)) {
-        applyStagedRegistration('apply')
-        registrationUpdated = true
-      }
-      let saved: Awaited<ReturnType<typeof saveModelSetup>>
-      try {
-        saved = await saveModelSetup({
-          agentDir,
-          ref,
-          providers: finalProviders,
-          ...(newCredential ||
-          JSON.stringify(memory.get(provider)) !== JSON.stringify(stored)
-            ? { credential: memory.get(provider) }
-            : {}),
-          ...(finalOverride ? { preset: finalOverride } : {}),
-          thinkingLevel: thinking as ThinkingLevel,
-        })
-      } catch (error) {
-        const authPath = join(agentDir, 'auth.json')
-        const writtenFiles = (
-          error as { writtenFiles?: readonly string[] } | null
-        )?.writtenFiles
-        const wroteAuth = writtenFiles
-          ? writtenFiles.includes(authPath)
-          : error instanceof Error && error.message.includes(authPath)
-        if (registrationUpdated && hasPrevRegistration && !wroteAuth) {
-          try {
-            applyStagedRegistration('rollback')
-          } catch {
-            /* preserve saveModelSetup error */
+      const controller = new AbortController()
+      host.signal?.addEventListener('abort', () => controller.abort(), {
+        once: true,
+      })
+      const interaction: AuthInteraction = {
+        signal: controller.signal,
+        prompt: async (prompt) => {
+          const answer =
+            prompt.type === 'select'
+              ? await host.select(
+                  prompt.message,
+                  prompt.options.map((o) => ({
+                    value: o.id,
+                    label: o.label,
+                  })),
+                )
+              : await host.input(
+                  prompt.message,
+                  prompt.placeholder,
+                  prompt.signal,
+                  prompt.type === 'secret',
+                )
+          if (prompt.signal?.aborted) throw new Error('Prompt closed')
+          if (!answer) {
+            controller.abort()
+            throw new Error('Login cancelled')
           }
-        }
-        throw error
+          return answer
+        },
+        notify: (event) => {
+          if (event.type === 'auth_url') {
+            host.addNotice(
+              `${event.instructions ?? 'Open this URL:'}\n${event.url}`,
+            )
+            ;(host.openBrowser ?? openBrowser)(event.url)
+          } else host.addNotice(event.message, 'dim')
+        },
       }
-      written.push(...saved.written)
-      host.vela.configureProvider(provider, saved.definition)
-      host.vela.setDefaults(ref, thinking as ThinkingLevel)
-      host.session.setModel(ref)
-      host.session.setThinkingLevel(thinking as ThinkingLevel)
-      host.onConfigured?.()
-      const summary = `Saved:\n${written.join('\n')}\nChange these files later or run vela setup again.${larkNote ? `\n${larkNote}` : ''}`
-      host.addNotice(summary)
-      host.setSummary(summary)
-      if (lark === 'yes') await larkSetup(host)
-      return true
-    } catch (error) {
-      const summary = `Setup failed: ${error instanceof Error ? error.message : String(error)}\nAlready written: ${written.join(', ') || 'none'}`
-      host.addNotice(summary, 'error')
-      host.setSummary(summary)
+      await stagingModels.login(provider, method, interaction, {
+        getDeviceId: () => {
+          const valid = readValidInstallationId(agentDir)
+          if (valid) return valid
+          newInstallationId ??= randomUUID()
+          return newInstallationId
+        },
+      })
+    }
+    newCredential = true
+  }
+
+  let id: string | undefined
+  if (choice === 'custom') id = await host.input('Model ID', 'e.g. model-name')
+  else {
+    const candidates = stagingModels
+      .list()
+      .filter((m) => m.provider === provider)
+    const selected = await host.pickModel(
+      candidates,
+      typeof settings.model === 'string' ? settings.model : undefined,
+    )
+    id = selected?.slice(provider.length + 1)
+  }
+  if (!id) return false
+
+  if (preset && choice === 'custom') {
+    const previous = prior.models ?? []
+    const model = { ...(previous.find((entry) => entry.id === id) ?? { id }) }
+    for (;;) {
+      const value = await host.input(
+        'Context window (optional)',
+        'Tokens · empty Enter keeps existing value (default if new)',
+        undefined,
+        false,
+        true,
+      )
+      if (value === undefined) return false
+      if (!value) break
+      const tokens = Number(value)
+      if (Number.isSafeInteger(tokens) && tokens > 0) {
+        model.contextWindow = tokens
+        break
+      }
+      host.addNotice('Context window must be a positive integer.', 'error')
+    }
+    for (const title of ['Image input', 'Reasoning support'] as const) {
+      const value = await host.select(title, [
+        {
+          value: 'keep',
+          label: 'Keep existing value (default for a new model)',
+        },
+        { value: 'yes', label: 'Yes' },
+        { value: 'no', label: 'No' },
+      ])
+      if (!value) return false
+      if (value !== 'keep') {
+        if (title === 'Image input')
+          model.input = value === 'yes' ? ['text', 'image'] : ['text']
+        else model.reasoning = value === 'yes'
+      }
+    }
+    preset.models = previous.some((entry) => entry.id === id)
+      ? previous.map((entry) => (entry.id === id ? model : entry))
+      : [...previous, model]
+  }
+
+  const finalOverride = preset ? { ...prior, ...preset } : undefined
+  const finalProviders = loadModels({
+    agentDir,
+    env: process.env,
+    ...(finalOverride ? { overrides: { [provider]: finalOverride } } : {}),
+  })
+  const ref = `${provider}/${id}`
+  const proceed = await host.select(
+    'Verification sends a minimal request and may incur a small charge',
+    [
+      { value: 'yes', label: 'Verify' },
+      { value: 'no', label: 'Cancel' },
+    ],
+  )
+  if (proceed !== 'yes') return false
+  for (;;) {
+    if (
+      !newCredential &&
+      stored?.type === 'oauth' &&
+      stored.expires <= Date.now() + 310_000
+    ) {
+      host.addNotice(
+        'The saved sign-in is close to expiry. Rerun setup and select Replace credential before verifying.',
+        'warning',
+      )
+      await host.select('Saved sign-in needs renewal', [
+        { value: 'cancel', label: 'Cancel and rerun setup' },
+      ])
       return false
     }
-  } finally {
-    await temporary.dispose()
+    try {
+      await verifyProviderModel(ref, finalProviders, memory, host.signal)
+      break
+    } catch (error) {
+      if (host.signal?.aborted) return false
+      const message = error instanceof Error ? error.message : String(error)
+      host.addNotice(`Verification failed: ${message}`, 'error')
+      const retry = await host.select(`Verification failed: ${message}`, [
+        { value: 'retry', label: 'Retry verification' },
+        { value: 'cancel', label: 'Cancel and rerun setup' },
+      ])
+      if (retry !== 'retry') return false
+    }
+  }
+
+  const model = finalProviders[provider]?.models?.find((m) => m.id === id)
+  const levels =
+    model?.reasoning === false
+      ? ['off']
+      : THINKING_LEVELS.filter(
+          (level) =>
+            !model ||
+            model.reasoning === undefined ||
+            (model.thinkingLevelMap?.[level] !== null &&
+              (!['xhigh', 'max'].includes(level) ||
+                model.thinkingLevelMap?.[level] !== undefined)),
+        )
+  const thinking = await host.select(
+    'Thinking level',
+    levels.map((level) => ({ value: level, label: level })),
+    typeof settings.thinkingLevel === 'string'
+      ? settings.thinkingLevel
+      : 'medium',
+  )
+  if (!thinking) return false
+  const lark = await host.select('Connect Lark?', [
+    { value: 'later', label: 'Not now' },
+    { value: 'yes', label: 'Yes, connect Lark' },
+  ])
+  if (!lark) return false
+  const save = await host.select(
+    `Save configuration for ${ref}\nThinking: ${thinking}\nCredentials: ${authPath}\nConfig: ${configPath}`,
+    [
+      { value: 'yes', label: 'Save configuration' },
+      { value: 'no', label: 'Cancel' },
+    ],
+  )
+  if (save !== 'yes') return false
+
+  const written: string[] = []
+  let prevRegistration: OAuthRegistration | undefined
+  let hasPrevRegistration = false
+  let registrationUpdated = false
+  const applyStagedRegistration = async (
+    mode: 'apply' | 'rollback',
+  ): Promise<void> => {
+    const staged = stagedRegistrations.get(provider)
+    const next = mode === 'apply' ? staged : prevRegistration
+    if (mode === 'apply') {
+      prevRegistration = await runtime.oauthRegistrations.get(provider)
+      hasPrevRegistration = true
+    }
+    if (next) await runtime.oauthRegistrations.set(provider, next)
+    else await runtime.oauthRegistrations.delete(provider)
+  }
+
+  try {
+    mkdirSync(agentDir, { recursive: true, mode: 0o700 })
+    if (newInstallationId) {
+      writeFileSync(join(agentDir, 'installation-id'), `${newInstallationId}\n`)
+      written.push(join(agentDir, 'installation-id'))
+    }
+    if (stagedRegistrations.has(provider)) {
+      await applyStagedRegistration('apply')
+      registrationUpdated = true
+    }
+    let saved: Awaited<ReturnType<typeof saveModelSetup>>
+    try {
+      saved = await saveModelSetup({
+        agentDir,
+        ref,
+        providers: finalProviders,
+        ...(newCredential ||
+        JSON.stringify(memory.get(provider)) !== JSON.stringify(stored)
+          ? { credential: memory.get(provider) }
+          : {}),
+        ...(finalOverride ? { preset: finalOverride } : {}),
+        thinkingLevel: thinking as ThinkingLevel,
+      })
+    } catch (error) {
+      const writtenFiles = (
+        error as { writtenFiles?: readonly string[] } | null
+      )?.writtenFiles
+      const wroteAuth = writtenFiles
+        ? writtenFiles.includes(authPath)
+        : error instanceof Error && error.message.includes(authPath)
+      if (registrationUpdated && hasPrevRegistration && !wroteAuth) {
+        await applyStagedRegistration('rollback').catch(() => {})
+      }
+      throw error
+    }
+    written.push(...saved.written)
+    await runtime.reloadConfig()
+    await host.session.setModel(ref)
+    await host.session.setThinkingLevel(thinking as ThinkingLevel)
+    host.onConfigured?.()
+    const summary = `Saved:\n${written.join('\n')}\nChange these files later or run vela setup again.`
+    host.addNotice(summary)
+    host.setSummary(summary)
+    if (lark === 'yes') await larkSetup(host)
+    return true
+  } catch (error) {
+    const summary = `Setup failed: ${error instanceof Error ? error.message : String(error)}\nAlready written: ${written.join(', ') || 'none'}`
+    host.addNotice(summary, 'error')
+    host.setSummary(summary)
+    return false
   }
 }

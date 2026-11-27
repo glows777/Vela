@@ -1,113 +1,154 @@
-import type {
-  AgentErrorKind,
-  ImageContent,
-  ModelMessage,
-  VelaSession,
-} from '../driver/index.ts'
+import type { AgentErrorKind, ImageContent } from '../driver/index.ts'
 import { failureHint } from '../driver/index.ts'
-import type { Vela } from '../vela.ts'
+import type { VelaRuntime } from '../runtime-sdk-types.ts'
 import { jsonEvent, toJsonLine, writeStdout } from './json-event.ts'
+import type { CliSessionClient } from './runtime-client.ts'
 
-/** Text of the last assistant message (the output of -p). */
-function lastAssistantText(messages: ModelMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i] as ModelMessage
-    if (message.role !== 'assistant') continue
-    if (typeof message.content === 'string') return message.content
-    return message.content
-      .map((part) => (part.type === 'text' ? part.text : ''))
-      .join('')
-  }
-  return ''
+function extractMessageText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(
+      (part): part is { type: string; text: string } =>
+        typeof part === 'object' &&
+        part !== null &&
+        (part as { type?: unknown }).type === 'text' &&
+        typeof (part as { text?: unknown }).text === 'string',
+    )
+    .map((part) => part.text)
+    .join('')
 }
 
 /**
  * Print mode (like pi's): send messages in order, then exit; returns the exit code.
  * - `text` (`-p`): stdout gets only the last assistant answer; on failure or abort the reason goes to stderr, exit code 1.
- * - `json` (`--mode json`): a session header line, then one JSON line per event.
+ * - `json` (`--mode json`): a session header line, then one v0.9 `RuntimeEvent` / `StreamDeltaEvent` JSON line per event.
  */
 export async function runPrintMode(options: {
-  vela: Vela
-  session: VelaSession
+  runtime: VelaRuntime
+  session: CliSessionClient
   messages: string[]
   images?: ImageContent[]
   mode: 'text' | 'json'
 }): Promise<number> {
-  const { vela, session, messages, mode } = options
+  const { runtime, session, messages, mode } = options
   let writing = Promise.resolve()
-  // -p prints only answers from this run, not old ones in a resumed session (e.g. `vela -c -p /memory` must not print the previous answer)
-  let answer: ModelMessage | undefined
-  let failure: { cause: unknown; kind: AgentErrorKind | undefined } | undefined
-  const offAnswer = session.subscribe((event) => {
-    if (event.type === 'agent_end' && event.reason === 'error' && !failure)
-      failure = { cause: event.error, kind: event.errorKind }
-    if (
-      event.type === 'message_end' &&
-      event.message.role === 'assistant' &&
-      event.stopReason !== 'error' &&
-      event.stopReason !== 'aborted'
-    )
-      answer = event.message
+  let lastReply = ''
+  let lastUserRunId: string | undefined
+  let userRunFailed = false
+  let failure:
+    | {
+        message: string
+        kind: AgentErrorKind | undefined
+        errorHint?: string
+      }
+    | undefined
+
+  let headerWritten = mode !== 'json'
+  const pendingJsonLines: string[] = []
+  const enqueueJsonLine = (line: string) => {
+    if (!headerWritten) {
+      pendingJsonLines.push(line)
+      return
+    }
+    writing = writing.then(() => writeStdout(line))
+  }
+
+  const unsubEvents = runtime.events.subscribe((event) => {
+    if (event.sessionId !== session.id) return
+    if (mode === 'json') {
+      enqueueJsonLine(jsonEvent(event))
+    }
+    if (event.type === 'run_started' && event.trigger === 'user') {
+      lastUserRunId = event.runId
+    } else if (event.type === 'message_committed') {
+      const msg = event.message as { role?: unknown; content?: unknown }
+      if (msg.role === 'assistant' && event.runId === lastUserRunId) {
+        lastReply = extractMessageText(msg.content)
+      }
+    } else if (event.type === 'notify' && mode === 'text') {
+      console.error(
+        event.level === 'info'
+          ? event.message
+          : `[${event.level}] ${event.message}`,
+      )
+    } else if (event.type === 'run_finished') {
+      if (event.status === 'failed') {
+        if (event.runId === lastUserRunId) userRunFailed = true
+        failure ??= {
+          message: event.error ?? 'Turn failed',
+          kind: event.errorKind,
+          errorHint: event.errorHint,
+        }
+      } else if (event.status === 'stopped') {
+        if (event.runId === lastUserRunId) userRunFailed = true
+        failure ??= { message: 'Stopped', kind: undefined }
+      } else if (event.status === 'waiting_human') {
+        if (event.runId === lastUserRunId) userRunFailed = true
+        failure ??= {
+          message: 'Waiting for human approval or input',
+          kind: undefined,
+        }
+      }
+    }
   })
-  const off: () => void =
+
+  const unsubDeltas =
     mode === 'json'
-      ? vela.subscribe((event, sessionId) => {
-          if (sessionId !== session.id) return
-          const line = jsonEvent(event, sessionId)
-          writing = writing.then(() => writeStdout(line))
+      ? runtime.events.subscribeDeltas((delta) => {
+          if (delta.sessionId !== session.id) return
+          enqueueJsonLine(jsonEvent(delta))
         })
-      : // -p has no UI: extension notify (e.g. `vela -p /memory`) goes to stderr, stdout carries only the answer
-        session.subscribe((event) => {
-          if (event.type === 'notify')
-            console.error(
-              event.level === 'info'
-                ? event.message
-                : `[${event.level}] ${event.message}`,
-            )
-        })
+      : () => {}
+
   if (mode === 'json') {
-    let model: string | undefined
-    try {
-      model = session.modelInfo.ref
-    } catch {}
+    const snap = await session.refresh({ includeEntries: false })
     await writeStdout(
       toJsonLine({
         type: 'session',
         id: session.id,
-        cwd: session.cwd,
-        model,
-        thinkingLevel: session.thinkingLevel,
+        cwd: snap.cwd,
+        model: snap.modelInfo?.ref,
+        thinkingLevel: snap.thinkingLevel,
       }),
     )
+    headerWritten = true
+    if (pendingJsonLines.length > 0) {
+      const flushed = pendingJsonLines.splice(0)
+      writing = writing.then(async () => {
+        for (const line of flushed) {
+          await writeStdout(line)
+        }
+      })
+    }
   }
+
   let exitCode = 0
-  if (mode === 'text') session.backgroundWork.holdDeliveries()
   try {
-    for (const [index, message] of messages.entries())
-      await session.prompt(message, {
-        source: 'interactive',
+    for (const [index, message] of messages.entries()) {
+      const res = await session.prompt(message, {
         images: index === 0 ? options.images : undefined,
       })
-    if (mode === 'text') {
-      const text = answer ? lastAssistantText([answer]) : ''
-      if (text) await writeStdout(`${text}\n`)
+      if (!res.handledCommand) {
+        await session.waitForSettled()
+      }
+      if (failure) break
     }
-    await session.backgroundWork.settle(() => session.waitForIdle())
-    // Background delivery logs its own failures; do not turn an incomplete run into success.
-    if (failure)
-      throw failure.cause ?? new Error('A background result turn failed')
+    if (mode === 'text' && lastReply && !userRunFailed) {
+      await writeStdout(`${lastReply}\n`)
+    }
+    if (failure) {
+      throw new Error(failure.message)
+    }
   } catch (error) {
-    console.error(
-      '[Agent] Turn stopped:',
-      error instanceof Error ? error.message : error,
-    )
-    const hint = failureHint(failure?.kind, failure?.cause ?? error)
+    const msg = error instanceof Error ? error.message : String(error)
+    console.error('[Agent] Turn stopped:', msg)
+    const hint = failure?.errorHint ?? failureHint(failure?.kind, error)
     if (mode === 'text' && hint) console.error(hint)
     exitCode = 1
   } finally {
-    session.backgroundWork.discardHeld()
-    off()
-    offAnswer()
+    unsubDeltas()
+    unsubEvents()
     await writing
   }
   return exitCode

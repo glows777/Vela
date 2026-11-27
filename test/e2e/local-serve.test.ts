@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import {
   freeLocalPort,
   LOCAL_TOKEN,
@@ -14,7 +14,8 @@ import {
 } from '../support/local.ts'
 import { tempDir } from '../support/vela.ts'
 
-const ROOT = resolve(import.meta.dir, '../..')
+const fixture = new URL('../fixtures/recovery/local-serve.ts', import.meta.url)
+  .pathname
 const dirs: { cleanup(): void }[] = []
 afterAll(() => {
   for (const dir of dirs.splice(0)) dir.cleanup()
@@ -84,23 +85,20 @@ test('real serve admits project chat, starts a file task and delivers HTTP/SSE w
       ],
     }),
   )
-  const proc = Bun.spawn(
-    ['bun', join(ROOT, 'packages/vela/src/cli/main.ts'), 'serve'],
-    {
-      cwd: cwd.path,
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: home.path,
-        VELA_DIR: home.path,
-        VELA_MODEL: `faux:${join(cwd.path, 'scenario.json')}`,
-        VELA_LOCAL_TOKEN: LOCAL_TOKEN,
-        VELA_OFFLINE: '1',
-      },
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
+  const proc = Bun.spawn(['bun', fixture], {
+    cwd: cwd.path,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: home.path,
+      VELA_DIR: home.path,
+      VELA_MODEL: `faux:${join(cwd.path, 'scenario.json')}`,
+      VELA_LOCAL_TOKEN: LOCAL_TOKEN,
+      VELA_OFFLINE: '1',
     },
-  )
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
   let stderr = ''
   const reading = (async () => {
     for await (const chunk of proc.stderr)
@@ -155,7 +153,7 @@ test('real serve admits project chat, starts a file task and delivers HTTP/SSE w
     const example = Bun.spawn(
       [
         'bun',
-        join(ROOT, 'examples/local-client.ts'),
+        join(import.meta.dir, '../../examples/local-client.ts'),
         projectDir.path,
         'Report status',
       ],

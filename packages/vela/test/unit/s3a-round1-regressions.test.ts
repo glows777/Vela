@@ -3,9 +3,12 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildDockerGuest } from '../../../../scripts/build-docker-guest.ts'
+import {
+  cliProjectExtensions,
+  cliWorkspaceModeAt,
+} from '../../../../test/support/legacy-cli-helpers.ts'
 import { tempDir } from '../../../../test/support/vela.ts'
-import { cliProjectExtensions } from '../../src/cli/project-extensions.ts'
-import { cliWorkspaceModeAt, parseArgs } from '../../src/cli/setup.ts'
+import { parseArgs } from '../../src/cli/setup.ts'
 import { saveTrust } from '../../src/db/index.ts'
 import { createLocalExecutionEnv } from '../../src/driver/execution/local.ts'
 import { loadConfig } from '../../src/driver/index.ts'

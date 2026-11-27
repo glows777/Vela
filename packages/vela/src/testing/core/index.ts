@@ -5,7 +5,7 @@
  * record and replay real sessions.
  */
 
-export { createMockModel, type DemoModel } from './demo-model.ts'
+export { createMockModel } from './demo-model.ts'
 export {
   createFauxModel,
   type FauxModel,

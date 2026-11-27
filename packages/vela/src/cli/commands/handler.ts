@@ -1,16 +1,16 @@
-import type { VelaSession } from '../../driver/index.ts'
-import type { Vela } from '../../vela.ts'
+import type { VelaRuntime } from '../../runtime-sdk-types.ts'
+import type { CliSessionClient } from '../runtime-client.ts'
 
 /**
- * Slash commands belong to the CLI: they read data the SDK exposes (vela / session) and
- * write output through print() (the TUI puts it in the chat log; tests capture it).
+ * Slash commands belong to the CLI: they read data `VelaRuntime` and `CliSessionClient` expose
+ * and write output through `print()`.
  */
 export interface CommandContext {
-  vela: Vela
-  session: VelaSession
+  runtime: VelaRuntime
+  session: CliSessionClient
   /** Print text (may be multi-line) */
   print: (text: string) => void
-  /** Configured agent directory (`VELA_DIR` or `~/.vela`). `/status` substitutes `$VELA_DIR` only for files under it. */
+  /** Configured agent directory (`VELA_DIR` or `~/.vela`). */
   agentDir?: string
 }
 

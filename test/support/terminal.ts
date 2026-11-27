@@ -3,7 +3,9 @@ import {
   InteractiveMode,
   type InteractiveOptions,
 } from '../../packages/vela/src/cli/interactive.ts'
+import type { VelaRuntime } from '../../packages/vela/src/runtime-sdk-types.ts'
 import type { Vela } from './compat-vela.ts'
+import { legacyVelaAsRuntime } from './legacy-vela-runtime.ts'
 
 /** Fake implementation of pi-tui's Terminal interface: writes nothing and sends keys straight to the TUI. */
 class FakeTerminal implements Terminal {
@@ -29,11 +31,9 @@ class FakeTerminal implements Terminal {
   setTitle(): void {}
   setProgress(): void {}
 
-  /** Type one character at a time (like a real terminal) */
   type(text: string): void {
     for (const char of text) this.onInput?.(char)
   }
-  /** Press a key: '\r' Enter, '\x1b' Esc, '\x1b\r' Alt+Enter, '\x1b[1;3A' Alt+Up, '\x04' Ctrl+D… */
   press(key: string): void {
     this.onInput?.(key)
   }
@@ -62,12 +62,17 @@ export async function stopTuis(): Promise<void> {
   await Promise.all(started.splice(0).map((mode) => mode.shutdown()))
 }
 
+function isRuntime(target: Vela | VelaRuntime): target is VelaRuntime {
+  return 'events' in target && 'sessions' in target && 'agentDir' in target
+}
+
 /**
- * Starts interactive mode in a fake terminal. `screen()` is the current screen text (colors stripped); `until()` waits for some text to appear.
+ * Starts interactive mode in a fake terminal.
  */
 export async function startTui(
-  vela: Vela,
+  target: Vela | VelaRuntime,
   options: {
+    cwd?: string
     sessionId?: string
     resume?: boolean
     pick?: boolean
@@ -78,17 +83,21 @@ export async function startTui(
     readClipboardText?: () => Promise<string | undefined>
     openBrowser?: (url: string) => void
     enabledModels?: string[]
-    /** Model check for the setup wizard: false runs it (first run without a usable model) */
     configure?: InteractiveOptions['configure']
     hasUsableModel?: () => boolean
     agentDir?: string
   } = {},
 ) {
+  const runtime = isRuntime(target)
+    ? target
+    : legacyVelaAsRuntime(target).runtime
+  const cwd = options.cwd ?? (isRuntime(target) ? process.cwd() : target.cwd)
   const terminal = new FakeTerminal()
   let exited = false
   let ids = 0
   const mode = new InteractiveMode({
-    vela,
+    runtime,
+    cwd,
     sessionId: options.sessionId ?? 'tui',
     resume: options.resume ?? false,
     pick: options.pick ?? false,
@@ -129,7 +138,6 @@ export async function startTui(
     ]
       .map((line) => stripTerminalSequences(line).trimEnd())
       .join('\n')
-  /** Wait until a condition holds (polls every 1 ms; on timeout, throws with the current screen) */
   const until = async (
     condition: string | (() => boolean),
     timeoutMs = 2000,
@@ -154,7 +162,6 @@ export async function startTui(
     screen,
     until,
     exited: () => exited,
-    /** Type a line and press Enter */
     submit: (text: string) => {
       terminal.type(text)
       terminal.press(KEYS.enter)

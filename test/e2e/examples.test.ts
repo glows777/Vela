@@ -49,16 +49,3 @@ for (const [file, expected] of sdkExamples)
     expect({ code, stderr }).toEqual({ code: 0, stderr: '' })
     expect(stdout).toContain(expected)
   })
-
-test.concurrent('examples/rpc-client.ts drives vela --mode rpc to agent_settled', async () => {
-  const { stdout, stderr, code } = await run([
-    'examples/rpc-client.ts',
-    'list files',
-  ])
-  expect(stderr).not.toContain('failed]')
-  expect(code).toBe(0)
-  // The demo model lists the folder with a default tool, and the listing comes back (#233)
-  expect(stdout).toContain('[tool] bash {"command":"ls"}')
-  expect(stdout).not.toContain('[tool error]')
-  expect(stdout).toContain('package.json')
-})

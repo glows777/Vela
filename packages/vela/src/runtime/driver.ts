@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { AgentErrorKind } from '../shared/provider-types.ts'
 import type { RuntimeEventPayload, StreamDeltaEvent } from './events.ts'
 
 export type RunTrigger =
@@ -130,6 +131,8 @@ export interface DriverTurnResult {
   replyText?: string
   silent?: boolean
   error?: string
+  errorKind?: AgentErrorKind
+  errorHint?: string
   committedInTx?: boolean
 }
 

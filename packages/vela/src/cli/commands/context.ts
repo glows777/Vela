@@ -1,5 +1,5 @@
-import { inspectSession } from '../../driver/diagnostics.ts'
-import type { VelaSession } from '../../driver/index.ts'
+import type { ModelMessage } from '../../driver/index.ts'
+import type { RuntimeSessionInspection } from '../../driver/runtime-types.ts'
 import {
   buildContextSnapshot,
   renderContextView,
@@ -8,15 +8,15 @@ import {
 import type { CommandHandler } from './handler.ts'
 
 export const contextCommands: CommandHandler[] = [
-  (cmd, { print, session, vela }) => {
+  (cmd, { print, session }) => {
     if (cmd !== '/context') return false
     return (async () => {
       try {
-        // Sections are built per prompt: preview the next prompt's sections so memory usage shows even before the first prompt
-        const snapshot = await inspectSession(vela, session, {
-          previewExtensions: true,
+        const snap = await session.refresh({
+          previewPrompt: true,
+          includeEntries: true,
         })
-        print(renderContextView(contextSnapshot(session, snapshot)))
+        print(renderContextView(contextSnapshot(snap)))
       } catch (error) {
         print(
           `[context] Failed: ${error instanceof Error ? error.message : error}`,
@@ -27,38 +27,41 @@ export const contextCommands: CommandHandler[] = [
 
   (cmd, { print, session }) => {
     if (cmd !== '/usage') return false
-    print(renderUsageView(session.usage.totals))
-    return true
+    return (async () => {
+      const snap = await session.refresh()
+      print(renderUsageView(snap.usage.totals))
+    })()
   },
 ]
 
-/**
- * The memory rules and the skills index are part of the system prompt; they get their own slices, so the System
- * prompt slice is the rest. The memory index itself travels as a message and counts under messages. The autocompact
- * buffer is the window above the summary threshold.
- */
-function contextSnapshot(
-  session: VelaSession,
-  snapshot: Awaited<ReturnType<typeof inspectSession>>,
-) {
-  const info = session.modelInfo
-  const windowTokens = info.contextWindow ?? snapshot.windowTokens
-  const memoryChars = snapshot.extensionSections.memory?.length ?? 0
+function contextSnapshot(snap: RuntimeSessionInspection) {
+  const info = snap.modelInfo
+  const preview = snap.promptSnapshot
+  if (!info || !preview) {
+    throw new Error(snap.modelError ?? 'No model selected')
+  }
+  const windowTokens = info.contextWindow ?? preview.windowTokens
+  const memoryChars = preview.extensionSections.memory?.length ?? 0
   return buildContextSnapshot({
     modelName: info.provider ? `${info.provider} / ${info.id}` : info.id,
     modelId: info.id,
     windowTokens,
     systemPromptChars: Math.max(
       0,
-      snapshot.systemPromptChars - memoryChars - snapshot.skillsChars,
+      preview.systemPromptChars - memoryChars - preview.skillsChars,
     ),
-    toolDescriptionChars: snapshot.toolDescriptionChars,
+    toolDescriptionChars: preview.toolDescriptionChars,
     memoryChars,
-    skillsChars: snapshot.skillsChars,
-    messages: session.messages,
+    skillsChars: preview.skillsChars,
+    messages: snap.branch.flatMap((entry): ModelMessage[] => {
+      if (entry.type === 'message') return [entry.message]
+      if (entry.type === 'custom_message')
+        return [{ role: 'user', content: entry.content }]
+      return []
+    }),
     autocompactBufferTokens: Math.max(
       0,
-      windowTokens - session.limits.summaryThreshold,
+      windowTokens - snap.limits.summaryThreshold,
     ),
   })
 }

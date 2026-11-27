@@ -73,6 +73,8 @@ export interface VelaDriverRunOptions {
   allowWaitingHuman?: boolean
   onRecoveryComplete?: () => Promise<void> | void
   appendInput?: (message: ModelMessage) => void
+  /** Skip driver-side `finishRun()` when the caller (e.g. `Runtime` worker) commits run status atomically. */
+  skipFinishRun?: boolean
   /**
    * Optional Runtime callback executed inside the SQLite transaction committing each
    * user/assistant/hosted/tool message so `message_committed` carries the exact DB entry ID atomically.
@@ -167,6 +169,7 @@ export class VelaDriver {
       typeof options.producer === 'function'
         ? options.producer()
         : (options.producer ?? describeModel(options.model).ref)
+    const shouldFinishRun = !options.skipFinishRun
     const claim =
       options.claim ??
       this.claim({
@@ -667,7 +670,7 @@ export class VelaDriver {
         if (!needAnotherStep && queued.length === 0) break
       }
 
-      if (!committedTerminalInTx) {
+      if (shouldFinishRun && !committedTerminalInTx) {
         this.finishRun(runId, ownerToken, 'completed')
       }
       this.emit({
@@ -684,19 +687,21 @@ export class VelaDriver {
       const aborted = Boolean(options.abortSignal?.aborted || draining)
       const { hasRunPendingApproval, hasSessionPendingApproval } =
         pendingApprovalState(db, sessionId, runId)
-      this.finishRun(
-        runId,
-        ownerToken,
-        hasRunPendingApproval
-          ? 'waiting_human'
-          : options.abortSignal?.aborted
-            ? 'stopped'
-            : draining
-              ? 'interrupted'
-              : 'failed',
-        error,
-        hasSessionPendingApproval ? 'waiting_human' : 'idle',
-      )
+      if (shouldFinishRun) {
+        this.finishRun(
+          runId,
+          ownerToken,
+          hasRunPendingApproval
+            ? 'waiting_human'
+            : options.abortSignal?.aborted
+              ? 'stopped'
+              : draining
+                ? 'interrupted'
+                : 'failed',
+          error,
+          hasSessionPendingApproval ? 'waiting_human' : 'idle',
+        )
+      }
       this.emit({
         type: 'agent_end',
         messages: newMessages,

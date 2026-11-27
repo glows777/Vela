@@ -5,22 +5,21 @@ import {
 } from '@glows777/vela/testing'
 import type { CommandContext } from '../../packages/vela/src/cli/commands/index.ts'
 import { createCliDispatcher } from '../../packages/vela/src/cli/dispatcher.ts'
+import type { InternalSessionOptions } from '../../packages/vela/src/driver/session/options.ts'
 import { velaInternals } from './compat-vela.ts'
+import { legacyVelaAsRuntime } from './legacy-vela-runtime.ts'
 
 export {
   cleanupTestVelas,
   tempDir,
 } from '@glows777/vela/testing'
 
-import type { InternalSessionOptions } from '../../packages/vela/src/driver/session/options.ts'
-
 export type TestVelaOptions = Omit<CoreTestVelaOptions, 'session'> & {
   session?: InternalSessionOptions
 }
 
 /**
- * createTestVela() from vela/testing plus the CLI's slash command dispatcher:
- * tests use exactly the same command handling as the CLI, applied to the default session (`t.session`).
+ * createTestVela() from vela/testing plus the CLI's v0.9 Runtime adapter & slash command dispatcher.
  */
 export function createTestVela(
   options: TestVelaOptions = {},
@@ -28,22 +27,21 @@ export function createTestVela(
 ) {
   const t = createCoreTestVela(options, assemble)
   const internals = velaInternals(t.vela)
+  const { runtime, clientFor } = legacyVelaAsRuntime(t.vela)
 
   const ctx: CommandContext = {
-    vela: t.vela,
-    session: t.session,
-    // Command output still goes to console.log; capture it with captureConsole()
+    runtime,
+    session: clientFor(t.session),
     print: (text) => console.log(text),
   }
-  const dispatch = createCliDispatcher(t.vela)
+  const dispatch = createCliDispatcher(runtime)
 
   return Object.assign(t, {
-    /** createVela()'s internals (registry, memory, knowledge base, channel gateway…), for tests only */
     internals,
+    runtime,
+    clientFor,
     ctx,
-    /** Run a slash command; returns what the CLI dispatcher does: false / true / Promise (async command) */
     dispatch: (command: string) => dispatch(command, ctx),
-    /** Run a slash command and wait for it; returns whether a handler claimed the command */
     command: async (command: string) => {
       const result = dispatch(command, ctx)
       if (result instanceof Promise) await result

@@ -3,21 +3,19 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela, type VelaOptions } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
-import { ownerDocker } from '../../packages/vela/src/cli/docker.ts'
-import {
-  cliHostExtensionConfig,
-  cliProjectExtensions,
-} from '../../packages/vela/src/cli/project-extensions.ts'
-import {
-  BUILTIN_EXTENSIONS,
-  parseArgs,
-} from '../../packages/vela/src/cli/setup.ts'
+import { parseArgs } from '../../packages/vela/src/cli/setup.ts'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { createLocalExecutionEnv } from '../../packages/vela/src/driver/index.ts'
 import { lark } from '../../packages/vela/src/lark/index.ts'
 import { drainChannels } from '../../packages/vela/src/legacy-channels/testing.ts'
 import { loadConfig } from '../../packages/vela/src/load-config.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
+import {
+  BUILTIN_EXTENSIONS,
+  cliHostExtensionConfig,
+  cliProjectExtensions,
+  ownerDocker,
+} from '../support/legacy-cli-helpers.ts'
 
 test('project settings cannot redirect an owner environment, group or Docker data directory', () => {
   const dir = tempDir()

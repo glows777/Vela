@@ -1,15 +1,16 @@
 import type { Component } from '@earendil-works/pi-tui'
-import type { ModelInfo, VelaSession } from '../../driver/index.ts'
-import type { Vela } from '../../vela.ts'
+import type { ModelInfo } from '../../driver/index.ts'
+import type { VelaRuntime } from '../../runtime-sdk-types.ts'
 import { nextModel, scopedModels } from '../model-cycle.ts'
+import type { CliSessionClient } from '../runtime-client.ts'
 import { dialogBox, errorMessage } from './components.ts'
 import { settleOnce } from './input-dialogs.ts'
 import { SearchSelect } from './search-select.ts'
 import { selectListTheme } from './theme.ts'
 
 interface ModelHost {
-  vela: Vela
-  session: VelaSession
+  runtime: VelaRuntime
+  session: CliSessionClient
   options: { enabledModels?: string[] }
   addNotice(text: string, level?: 'info' | 'warning' | 'error' | 'dim'): void
   dialog<T>(
@@ -23,15 +24,16 @@ interface ModelHost {
 }
 
 function currentModelRef(host: ModelHost): string | undefined {
-  try {
-    return host.session.modelInfo.ref
-  } catch {}
+  return host.session.modelInfo?.ref
 }
 
 /** `/model` and Ctrl+L: pick from the models of providers with a credential, with search (like pi) */
 export async function selectModel(host: ModelHost): Promise<void> {
   const current = currentModelRef(host)
-  const models = host.vela.models({ channel: host.session.channel })
+  const models = await host.runtime.models({
+    channel: host.session.channel,
+    ...(host.session.modelEnv ? { env: host.session.modelEnv } : {}),
+  })
   if (!models.length) {
     host.addNotice(
       'No models available: sign in with /login, set a provider API key (e.g. ANTHROPIC_API_KEY), or switch directly with /model provider/id',
@@ -40,7 +42,7 @@ export async function selectModel(host: ModelHost): Promise<void> {
     return
   }
   const ref = await pickModel(host, models, current)
-  if (ref) switchModel(host, ref)
+  if (ref) await switchModel(host, ref)
 }
 
 export async function pickModel(
@@ -81,11 +83,11 @@ export async function pickModel(
   })
 }
 
-function switchModel(host: ModelHost, ref: string): void {
+async function switchModel(host: ModelHost, ref: string): Promise<void> {
   try {
-    host.session.setModel(ref)
+    const info = await host.session.setModel(ref)
     host.addNotice(
-      `Model: ${host.session.modelInfo.ref} · thinking: ${host.session.thinkingLevel}`,
+      `Model: ${info.ref} · thinking: ${host.session.thinkingLevel}`,
       'dim',
     )
     host.renderHeader(true)
@@ -102,11 +104,15 @@ export async function cycleModel(
 ): Promise<void> {
   const active = host.session
   try {
-    const resources = await active.resources()
+    const snap = await active.refresh()
     if (active !== host.session) return
+    const allModels = await host.runtime.models({
+      channel: snap.channel,
+      ...(active.modelEnv ? { env: active.modelEnv } : {}),
+    })
     const models = scopedModels(
-      host.vela.models({ channel: host.session.channel }),
-      resources.enabledModels ?? host.options.enabledModels,
+      allModels,
+      snap.resources.enabledModels ?? host.options.enabledModels,
     )
     const next = nextModel(models, currentModelRef(host), direction)
     if (!next) {
@@ -118,7 +124,7 @@ export async function cycleModel(
       )
       return
     }
-    switchModel(host, next.ref)
+    await switchModel(host, next.ref)
   } catch (error) {
     if (active === host.session) host.addNotice(errorMessage(error), 'error')
   }

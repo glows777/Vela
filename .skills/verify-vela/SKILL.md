@@ -1,6 +1,6 @@
 ---
 name: verify-vela
-description: Use Vela as a real user would (the TUI in tmux, -p / --mode json / rpc, a small SDK script), offline with the mock or a scripted faux model, and keep screens and side effects as proof. Use after changing CLI/TUI/SDK, desktop, or core behavior, for feature acceptance, and to learn the SDK.
+description: Use Vela as a real user would (the TUI in tmux, -p / --mode json, connectRuntime(), or a small SDK script), offline with the mock or a scripted faux model, and keep screens and side effects as proof. Use after changing CLI/TUI/SDK, desktop, or core behavior, for feature acceptance, and to learn the SDK.
 ---
 
 # verify-vela
@@ -27,7 +27,7 @@ REPO=$PWD; H=$REPO/.skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date
 | `$H wait $RUN '<regex>' [s]` | Until the regex matches more lines than before the last `send` / `keys` and nothing is running |
 | `$H snap $RUN <name>` / `grab $RUN <file>` | Save the screen with scrollback / copy a file from `work/` into the evidence dir |
 | `$H run $RUN [--stdin] <name> [vela args]` | One non-interactive Vela run; saves `<name>.{cmd,stdout,stderr,exit}` |
-| `$H exec $RUN [--stdin] <name> <cmd…>` | The same for any command (SDK scripts, `examples/rpc-client.ts`) |
+| `$H exec $RUN [--stdin] <name> <cmd…>` | The same for any command (SDK / `connectRuntime()` scripts) |
 | `$H doctor $RUN` | Versions, and whether the TUI is still up |
 | `$H cleanup $RUN` | Stop the run, copy `VELA_DIR` into the evidence, delete the scratch dir |
 

@@ -1,6 +1,6 @@
 import { CombinedAutocompleteProvider } from '@earendil-works/pi-tui'
-import type { VelaSession } from '../../driver/index.ts'
-import type { Vela } from '../../vela.ts'
+import type { RuntimeSessionInspection } from '../../driver/runtime-types.ts'
+import type { CliSessionClient } from '../runtime-client.ts'
 import { keyLabel } from './editor.ts'
 
 /** Commands the TUI handles itself (besides extension and CLI slash commands), for autocomplete */
@@ -61,31 +61,32 @@ export const HOTKEYS = [
 ]
 
 export function commandCompletions(
-  vela: Vela,
-  session: VelaSession,
-  resources: Awaited<ReturnType<VelaSession['resources']>>,
+  session: CliSessionClient,
+  inspection: RuntimeSessionInspection,
   fdPath?: string,
 ): CombinedAutocompleteProvider {
   return new CombinedAutocompleteProvider(
     [
       ...TUI_COMMANDS,
       ...CLI_COMMANDS,
-      ...resources.promptTemplates.map((t) => ({
+      ...inspection.resources.promptTemplates.map((t) => ({
         name: t.name,
         description: t.argumentHint
           ? `${t.argumentHint} — ${t.description}`
           : t.description,
       })),
-      ...resources.skills.map((s) => ({
+      ...inspection.resources.skills.map((s) => ({
         name: `skill:${s.name}`,
         description: s.description,
       })),
-      ...vela.commands(session.id).map((c) => ({
+      ...inspection.commands.map((c) => ({
         name: c.name,
-        description: c.description ?? `Extension ${c.extension}`,
+        description:
+          c.description ??
+          (c.extension ? `Extension ${c.extension}` : 'Built-in command'),
       })),
     ],
-    session.cwd,
+    session.cwd || inspection.cwd,
     fdPath,
   )
 }

@@ -1,11 +1,8 @@
 import { expect, test } from 'bun:test'
-import * as paths from '../../packages/vela/src/driver/config/paths.ts'
 import * as settings from '../../packages/vela/src/driver/config/settings.ts'
 import * as diagnostics from '../../packages/vela/src/driver/diagnostics.ts'
 import * as messages from '../../packages/vela/src/driver/messages.ts'
 import * as entries from '../../packages/vela/src/driver/session/entries.ts'
-import * as html from '../../packages/vela/src/driver/session/export-html.ts'
-import * as options from '../../packages/vela/src/driver/session/options.ts'
 import * as ids from '../../packages/vela/src/driver/session/session-id.ts'
 import * as selection from '../../packages/vela/src/driver/tools/tool-selection.ts'
 import * as catalog from '../../packages/vela/src/providers/models/catalog.ts'
@@ -18,7 +15,6 @@ import {
 const api = diagnostics as unknown as Record<string, unknown>
 test('experimental frontend helpers are the canonical core implementations', () => {
   const canonical: Record<string, unknown> = {
-    renderSessionHtml: html.renderSessionHtml,
     buildSessionPath: entries.buildSessionPath,
     contextEntries: (entries as unknown as Record<string, unknown>)
       .contextEntries,
@@ -26,12 +22,9 @@ test('experimental frontend helpers are the canonical core implementations', () 
     branchSummaryMessageText: entries.branchSummaryMessageText,
     sessionContentText: entries.messageText,
     newSessionId: ids.newSessionId,
-    assertSessionId: options.assertSessionId,
     THINKING_LEVELS: catalog.THINKING_LEVELS,
-    isToolModifier: selection.isToolModifier,
     getToolListError: selection.getToolListError,
     isToolContent: messages.isToolContent,
-    defaultAgentDir: paths.defaultAgentDir,
     extensionName: (settings as unknown as Record<string, unknown>)
       .extensionName,
     projectTrustRequired: (settings as unknown as Record<string, unknown>)

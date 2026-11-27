@@ -27,7 +27,7 @@ The built-in tools (`read`, `write`, `edit`, `ls`, `grep`, `find`, `bash`) run i
 - Vela does not filter `bash` commands: a command the model writes runs unless a user extension blocks the call. A pattern-based confirmation extension can catch mistakes, but is not a security control and is easy to get around.
 - Vela does not block risky tool calls by default unless you load a user extension with a `tool_call` hook (see [Block dangerous calls](#block-dangerous-calls)).
 
-Anyone in an enabled chat can make Vela run `bash`. That shell runs as the Vela user with Vela's environment and working folder, so it can read `~/.vela/auth.json` (provider keys and OAuth tokens) and `~/.vela/config.json`: group members can read Vela's keys. Run Vela as a dedicated user with its own home, or inside a container or virtual machine, holding only the files, credentials and network access the bot needs; the [`vela serve` deploy recipe](deploy.md) sets up such a user.
+Anyone in an enabled chat can make Vela run `bash`. That shell runs as the Vela user with Vela's environment and working folder, so it can read `~/.vela/auth.json` (provider keys and OAuth tokens) and `~/.vela/config.json`: group members can read Vela's keys. Run Vela as a dedicated user with its own home, or inside a container or virtual machine, holding only the files, credentials and network access the bot needs; the [`vela daemon` deploy recipe](deploy.md) sets up such a user.
 
 ## Extensions are trusted code
 
@@ -41,7 +41,7 @@ Review an extension before you load it, and load only extensions from sources yo
 
 A project directory can contain `.vela/config.json`, `.vela/extensions/`, prompt templates, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills, prompts and prompt files put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
 
-Interactive mode asks once per project and saves the answer in `~/.vela/vela.db` (`trusted_paths`); `--approve` and `--no-approve` decide for one run; print, JSON and RPC modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
+Interactive mode asks once per project and saves the answer in `~/.vela/vela.db` (`trusted_paths`); `--approve` and `--no-approve` decide for one run; print and JSON modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
 
 Project trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read: a README or source comment can still try to steer the model.
 

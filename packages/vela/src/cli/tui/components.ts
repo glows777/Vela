@@ -12,11 +12,7 @@ import {
   visibleWidth,
 } from '@earendil-works/pi-tui'
 import { isToolContent } from '../../driver/diagnostics.ts'
-import {
-  failureHint,
-  type ModelMessage,
-  type VelaEvent,
-} from '../../driver/index.ts'
+import type { ModelMessage } from '../../driver/index.ts'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'
@@ -581,21 +577,6 @@ export function dialogBox(
   return box
 }
 
-export function compactionLine(
-  event: Extract<VelaEvent, { type: 'compaction_end' }>,
-): string {
-  const result = event.result
-  if (!result) return ''
-  switch (event.reason) {
-    case 'threshold':
-      return `[context] Summarized ${result.tokensBefore} → ${result.tokensAfter} tokens`
-    case 'manual':
-      return `[context] Manually compacted ${result.tokensBefore} → ${result.tokensAfter} tokens`
-    case 'overflow':
-      return `[context] The model said the context is too long; summarized ${result.tokensBefore} → ${result.tokensAfter} tokens and retrying`
-  }
-}
-
 /** Text of the last assistant message that has any (tool-call-only steps are skipped). */
 export function lastAnswer(messages: readonly ModelMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -627,20 +608,6 @@ export function isDeadTerminalError(error: unknown): boolean {
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-/** Terminal-run notice shared by the interactive event handler. */
-export function agentEndNotice(
-  event: Extract<VelaEvent, { type: 'agent_end' }>,
-): { message: string; level: 'dim' | 'error' } | undefined {
-  if (event.reason === 'aborted')
-    return { message: 'Interrupted', level: 'dim' }
-  if (event.reason !== 'error') return undefined
-  const hint = failureHint(event.errorKind, event.error)
-  return {
-    message: `Error: ${errorMessage(event.error)}${hint ? `\n${hint}` : ''}`,
-    level: 'error',
-  }
 }
 
 export function oneLine(text: string): string {

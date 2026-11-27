@@ -233,7 +233,7 @@ VELA_MODEL=faux:run.json vela -p "summarize README.md"        # offline replay
 
 `VELA_RECORD` wraps the default model (`VELA_MODEL`, `--model` or `model`). A model from a provider registered by an extension can't be recorded. Only the main session's inputs are recorded, not channel sessions. The file is rewritten after each request, so an interrupted run keeps what was recorded.
 
-`VELA_MODEL=faux:<file>` replays the responses in order and ignores the recorded inputs, so pass the same prompts again. It also works with `--mode json` and `--mode rpc`.
+`VELA_MODEL=faux:<file>` replays the responses in order and ignores the recorded inputs, so pass the same prompts again. It also works with `--mode json`.
 
 From code:
 

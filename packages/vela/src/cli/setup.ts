@@ -1,69 +1,39 @@
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import type { VelaSettings } from '../config/index.ts'
-import { savedTrust, saveTrust } from '../db/index.ts'
-import { canonicalLocalPath } from '../db/trust.ts'
-import {
-  assertSessionId,
-  getToolListError,
-  isToolModifier,
-  THINKING_LEVELS,
-} from '../driver/diagnostics.ts'
+import { getToolListError, THINKING_LEVELS } from '../driver/diagnostics.ts'
 import type { ModelInfo, ThinkingLevel } from '../driver/index.ts'
-import { background, memory, todo, web, webConfig } from '../driver/index.ts'
-import { lark, larkConfig } from '../lark/index.ts'
-import type { ChannelExtension as VelaExtension } from '../legacy-channels/index.ts'
-import {
-  type ExtensionEntry,
-  extensionName,
-  importExtension,
-  projectTrustRequired,
-  type VelaConfig,
-} from '../load-config.ts'
-import { type McpPool, mcp } from '../mcp/index.ts'
-import { resolveShellPath } from './shell.ts'
-import { applyToolModifiers, type ToolLoadout } from './tool-selection.ts'
+import { projectTrustRequired } from '../load-config.ts'
+import type { VelaRuntime } from '../runtime-sdk-types.ts'
+import { selectTools } from '../shared/tool-selection.ts'
 
-type Env = Record<string, string | undefined>
+export { cliVersion as packageVersion } from './version.ts'
+export { selectTools }
 
-export interface BuiltinExtensionOptions {
-  mcpPool?: McpPool
+type DaemonSubcommand = 'start' | 'stop' | 'status' | 'run'
+
+export class RetiredCommandError extends Error {
+  readonly exitCode = 2
+  constructor(message: string) {
+    super(message)
+    this.name = 'RetiredCommandError'
+  }
 }
-
-/** Built-in extensions shipped with the CLI (`builtin:<name>`). Config comes from top-level `<name>` in `config.json`. */
-export const BUILTIN_EXTENSIONS: Record<
-  string,
-  (settings: VelaSettings, options?: BuiltinExtensionOptions) => VelaExtension
-> = {
-  background: (settings) =>
-    background({ shellPath: resolveShellPath(settings.shellPath) }),
-  memory: () => memory(),
-  web: () => web(),
-  lark: () => lark(),
-  mcp: (_settings, options) =>
-    mcp(options?.mcpPool ? { pool: options.mcpPool } : {}),
-  todo: () => todo(),
-}
-
-/** Config-driven session capabilities; explicit -e factories remain host-owned. */
-export const SESSION_BUILTINS = new Set(['background', 'web', 'mcp', 'todo'])
-/** One owner for each host-wide storage/lifecycle, regardless of project switches. */
-export const HOST_STORAGE_BUILTINS = new Set(['memory'])
 
 export interface CliArgs {
+  agentDir?: string
+  daemon?: DaemonSubcommand
+  daemonHelp?: boolean
   setup?: boolean
   setupTarget?: 'lark' | 'github'
   setupRepositories?: string[]
   setupUrl?: string
-  /** `serve`: run the configured channels without the TUI, until a signal stops the process */
-  serve: boolean
   /** `-p, --print`: run the given prompts and exit; stdout gets only the last answer (like pi) */
   print: boolean
-  /** `--mode text | json | rpc` (like pi): json writes one line per event, rpc reads commands from stdin */
-  mode?: 'text' | 'json' | 'rpc'
+  /** `--mode text | json` (like pi): json writes one line per runtime event */
+  mode?: 'text' | 'json'
   /** Arguments not starting with `-`: prompts sent in order (like pi) */
   messages: string[]
-  /** `-c, --continue`: continue the most recent session */
+  /** `-c, --continue`: continue the most recent session for this directory */
   continue: boolean
   /** `-r, --resume`: pick a saved session */
   resume: boolean
@@ -73,7 +43,7 @@ export interface CliArgs {
   extensions: string[]
   /** `--no-extensions`: skip built-in and discovered extensions (`-e` still loads), like pi */
   noExtensions: boolean
-  /** `--no-session`: keep the session in memory only, not on disk (tool history and usage stay out of the data directory; memory and the knowledge base work as usual) */
+  /** `--no-session`: keep the session in an isolated ephemeral runtime in memory */
   noSession: boolean
   /** `--fork <id>`: start in a new session copied from this saved one (like pi) */
   fork?: string
@@ -106,16 +76,30 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--system-prompt <text|file>]... [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
+  'Usage: vela [prompt...] [-p | --mode text|json] [-c | -r | --session <id> | --fork <id>] [--export <id> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--system-prompt <text|file>]... [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela daemon [start | stop | status | run]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
+
+export const DAEMON_HELP = `vela daemon - manage the local single-writer Vela background daemon
+
+Usage:
+  vela daemon start    Start the resident daemon (or report existing PID/socket)
+  vela daemon stop     Gracefully stop the resident daemon and its child jobs
+  vela daemon status   Show whether the daemon is running, PID, and socket path
+  vela daemon run      Run the daemon server in the foreground (internal / systemd)
+`
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
 
 Usage:
   vela [options] [prompt...]
-  vela serve [options]
+  vela daemon [start | stop | status | run]
   vela setup [lark]
   vela setup github owner/repo [owner/repo...] --url https://origin
+
+Daemon:
+  Local CLI invocations connect to a resident single-writer daemon on
+  <VELA_DIR>/vela.sock (auto-started on demand). Use \`vela daemon status|stop\`
+  or the \`connectRuntime()\` SDK to interact with it.
 
 GitHub setup:
   Configure repository webhooks using logged-in gh (github.com). Missing inputs are prompted
@@ -125,20 +109,20 @@ GitHub setup:
 
 Modes:
   (default)                     Interactive TUI when stdin and stdout are a terminal
+  daemon [start|stop|status]    Manage the local single-writer background daemon
   setup                         Configure a model provider interactively
-  serve                         Run the configured channels without the TUI: one line per channel
-                                event on stderr, stops on Ctrl-C / SIGTERM
   -p, --print                   Run the prompts and exit; stdout gets only the last answer
                                 (also used when stdin or stdout is redirected)
-  --mode <text|json|rpc>        text: like -p; json: one JSON line per event; rpc: JSON commands on stdin
+  --mode <text|json>            text: like -p; json: one RuntimeEvent / StreamDelta JSON line per event
 
 Options:
-  -c, --continue                Continue the most recent session
+  -c, --continue                Continue the most recent session for the current directory
   -r, --resume                  Pick a saved session (interactive mode only)
   --session <id>                Open this session (created if missing)
   --no-session                  Keep the session in memory only, not on disk
   --fork <id>                   Start in a new session copied from a saved session
   --export <id> [output]        Write a saved session from vela.db as HTML (or JSONL for .jsonl) and exit
+  --agent-dir <dir>             Override VELA_DIR (owner data directory)
   --model <provider/id>         Model to use (providers: built-in anthropic / openai / openrouter / deepseek,
                                 ~/.vela/config.json, extensions)
   --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}
@@ -165,15 +149,16 @@ anything else goes to the model.
 
 Command-line @file arguments attach images (detected by header) or inline text in <file name="…">…</file>
 on the first prompt. Missing files exit 1. In the TUI, Ctrl+V (Windows: Alt+V) pastes clipboard files
-as their paths, an image as a temporary file path for read, or clipboard text. Images in history
-show a short placeholder.
+as their paths, an image as a temporary file path for read, or clipboard text.
 
 Examples:
   # Interactive mode
   vela
 
-  # Run the configured channels in the background
-  vela serve
+  # Manage the resident daemon
+  vela daemon start
+  vela daemon status
+  vela daemon stop
 
   # Interactive mode with an initial prompt
   vela "List all .ts files in src/"
@@ -187,7 +172,7 @@ Examples:
   # Piped stdin is prepended to the first prompt
   git diff | vela -p "Review this change"
 
-  # Continue the most recent session
+  # Continue the most recent session in this directory
   vela -c "What did we discuss?"
 
   # Pick a model and thinking level
@@ -219,12 +204,25 @@ Environment variables:
   VELA_DEBUG                    1: debug logging (interactive mode: ~/.vela/debug.log)
 `
 
-/** The package version; `--version` prints it. See [version.ts](./version.ts). */
-export { cliVersion as packageVersion } from './version.ts'
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
+
+function assertCliSessionId(id: string): void {
+  if (!SESSION_ID_RE.test(id)) {
+    throw new Error(
+      `Invalid session id "${id}": must match ${SESSION_ID_RE.source}`,
+    )
+  }
+}
+
+function toolList(value: string): string[] {
+  return value
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+}
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
-    serve: false,
     print: false,
     messages: [],
     continue: false,
@@ -237,6 +235,11 @@ export function parseArgs(argv: string[]): CliArgs {
     noContextFiles: false,
     noTools: false,
     excludeTools: [],
+  }
+  if (argv[0] === 'serve') {
+    throw new RetiredCommandError(
+      '`vela serve` was retired in v0.9: use `vela daemon start` (or `vela daemon status|stop`) and `connectRuntime()` instead.',
+    )
   }
   if (argv[0] === 'setup' && argv[1] === 'github') {
     args.setup = true
@@ -271,23 +274,54 @@ export function parseArgs(argv: string[]): CliArgs {
         args.setupTarget = 'lark'
         i++
       }
-    } else if (i === 0 && arg === 'serve') args.serve = true
-    else if (arg === '-h' || arg === '--help') args.help = true
-    else if (arg === '-v' || arg === '--version') args.version = true
+    } else if (arg === 'daemon' && !args.daemon && args.messages.length === 0) {
+      const next = argv[i + 1]
+      if (next === '--help' || next === '-h') {
+        args.daemonHelp = true
+        i++
+      } else if (
+        next === 'start' ||
+        next === 'stop' ||
+        next === 'status' ||
+        next === 'run'
+      ) {
+        args.daemon = next
+        i++
+      } else if (next && !next.startsWith('-')) {
+        throw new Error(
+          `Unknown daemon subcommand "${next}": expected start, stop, status, or run`,
+        )
+      } else {
+        args.daemon = 'status'
+      }
+    } else if (arg === 'serve' && !args.daemon && args.messages.length === 0) {
+      throw new RetiredCommandError(
+        '`vela serve` was retired in v0.9: use `vela daemon start` (or `vela daemon status|stop`) and `connectRuntime()` instead.',
+      )
+    } else if (arg === '-h' || arg === '--help') {
+      if (args.daemon) args.daemonHelp = true
+      else args.help = true
+    } else if (arg === '-v' || arg === '--version') args.version = true
     else if (arg === '-p' || arg === '--print') args.print = true
+    else if (arg === '--agent-dir') args.agentDir = value()
     else if (arg === '--mode') {
       const mode = value()
-      if (mode !== 'text' && mode !== 'json' && mode !== 'rpc')
-        throw new Error('--mode must be text, json or rpc')
+      if (mode === 'rpc') {
+        throw new RetiredCommandError(
+          '`--mode rpc` was retired in v0.9: use `connectRuntime()` from `@glows777/vela` or `--mode json` instead.',
+        )
+      }
+      if (mode !== 'text' && mode !== 'json')
+        throw new Error('--mode must be text or json')
       args.mode = mode
     } else if (arg === '-c' || arg === '--continue') args.continue = true
     else if (arg === '-r' || arg === '--resume') args.resume = true
     else if (arg === '--session') {
       args.session = value()
-      assertSessionId(args.session)
+      assertCliSessionId(args.session)
     } else if (arg === '--fork') {
       args.fork = value()
-      assertSessionId(args.fork)
+      assertCliSessionId(args.fork)
     } else if (arg === '--export') args.export = value()
     else if (arg === '-e' || arg === '--extension')
       args.extensions.push(value())
@@ -302,13 +336,15 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--system-prompt') args.systemPrompt.push(value())
     else if (arg === '--no-context-files' || arg === '-nc')
       args.noContextFiles = true
-    else if (arg === '--tools' || arg === '-t')
-      args.tools = [...(args.tools ?? []), ...toolList(value())]
-    else if (arg === '--no-tools' || arg === '-nt') args.noTools = true
+    else if (arg === '--tools' || arg === '-t') {
+      const next = toolList(value())
+      const err = getToolListError(next)
+      if (err) throw new Error(`Invalid --tools list: ${err}`)
+      args.tools = [...(args.tools ?? []), ...next]
+    } else if (arg === '--no-tools' || arg === '-nt') args.noTools = true
     else if (arg === '--exclude-tools' || arg === '-xt')
       args.excludeTools.push(...toolList(value()))
     else if (arg === '--list-models') {
-      // Like pi: the next argument is the search unless it is an option
       const next = argv[i + 1]
       if (next !== undefined && !next.startsWith('-')) {
         args.listModels = next
@@ -339,7 +375,7 @@ export function parseArgs(argv: string[]): CliArgs {
     (args.messages.length ||
       args.mode ||
       args.print ||
-      args.serve ||
+      args.daemon ||
       args.resume ||
       args.continue ||
       args.session ||
@@ -350,114 +386,10 @@ export function parseArgs(argv: string[]): CliArgs {
     throw new Error(
       'vela setup does not take a prompt, run mode or session option',
     )
-  // `serve` has no single session and no prompt: a flag that only configures one would be ignored
-  if (args.serve) {
-    const unsupported = [
-      args.messages.length > 0 && 'a prompt',
-      args.print && '-p/--print',
-      args.mode && '--mode',
-      args.export && '--export',
-      args.listModels && '--list-models',
-      args.continue && '-c/--continue',
-      args.resume && '-r/--resume',
-      args.session && '--session',
-      args.fork && '--fork',
-      args.tools?.length && '-t/--tools',
-      args.noTools && '-nt/--no-tools',
-      args.excludeTools.length > 0 && '-xt/--exclude-tools',
-    ].filter((entry): entry is string => typeof entry === 'string')
-    if (unsupported.length > 0)
-      throw new Error(
-        `vela serve runs channels only; it does not take ${unsupported.join(', ')}`,
-      )
+  if (args.daemon && args.messages.length > 0) {
+    throw new Error('vela daemon does not accept positional prompts')
   }
   return args
-}
-
-function toolList(value: string): string[] {
-  return value
-    .split(',')
-    .map((name) => name.trim())
-    .filter(Boolean)
-}
-
-/**
- * The tools a session starts with, from `--tools / --no-tools / --exclude-tools` and the
- * `defaultTools` setting (like pi), or undefined for the default set. Plain entries are names or
- * `*` patterns and replace the setting; `+name` / `-name` entries adjust the default set instead.
- * One entry that matches no registered tool is an error (pi ignores it; a typo would silently
- * leave a tool on or off).
- */
-export function selectTools(
-  available: readonly string[],
-  args: Pick<CliArgs, 'tools' | 'noTools' | 'excludeTools'>,
-  defaultTools?: readonly string[],
-): ToolLoadout | undefined {
-  const entries = args.tools ?? []
-  const listError = getToolListError(entries)
-  if (listError) throw new Error(`Invalid --tools list: ${listError}`)
-  const plain = entries.filter((entry) => !isToolModifier(entry))
-  const modifiers = entries.filter(isToolModifier)
-  // A plain --tools list replaces the setting, so the setting's entries are not in play then
-  const requested =
-    plain.length > 0
-      ? [...plain, ...args.excludeTools]
-      : [...[...(defaultTools ?? []), ...entries], ...args.excludeTools].map(
-          (entry) => (isToolModifier(entry) ? entry.slice(1) : entry),
-        )
-  const unknown = requested.filter(
-    (entry) => !available.some(toolMatcher(entry)),
-  )
-  if (unknown.length)
-    throw new Error(
-      `Unknown tool${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. Available: ${available.join(', ')}`,
-    )
-  const matches = (names: readonly string[]) => (name: string) =>
-    names.some((entry) => toolMatcher(entry)(name))
-  // The setting's plain names and * patterns select exactly those tools; only modifiers adjust the
-  // default set. Its modifiers apply after the patterns are expanded, so a project's `-name` removes
-  // a tool the user selected with a pattern. An empty list selects nothing (pi keeps the user's list).
-  const settingsPlain = defaultTools?.filter((entry) => !isToolModifier(entry))
-  const settingsSelection =
-    settingsPlain && (settingsPlain.length > 0 || defaultTools?.length === 0)
-      ? applyToolModifiers(
-          available.filter(matches(settingsPlain)),
-          (defaultTools ?? []).filter(isToolModifier),
-        )
-      : undefined
-  let selection: string[] | undefined
-  let adjusted = modifiers
-  if (modifiers.length > 0) {
-    if (args.noTools) selection = applyToolModifiers([], modifiers)
-    else if (settingsSelection)
-      selection = applyToolModifiers(settingsSelection, modifiers)
-    else adjusted = [...(defaultTools ?? []), ...modifiers]
-  } else if (plain.length > 0) {
-    selection = available.filter(matches(plain))
-  } else if (args.noTools) {
-    selection = []
-  } else if (settingsSelection) {
-    selection = settingsSelection
-  } else if (defaultTools?.length) {
-    adjusted = defaultTools.filter(isToolModifier)
-  }
-  const excluded = available.filter(matches(args.excludeTools))
-  if (selection)
-    selection = selection.filter((name) => !excluded.includes(name))
-  else adjusted = [...adjusted, ...excluded.map((name) => `-${name}`)]
-  if (selection) return { selection }
-  return adjusted.length > 0 ? { modifiers: adjusted } : undefined
-}
-
-function toolMatcher(entry: string): (name: string) => boolean {
-  if (!entry.includes('*')) return (name) => name === entry
-  const pattern = new RegExp(
-    `^${entry
-      .split('*')
-      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-      .join('.*')}$`,
-  )
-  return (name) => pattern.test(name)
 }
 
 function isSubsequence(haystack: string, needle: string): boolean {
@@ -470,7 +402,6 @@ function isSubsequence(haystack: string, needle: string): boolean {
   return true
 }
 
-/** Space- and slash-separated case-insensitive subsequence match with alpha/digit swap fallback (keeps `--list-models` off pi-tui). */
 function matchesTokens(text: string, query: string): boolean {
   const haystack = text.toLowerCase()
   for (const token of query
@@ -488,8 +419,7 @@ function matchesTokens(text: string, query: string): boolean {
 }
 
 /**
- * `--list-models` output (like pi's): provider, model, context window and thinking support, sorted by
- * provider and id. Only providers with a credential (auth.json, config.json or an environment variable) appear.
+ * `--list-models` output (like pi's): provider, model, context window and thinking support.
  */
 export function formatModelList(
   models: readonly ModelInfo[],
@@ -530,7 +460,6 @@ export function formatModelList(
     .concat('\n')
 }
 
-/** 200000 → 200K, 1000000 → 1M (like pi) */
 function tokenCount(count: number): string {
   const [value, unit] =
     count >= 1_000_000
@@ -542,20 +471,19 @@ function tokenCount(count: number): string {
 }
 
 /**
- * Decide whether to load a project's `.vela/config.json`, `.vela/extensions/` and project skills (like pi's project trust):
- * `--approve / --no-approve` → saved decision → ask once in interactive mode and save; untrusted when we can't ask.
- * `warning` in the result is the notice shown to the user when untrusted.
+ * Resolves workspace trust over `VelaRuntime['trust']` (`--approve / --no-approve` -> saved decision in `vela.db` -> interactive prompt).
  */
 export async function resolveTrust(options: {
   cwd: string
   agentDir: string
   approve?: boolean
   interactive: boolean
+  trust?: VelaRuntime['trust']
 }): Promise<{ trusted: boolean; warning?: string }> {
   const { cwd, agentDir } = options
   if (!projectTrustRequired(cwd, agentDir)) return { trusted: false }
   if (options.approve !== undefined) return { trusted: options.approve }
-  const saved = savedTrust(agentDir, cwd)
+  const saved = options.trust ? await options.trust.check(cwd) : undefined
   if (saved !== undefined)
     return saved
       ? { trusted: true }
@@ -580,7 +508,7 @@ export async function resolveTrust(options: {
     `${resolve(cwd)} has project config (.vela/config.json, .vela/extensions/, .vela/prompts/, .vela/SYSTEM.md, .vela/APPEND_SYSTEM.md, or skills in .vela/skills/, .skills/ or .agents/skills/).\nExtensions are code that runs on this machine; skills, prompts, SYSTEM.md and APPEND_SYSTEM.md are instructions for the model. Trust this project and load it? (y/N) `,
   )
   const trusted = answer === 'y' || answer === 'yes'
-  saveTrust(agentDir, cwd, trusted)
+  if (options.trust) await options.trust.approve(cwd, trusted)
   return trusted
     ? { trusted }
     : { trusted, warning: notTrusted(cwd, agentDir, 'this choice was saved') }
@@ -588,40 +516,6 @@ export async function resolveTrust(options: {
 
 function notTrusted(cwd: string, agentDir: string, reason: string): string {
   return `[trust] Did not load config, extensions, skills and prompts from ${resolve(cwd)} (${reason}; pass --approve or update trusted_paths in ${join(agentDir, 'vela.db')} to change this)`
-}
-
-/** Scope `--approve` to the CLI startup directory while consulting saved trust elsewhere. */
-export function cliWorkspaceModeAt(options: {
-  agentDir: string
-  dataDir?: string
-  startupCwd: string
-  approve?: boolean
-  location: string
-  environment?: string
-}): 'home' | 'all' | 'none' {
-  const { agentDir, dataDir, startupCwd, approve, location } = options
-  const environment = options.environment ?? 'local'
-  if (environment === 'local') {
-    const canonicalLoc = canonicalLocalPath(location)
-    const canonicalStartup = canonicalLocalPath(startupCwd)
-    const canonicalAgentDir = canonicalLocalPath(agentDir)
-    if (canonicalLocalPath(join(canonicalLoc, '.vela')) === canonicalAgentDir) {
-      return 'home'
-    }
-    if (canonicalLoc === canonicalStartup) {
-      return approve === true ||
-        (approve !== false && savedTrust(agentDir, canonicalLoc) === true)
-        ? 'all'
-        : 'none'
-    }
-    return approve !== false && savedTrust(agentDir, canonicalLoc) === true
-      ? 'all'
-      : 'none'
-  }
-  return approve !== false &&
-    savedTrust(agentDir, { environment, cwd: location }, dataDir) === true
-    ? 'all'
-    : 'none'
 }
 
 async function question(prompt: string): Promise<string> {
@@ -633,132 +527,4 @@ async function question(prompt: string): Promise<string> {
   } finally {
     rl.close()
   }
-}
-
-/**
- * Built-in extension config defaults come from environment variables (those in `.env.example`);
- * `extensionConfig` in settings.json overrides them.
- */
-export function extensionConfigFromEnv(
-  env: Env,
-  fromSettings: Record<string, Record<string, unknown>>,
-): Record<string, Record<string, unknown>> {
-  const result = { ...fromSettings }
-  const context = { cwd: '', agentDir: '', projectDir: '', trusted: false, env }
-  for (const definition of [webConfig, larkConfig])
-    result[definition.name] = definition.resolve(
-      result[definition.name] ?? {},
-      context,
-    )
-  return result
-}
-
-/**
- * The mcp extension's config: the servers from mcp.json (with where each came from and the errors
- * found reading them) override `extensionConfig.mcp.mcpServers` from settings.json.
- */
-export function withMcpServers(
-  extensionConfig: Record<string, Record<string, unknown>>,
-  config: Pick<VelaConfig, 'mcp'>,
-): Record<string, Record<string, unknown>> {
-  const { servers, sources, errors } = config.mcp
-  const section = extensionConfig.mcp ?? {}
-  const fromSettings =
-    typeof section.mcpServers === 'object' && section.mcpServers !== null
-      ? (section.mcpServers as Record<string, unknown>)
-      : {}
-  return {
-    ...extensionConfig,
-    mcp: {
-      ...section,
-      mcpServers: { ...fromSettings, ...servers },
-      sources,
-      errors,
-    },
-  }
-}
-
-/**
- * Load extensions from the loadConfig result and command-line args: built-in → discovered → `-e`.
- * Extensions that fail to load are skipped and the error goes to onError (like pi: report, don't exit).
- */
-export async function loadCliExtensions(
-  config: VelaConfig,
-  args: CliArgs,
-  onError: (message: string) => void,
-  hostOnly = false,
-  mcpPool?: McpPool,
-): Promise<VelaExtension[]> {
-  const entries: ExtensionEntry[] = [
-    ...(args.noExtensions
-      ? []
-      : hostOnly
-        ? [
-            ...config.extensions.filter(
-              (entry) =>
-                'builtin' in entry &&
-                !SESSION_BUILTINS.has(entry.name) &&
-                !HOST_STORAGE_BUILTINS.has(entry.name),
-            ),
-            ...(
-              config.sessionResources?.hostExtensions ?? config.extensions
-            ).filter(
-              (entry) =>
-                !('builtin' in entry) || HOST_STORAGE_BUILTINS.has(entry.name),
-            ),
-          ]
-        : config.extensions),
-    ...args.extensions.map((source): ExtensionEntry => {
-      const builtin = /^builtin:(.+)$/.exec(source)?.[1]
-      if (builtin) return { name: builtin, builtin: true }
-      const path = resolve(source)
-      return { name: extensionName(path), path }
-    }),
-  ]
-  const loaded: VelaExtension[] = []
-  const seen = new Set<string>()
-  for (const entry of entries) {
-    const key = 'builtin' in entry ? `builtin:${entry.name}` : entry.path
-    if (seen.has(key)) continue
-    seen.add(key)
-    const report = (error: unknown) =>
-      onError(
-        `[extensions] Failed to load ${key}: ${error instanceof Error ? error.message : error}`,
-      )
-    try {
-      let extension: VelaExtension
-      if ('builtin' in entry) {
-        const factory = BUILTIN_EXTENSIONS[entry.name]
-        if (!factory)
-          throw new Error(`Unknown built-in extension builtin:${entry.name}`)
-        extension = factory(config.settings, mcpPool ? { mcpPool } : undefined)
-      } else extension = await importExtension(entry.path, entry.name)
-      loaded.push(reportFailures(extension, report))
-    } catch (error) {
-      report(error)
-    }
-  }
-  return loaded
-}
-
-/**
- * The extension function itself runs inside createVela(): a sync throw or async failure is only reported, so the CLI
- * still starts (the SDK's createVela still throws). Tools and commands registered before the failure are kept.
- */
-function reportFailures(
-  extension: VelaExtension,
-  report: (error: unknown) => void,
-): VelaExtension {
-  const { name } = extension
-  // A computed property name keeps the function name: the runner uses extension.name as the extension name
-  return {
-    [name]: (vela: Parameters<VelaExtension>[0]) => {
-      try {
-        const result = extension(vela)
-        if (result instanceof Promise) return result.catch(report)
-      } catch (error) {
-        report(error)
-      }
-    },
-  }[name] as VelaExtension
 }

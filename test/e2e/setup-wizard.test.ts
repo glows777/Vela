@@ -9,14 +9,15 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { CliSessionClient } from '../../packages/vela/src/cli/runtime-client.ts'
 import { setupWizard } from '../../packages/vela/src/cli/tui/setup-wizard.ts'
+import { fileCredentialStore } from '../../packages/vela/src/driver/index.ts'
 import {
-  fileCredentialStore,
+  createRuntime,
   loadModels,
   memoryCredentialStore,
   verifyProviderModel,
-} from '../../packages/vela/src/driver/index.ts'
-import { createVela } from '../../packages/vela/src/vela.ts'
+} from '../../packages/vela/src/index.ts'
 import { responsesReply } from '../support/responses.ts'
 
 test('OpenAI setup verification uses a Responses-compatible output limit', async () => {
@@ -62,9 +63,16 @@ test('setup preserves a successful browser callback when the paste prompt closes
   try {
     await setupWizard({
       agentDir: join(tmpdir(), `vela-oauth-callback-${process.pid}`),
-      vela: {
-        cwd: tmpdir(),
-        loginProviders: () => [{ provider: 'openrouter', oauth: 'OpenRouter' }],
+      runtime: {
+        loginProviders: async () => [
+          { provider: 'openrouter', oauth: 'OpenRouter' },
+        ],
+        oauthRegistrations: {
+          get: async () => undefined,
+          set: async () => {},
+          delete: async () => false,
+        },
+        reloadConfig: async () => {},
       },
       session: {},
       select: async (title: string) =>
@@ -116,12 +124,18 @@ test('setup preserves an existing custom DeepSeek provider and applies its defau
     configPath,
     JSON.stringify({ providers: originalProviders }, null, 4),
   )
-  const vela = createVela({
-    cwd: dir,
-    providers: loadModels({ agentDir: dir }),
-    credentials: fileCredentialStore(join(dir, 'auth.json')),
+  const runtime = createRuntime({ agentDir: dir, hostEnv: {} })
+  await runtime.ready()
+  const project = await runtime.projects.create({ name: 'test', cwd: dir })
+  const initial = await runtime.sessions.create({
+    id: 'initial',
+    projectId: project.id,
   })
-  const session = vela.session('initial')
+  const session = new CliSessionClient(
+    runtime,
+    initial.id,
+    await runtime.sessions.inspect(initial.id),
+  )
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async () =>
     Response.json({
@@ -140,7 +154,7 @@ test('setup preserves an existing custom DeepSeek provider and applies its defau
     })) as unknown as typeof fetch
   try {
     const saved = await setupWizard({
-      vela,
+      runtime,
       session,
       agentDir: dir,
       select: async (title) =>
@@ -156,18 +170,22 @@ test('setup preserves an existing custom DeepSeek provider and applies its defau
       addNotice: () => {},
       setSummary: () => {},
     })
-    const next = vela.session('new')
+    const nextRecord = await runtime.sessions.create({
+      id: 'new',
+      projectId: project.id,
+    })
+    const next = await runtime.sessions.inspect(nextRecord.id)
     expect(saved).toBe(true)
     expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
       providers: originalProviders,
       model: 'deepseek/deepseek-reasoner',
       thinkingLevel: 'high',
     })
-    expect(next.modelInfo.ref).toBe('deepseek/deepseek-reasoner')
+    expect(next.modelInfo?.ref).toBe('deepseek/deepseek-reasoner')
     expect(next.thinkingLevel).toBe('high')
   } finally {
     globalThis.fetch = originalFetch
-    await vela.dispose()
+    await runtime.dispose()
     rmSync(dir, { recursive: true, force: true })
   }
 })
@@ -175,12 +193,18 @@ test('setup preserves an existing custom DeepSeek provider and applies its defau
 test('empty-home DeepSeek setup uses the built-in Responses provider for its first answer', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'vela-setup-deepseek-'))
   const authPath = join(dir, 'auth.json')
-  const vela = createVela({
-    cwd: dir,
-    providers: loadModels({ agentDir: dir, env: {} }),
-    credentials: fileCredentialStore(authPath),
+  const runtime = createRuntime({ agentDir: dir, hostEnv: {} })
+  await runtime.ready()
+  const project = await runtime.projects.create({ name: 'test', cwd: dir })
+  const initial = await runtime.sessions.create({
+    id: 'initial',
+    projectId: project.id,
   })
-  const session = vela.session('initial')
+  const session = new CliSessionClient(
+    runtime,
+    initial.id,
+    await runtime.sessions.inspect(initial.id),
+  )
   const originalFetch = globalThis.fetch
   const requests: {
     url: string
@@ -198,7 +222,7 @@ test('empty-home DeepSeek setup uses the built-in Responses provider for its fir
   }) as typeof fetch
   try {
     const saved = await setupWizard({
-      vela,
+      runtime,
       session,
       agentDir: dir,
       select: async (title) =>
@@ -237,11 +261,17 @@ test('empty-home DeepSeek setup uses the built-in Responses provider for its fir
     })
     expect(statSync(join(dir, 'config.json')).mode & 0o777).toBe(0o600)
     expect(statSync(dir).mode & 0o777).toBe(0o700)
-    expect(session.modelInfo.ref).toBe('deepseek/deepseek-flash')
-    const next = vela.session('new')
-    expect(next.modelInfo.ref).toBe('deepseek/deepseek-flash')
+    await session.refresh()
+    expect(session.modelInfo?.ref).toBe('deepseek/deepseek-flash')
+    const nextRecord = await runtime.sessions.create({
+      id: 'new',
+      projectId: project.id,
+    })
+    const next = await runtime.sessions.inspect(nextRecord.id)
+    expect(next.modelInfo?.ref).toBe('deepseek/deepseek-flash')
     expect(next.thinkingLevel).toBe('high')
-    await session.prompt('Hello DeepSeek')
+    await runtime.prompt(initial.id, { text: 'Hello DeepSeek' })
+    await runtime.waitForIdle(initial.id)
     expect(requests).toHaveLength(2)
     for (const request of requests) {
       expect(request.url).toBe('https://api.deepseek.com/responses')
@@ -249,16 +279,17 @@ test('empty-home DeepSeek setup uses the built-in Responses provider for its fir
       expect(request.authorization).toBe('Bearer fake-deepseek-key')
     }
     expect(requests[1]!.body.stream).toBe(true)
+    const page = await runtime.sessions.messages({ sessionId: initial.id })
     expect(
-      session.messages.some(
-        (message) =>
-          message.role === 'assistant' &&
-          JSON.stringify(message.content).includes('OK'),
+      page.messages.some(
+        (record) =>
+          record.role === 'assistant' &&
+          JSON.stringify(record.content).includes('OK'),
       ),
     ).toBe(true)
   } finally {
     globalThis.fetch = originalFetch
-    await vela.dispose()
+    await runtime.dispose()
     rmSync(dir, { recursive: true, force: true })
   }
 })

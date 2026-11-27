@@ -193,6 +193,16 @@ export class ModelRegistry {
     this.providers.set(name, provider)
   }
 
+  /** Remove a provider registration (used when config reloads drop a provider). */
+  unregister(name: string): boolean {
+    return this.providers.delete(name)
+  }
+
+  /** Shallow map of currently registered provider definitions. */
+  providerDefinitions(): Record<string, ProviderDefinition> {
+    return Object.fromEntries(this.providers)
+  }
+
   /** Where a provider's credential comes from, or undefined when it has none */
   authSource(name: string, channel?: string): string | undefined {
     const def = this.providers.get(name)

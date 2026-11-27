@@ -2,7 +2,7 @@
 
 `@glows777/vela` embeds Vela in a Node.js (>= 22.18) or Bun (>= 1.4) process. It gives TypeScript code the same agent the `vela` command runs: models, tools, system prompt, sessions, compaction and extensions.
 
-Use the SDK for in-process integration. For another language or a separate process, drive the CLI with [JSON mode](json.md) or [RPC mode](rpc.md).
+Use the SDK for in-process integration (`createRuntime()` or legacy `createVela()`) or connect to the local daemon via `connectRuntime()`. For one-shot scripting from another language or process, run `vela --mode json` (see [JSON mode](json.md)).
 
 ```typescript
 import { createVela } from '@glows777/vela'
@@ -290,12 +290,12 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `compaction_start` | `reason` (`threshold`, `manual`, `overflow`) | Summarizing earlier history starts (like pi): before a request that is too large, from `session.compact()`, or after the provider said the context is too long |
 | `compaction_end` | `reason`, `result?` (`summary`, `firstKeptEntryId`, `tokensBefore`, `tokensAfter`, `messages`), `aborted`, `willRetry`, `errorMessage?` | Summarizing ended (like pi). `result` is set when it succeeded, `aborted` when it was interrupted, otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again |
 | `audit` | `toolName`, `path` | Before `write` or `edit` writes `path` |
-| `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ctx.notify()`. See [Extension Notifications](rpc.md#extension-notifications). |
+| `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ctx.notify()`. |
 | `channel_message` | `channel`, `senderId`, `senderName`, `text` | A channel received a message for this session |
 | `channel_reply` | `channel`, `recipientId`, `text` | A channel sent a reply |
 | `channel_error` | `channel`, `senderId`, `error`, `aborted`, `source?` | A channel turn failed or was aborted. `source: 'feedback'` means only the progress presentation failed (the run still finishes); admission, preparation and command failures are not tagged |
 
-The types are `VelaEvent`, `AssistantMessageEvent`, `StopReason`, `VelaEventListener` and `VelaSessionEventListener`. Extension lifecycle events (`session_start`, `before_agent_start`, `tool_call` interception, ...) are a separate API, see [Extensions](extensions.md). The CLI's `--mode json` and `--mode rpc` write these same events as JSON lines, see [JSON mode](json.md).
+The legacy SDK types are `VelaEvent`, `AssistantMessageEvent`, `StopReason`, `VelaEventListener` and `VelaSessionEventListener`; v0.9 `VelaRuntime` subscribers use `RuntimeEvent` and `StreamDeltaEvent`. Extension lifecycle events (`session_start`, `before_agent_start`, `tool_call` interception, ...) are a separate API, see [Extensions](extensions.md). The CLI's `--mode json` writes `RuntimeEvent` and `StreamDeltaEvent` lines; see [JSON mode](json.md).
 
 See [02-events.ts](../examples/sdk/02-events.ts).
 
@@ -325,18 +325,20 @@ await Promise.all([alice.prompt('Hi'), bob.prompt('Hello')])
 
 Sessions in one Vela run concurrently. Tool definitions, extensions, skills, memory and channels are shared; history, queues, compaction, usage, tool results and the run lock are per session. Channels rely on this: the gateway opens one shared session per conversation (`<channel>-<channelId>`). See [03-multi-session.ts](../examples/sdk/03-multi-session.ts) and [Sessions](sessions.md#multiple-sessions).
 
-## createRuntime() and VelaRuntime
+## createRuntime(), connectRuntime(), and VelaRuntime
 
-`createRuntime(options?: CreateRuntimeOptions): LocalVelaRuntime` is the v0.9 transport-compatible Runtime SDK built around `$VELA_DIR/vela.db` (`<agentDir>/vela.db`, or `:memory:` when `ephemeral: true`), implementing the `VelaRuntime` client contract (which the daemon IPC client — planned as `connectRuntime()` in S4a — will implement). Domain records, cursors, events, and results are JSON-serializable; over future daemon IPC, `Uint8Array` blob payloads encode as base64, `subscribe` / `subscribeDeltas` return synchronous unsubscribe functions backed by the daemon event stream, and `logout` `AbortSignal` cancels client waits/RPC.
+`createRuntime(options?: CreateRuntimeOptions): LocalVelaRuntime` is the in-process Runtime SDK built around `$VELA_DIR/vela.db` (`<agentDir>/vela.db`, `:memory:` when `ephemeral: true`, or `:memory:` SQLite while keeping owner `config.json`/`auth.json`/memory when `ephemeralSessions: true`). `connectRuntime(options?: ConnectRuntimeOptions): Promise<VelaRuntime>` connects to (or auto-starts) the resident single-writer daemon (`vela daemon`) over `<agentDir>/vela.sock` (or Windows named pipe) and implements the same `VelaRuntime` contract. Domain records, cursors, events, and results are JSON-serializable; over daemon IPC, `Uint8Array` blob payloads encode as base64, `subscribe` / `subscribeDeltas` return synchronous unsubscribe functions backed by the daemon event stream, `login` forwards `deviceId` and per-prompt `AbortSignal` cancellation, and `logout` honors `AbortSignal` cancellation across IPC.
 
 - **Configuration loading vs `ephemeral` isolation**: `hostEnv` defaults to `{}` in both modes (pass `hostEnv: process.env` explicitly when ambient env var credentials or `VELA_DIR` lookup are desired; core modules do not read `process.env`). When `ephemeral` is omitted or `false`, `createRuntime()` loads `<agentDir>/config.json` (`model`, `thinkingLevel`, `limits`, `web`, `memory.dream`, `environments`, `providers`, `mcpServers`) and `<agentDir>/auth.json` (`agentDir` defaults to `defaultAgentDir(hostEnv)`, i.e. `~/.vela`; explicit `CreateRuntimeOptions` override loaded keys). When `ephemeral: true`, `createRuntime()` isolates completely from on-disk `config.json`, `auth.json`, and user `mcpServers` unless explicitly supplied.
-- **Exported contract types**: `@glows777/vela` exports `VelaRuntime`, `LocalVelaRuntime`, `CreateRuntimeOptions`, `AgentDriver`, `AgentDriverCapabilities`, `DriverTurnRequest`, `DriverTurnResult`, `DriverInboxItem`, `DriverTerminalOutcome`, `RunTrigger`, `SessionKind`, `SessionState`, `ApprovalStatus`, `EnvironmentRegistry`, and `EnvironmentRegistryOptions`.
-- `projects`: `list()`, `get(id)`, `getByCwd(cwd)`, `create(input)`, `update(id, patch)`, `remove(id, { deleteSessions? })`
-- `sessions`: `list({ projectId?, includeArchived? })`, `get(id)`, `create(input?)`, `rename(id, name)`, `delete(id)`, `reset(id)`, `status(id)`, `messages({ sessionId, cursor?, limit? })`
-- Turn & approval control: `prompt(sessionId, input)`, `steer(sessionId, text)`, `stop(sessionId, reason?)`, `waitForIdle(sessionId?)` (with `sessionId`, waits for that session's active worker; without arguments, drains all session workers and awaits driver background tasks such as pending Dream passes via `driver.waitForBackground?.()`), `approvals.list(sessionId?)`, `approvals.resolve({ approvalId, decision, reason?, decidedBy? })`
-- Platform & storage: `timers`, `subscriptions`, `bindings`, `blobs` (`get`, `list`, `read`, `storeInbound`), `events` (`list`, `bufferedDeltas`, `subscribe`, `subscribeDeltas`), `models({ all?, channel? })`, `loginProviders()`, `logout(provider, { signal?, forget? })`, `recover()`, `dispose()`
+- **Exported contract types**: `@glows777/vela` exports `VelaRuntime`, `LocalVelaRuntime`, `CreateRuntimeOptions`, `ConnectRuntimeOptions`, `RuntimeSessionOverride`, `RuntimeSessionInspection`, `AgentDriver`, `AgentDriverCapabilities`, `DriverTurnRequest`, `DriverTurnResult`, `DriverInboxItem`, `DriverTerminalOutcome`, `RunTrigger`, `SessionKind`, `SessionState`, `ApprovalStatus`, `EnvironmentRegistry`, and `EnvironmentRegistryOptions`, plus `createRuntime()` and `connectRuntime()`.
+- `ready()`, `extensionErrors()`, `reloadConfig()`: wait for host extensions, inspect host extension load errors, and force a config/extension reload.
+- `projects`: `list(options?)`, `get(id)`, `getByCwd(cwd)`, `create(input)`, `update(id, patch)`, `remove(id, { deleteSessions? })`
+- `trust` & `oauthRegistrations`: `trust.check(location)`, `trust.approve(location, trusted)`, `oauthRegistrations.get(provider)`, `oauthRegistrations.set(provider, registration)`
+- `sessions`: `list(options?)`, `listSummaries(options?)`, `get(id)`, `create(input?)`, `rename(id, name)`, `delete(id)`, `reset(id)`, `status(id)`, `messages({ sessionId, cursor?, limit? })`, `configure(id, override)`, `setModel(id, modelRef)`, `setThinkingLevel(id, level)`, `compact(id, instructions?)`, `tree(id)`, `navigateTree(id, targetId, options?)`, `setLabel(id, entryId, label)`, `fork(id, entryId, options?)`, `clone(id, options?)`, `inspect(id, { previewPrompt?, includeEntries? })`, `execBash(id, command, options?)`, `abortBash(id)`, `runCommand(id, input)`, `clearQueue(id)`, `export(id, format, outputPath?, baseCwd?)`
+- Turn, job & approval control: `prompt(sessionId, input)`, `steer(sessionId, text)`, `stop(sessionId, reason?)`, `waitForIdle(sessionId?)` (with `sessionId`, waits for that session's active worker; without arguments, drains all session workers and awaits driver background tasks such as pending Dream passes via `driver.waitForBackground?.()`), `jobs` (`list(sessionId?)`, `stop(sessionId, jobId)`, `promoteForeground(sessionId, toolCallId?)`), `approvals.list(sessionId?)`, `approvals.resolve({ approvalId, decision, reason?, decidedBy? })`
+- Platform, storage & auth: `timers`, `subscriptions`, `bindings`, `blobs` (`get`, `list`, `read`, `storeInbound`), `events` (`list`, `bufferedDeltas`, `subscribe`, `subscribeDeltas`), `models({ all?, channel?, env? })`, `loginProviders()`, `login(provider, method, interaction, options?)`, `logout(provider, { signal?, forget? })`, `recover()`, `dispose()`
 - Execution configuration: `environments` loads owner Docker definitions from `<agentDir>/config.json` by default (unless `ephemeral: true`), or accepts declarative `CreateRuntimeOptions.environments` / a shared `EnvironmentRegistry`
-- Host-local hooks on `LocalVelaRuntime`: `registerChannel(adapter)`, `unregisterChannel(name)`, `registerDriver(driver)`, `login(provider, method, interaction, options?)`
+- Host-local hooks on `LocalVelaRuntime`: `registerChannel(adapter)`, `unregisterChannel(name)`, `registerDriver(driver)`
 
 ## Session storage
 
@@ -513,4 +515,4 @@ The umbrella `@glows777/vela` preserves its root and `./testing` entries and the
 
 `@glows777/vela` also exports the frontend inspection helpers (`inspectVela`, `inspectSession`, returning snapshots whose public shapes are recorded in `api/public-api.txt`). Internal frontend helpers for HTML/session views, session IDs, thinking choices, tool validation, and config trust/path decisions remain internal to the CLI/desktop package build.
 
-`vela serve` uses graceful disposal on its first shutdown signal, with a 30-second total cap. Bare SDK `dispose()` and explicit Stop retain immediate cancellation. A second signal exits immediately. See [channel shutdown](channels.md#shutdown-and-recovery).
+Graceful daemon shutdown runs `dispose()` on its first shutdown signal; bare SDK `dispose()` and explicit Stop retain immediate cancellation. See [channel shutdown](channels.md#shutdown-and-recovery).

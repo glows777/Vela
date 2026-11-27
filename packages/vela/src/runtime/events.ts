@@ -9,7 +9,7 @@
  */
 
 import type { VelaMessage } from '../shared/messages.ts'
-import type { ProviderUsage } from '../shared/provider-types.ts'
+import type { AgentErrorKind, ProviderUsage } from '../shared/provider-types.ts'
 
 export type RunEndStatus =
   | 'completed'
@@ -38,6 +38,8 @@ export type RuntimeEventPayload =
       messageId: string
       message: VelaMessage
       usage?: ProviderUsage
+      customType?: string
+      display?: boolean
     }
   | {
       type: 'tool_started'
@@ -54,6 +56,7 @@ export type RuntimeEventPayload =
       isError: boolean
       durationMs?: number
       details?: unknown
+      result?: unknown
     }
   | {
       type: 'approval_requested'
@@ -73,6 +76,26 @@ export type RuntimeEventPayload =
       decidedBy?: string
     }
   | {
+      type: 'auto_retry_start'
+      runId: string
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      errorMessage: string
+    }
+  | {
+      type: 'auto_retry_end'
+      runId: string
+      attempt: number
+      success: boolean
+      finalError?: string
+    }
+  | {
+      type: 'compaction_started'
+      runId?: string
+      reason: 'manual' | 'threshold' | 'overflow'
+    }
+  | {
       type: 'compaction_finished'
       runId?: string
       reason: 'manual' | 'threshold' | 'overflow'
@@ -81,10 +104,32 @@ export type RuntimeEventPayload =
       messages: number
     }
   | {
+      type: 'compaction_failed'
+      runId?: string
+      reason: 'manual' | 'threshold' | 'overflow'
+      aborted: boolean
+      willRetry: boolean
+      errorMessage: string
+    }
+  | {
+      type: 'notify'
+      runId?: string
+      level: 'info' | 'warning' | 'error'
+      message: string
+    }
+  | {
+      type: 'audit'
+      runId?: string
+      toolName: string
+      path: string
+    }
+  | {
       type: 'run_finished'
       runId: string
       status: RunEndStatus
       error?: string
+      errorKind?: AgentErrorKind
+      errorHint?: string
     }
 
 /** Persisted Runtime event carrying a strictly monotonic `seq` cursor. */
@@ -112,10 +157,24 @@ export type StreamDeltaEvent =
       delta: string
     }
   | {
+      type: 'toolcall_end'
+      sessionId: string
+      runId: string
+      contentIndex: number
+      toolCall: { toolCallId: string; toolName: string; input: unknown }
+    }
+  | {
       type: 'tool_output_delta'
       sessionId: string
       runId: string
       toolCallId: string
       toolName: string
+      delta: string
+    }
+  | {
+      type: 'bash_output_delta'
+      sessionId: string
+      runId?: string
+      bashId?: string
       delta: string
     }

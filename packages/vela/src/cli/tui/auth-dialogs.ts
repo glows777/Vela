@@ -3,12 +3,12 @@ import type {
   AuthPrompt,
   LoginOptions,
 } from '../../driver/index.ts'
-import type { Vela } from '../../vela.ts'
+import type { VelaRuntime } from '../../runtime-sdk-types.ts'
 import { openBrowser } from '../login.ts'
 import { type DialogHost, errorMessage } from './components.ts'
 
 interface AuthHost extends DialogHost {
-  vela: Vela
+  runtime: VelaRuntime
   options: { openBrowser?: (url: string) => void; loginOptions?: LoginOptions }
   addNotice(text: string, level?: 'info' | 'warning' | 'error' | 'dim'): void
   renderHeader(modelOk: boolean): void
@@ -19,7 +19,7 @@ export async function loginCommand(
   host: AuthHost,
   args: string,
 ): Promise<void> {
-  const providers = host.vela.loginProviders()
+  const providers = await host.runtime.loginProviders()
   let provider = args.trim() || undefined
   if (!provider) {
     if (!providers.length) {
@@ -70,7 +70,7 @@ export async function loginCommand(
     },
   }
   try {
-    await host.vela.login(
+    await host.runtime.login(
       provider,
       method,
       interaction,
@@ -93,7 +93,6 @@ export async function loginCommand(
   host.renderHeader(true)
 }
 
-/** One login question as a dialog; Esc cancels the whole login, the prompt's own signal closes just the dialog */
 async function authPrompt(
   host: AuthHost,
   prompt: AuthPrompt,
@@ -120,8 +119,7 @@ async function authPrompt(
   return answer
 }
 
-/** `/logout [provider] [--forget]`: removes the stored credential, revoking the provider's session first where it can
- * (environment variables and config.json keys stay; `--forget` also clears retained OAuth registration) */
+/** `/logout [provider] [--forget]` */
 export async function logoutCommand(
   host: AuthHost,
   args: string,
@@ -129,7 +127,7 @@ export async function logoutCommand(
   const tokens = args.trim().split(/\s+/).filter(Boolean)
   const forget = tokens.includes('--forget')
   const requested = tokens.find((token) => token !== '--forget')
-  const providers = host.vela.loginProviders()
+  const providers = await host.runtime.loginProviders()
   const isStoredCredential = (p: (typeof providers)[number]) =>
     p.source === 'auth.json' || p.source === 'OAuth (auth.json)'
   const stored = providers.filter(isStoredCredential)
@@ -164,7 +162,7 @@ export async function logoutCommand(
     return
   }
   try {
-    const result = await host.vela.logout(provider, { forget })
+    const result = await host.runtime.logout(provider, { forget })
     if (result.notice) host.addNotice(result.notice, 'dim')
     if (result.removed && result.forgotten) {
       host.addNotice(

@@ -1,3 +1,8 @@
+export {
+  type ConnectRuntimeOptions,
+  connectRuntime,
+  type DaemonStatus,
+} from './daemon/index.ts'
 export { agentErrorHint, createLocalExecutionEnv } from './driver/index.ts'
 export type {
   LocalEvent,
