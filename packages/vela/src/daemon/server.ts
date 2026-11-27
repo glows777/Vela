@@ -681,8 +681,15 @@ export async function startDaemonServer(
   })
   renameSync(tmpPidPath, paths.pidPath)
 
-  configWatcher = startDaemonConfigWatcher(paths.agentDir, () =>
-    runtime.reloadConfig(),
+  configWatcher = startDaemonConfigWatcher(
+    paths.agentDir,
+    () => runtime.reloadConfig(),
+    undefined,
+    (err) => {
+      logger.warn(
+        `[daemon] Automatic config reload failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    },
   )
 
   const onSigHup = () => {

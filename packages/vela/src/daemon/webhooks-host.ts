@@ -22,6 +22,7 @@ export function startDaemonConfigWatcher(
   agentDir: string,
   reload: () => Promise<void>,
   intervalMs = 1000,
+  onError?: (error: unknown) => void,
 ): { checkNow: () => Promise<void>; stop: () => void } {
   const sig = () =>
     `${ownerStatSig(join(agentDir, 'config.json'))}|${ownerStatSig(join(agentDir, 'auth.json'))}`
@@ -35,7 +36,9 @@ export function startDaemonConfigWatcher(
     if (next === lastSig) return Promise.resolve()
     lastSig = next
     inflight = reload()
-      .catch(() => {})
+      .catch((error) => {
+        onError?.(error)
+      })
       .finally(() => {
         inflight = undefined
       })

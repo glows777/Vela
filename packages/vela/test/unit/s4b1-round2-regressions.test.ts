@@ -7,7 +7,10 @@ import { z } from 'zod'
 import { connectRuntime } from '../../src/daemon/client.ts'
 import { getDaemonStatus } from '../../src/daemon/launcher.ts'
 import { startDaemonServer } from '../../src/daemon/server.ts'
-import { DaemonWebhooksHost } from '../../src/daemon/webhooks-host.ts'
+import {
+  DaemonWebhooksHost,
+  startDaemonConfigWatcher,
+} from '../../src/daemon/webhooks-host.ts'
 import { openDatabase } from '../../src/db/index.ts'
 import { createVelaAgentDriver } from '../../src/driver/runtime-adapter.ts'
 import type {
@@ -705,4 +708,35 @@ test('R2 #7,#8,#16,#18,#19: idle daemon config watch, reload target generation i
       author: { id: 'u', name: 'U' },
     }),
   ).rejects.toThrow(/Invalid channels\.submit/)
+})
+
+test('startDaemonConfigWatcher reports reload failures to onError and recovers on next change', async () => {
+  const agentDir = makeTempDir('vela-s4b1-watcher-err-')
+  const configPath = join(agentDir, 'config.json')
+  writeFileSync(configPath, '{"ok":true}')
+
+  const errors: string[] = []
+  let reloads = 0
+  let shouldFail = true
+  const watcher = startDaemonConfigWatcher(
+    agentDir,
+    async () => {
+      reloads++
+      if (shouldFail) throw new Error('malformed config.json')
+    },
+    60_000,
+    (err) => errors.push(err instanceof Error ? err.message : String(err)),
+  )
+  cleanups.push(() => watcher.stop())
+
+  writeFileSync(configPath, '{bad json')
+  await watcher.checkNow()
+  expect(reloads).toBe(1)
+  expect(errors).toEqual(['malformed config.json'])
+
+  shouldFail = false
+  writeFileSync(configPath, '{"ok":true,"v":2}')
+  await watcher.checkNow()
+  expect(reloads).toBe(2)
+  expect(errors).toEqual(['malformed config.json'])
 })
