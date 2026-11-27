@@ -37,6 +37,8 @@ export interface ConnectRuntimeOptions {
   appVersion?: string
   /** @internal Override expected protocolVersion for handshake tests. */
   protocolVersion?: number
+  /** @internal Hook invoked when the daemon IPC socket closes unexpectedly. */
+  onDisconnect?: (error: Error) => void
   /** Timeout (ms) for auto-starting and handshaking with the daemon. */
   timeoutMs?: number
 }
@@ -83,6 +85,7 @@ export async function connectRuntime(
   const { runtime, verifyHello } = createSocketRuntimeClient(
     paths.agentDir,
     socket,
+    options.onDisconnect,
   )
   try {
     const hello = await verifyHello()
@@ -137,6 +140,7 @@ async function openSocket(
 function createSocketRuntimeClient(
   agentDir: string,
   socket: Socket,
+  onDisconnect?: (error: Error) => void,
 ): { runtime: VelaRuntime; verifyHello: () => Promise<DaemonHello> } {
   let nextReqId = 1
   let nextLoginId = 1
@@ -177,7 +181,7 @@ function createSocketRuntimeClient(
     })
   }
 
-  const failAll = (err: Error) => {
+  const failAll = (err: Error, unexpected = true) => {
     if (closed) return
     closed = true
     for (const p of pending.values()) p.reject(err)
@@ -195,6 +199,11 @@ function createSocketRuntimeClient(
     eventListeners.clear()
     deltaListeners.clear()
     channelListeners.clear()
+    if (unexpected) {
+      try {
+        onDisconnect?.(err)
+      } catch {}
+    }
   }
 
   const parse = createNdjsonParser(
@@ -611,7 +620,7 @@ function createSocketRuntimeClient(
     },
     recover: () => rpc('runtime.recover'),
     dispose: async () => {
-      failAll(new Error('Daemon client disposed'))
+      failAll(new Error('Daemon client disposed'), false)
       socket.end()
       socket.destroy()
     },

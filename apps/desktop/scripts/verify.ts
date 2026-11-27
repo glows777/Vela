@@ -452,7 +452,8 @@ const bridgeJourney = async (page: Page) => {
   checks.push(
     'History reads page by page with the after cursor and keeps its order.',
   )
-  // Verify removeProject removes it from Vela without touching disk files, leaving Home clean for Journey 1.
+  // Verify removeProject unlinks from Vela without touching disk files or session history,
+  // then clean up the unlinked bridge session so Home starts clean for Journey 1.
   assert.equal(
     await page.evaluate(
       ({ projectId }) => window.vela.removeProject({ projectId }),
@@ -461,6 +462,23 @@ const bridgeJourney = async (page: Page) => {
     true,
   )
   assert.equal((await stat(project)).isDirectory(), true)
+  const preservedHistory = await page.evaluate(
+    ({ sessionId }) => window.vela.messages({ sessionId }),
+    { sessionId: bridgeSessionId },
+  )
+  assert(
+    preservedHistory.messages.some((m) =>
+      m.text.includes('Desktop faux reply'),
+    ),
+    'removeProject unlinks project without deleting recorded session history',
+  )
+  assert.equal(
+    await page.evaluate(
+      ({ sessionId }) => window.vela.deleteSession({ sessionId }),
+      { sessionId: bridgeSessionId },
+    ),
+    true,
+  )
 }
 
 /** Journey 1: a Local project, a short question in its chat, the answer. */

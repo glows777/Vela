@@ -11,15 +11,21 @@ import { join } from 'node:path'
 import { ensureCliProject } from '../../src/cli/runtime-client.ts'
 import { ensureDaemonRunning } from '../../src/daemon/launcher.ts'
 import { larkStartupDiagnostic } from '../../src/daemon/settings-service.ts'
+import { openDatabase } from '../../src/db/index.ts'
+import { importExtension } from '../../src/driver/config/extensions.ts'
 import {
   type ChannelRuntimeEvent,
   connectRuntime,
+  createRuntime,
+  type LarkTransport,
+  memoryCredentialStore,
   startDaemonServer,
   stopDaemon,
 } from '../../src/index.ts'
 import { fileCredentialStore } from '../../src/providers/auth/store.ts'
 import { ModelRegistry } from '../../src/providers/models/index.ts'
 import { loadModels } from '../../src/providers/models-config.ts'
+import { setChannelEnabledInDb } from '../../src/runtime/index.ts'
 import { usableModel } from '../../src/settings.ts'
 import { createFauxModel } from '../../src/testing/core/index.ts'
 
@@ -35,6 +41,59 @@ function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
+}
+
+function makeMockLarkTransport(
+  overrides: Partial<LarkTransport> = {},
+): LarkTransport {
+  return {
+    async start() {},
+    async getBotId() {
+      return 'bot_1'
+    },
+    stop() {},
+    async startTopic() {
+      return {
+        messageId: 'om_topic',
+        createTime: '1',
+        rootId: 'om_root',
+        threadId: 'omt_1',
+      }
+    },
+    async forward() {
+      return { messageId: 'om_fwd', createTime: '1' }
+    },
+    async send() {
+      return { messageId: 'om_1', createTime: '1' }
+    },
+    async reply() {
+      return { messageId: 'om_2', createTime: '1' }
+    },
+    async sendCard() {
+      return 'om_3'
+    },
+    async patchCard() {},
+    async addReaction() {
+      return 'rx_1'
+    },
+    async removeReaction() {},
+    async getResource() {
+      throw new Error('unused')
+    },
+    async getSenderName() {
+      return undefined
+    },
+    async listTopicMessages() {
+      return { items: [] }
+    },
+    async searchMessages() {
+      return { items: [] }
+    },
+    async listMessages() {
+      return []
+    },
+    ...overrides,
+  }
 }
 
 test('daemon settings toggle Lark via vela.db without writing runInApp to config.json', async () => {
@@ -266,4 +325,364 @@ test('larkStartupDiagnostic maps config errors to fixed diagnostic copy', () => 
     'duplicate chat IDs',
   )
   expect(larkStartupDiagnostic(new Error('secret=abc'))).not.toContain('secret')
+})
+
+test('ephemeral runtime settings isolate from explicit ownerDir, honor injected credentials and allowLocalOnlyOAuth: false', async () => {
+  const ownerDir = tempDir('vela-s4c1-ephemeral-owner-')
+  writeFileSync(
+    join(ownerDir, 'config.json'),
+    JSON.stringify({
+      model: 'openai/gpt-5.4',
+      lark: { appId: 'owner-app', appSecret: 'owner-secret', chats: ['oc_1'] },
+    }),
+  )
+  await fileCredentialStore(join(ownerDir, 'auth.json')).modify(
+    'openai',
+    async () => ({
+      type: 'oauth',
+      access: 'tok',
+      refresh: 'ref',
+      expires: Date.now() + 60_000,
+      localOnly: true,
+    }),
+  )
+
+  const ephRuntime = createRuntime({
+    ephemeral: true,
+    agentDir: ownerDir,
+    hostEnv: {},
+  })
+  cleanups.push(() => ephRuntime.dispose())
+  const ephState = await ephRuntime.settings.get()
+  expect(ephState.model).toBeUndefined()
+  expect(ephState.lark.appId).toBe('')
+  expect(
+    ephState.providers.find((p) => p.name === 'openai')?.credential,
+  ).toBeUndefined()
+  await expect(
+    ephRuntime.settings.saveModel({
+      provider: 'openai',
+      model: 'gpt-5.4',
+      key: 'new-key',
+    }),
+  ).rejects.toThrow(/ephemeral/i)
+  await expect(
+    ephRuntime.settings.saveLark({ enabled: false }),
+  ).rejects.toThrow(/ephemeral/i)
+
+  const injected = memoryCredentialStore({
+    openai: {
+      type: 'oauth',
+      access: 'local-only-acc',
+      refresh: 'local-only-ref',
+      expires: Date.now() + 60_000,
+      localOnly: true,
+    },
+  })
+  const isolatedOwner = tempDir('vela-s4c1-localonly-owner-')
+  writeFileSync(
+    join(isolatedOwner, 'config.json'),
+    JSON.stringify({ model: 'openai/gpt-5.4' }),
+  )
+  const serverRuntime = createRuntime({
+    agentDir: isolatedOwner,
+    hostEnv: {},
+    credentials: injected,
+    allowLocalOnlyOAuth: false,
+  })
+  cleanups.push(() => serverRuntime.dispose())
+  const blockedState = await serverRuntime.settings.get()
+  expect(blockedState.setup.required).toBe(true)
+  expect(blockedState.setup.reason).toBe('missing-credential')
+  await expect(
+    serverRuntime.settings.saveModel({ provider: 'openai', model: 'gpt-5.4' }),
+  ).rejects.toThrow(/local/i)
+})
+
+test('Lark discovery enforces single owner, client-scoped cancel awaiting restore, pre-aborted signals, and credential-bound approval', async () => {
+  const dir = tempDir('vela-s4c1-disc-guard-')
+  const socketPath = join(dir, 'daemon.sock')
+  writeFileSync(
+    join(dir, 'config.json'),
+    JSON.stringify({
+      lark: { appId: 'cli_a', appSecret: 'sec_a', chats: [] },
+    }),
+  )
+  let discoveryStopped = false
+  let mainStoppedCount = 0
+  let mainStartedCount = 0
+  let discoveryCall = 0
+
+  const server = await startDaemonServer({
+    agentDir: dir,
+    socketPath,
+    hostEnv: {},
+    enableWebhooks: false,
+    defaultModel: createFauxModel(),
+    larkTransport: makeMockLarkTransport({
+      async start() {
+        mainStartedCount += 1
+      },
+      async getBotId() {
+        return 'bot_main'
+      },
+      stop() {
+        mainStoppedCount += 1
+      },
+    }),
+    onVerifyLarkCredentials: async () => {},
+    onCreateLarkDiscoveryTransport: async () => {
+      discoveryCall += 1
+      if (discoveryCall === 1) {
+        return makeMockLarkTransport({
+          async getBotId() {
+            return 'bot_disc'
+          },
+          stop() {
+            discoveryStopped = true
+          },
+        })
+      }
+      return makeMockLarkTransport({
+        async start(handler) {
+          queueMicrotask(() =>
+            handler({
+              message: {
+                message_id: 'om_disc_1',
+                chat_id: 'oc_found',
+                chat_type: 'group',
+                message_type: 'text',
+                content: JSON.stringify({ text: 'hello' }),
+                mentions: [{ key: '@_user_1', id: { open_id: 'bot_disc' } }],
+              },
+              sender: { sender_id: { open_id: 'ou_1' }, sender_type: 'user' },
+            }),
+          )
+        },
+        async getBotId() {
+          return 'bot_disc'
+        },
+      })
+    },
+  })
+  const clientA = await connectRuntime({
+    agentDir: dir,
+    socketPath,
+    autoStart: false,
+  })
+  const clientB = await connectRuntime({
+    agentDir: dir,
+    socketPath,
+    autoStart: false,
+  })
+  cleanups.push(async () => {
+    await clientA.dispose()
+    await clientB.dispose()
+    await server.close('test-cleanup')
+  })
+  await Promise.all([clientA.ready(), clientB.ready()])
+
+  const preAborted = AbortSignal.abort(
+    new DOMException('Cancelled', 'AbortError'),
+  )
+  const preAbortedRes = await clientA.settings.discoverLarkGroup({
+    signal: preAborted,
+  })
+  expect(preAbortedRes).toBeUndefined()
+  expect(discoveryCall).toBe(0)
+
+  const beforeStartCount = mainStartedCount
+  const pendingDisc = clientA.settings.discoverLarkGroup()
+  const stopDeadline = Date.now() + 5000
+  while (Date.now() < stopDeadline && mainStoppedCount === 0) {
+    await Bun.sleep(20)
+  }
+  expect(mainStoppedCount).toBeGreaterThan(0)
+
+  await expect(clientB.settings.discoverLarkGroup()).rejects.toThrow(
+    /already in progress/i,
+  )
+  await clientB.settings.cancelLarkSetup()
+  expect(discoveryStopped).toBe(false)
+
+  await clientA.settings.cancelLarkSetup()
+  expect(await pendingDisc).toBeUndefined()
+  expect(discoveryStopped).toBe(true)
+  expect(mainStartedCount).toBeGreaterThan(beforeStartCount)
+
+  const found = await clientA.settings.discoverLarkGroup()
+  expect(found?.chatId).toBe('oc_found')
+
+  await expect(clientB.settings.confirmLarkGroup('oc_found')).rejects.toThrow(
+    /No pending group approval/i,
+  )
+  await clientA.settings.saveLark({ appId: 'cli_b', appSecret: 'sec_b' })
+  await expect(clientA.settings.confirmLarkGroup('oc_found')).rejects.toThrow(
+    /No pending group approval|changed/i,
+  )
+})
+
+test('removeChat rejects while pending outbox exists and disabled Lark rejects unified messages()', async () => {
+  const dir = tempDir('vela-s4c1-removechat-')
+  const socketPath = join(dir, 'daemon.sock')
+  writeFileSync(
+    join(dir, 'config.json'),
+    JSON.stringify({
+      lark: { appId: 'cli_a', appSecret: 'sec_a', chats: ['oc_busy'] },
+    }),
+  )
+  let blockSend!: () => void
+  const sendBlocked = new Promise<void>((resolve) => {
+    blockSend = resolve
+  })
+  let resolveSendGate!: () => void
+  const sendGate = new Promise<void>((resolve) => {
+    resolveSendGate = resolve
+  })
+  cleanups.push(() => resolveSendGate())
+
+  const model = createFauxModel()
+  model.push({ text: 'Done!' })
+  const server = await startDaemonServer({
+    agentDir: dir,
+    socketPath,
+    hostEnv: {},
+    enableWebhooks: false,
+    defaultModel: model,
+    larkTransport: makeMockLarkTransport({
+      async reply() {
+        blockSend()
+        await sendGate
+        return { messageId: 'm2', createTime: '1' }
+      },
+      async listTopicMessages() {
+        return {
+          items: [
+            {
+              message_id: 'om_1',
+              msg_type: 'text',
+              sender: { sender_type: 'user' },
+              create_time: '1700000000000',
+              body: { content: JSON.stringify({ text: 'Remote message' }) },
+            },
+          ],
+        }
+      },
+    }),
+  })
+  const client = await connectRuntime({
+    agentDir: dir,
+    socketPath,
+    autoStart: false,
+  })
+  cleanups.push(async () => {
+    resolveSendGate()
+    await client.dispose()
+    await server.close('test-cleanup')
+  })
+  await client.ready()
+
+  const submitted = await client.channels.submit('lark', {
+    chatId: 'oc_busy',
+    newTopic: { title: 'Busy topic' },
+    text: 'Check busy delivery',
+    author: { id: 'ou_tester', name: 'Tester' },
+  })
+  await sendBlocked
+  await expect(
+    client.settings.saveLark({ removeChat: 'oc_busy' }),
+  ).rejects.toThrow(/waiting to send|running/i)
+
+  resolveSendGate()
+  await client.waitForIdle(submitted.sessionId)
+  await client.settings.saveLark({ enabled: false })
+  await expect(
+    client.sessions.messages({ sessionId: submitted.sessionId! }),
+  ).rejects.toThrow(/disabled/i)
+})
+
+test('ensureDaemonRunning rejects invalid daemonCommand and cold start respects legacy runInApp: false', async () => {
+  const badDir = tempDir('vela-s4c1-badcmd-')
+  await expect(
+    ensureDaemonRunning({
+      agentDir: badDir,
+      socketPath: join(badDir, 'bad.sock'),
+      daemonCommand: {
+        command: '/nonexistent/vela-missing-bin',
+        args: [],
+      },
+      timeoutMs: 3000,
+    }),
+  ).rejects.toThrow(/Failed to spawn Vela daemon/)
+
+  const dirOff = tempDir('vela-s4c1-runinapp-off-')
+  writeFileSync(
+    join(dirOff, 'config.json'),
+    JSON.stringify({
+      lark: {
+        appId: 'cli_a',
+        appSecret: 'sec_a',
+        chats: ['oc_legacy'],
+        runInApp: false,
+      },
+    }),
+  )
+  const rtOff = createRuntime({ agentDir: dirOff, hostEnv: {} })
+  cleanups.push(() => rtOff.dispose())
+  const stOff = await rtOff.settings.get()
+  expect(stOff.lark.enabled).toBe(false)
+
+  const dirDbOverride = tempDir('vela-s4c1-runinapp-db-')
+  writeFileSync(
+    join(dirDbOverride, 'config.json'),
+    JSON.stringify({
+      lark: {
+        appId: 'cli_a',
+        appSecret: 'sec_a',
+        chats: ['oc_legacy'],
+        runInApp: false,
+      },
+    }),
+  )
+  const seedDb = openDatabase({ path: join(dirDbOverride, 'vela.db') })
+  setChannelEnabledInDb(seedDb, 'lark', true)
+  seedDb.close()
+  const rtOverride = createRuntime({ agentDir: dirDbOverride, hostEnv: {} })
+  cleanups.push(() => rtOverride.dispose())
+  const stOverride = await rtOverride.settings.get()
+  expect(stOverride.lark.enabled).toBe(true)
+})
+
+test('importExtension ignores type-only @glows777/vela imports and preserves nested helper import.meta.url', async () => {
+  const extDir = tempDir('vela-s4c1-ext-meta-')
+  const subDir = join(extDir, 'nested')
+  const { mkdirSync } = await import('node:fs')
+  mkdirSync(subDir, { recursive: true })
+  writeFileSync(
+    join(subDir, 'data.json'),
+    JSON.stringify({ ok: 'from-nested' }),
+  )
+  writeFileSync(
+    join(subDir, 'helper.ts'),
+    `import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+export function readNested() {
+  return JSON.parse(readFileSync(fileURLToPath(new URL('./data.json', import.meta.url)), 'utf8')).ok
+}
+`,
+  )
+  const extPath = join(extDir, 'type-only-ext.ts')
+  writeFileSync(
+    extPath,
+    `import type { ExtensionAPI } from '@glows777/vela'
+import { readNested } from './nested/helper.ts'
+export default function (vela: ExtensionAPI) {
+  (vela as unknown as { tag?: string }).tag = readNested()
+}
+`,
+  )
+  const fn = await importExtension(extPath, 'typeOnlyExt')
+  const fakeVela = {} as { tag?: string }
+  fn(fakeVela as unknown as Parameters<typeof fn>[0])
+  expect(fakeVela.tag).toBe('from-nested')
 })

@@ -1,5 +1,10 @@
 export type { ApprovalRecord, ApprovalStatus } from './approvals.ts'
 export { type BlobDirection, type BlobRecord, BlobStore } from './blobs.ts'
+export {
+  hasChannelEnabledInDb,
+  isChannelEnabledInDb,
+  setChannelEnabledInDb,
+} from './channel-ingress.ts'
 export type {
   ChannelAdapter,
   ChannelAdapterContext,

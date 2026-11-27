@@ -14,11 +14,15 @@ import {
   DesktopClientIdTracker,
   deleteDesktopSession,
   fetchDesktopMessages,
+  mapLocalRuntimeEvent,
   openLocalDesktopProject,
   removeDesktopProject,
   renameDesktopSession,
+  resolveSessionOwnership,
   stopDesktopTarget,
   submitDesktopMessage,
+  toDesktopMessage,
+  toDesktopSession,
 } from '../src/main/runtime-bridge.ts'
 import { handleDesktopRoutineRequest } from '../src/main/runtime-routines.ts'
 
@@ -390,4 +394,218 @@ test('DesktopClientIdTracker correlates batched inboxEventIds onto user commits 
   )
   expect(reverseOrder).toEqual(['c-3'])
   expect(tracker.getForMessage('msg-2')).toBe('c-3')
+})
+
+test('removeDesktopProject unlinks without deleting shared sessions', async () => {
+  const { runtime } = await openTestRuntime()
+  const cwd = tempDir('vela-unlink-')
+  const proj = await openLocalDesktopProject(runtime, { cwd })
+  const sess = await createDesktopSession(runtime, {
+    projectId: proj.id,
+    name: 'Keep history',
+  })
+  await submitDesktopMessage(runtime, false, new DesktopClientIdTracker(), {
+    method: 'submit',
+    channel: 'local',
+    message: { projectId: proj.id, sessionId: sess.sessionId, text: 'hello' },
+  })
+  await runtime.waitForIdle(sess.sessionId)
+
+  const removed = await removeDesktopProject(runtime, { projectId: proj.id })
+  expect(removed).toBe(true)
+  expect(await runtime.projects.get(proj.id)).toBeUndefined()
+  const surviving = await runtime.sessions.get(sess.sessionId)
+  expect(surviving?.id).toBe(sess.sessionId)
+  const msgs = await runtime.sessions.messages({ sessionId: sess.sessionId })
+  expect(msgs.messages.some((m) => m.text === 'hello')).toBe(true)
+})
+
+test('hidden memory custom_message does not consume clientMessageId and session_reset maps cleanly', async () => {
+  const tracker = new DesktopClientIdTracker()
+  tracker.trackPrompt('in-mem-1', 'cid-1')
+  tracker.onRunStarted('run-mem-1', ['in-mem-1'])
+
+  const hidden = toDesktopMessage({
+    id: 'm-hidden',
+    sessionId: 's-1',
+    runId: 'run-mem-1',
+    kind: 'custom_message',
+    role: 'user',
+    text: 'secret memory update',
+    content: 'secret memory update',
+    display: false,
+    createdAt: '2026-11-28T00:00:00.000Z',
+  })
+  expect(hidden).toBeUndefined()
+  const consumed = tracker.consumeForUserMessage(
+    's-1',
+    'run-mem-1',
+    'actual user text',
+    'm-real',
+  )
+  expect(consumed).toEqual(['cid-1'])
+
+  const mappedReset = mapLocalRuntimeEvent(
+    {
+      seq: 7,
+      type: 'session_reset',
+      sessionId: 's-1',
+      timestamp: '2026-11-28T00:00:01.000Z',
+    },
+    null,
+    {
+      channel: 'local',
+      sessionId: 's-1',
+      chatId: null,
+      chatKind: 'quick',
+      projectId: null,
+      task: 'Reset test',
+      state: 'done',
+      requester: { id: 'local-user', name: 'You' },
+      updatedAt: '2026-11-28T00:00:01.000Z',
+    },
+  )
+  expect(mappedReset[0]).toMatchObject({
+    type: 'local',
+    value: { type: 'session_reset', sessionId: 's-1' },
+  })
+})
+
+test('Local hub session marks isHub and disabled Lark rejects fetchDesktopMessages', async () => {
+  const { runtime } = await openTestRuntime()
+  const cwd = tempDir('vela-hub-ownership-')
+  const hubProj = await runtime.projects.create({
+    name: 'LegacyHubProj',
+    cwd,
+    hubSessionId: true,
+  })
+  const hubSession = await runtime.sessions.get(hubProj.hubSessionId!)
+  expect(hubSession?.kind).toBe('hub')
+  const ownership = resolveSessionOwnership(hubSession!, [], new Set())!
+  expect(toDesktopSession(hubSession!, ownership).isHub).toBe(true)
+
+  const larkProj = await runtime.projects.create({
+    name: 'LarkDisabled',
+    hubSessionId: true,
+  })
+  const larkTopic = await runtime.sessions.create({
+    projectId: larkProj.id,
+    kind: 'topic',
+  })
+  await runtime.bindings.upsert({
+    channel: 'lark',
+    externalId: 'oc_disabled_msg',
+    kind: 'group',
+    projectId: larkProj.id,
+    sessionId: larkProj.hubSessionId,
+    enabled: false,
+  })
+  await runtime.bindings.upsert({
+    channel: 'lark',
+    externalId: 'oc_disabled_msg',
+    threadId: 'omt_1',
+    kind: 'group',
+    projectId: larkProj.id,
+    sessionId: larkTopic.id,
+    enabled: false,
+  })
+  await expect(
+    fetchDesktopMessages(
+      runtime,
+      { sessionId: larkTopic.id },
+      new DesktopClientIdTracker(),
+    ),
+  ).rejects.toThrow(/Unknown or disabled Lark/i)
+})
+
+test('submitDesktopMessage forwards images when steering an active Local run', async () => {
+  const dir = tempDir('vela-steer-img-')
+  const socketPath = join(dir, 'test.sock')
+  let seenImagesCount = 0
+  let releaseTurn!: () => void
+  const turnGate = new Promise<void>((resolve) => {
+    releaseTurn = resolve
+  })
+  let markTurnEntered!: () => void
+  const turnEntered = new Promise<void>((resolve) => {
+    markTurnEntered = resolve
+  })
+  cleanups.push(() => releaseTurn())
+
+  const { createFauxModel } = await import('@glows777/vela/testing')
+  const baseModel = createFauxModel()
+  baseModel.push(
+    { toolCalls: [{ name: 'bash', input: { command: 'echo ok' } }] },
+    { text: 'steered' },
+  )
+  const slowModel = {
+    ...baseModel,
+    async doStream(opts: unknown) {
+      markTurnEntered()
+      await turnGate
+      const msgs =
+        (opts as { prompt?: Array<{ content?: unknown }> })?.prompt ?? []
+      for (const m of msgs) {
+        if (Array.isArray(m.content)) {
+          seenImagesCount += m.content.filter((part) => {
+            const kind = (part as { type?: string })?.type
+            return kind === 'file' || kind === 'image'
+          }).length
+        }
+      }
+      return baseModel.doStream(
+        opts as Parameters<typeof baseModel.doStream>[0],
+      )
+    },
+  }
+  const server = await startDaemonServer({
+    agentDir: dir,
+    socketPath,
+    hostEnv: {},
+    enableWebhooks: false,
+    enableLark: false,
+    defaultModel: slowModel,
+  })
+  const runtime = await connectRuntime({
+    agentDir: dir,
+    socketPath,
+    autoStart: false,
+  })
+  cleanups.push(async () => {
+    releaseTurn()
+    await runtime.dispose()
+    await server.close('test-cleanup')
+  })
+  await runtime.ready()
+
+  const cwd = tempDir('vela-steer-proj-')
+  const proj = await openLocalDesktopProject(runtime, { cwd })
+  await runtime.trust.approve(proj.cwd, true)
+  const sess = await createDesktopSession(runtime, { projectId: proj.id })
+  const tracker = new DesktopClientIdTracker()
+  await submitDesktopMessage(runtime, false, tracker, {
+    method: 'submit',
+    channel: 'local',
+    message: {
+      projectId: proj.id,
+      sessionId: sess.sessionId,
+      text: 'start run',
+    },
+  })
+  await turnEntered
+
+  const pngBase64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+  await submitDesktopMessage(runtime, false, tracker, {
+    method: 'submit',
+    channel: 'local',
+    message: {
+      sessionId: sess.sessionId,
+      text: 'steer with image',
+      images: [{ type: 'image', data: pngBase64, mimeType: 'image/png' }],
+    },
+  })
+  releaseTurn()
+  await runtime.waitForIdle(sess.sessionId)
+  expect(seenImagesCount).toBeGreaterThan(0)
 })

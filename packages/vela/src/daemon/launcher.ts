@@ -475,10 +475,14 @@ export async function ensureDaemonRunning(
     let childExited:
       | { code: number | null; signal: NodeJS.Signals | null }
       | undefined
+    let spawnError: Error | undefined
     const child = spawn(command, args, {
       detached: true,
       stdio: ['ignore', logFd, logFd],
       env: childEnv,
+    })
+    child.on('error', (error) => {
+      spawnError = error
     })
     child.on('exit', (code, signal) => {
       childExited = { code, signal }
@@ -488,10 +492,16 @@ export async function ensureDaemonRunning(
 
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
+      if (spawnError) break
       const hello = await probeDaemonHello(paths.socketPath, 300)
       if (hello && matches(hello)) return hello
-      if (childExited) break
+      if (childExited || spawnError) break
       await sleep(50)
+    }
+    if (spawnError) {
+      throw new Error(
+        `Failed to spawn Vela daemon (${command}): ${spawnError.message}`,
+      )
     }
     const tail = readLogTail(paths.logPath)
     const reason = childExited

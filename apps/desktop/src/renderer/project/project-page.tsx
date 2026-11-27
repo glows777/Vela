@@ -42,12 +42,24 @@ export function ProjectPage({
 }) {
   useEffect(() => watchLarkProject(project), [project])
 
+  const localSessions =
+    project.channel === 'local' ? projectSessions(snapshot, project) : []
+  const workSessions = localSessions.filter((s) => !s.isHub)
+  const active =
+    project.channel === 'local'
+      ? ((panel.sessionId
+          ? localSessions.find((s) => s.sessionId === panel.sessionId)
+          : undefined) ?? workSessions[0])
+      : undefined
+
+  useEffect(() => {
+    if (project.channel === 'local' && !panel.sessionId && active) {
+      onPanel({ open: panel.open, sessionId: active.sessionId })
+    }
+  }, [project.channel, panel.open, panel.sessionId, active, onPanel])
+
   if (project.channel === 'local') {
-    const sessions = projectSessions(snapshot, project)
-    const active =
-      (panel.sessionId
-        ? sessions.find((s) => s.sessionId === panel.sessionId)
-        : undefined) ?? sessions[0]
+    const sessions = localSessions
     return (
       <div className={styles.page}>
         {active ? (

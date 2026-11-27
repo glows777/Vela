@@ -5,6 +5,7 @@ import type {
   Project,
   Session,
   SettingsState,
+  SubmitReceipt,
 } from '../shared/bridge.ts'
 import type { SessionProgress } from './session/progress.ts'
 
@@ -62,6 +63,25 @@ export const withoutKey = <Value>(
   return next
 }
 
+export const sessionMap = (sessions: Session[]) =>
+  Object.fromEntries(sessions.map((session) => [session.sessionId, session]))
+
+export const topicTitle = (text: string) =>
+  text
+    .split('\n')
+    .find((line) => line.trim() !== '')
+    ?.trim() ?? text.trim()
+
+export const larkNotice = (result: SubmitReceipt, place: string) => {
+  const reason = result.error
+    ? ` ${result.error.trim().replace(/\.$/, '')}.`
+    : ''
+  if (result.outcome === 'posted') {
+    return `Vela posted it in the ${place}, but the rest of the submission failed.${reason} It did not send it again; check the ${place}.`
+  }
+  return `It may have been posted.${reason} Vela did not send it again; check the ${place} before sending.`
+}
+
 const byTime = (messages: Message[]) =>
   messages.toSorted((one, other) =>
     one.createdAt.localeCompare(other.createdAt),
@@ -97,12 +117,34 @@ export function applyLocalEventState(params: {
   publish: (change: Partial<Snapshot>) => void
   mergeSessions: (sessions: Session[]) => void
   mergeMessages: (sessionId: string, incoming: Message[]) => void
+  onSessionReset?: (sessionId: string) => void
 }) {
-  const { value, snapshot, attempts, publish, mergeSessions, mergeMessages } =
-    params
+  const {
+    value,
+    snapshot,
+    attempts,
+    publish,
+    mergeSessions,
+    mergeMessages,
+    onSessionReset,
+  } = params
   const sessionId = value.sessionId
   if (value.type === 'session') {
     mergeSessions([value.data])
+    return
+  }
+  if (value.type === 'session_reset' && sessionId) {
+    attempts.delete(sessionId)
+    onSessionReset?.(sessionId)
+    const shown = snapshot.failures[sessionId]
+    publish({
+      messages: withoutKey(snapshot.messages, sessionId),
+      failures: withoutKey(snapshot.failures, sessionId),
+      progress: withoutKey(snapshot.progress, sessionId),
+      hidden: shown?.replyId
+        ? withoutKey(snapshot.hidden, shown.replyId)
+        : snapshot.hidden,
+    })
     return
   }
   if (value.type === 'message') {

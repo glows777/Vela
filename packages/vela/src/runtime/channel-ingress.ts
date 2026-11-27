@@ -57,6 +57,14 @@ export function getHostPostAuthorInDb(
   }
 }
 
+export function hasChannelEnabledInDb(db: VelaDatabase, name: string): boolean {
+  const row = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    `${CHANNEL_ENABLED_PREFIX}${name}`,
+  )
+  return row !== undefined
+}
+
 export function isChannelEnabledInDb(db: VelaDatabase, name: string): boolean {
   const row = db.get<{ value_json: string }>(
     'SELECT value_json FROM kv_meta WHERE key = ?',

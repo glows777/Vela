@@ -14,6 +14,7 @@ import { createRuntime, type LocalVelaRuntime } from '../runtime-sdk.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import { createAuthLoginHandler, type PendingLoginClient } from './auth-rpc.ts'
+import { registerBuiltinExtensionHostModules } from './extension-host.ts'
 import { DaemonLarkHost } from './lark-host.ts'
 import {
   acquireOwnerLock,
@@ -39,6 +40,7 @@ import {
   safeWriteWire,
   serializeError,
 } from './protocol.ts'
+import { resolveSettingsOwnerHooks } from './settings-discovery.ts'
 import {
   DaemonWebhooksHost,
   startDaemonConfigWatcher,
@@ -99,6 +101,7 @@ const safeWrite = safeWriteWire
 export async function startDaemonServer(
   options: StartDaemonServerOptions = {},
 ): Promise<DaemonServerHandle> {
+  registerBuiltinExtensionHostModules({ startDaemonServer })
   const hostEnv = options.hostEnv ?? {}
   const logger = options.logger ?? silentLogger
   const rawAgentDir = options.agentDir ?? defaultAgentDir(hostEnv)
@@ -427,7 +430,17 @@ export async function startDaemonServer(
         }
         client.activeDiscoveries.set(setupId, controller)
       }
+      if (controller.signal.aborted) {
+        if (typeof setupId === 'number') {
+          client.activeDiscoveries.delete(setupId)
+        }
+        return undefined
+      }
       try {
+        const hooks = await resolveSettingsOwnerHooks(runtime)
+        if (hooks) {
+          return await hooks.discoverLarkGroup(client, controller.signal)
+        }
         return await runtime.settings.discoverLarkGroup({
           signal: controller.signal,
         })
@@ -437,9 +450,21 @@ export async function startDaemonServer(
         }
       }
     },
-    'settings.confirmLarkGroup': (p) =>
-      runtime.settings.confirmLarkGroup(p.chatId),
-    'settings.cancelLarkSetup': () => runtime.settings.cancelLarkSetup(),
+    'settings.confirmLarkGroup': async (p, client: ConnectedClient) => {
+      const hooks = await resolveSettingsOwnerHooks(runtime)
+      return hooks
+        ? hooks.confirmLarkGroup(client, p.chatId)
+        : runtime.settings.confirmLarkGroup(p.chatId)
+    },
+    'settings.cancelLarkSetup': async (_p, client: ConnectedClient) => {
+      for (const ctrl of client.activeDiscoveries.values()) {
+        ctrl.abort(new DOMException('Cancelled', 'AbortError'))
+      }
+      const hooks = await resolveSettingsOwnerHooks(runtime)
+      if (hooks) {
+        await hooks.cancelLarkSetup(client)
+      }
+    },
     'blobs.get': (p) => runtime.blobs.get(p.id),
     'blobs.list': (p) => runtime.blobs.list(p.sessionId, p.direction),
     'blobs.read': (p) => runtime.blobs.read(p.id),
@@ -617,6 +642,9 @@ export async function startDaemonServer(
         ctrl.abort(new DOMException('Client disconnected', 'AbortError'))
       }
       client.activeDiscoveries.clear()
+      void resolveSettingsOwnerHooks(runtime).then((hooks) =>
+        hooks?.clearOwner(client),
+      )
     })
   })
 

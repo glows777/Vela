@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Composer } from '../components/composer.tsx'
 import { Conversation } from '../components/conversation.tsx'
 import { PageError } from '../components/page-error.tsx'
@@ -24,6 +25,12 @@ export function QuickChatPage({
     (panel.sessionId
       ? sessions.find((s) => s.sessionId === panel.sessionId)
       : undefined) ?? sessions[0]
+
+  useEffect(() => {
+    if (!panel.sessionId && active) {
+      onPanel({ open: panel.open, sessionId: active.sessionId })
+    }
+  }, [panel.open, panel.sessionId, active, onPanel])
 
   return (
     <div className={styles.page}>

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -7,6 +7,7 @@ import {
   toExtensionConfigView,
   type VelaSettings,
 } from './config/index.ts'
+import { registerRuntimeSettingsHooksResolver } from './daemon/settings-discovery.ts'
 import { openDatabase, withReadonlyDb } from './db/index.ts'
 import { savedTrust, saveTrust } from './db/trust.ts'
 import { defaultAgentDir } from './driver/config/paths.ts'
@@ -28,7 +29,10 @@ import { loadModels } from './providers/models-config.ts'
 import {
   EnvironmentRegistry,
   extractGithubRepositories,
+  hasChannelEnabledInDb,
+  isChannelEnabledInDb,
   SqliteOAuthRegistrationStore,
+  setChannelEnabledInDb,
   VelaRuntimeEngine,
 } from './runtime/index.ts'
 import type {
@@ -257,6 +261,22 @@ export function createRuntime(
     }
 
     const initial = computeConfigState()
+    const hasLegacyLarkDisabled = (() => {
+      if (isEphemeral || hasChannelEnabledInDb(db, 'lark')) return false
+      if (initial.ownerConfig.lark?.runInApp === false) return true
+      if (!existsSync(configPath)) return false
+      try {
+        const raw = JSON.parse(readFileSync(configPath, 'utf8')) as {
+          lark?: { runInApp?: unknown }
+        }
+        return raw?.lark?.runInApp === false
+      } catch {
+        return false
+      }
+    })()
+    if (hasLegacyLarkDisabled) {
+      setChannelEnabledInDb(db, 'lark', false)
+    }
     const credentials =
       options.credentials ??
       (isEphemeral ? memoryCredentialStore() : fileCredentialStore(authPath))
@@ -439,22 +459,58 @@ export function createRuntime(
       return reloadConfigInternal(false)
     }
 
+    const hasPendingOutboxDeliveries = (chatId?: string): boolean => {
+      const pending = db.all<{ session_id: string }>(
+        `SELECT session_id FROM outbox WHERE channel = 'lark' AND status IN ('pending', 'sending')`,
+      )
+      if (pending.length === 0) return false
+      if (!chatId) return true
+      const bindingRows = db.all<{
+        session_id: string | null
+        project_id: string | null
+      }>(
+        `SELECT session_id, project_id FROM channel_bindings WHERE channel = 'lark' AND external_id = ?`,
+        chatId,
+      )
+      const ownedSessionIds = new Set<string>()
+      const projectIds = new Set<string>()
+      for (const row of bindingRows) {
+        if (row.session_id) ownedSessionIds.add(row.session_id)
+        if (row.project_id) projectIds.add(row.project_id)
+      }
+      for (const projectId of projectIds) {
+        const projectSessions = db.all<{ id: string }>(
+          'SELECT id FROM sessions WHERE project_id = ?',
+          projectId,
+        )
+        for (const s of projectSessions) ownedSessionIds.add(s.id)
+      }
+      return pending.some((row) => ownedSessionIds.has(row.session_id))
+    }
+
     let disposing: Promise<void> | undefined
     let settingsApiPromise: Promise<VelaRuntime['settings']> | undefined
     const getSettingsApi = (): Promise<VelaRuntime['settings']> => {
-      settingsApiPromise ??= import('./daemon/settings-service.ts').then(
+      settingsApiPromise ??= import('./daemon/settings-discovery.ts').then(
         (svc) =>
           svc.createRuntimeSettingsApi({
             agentDir,
             hostEnv,
             runtime: runtimeHandle,
+            ephemeral: isEphemeral,
+            credentials,
+            hasCustomCredentials: options.credentials !== undefined,
+            extraProviders: options.providers,
+            blockLocalOnlyOAuth: options.allowLocalOnlyOAuth === false,
             directModel: Boolean(options.defaultModel),
             isLarkLoaded: options.isLarkLoaded,
+            isLarkEnabledInDb: () => isChannelEnabledInDb(db, 'lark'),
             getLarkConfigError: options.getLarkConfigError,
             pauseLark: options.onPauseLarkForDiscovery,
             resumeLark: options.onResumeLarkFromDiscovery,
             createDiscoveryTransport: options.onCreateLarkDiscoveryTransport,
             verifyCredentials: options.onVerifyLarkCredentials,
+            hasPendingOutboxDeliveries,
           }),
       )
       return settingsApiPromise
@@ -718,6 +774,13 @@ export function createRuntime(
         return disposing
       },
     }
+    registerRuntimeSettingsHooksResolver(runtimeHandle, () =>
+      getSettingsApi().then((s) =>
+        import('./daemon/settings-discovery.ts').then(
+          (m) => m.getSettingsOwnerHooks(s)!,
+        ),
+      ),
+    )
     return runtimeHandle
   } catch (error) {
     if (ownsDb && db.open) db.close()

@@ -54,6 +54,19 @@ export function mapLocalRuntimeEvent(
       })
       return events
     }
+    case 'session_reset':
+      return [
+        {
+          type: 'local',
+          channel: 'local',
+          value: { ...base, type: 'session_reset', data: {} },
+        },
+        {
+          type: 'local',
+          channel: 'local',
+          value: { ...base, type: 'session', data: desktopSession },
+        },
+      ]
     case 'tool_started':
       return [
         {

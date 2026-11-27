@@ -1,15 +1,10 @@
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import {
-  connectRuntime,
-  type ProjectRecord,
-  type RuntimeSettingsState,
-  stopDaemon,
-  type VelaRuntime,
+import type {
+  ProjectRecord,
+  RuntimeSettingsState,
+  SessionRecord,
+  VelaRuntime,
 } from '@glows777/vela'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import {
   EVENT,
   type Event,
@@ -38,59 +33,17 @@ import {
   toDesktopMessage,
   toDesktopSession,
 } from './runtime-bridge.ts'
+import {
+  createManagedDaemonClient,
+  isDisconnectError,
+  MUTATING_REQUEST_METHODS,
+  safeUserDataDir,
+} from './runtime-connection.ts'
 import { fetchLastRunStatus } from './runtime-history.ts'
 import { handleDesktopRoutineRequest } from './runtime-routines.ts'
 
 const larkChatLink = (chatId: string) =>
   `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(chatId)}`
-
-function resolveDaemonEntry(): string {
-  const mainDir = dirname(fileURLToPath(import.meta.url))
-  const unpackedDir = mainDir.replace(
-    /app\.asar(?=[\\/]|$)/,
-    'app.asar.unpacked',
-  )
-  const unpackedCandidate = join(unpackedDir, 'daemon.mjs')
-  if (existsSync(unpackedCandidate)) return unpackedCandidate
-  return join(mainDir, 'daemon.mjs')
-}
-
-function buildDaemonEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = {
-    ELECTRON_RUN_AS_NODE: '1',
-  }
-  const modelEnv = process.env.VELA_MODEL?.trim()
-  if (modelEnv === 'mock' || modelEnv?.startsWith('faux:')) {
-    env.VELA_MODEL = modelEnv
-  }
-  if (process.env.VELA_DESKTOP_LARK) {
-    env.VELA_DESKTOP_LARK = process.env.VELA_DESKTOP_LARK
-  }
-  if (process.env.VELA_DESKTOP_LARK_DIR) {
-    env.VELA_DESKTOP_LARK_DIR = process.env.VELA_DESKTOP_LARK_DIR
-  }
-  if (process.env.VELA_DESKTOP_VERIFY_DISCOVERY_TIMEOUT) {
-    env.VELA_DESKTOP_VERIFY_DISCOVERY_TIMEOUT =
-      process.env.VELA_DESKTOP_VERIFY_DISCOVERY_TIMEOUT
-  }
-  if (process.env.VELA_DIR) {
-    env.VELA_DIR = process.env.VELA_DIR
-  }
-  return env
-}
-
-function resolveAgentDir(): string {
-  const envDir = process.env.VELA_DIR?.trim()
-  return envDir ? resolve(envDir) : join(homedir(), '.vela')
-}
-
-function safeUserDataDir(agentDir: string): string {
-  try {
-    return app.getPath('userData')
-  } catch {
-    return agentDir
-  }
-}
 
 export interface DesktopHostController {
   dispose(): Promise<void>
@@ -98,25 +51,12 @@ export interface DesktopHostController {
 }
 
 export async function startHost(): Promise<DesktopHostController> {
-  const agentDir = resolveAgentDir()
-  const userDataDir = safeUserDataDir(agentDir)
-  const daemonEntry = resolveDaemonEntry()
-  const runtime: VelaRuntime = await connectRuntime({
-    agentDir,
-    hostEnv: process.env,
-    daemonCommand: {
-      command: process.execPath,
-      args: [daemonEntry],
-      env: buildDaemonEnv(),
-    },
-  })
-
-  const off: (() => void)[] = []
   const clientIdTracker = new DesktopClientIdTracker()
   const lastRunStatusBySession = new Map<string, string>()
   const retryTimersBySession = new Map<string, ReturnType<typeof setTimeout>>()
   let pendingLarkDiscovery: { chatId: string; name?: string } | undefined
   let disposed = false
+  let eventChain = Promise.resolve()
 
   const publish = (event: Event) => {
     if (disposed) return
@@ -125,15 +65,26 @@ export async function startHost(): Promise<DesktopHostController> {
     }
   }
 
+  const clearTimersAndCache = () => {
+    lastRunStatusBySession.clear()
+    for (const timer of retryTimersBySession.values()) {
+      clearTimeout(timer)
+    }
+    retryTimersBySession.clear()
+  }
+
+  const conn = await createManagedDaemonClient(publish, clearTimersAndCache)
+  const userDataDir = safeUserDataDir(conn.agentDir)
+
   const withPreferences = (state: RuntimeSettingsState): SettingsState => ({
     ...state,
     stopDaemonOnQuit: loadPreferences(userDataDir).stopDaemonOnQuit,
   })
 
-  const getLarkContext = async () => {
+  const getLarkContext = async (rt: VelaRuntime = conn.runtime()) => {
     const [bindings, allProjects] = await Promise.all([
-      runtime.bindings.list({ channel: 'lark' }),
-      runtime.projects.list({ includeArchived: true }),
+      rt.bindings.list({ channel: 'lark' }),
+      rt.projects.list({ includeArchived: true }),
     ])
     const projectsById = new Map<string, ProjectRecord>(
       allProjects.map((p) => [p.id, p]),
@@ -143,12 +94,16 @@ export async function startHost(): Promise<DesktopHostController> {
   }
 
   const buildDesktopSession = async (
-    sessionId: string,
+    recordOrId: SessionRecord | string,
     context?: Awaited<ReturnType<typeof getLarkContext>>,
+    rt: VelaRuntime = conn.runtime(),
   ) => {
-    const record = await runtime.sessions.get(sessionId)
+    const record =
+      typeof recordOrId === 'string'
+        ? await rt.sessions.get(recordOrId)
+        : recordOrId
     if (!record || record.archived) return undefined
-    const ctx = context ?? (await getLarkContext())
+    const ctx = context ?? (await getLarkContext(rt))
     const ownership = resolveSessionOwnership(
       record,
       ctx.bindings,
@@ -156,12 +111,10 @@ export async function startHost(): Promise<DesktopHostController> {
       ctx.projectsById,
     )
     if (!ownership) return undefined
-    const status = await runtime.sessions
-      .status(record.id)
-      .catch(() => undefined)
+    const status = await rt.sessions.status(record.id).catch(() => undefined)
     let fallbackTask: string | undefined
     if (ownership.topic && !record.name?.trim()) {
-      const firstPage = await runtime.sessions
+      const firstPage = await rt.sessions
         .messages({ sessionId: record.id, limit: 1 })
         .catch(() => undefined)
       fallbackTask = firstPage?.messages[0]?.text.trim() || undefined
@@ -169,7 +122,7 @@ export async function startHost(): Promise<DesktopHostController> {
     const lastRunStatus =
       status?.activeRunId || record.state === 'running'
         ? 'running'
-        : await fetchLastRunStatus(runtime, lastRunStatusBySession, record.id)
+        : await fetchLastRunStatus(rt, lastRunStatusBySession, record.id)
     return {
       session: toDesktopSession(
         record,
@@ -190,263 +143,301 @@ export async function startHost(): Promise<DesktopHostController> {
   }
 
   try {
-    await runtime.ready()
-
-    let eventChain = Promise.resolve()
-    off.push(
-      runtime.events.subscribe((event) => {
-        if (event.type === 'run_started') {
-          lastRunStatusBySession.set(event.sessionId, 'running')
-          clientIdTracker.onRunStarted(event.runId, event.inboxEventIds)
-        } else if (event.type === 'run_finished') {
-          lastRunStatusBySession.set(event.sessionId, event.status)
-        }
-        eventChain = eventChain
-          .then(async () => {
-            if (disposed) return
-            const info = await buildDesktopSession(event.sessionId)
-            if (!info) return
-            if (info.channel === 'local') {
-              let mappedMsg: Message | undefined
-              let extraClientIds: string[] = []
-              if (event.type === 'message_committed') {
-                const msgText = extractMessageText(event.message.content)
-                const msgRole =
-                  event.message.role === 'user' ||
-                  event.message.role === 'assistant' ||
-                  event.message.role === 'system'
-                    ? event.message.role
-                    : 'assistant'
-                const isUser = msgRole === 'user'
-                const consumed = isUser
-                  ? clientIdTracker.consumeForUserMessage(
-                      event.sessionId,
-                      event.runId,
-                      msgText,
-                      event.messageId,
-                    )
-                  : []
-                const [firstId, ...restIds] = consumed
-                extraClientIds = restIds
-                mappedMsg = toDesktopMessage(
-                  {
+    const bindSubscriptions = (rt: VelaRuntime): (() => void) => {
+      const subs: (() => void)[] = []
+      subs.push(
+        rt.events.subscribe((event) => {
+          if (event.type === 'run_started') {
+            lastRunStatusBySession.set(event.sessionId, 'running')
+            clientIdTracker.onRunStarted(event.runId, event.inboxEventIds)
+          } else if (event.type === 'run_finished') {
+            lastRunStatusBySession.set(event.sessionId, event.status)
+          } else if (event.type === 'session_reset') {
+            lastRunStatusBySession.delete(event.sessionId)
+          }
+          eventChain = eventChain
+            .then(async () => {
+              if (disposed || conn.runtime() !== rt) return
+              const info = await buildDesktopSession(
+                event.sessionId,
+                undefined,
+                rt,
+              )
+              if (!info) return
+              if (info.channel === 'local') {
+                let mappedMsg: Message | undefined
+                let extraClientIds: string[] = []
+                if (event.type === 'message_committed') {
+                  const msgText = extractMessageText(event.message.content)
+                  const rawRole = event.message.role
+                  const msgRole =
+                    rawRole === 'user' ||
+                    rawRole === 'assistant' ||
+                    rawRole === 'tool' ||
+                    rawRole === 'system'
+                      ? rawRole
+                      : null
+                  const baseMsg = {
                     id: event.messageId,
                     sessionId: event.sessionId,
                     runId: event.runId,
-                    kind: 'message',
+                    kind: event.customType ? 'custom_message' : 'message',
                     role: msgRole,
                     text: msgText,
                     content: event.message.content,
                     display: event.display,
                     createdAt: event.timestamp,
-                  },
-                  firstId,
-                )
+                  }
+                  const visiblePreview = toDesktopMessage(baseMsg)
+                  if (visiblePreview) {
+                    const consumed =
+                      visiblePreview.role === 'user'
+                        ? clientIdTracker.consumeForUserMessage(
+                            event.sessionId,
+                            event.runId,
+                            msgText,
+                            event.messageId,
+                          )
+                        : []
+                    const [firstId, ...restIds] = consumed
+                    extraClientIds = restIds
+                    mappedMsg = firstId
+                      ? { ...visiblePreview, clientMessageId: firstId }
+                      : visiblePreview
+                  }
+                }
+                if (
+                  event.type === 'run_started' ||
+                  event.type === 'tool_started' ||
+                  event.type === 'auto_retry_end'
+                ) {
+                  const pendingTimer = retryTimersBySession.get(event.sessionId)
+                  if (pendingTimer) {
+                    clearTimeout(pendingTimer)
+                    retryTimersBySession.delete(event.sessionId)
+                  }
+                }
+                for (const desktopEvent of mapLocalRuntimeEvent(
+                  event,
+                  info.chatId,
+                  info.session,
+                  mappedMsg,
+                )) {
+                  publish(desktopEvent)
+                }
+                if (mappedMsg && extraClientIds.length > 0) {
+                  extraClientIds.forEach((extraId, idx) => {
+                    publish({
+                      type: 'local',
+                      channel: 'local',
+                      value: {
+                        version: 1,
+                        id: `evt-${event.seq}-batch-${idx + 1}`,
+                        time: event.timestamp,
+                        ...(info.chatId ? { projectId: info.chatId } : {}),
+                        sessionId: event.sessionId,
+                        ...(event.type === 'message_committed' && event.runId
+                          ? { runId: event.runId }
+                          : {}),
+                        type: 'message',
+                        data: { ...mappedMsg!, clientMessageId: extraId },
+                      },
+                    })
+                  })
+                }
+                if (event.type === 'run_finished') {
+                  clientIdTracker.onRunFinished(event.runId)
+                }
+                if (event.type === 'auto_retry_start') {
+                  const timer = setTimeout(() => {
+                    if (retryTimersBySession.get(event.sessionId) !== timer) {
+                      return
+                    }
+                    retryTimersBySession.delete(event.sessionId)
+                    if (disposed) return
+                    publish({
+                      type: 'local',
+                      channel: 'local',
+                      value: {
+                        version: 1,
+                        id: `evt-${event.seq}-retry-end`,
+                        time: new Date().toISOString(),
+                        ...(info.chatId ? { projectId: info.chatId } : {}),
+                        sessionId: event.sessionId,
+                        ...(event.runId ? { runId: event.runId } : {}),
+                        type: 'progress',
+                        data: { stage: 'retry', state: 'finished' },
+                      },
+                    })
+                  }, event.delayMs)
+                  timer.unref?.()
+                  retryTimersBySession.set(event.sessionId, timer)
+                }
+                return
               }
-              if (
-                event.type === 'run_started' ||
-                event.type === 'tool_started' ||
+
+              if (event.type === 'run_started') {
+                publish({
+                  type: 'session',
+                  channel: 'lark',
+                  value: {
+                    session: info.session,
+                    run: { type: 'started', runId: event.runId },
+                  },
+                })
+              } else if (event.type === 'run_finished') {
+                const outcome =
+                  event.status === 'failed' || event.status === 'interrupted'
+                    ? 'failed'
+                    : event.status === 'stopped'
+                      ? 'stopped'
+                      : event.silent
+                        ? 'silent'
+                        : 'done'
+                publish({
+                  type: 'session',
+                  channel: 'lark',
+                  value: {
+                    session: info.session,
+                    run: { type: 'finished', runId: event.runId, outcome },
+                  },
+                })
+                publish({
+                  type: 'status',
+                  channel: 'lark',
+                  value: {
+                    chatId: info.chatId ?? '',
+                    rootId:
+                      info.session.topic?.rootId ?? info.session.sessionId,
+                    sessionId: info.session.sessionId,
+                    text: '',
+                  },
+                })
+              } else if (event.type === 'tool_started') {
+                publish({
+                  type: 'status',
+                  channel: 'lark',
+                  value: {
+                    chatId: info.chatId ?? '',
+                    rootId:
+                      info.session.topic?.rootId ?? info.session.sessionId,
+                    sessionId: info.session.sessionId,
+                    text: event.toolName,
+                  },
+                })
+              } else if (
+                event.type === 'tool_finished' ||
                 event.type === 'auto_retry_end'
               ) {
-                const pendingTimer = retryTimersBySession.get(event.sessionId)
-                if (pendingTimer) {
-                  clearTimeout(pendingTimer)
-                  retryTimersBySession.delete(event.sessionId)
-                }
-              }
-              for (const desktopEvent of mapLocalRuntimeEvent(
-                event,
-                info.chatId,
-                info.session,
-                mappedMsg,
-              )) {
-                publish(desktopEvent)
-              }
-              if (mappedMsg && extraClientIds.length > 0) {
-                extraClientIds.forEach((extraId, idx) => {
-                  publish({
-                    type: 'local',
-                    channel: 'local',
-                    value: {
-                      version: 1,
-                      id: `evt-${event.seq}-batch-${idx + 1}`,
-                      time: event.timestamp,
-                      ...(info.chatId ? { projectId: info.chatId } : {}),
-                      sessionId: event.sessionId,
-                      ...(event.type === 'message_committed' && event.runId
-                        ? { runId: event.runId }
-                        : {}),
-                      type: 'message',
-                      data: { ...mappedMsg!, clientMessageId: extraId },
-                    },
-                  })
+                publish({
+                  type: 'status',
+                  channel: 'lark',
+                  value: {
+                    chatId: info.chatId ?? '',
+                    rootId:
+                      info.session.topic?.rootId ?? info.session.sessionId,
+                    sessionId: info.session.sessionId,
+                    text: '',
+                  },
+                })
+              } else if (event.type === 'auto_retry_start') {
+                publish({
+                  type: 'status',
+                  channel: 'lark',
+                  value: {
+                    chatId: info.chatId ?? '',
+                    rootId:
+                      info.session.topic?.rootId ?? info.session.sessionId,
+                    sessionId: info.session.sessionId,
+                    text: 'Retrying after a transient error',
+                  },
                 })
               }
-              if (event.type === 'run_finished') {
-                clientIdTracker.onRunFinished(event.runId)
-              }
-              if (event.type === 'auto_retry_start') {
-                const timer = setTimeout(() => {
-                  if (retryTimersBySession.get(event.sessionId) !== timer) {
-                    return
-                  }
-                  retryTimersBySession.delete(event.sessionId)
-                  if (disposed) return
-                  publish({
-                    type: 'local',
-                    channel: 'local',
-                    value: {
-                      version: 1,
-                      id: `evt-${event.seq}-retry-end`,
-                      time: new Date().toISOString(),
-                      ...(info.chatId ? { projectId: info.chatId } : {}),
-                      sessionId: event.sessionId,
-                      ...(event.runId ? { runId: event.runId } : {}),
-                      type: 'progress',
-                      data: { stage: 'retry', state: 'finished' },
-                    },
-                  })
-                }, event.delayMs)
-                timer.unref?.()
-                retryTimersBySession.set(event.sessionId, timer)
-              }
-              return
-            }
+            })
+            .catch(() => {})
+        }),
+      )
 
-            if (event.type === 'run_started') {
-              publish({
-                type: 'session',
-                channel: 'lark',
-                value: {
-                  session: info.session,
-                  run: { type: 'started', runId: event.runId },
-                },
-              })
-            } else if (event.type === 'run_finished') {
-              const outcome =
-                event.status === 'failed' || event.status === 'interrupted'
-                  ? 'failed'
-                  : event.status === 'stopped'
-                    ? 'stopped'
-                    : event.silent
-                      ? 'silent'
-                      : 'done'
-              publish({
-                type: 'session',
-                channel: 'lark',
-                value: {
-                  session: info.session,
-                  run: { type: 'finished', runId: event.runId, outcome },
-                },
-              })
-              publish({
-                type: 'status',
-                channel: 'lark',
-                value: {
-                  chatId: info.chatId ?? '',
-                  rootId: info.session.topic?.rootId ?? info.session.sessionId,
-                  sessionId: info.session.sessionId,
-                  text: '',
-                },
-              })
-            } else if (event.type === 'tool_started') {
-              publish({
-                type: 'status',
-                channel: 'lark',
-                value: {
-                  chatId: info.chatId ?? '',
-                  rootId: info.session.topic?.rootId ?? info.session.sessionId,
-                  sessionId: info.session.sessionId,
-                  text: event.toolName,
-                },
-              })
-            } else if (
-              event.type === 'tool_finished' ||
-              event.type === 'auto_retry_end'
-            ) {
-              publish({
-                type: 'status',
-                channel: 'lark',
-                value: {
-                  chatId: info.chatId ?? '',
-                  rootId: info.session.topic?.rootId ?? info.session.sessionId,
-                  sessionId: info.session.sessionId,
-                  text: '',
-                },
-              })
-            } else if (event.type === 'auto_retry_start') {
-              publish({
-                type: 'status',
-                channel: 'lark',
-                value: {
-                  chatId: info.chatId ?? '',
-                  rootId: info.session.topic?.rootId ?? info.session.sessionId,
-                  sessionId: info.session.sessionId,
-                  text: 'Retrying after a transient error',
-                },
-              })
-            }
-          })
-          .catch(() => {})
-      }),
-    )
+      subs.push(
+        rt.channels.subscribe((event) => {
+          if (event.type === 'channel_status') {
+            publish({
+              type: 'connection',
+              channel: event.channel,
+              value: {
+                connected: event.connected,
+                ...(event.error ? { error: event.error } : {}),
+              },
+            })
+            publish({
+              type: 'channel',
+              channel: event.channel,
+              value: {
+                type: 'channel_status',
+                connected: event.connected,
+                ...(event.error ? { error: event.error } : {}),
+                ...(event.reset ? { reset: true } : {}),
+              },
+            })
+            return
+          }
+          if (event.type === 'channel_history_changed') {
+            publish({
+              type: 'channel',
+              channel: event.channel,
+              value: {
+                type: 'channel_history_changed',
+                ...(event.chatId ? { chatId: event.chatId } : {}),
+                ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+              },
+            })
+          }
+        }),
+      )
 
-    off.push(
-      runtime.channels.subscribe((event) => {
-        if (event.type === 'channel_status') {
-          publish({
-            type: 'connection',
-            channel: event.channel,
-            value: {
-              connected: event.connected,
-              ...(event.error ? { error: event.error } : {}),
-            },
-          })
-          publish({
-            type: 'channel',
-            channel: event.channel,
-            value: {
-              type: 'channel_status',
-              connected: event.connected,
-              ...(event.error ? { error: event.error } : {}),
-              ...(event.reset ? { reset: true } : {}),
-            },
-          })
-          return
+      return () => {
+        for (const unsub of subs.splice(0)) {
+          unsub()
         }
-        if (event.type === 'channel_history_changed') {
-          publish({
-            type: 'channel',
-            channel: event.channel,
-            value: {
-              type: 'channel_history_changed',
-              ...(event.chatId ? { chatId: event.chatId } : {}),
-              ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-            },
-          })
-        }
-      }),
-    )
+      }
+    }
 
-    const isLarkEnabled = async (): Promise<boolean> => {
+    conn.setSubscriptionBinder(bindSubscriptions)
+
+    const isLarkEnabled = async (rt: VelaRuntime): Promise<boolean> => {
       try {
-        const state = await runtime.settings.get()
+        const state = await rt.settings.get()
         return state.lark.enabled
       } catch {
-        const statuses = await runtime.channels.list().catch(() => [])
+        const statuses = await rt.channels.list().catch(() => [])
         const lark = statuses.find((s) => s.name === 'lark')
         return lark ? lark.enabled : true
       }
     }
 
-    const sessionsFor = async (channel: string, chatId?: string) => {
-      const ctx = await getLarkContext()
+    const sessionsFor = async (
+      rt: VelaRuntime,
+      channel: string,
+      chatId?: string,
+    ) => {
+      const ctx = await getLarkContext(rt)
       if (channel === 'lark') {
-        const enabled = await isLarkEnabled()
-        if (!enabled) return []
-        const all = await runtime.sessions.list({ includeArchived: false })
+        if (!(await isLarkEnabled(rt))) return []
+        const all = await rt.sessions.list({ includeArchived: false })
+        const matching = all.filter((record) => {
+          const ownership = resolveSessionOwnership(
+            record,
+            ctx.bindings,
+            ctx.larkProjectIds,
+            ctx.projectsById,
+          )
+          return (
+            ownership?.channel === 'lark' &&
+            (!chatId || ownership.chatId === chatId)
+          )
+        })
         const built = await Promise.all(
-          all.map((record) => buildDesktopSession(record.id, ctx)),
+          matching.map((record) => buildDesktopSession(record, ctx, rt)),
         )
         return built
           .filter(
@@ -454,20 +445,27 @@ export async function startHost(): Promise<DesktopHostController> {
               entry,
             ): entry is NonNullable<
               Awaited<ReturnType<typeof buildDesktopSession>>
-            > =>
-              Boolean(
-                entry &&
-                  entry.channel === 'lark' &&
-                  !entry.isUnusedLarkHub &&
-                  (!chatId || entry.chatId === chatId),
-              ),
+            > => Boolean(entry && !entry.isUnusedLarkHub),
           )
           .map((entry) => entry.session)
       }
       if (channel === 'local') {
-        const all = await runtime.sessions.list({ includeArchived: false })
+        const all = await rt.sessions.list({ includeArchived: false })
+        const matching = all.filter((record) => {
+          const ownership = resolveSessionOwnership(
+            record,
+            ctx.bindings,
+            ctx.larkProjectIds,
+            ctx.projectsById,
+          )
+          if (ownership?.channel !== 'local') return false
+          if (!chatId) return true
+          return chatId === 'quick'
+            ? ownership.chatKind === 'quick'
+            : ownership.chatId === chatId
+        })
         const built = await Promise.all(
-          all.map((record) => buildDesktopSession(record.id, ctx)),
+          matching.map((record) => buildDesktopSession(record, ctx, rt)),
         )
         return built
           .filter(
@@ -475,42 +473,39 @@ export async function startHost(): Promise<DesktopHostController> {
               entry,
             ): entry is NonNullable<
               Awaited<ReturnType<typeof buildDesktopSession>>
-            > =>
-              Boolean(
-                entry &&
-                  entry.channel === 'local' &&
-                  (!chatId
-                    ? true
-                    : chatId === 'quick'
-                      ? entry.session.chatKind === 'quick'
-                      : entry.chatId === chatId),
-              ),
+            > => Boolean(entry),
           )
           .map((entry) => entry.session)
       }
       throw new Error(`Unknown channel: ${channel}`)
     }
 
-    const listProjects = async (): Promise<Project[]> => {
-      const ctx = await getLarkContext()
-      const allProjects = await runtime.projects.list({
+    const listProjects = async (rt: VelaRuntime): Promise<Project[]> => {
+      const ctx = await getLarkContext(rt)
+      const allProjects = await rt.projects.list({
         includeArchived: false,
       })
-      const localProjects: LocalProject[] = allProjects
-        .filter((p) => !ctx.larkProjectIds.has(p.id))
-        .map((p) => ({
+      const localProjects: LocalProject[] = []
+      for (const p of allProjects) {
+        if (ctx.larkProjectIds.has(p.id)) continue
+        const localCwd =
+          p.cwd ??
+          (p.defaultLocation?.environment === 'local'
+            ? p.defaultLocation.cwd
+            : undefined)
+        if (!localCwd) continue
+        localProjects.push({
           id: p.id,
           channel: 'local' as const,
-          cwd: p.cwd ?? agentDir,
+          cwd: localCwd,
           name: p.name,
-        }))
+        })
+      }
 
-      const larkEnabled = await isLarkEnabled()
+      const larkEnabled = await isLarkEnabled(rt)
       const larkProjects: Project[] = []
       if (larkEnabled) {
-        const adapterChats = await runtime.channels
-          .chats('lark')
-          .catch(() => [])
+        const adapterChats = await rt.channels.chats('lark').catch(() => [])
         const seenChatIds = new Set<string>()
         for (const root of ctx.bindings) {
           if (root.threadId || !root.enabled || !root.projectId) continue
@@ -549,12 +544,19 @@ export async function startHost(): Promise<DesktopHostController> {
       return [...localProjects, ...larkProjects]
     }
 
-    const connectionState = async (channel: string) => {
-      if (channel === 'local') return { connected: true }
+    const connectionState = async (rt: VelaRuntime, channel: string) => {
+      if (channel === 'local') {
+        return conn.disconnected
+          ? {
+              connected: false,
+              error: 'Background service disconnected. Reconnecting…',
+            }
+          : { connected: true }
+      }
       if (channel === 'lark') {
-        const statuses = await runtime.channels.list().catch(() => [])
+        const statuses = await rt.channels.list().catch(() => [])
         const larkStatus = statuses.find((s) => s.name === 'lark')
-        const state = await runtime.settings.get().catch(() => undefined)
+        const state = await rt.settings.get().catch(() => undefined)
         const enabled = state
           ? state.lark.enabled
           : larkStatus?.enabled !== false
@@ -568,13 +570,13 @@ export async function startHost(): Promise<DesktopHostController> {
       throw new Error(`Unknown channel: ${channel}`)
     }
 
-    const handle = async (request: Request) => {
+    const executeRequest = async (rt: VelaRuntime, request: Request) => {
       switch (request.method) {
         case 'channels': {
-          const state = await runtime.settings.get().catch(() => undefined)
+          const state = await rt.settings.get().catch(() => undefined)
           const larkAvailable = state
             ? state.lark.enabled && !state.lark.startupError
-            : await isLarkEnabled()
+            : await isLarkEnabled(rt)
           return [
             { name: 'local', description: 'Work on this computer' },
             ...(larkAvailable
@@ -583,19 +585,24 @@ export async function startHost(): Promise<DesktopHostController> {
           ]
         }
         case 'settings':
-          return withPreferences(await runtime.settings.get())
+          return withPreferences(await rt.settings.get())
         case 'saveModel':
-          return withPreferences(
-            await runtime.settings.saveModel(request.input),
-          )
-        case 'saveLark':
-          return withPreferences(await runtime.settings.saveLark(request.input))
+          return withPreferences(await rt.settings.saveModel(request.input))
+        case 'saveLark': {
+          if (
+            ('enabled' in request.input && request.input.enabled === false) ||
+            (!('enabled' in request.input) && !('removeChat' in request.input))
+          ) {
+            pendingLarkDiscovery = undefined
+          }
+          return withPreferences(await rt.settings.saveLark(request.input))
+        }
         case 'savePreferences': {
           savePreferences(request.input, userDataDir)
-          return withPreferences(await runtime.settings.get())
+          return withPreferences(await rt.settings.get())
         }
         case 'discoverLarkGroup': {
-          const found = await runtime.settings.discoverLarkGroup()
+          const found = await rt.settings.discoverLarkGroup()
           pendingLarkDiscovery = found
           return found
         }
@@ -605,20 +612,20 @@ export async function startHost(): Promise<DesktopHostController> {
           }
           const chatId = pendingLarkDiscovery.chatId
           pendingLarkDiscovery = undefined
-          await runtime.settings.confirmLarkGroup(chatId)
+          await rt.settings.confirmLarkGroup(chatId)
           return
         }
         case 'cancelLarkSetup':
           pendingLarkDiscovery = undefined
-          return runtime.settings.cancelLarkSetup()
+          return rt.settings.cancelLarkSetup()
         case 'sessions':
-          return sessionsFor(request.channel, request.chatId)
+          return sessionsFor(rt, request.channel, request.chatId)
         case 'createSession':
-          return createDesktopSession(runtime, request.input)
+          return createDesktopSession(rt, request.input)
         case 'renameSession':
-          return renameDesktopSession(runtime, request.input)
+          return renameDesktopSession(rt, request.input)
         case 'deleteSession': {
-          const deleted = await deleteDesktopSession(runtime, request.input)
+          const deleted = await deleteDesktopSession(rt, request.input)
           if (deleted) {
             publish({
               type: 'channel',
@@ -629,22 +636,22 @@ export async function startHost(): Promise<DesktopHostController> {
           return deleted
         }
         case 'connection':
-          return connectionState(request.channel)
+          return connectionState(rt, request.channel)
         case 'submit':
           return submitDesktopMessage(
-            runtime,
-            await isLarkEnabled(),
+            rt,
+            await isLarkEnabled(rt),
             clientIdTracker,
             request,
           )
         case 'stop':
-          return stopDesktopTarget(runtime, request)
+          return stopDesktopTarget(rt, request)
         case 'projects':
-          return listProjects()
+          return listProjects(rt)
         case 'openProject':
-          return openLocalDesktopProject(runtime, request.input)
+          return openLocalDesktopProject(rt, request.input)
         case 'removeProject': {
-          const removed = await removeDesktopProject(runtime, request.input)
+          const removed = await removeDesktopProject(rt, request.input)
           if (removed) {
             publish({
               type: 'channel',
@@ -665,7 +672,7 @@ export async function startHost(): Promise<DesktopHostController> {
           return result.canceled ? undefined : result.filePaths[0]
         }
         case 'messages':
-          return fetchDesktopMessages(runtime, request.input, clientIdTracker)
+          return fetchDesktopMessages(rt, request.input, clientIdTracker)
         case 'openMessageLink': {
           const url =
             typeof request.url === 'string' && URL.canParse(request.url)
@@ -684,10 +691,10 @@ export async function startHost(): Promise<DesktopHostController> {
           clipboard.writeText(request.text)
           return
         case 'openLarkChat': {
-          if (!(await isLarkEnabled())) {
+          if (!(await isLarkEnabled(rt))) {
             throw new Error('Lark is not available in this app')
           }
-          const chats = await runtime.channels.chats('lark').catch(() => [])
+          const chats = await rt.channels.chats('lark').catch(() => [])
           if (!chats.some((chat) => chat.chatId === request.chatId)) {
             throw new Error('Open a Lark group that is enabled in this app')
           }
@@ -698,9 +705,33 @@ export async function startHost(): Promise<DesktopHostController> {
         case 'createRoutine':
         case 'editRoutine':
         case 'cancelRoutine':
-          return handleDesktopRoutineRequest(runtime, {}, request)
+          return handleDesktopRoutineRequest(rt, {}, request)
         default:
           throw new Error('Unknown desktop request')
+      }
+    }
+
+    const handle = async (request: Request) => {
+      const mutating = MUTATING_REQUEST_METHODS.has(request.method)
+      if (conn.disconnected) {
+        if (mutating) {
+          void conn.reconnect().catch(() => {})
+          throw new Error(
+            'Background service disconnected and is reconnecting. Please try again.',
+          )
+        }
+        await conn.reconnect()
+      }
+      try {
+        return await executeRequest(conn.runtime(), request)
+      } catch (error) {
+        if (!isDisconnectError(error) || disposed) throw error
+        if (mutating) {
+          void conn.reconnect().catch(() => {})
+          throw error
+        }
+        const recovered = await conn.reconnect()
+        return executeRequest(recovered, request)
       }
     }
 
@@ -710,68 +741,28 @@ export async function startHost(): Promise<DesktopHostController> {
       if (disposed) return
       disposed = true
       ipcMain.removeHandler(REQUEST)
-      for (const timer of retryTimersBySession.values()) {
-        clearTimeout(timer)
-      }
-      retryTimersBySession.clear()
-      for (const unregister of off.splice(0)) {
-        unregister()
-      }
+      clearTimersAndCache()
       await eventChain.catch(() => {})
-      await runtime.dispose()
+      await conn.dispose()
     }
 
     const beforeQuit = async (): Promise<boolean> => {
       const prefs = loadPreferences(userDataDir)
-      if (!prefs.stopDaemonOnQuit) {
-        await dispose()
-        return true
+      const quitOk = await conn.confirmAndStopBeforeQuit(prefs.stopDaemonOnQuit)
+      if (quitOk) {
+        disposed = true
+        ipcMain.removeHandler(REQUEST)
+        clearTimersAndCache()
+        await eventChain.catch(() => {})
       }
-      let hasActiveWork = false
-      try {
-        const activeSessions = await runtime.sessions.list({
-          includeArchived: false,
-        })
-        for (const s of activeSessions) {
-          const st = await runtime.sessions.status(s.id).catch(() => undefined)
-          if (st?.activeRunId || st?.runningJobs || s.state === 'running') {
-            hasActiveWork = true
-            break
-          }
-        }
-      } catch {
-        hasActiveWork = false
-      }
-      if (hasActiveWork) {
-        const owner =
-          BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-        const messageBoxOptions: Electron.MessageBoxOptions = {
-          type: 'question',
-          buttons: ['Stop and quit', 'Cancel'],
-          defaultId: 0,
-          cancelId: 1,
-          message: 'A session or routine is still running.',
-          detail: 'Stopping the background service will interrupt active work.',
-        }
-        const choice = owner
-          ? await dialog.showMessageBox(owner, messageBoxOptions)
-          : await dialog.showMessageBox(messageBoxOptions)
-        if (choice.response !== 0) {
-          return false
-        }
-      }
-      await dispose()
-      await stopDaemon({ agentDir, hostEnv: process.env }).catch(() => {})
-      return true
+      return quitOk
     }
 
     return { dispose, beforeQuit }
   } catch (error) {
     ipcMain.removeHandler(REQUEST)
-    for (const unregister of off.splice(0)) {
-      unregister()
-    }
-    await runtime.dispose().catch(() => {})
+    clearTimersAndCache()
+    await conn.dispose()
     throw error
   }
 }

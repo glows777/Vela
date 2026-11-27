@@ -297,20 +297,20 @@ async function resolveMessageSource(
   if (!session) {
     throw new Error(`Session ${sessionId} not found`)
   }
-  const bindings = await runtime.bindings.list({ channel: 'lark' })
-  const enabledBinding = bindings.find(
-    (b) => b.enabled && b.sessionId === sessionId,
-  )
-  if (enabledBinding) {
-    const root = enabledBinding.threadId
+  const [bindings, statuses] = await Promise.all([
+    runtime.bindings.list({ channel: 'lark' }),
+    runtime.channels.list().catch(() => []),
+  ])
+  const larkChannelEnabled =
+    statuses.find((s) => s.name === 'lark')?.enabled !== false
+  const anyBinding = bindings.find((b) => b.sessionId === sessionId)
+  if (anyBinding) {
+    const root = anyBinding.threadId
       ? bindings.find(
-          (b) =>
-            b.externalId === enabledBinding.externalId &&
-            !b.threadId &&
-            b.enabled,
+          (b) => b.externalId === anyBinding.externalId && !b.threadId,
         )
-      : enabledBinding
-    if (!root) {
+      : anyBinding
+    if (!larkChannelEnabled || !anyBinding.enabled || !root?.enabled) {
       throw new Error(`Unknown or disabled Lark chat for session ${sessionId}`)
     }
     return 'lark'
@@ -327,7 +327,7 @@ async function resolveMessageSource(
       const root = bindings.find(
         (b) => b.projectId === project.id && !b.threadId && b.enabled,
       )
-      if (root && project.hubSessionId === sessionId) {
+      if (larkChannelEnabled && root && project.hubSessionId === sessionId) {
         return 'lark'
       }
       throw new Error(`Unknown or disabled Lark session ${sessionId}`)

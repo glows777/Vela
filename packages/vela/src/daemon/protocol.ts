@@ -16,6 +16,8 @@ import type {
 export const DAEMON_PROTOCOL_VERSION = 4
 const MAX_WIRE_FRAME_BYTES = 128 * 1024 * 1024
 
+declare const __VELA_SDK_VERSION__: string | undefined
+
 export interface DaemonHello {
   protocolVersion: number
   appVersion: string
@@ -94,11 +96,18 @@ export type DaemonWireMessage =
 
 let cachedVersion: string | undefined
 
-/** Reads the Vela package version (cached), falling back gracefully for temp single-file bundles. */
+/** Reads the Vela package version (cached), honoring build-time injection in single-file bundles. */
 export function getAppVersion(): string {
   if (cachedVersion !== undefined) return cachedVersion
+  if (
+    typeof __VELA_SDK_VERSION__ === 'string' &&
+    __VELA_SDK_VERSION__.length > 0
+  ) {
+    cachedVersion = __VELA_SDK_VERSION__
+    return cachedVersion
+  }
   let cur = dirname(fileURLToPath(import.meta.url))
-  for (let depth = 0; depth < 5; depth++) {
+  for (let depth = 0; depth < 6; depth++) {
     const pkgPath = join(cur, 'package.json')
     if (existsSync(pkgPath)) {
       try {
@@ -108,9 +117,8 @@ export function getAppVersion(): string {
         }
         if (
           typeof parsed.version === 'string' &&
-          (parsed.name === '@glows777/vela' ||
-            parsed.name === 'vela-workspace' ||
-            depth >= 2)
+          parsed.version !== '0.0.0' &&
+          (parsed.name === '@glows777/vela' || parsed.name === 'vela-workspace')
         ) {
           cachedVersion = parsed.version
           return cachedVersion

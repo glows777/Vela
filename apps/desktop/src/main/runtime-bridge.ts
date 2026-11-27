@@ -137,6 +137,9 @@ export function toDesktopSession(
     chatKind: ownership.chatKind,
     projectId: ownership.projectId,
     ...(ownership.topic ? { topic: ownership.topic } : {}),
+    ...(ownership.channel === 'local' && session.kind === 'hub'
+      ? { isHub: true }
+      : {}),
     task: session.name?.trim() || fallbackTask || '',
     state: mapSessionState(session, status, lastRunStatus),
     requester:
@@ -341,19 +344,7 @@ export async function removeDesktopProject(
   if (!project || project.archived || larkProjectIds.has(project.id)) {
     throw new Error(`Unknown project ${input.projectId}`)
   }
-  const sessions = await runtime.sessions.list({
-    projectId: project.id,
-    includeArchived: false,
-  })
-  for (const s of sessions) {
-    const status = await runtime.sessions.status(s.id).catch(() => undefined)
-    if (status?.activeRunId) {
-      await runtime.stop(s.id, 'Project removed', {
-        expectedRunId: status.activeRunId,
-      })
-    }
-  }
-  return runtime.projects.remove(project.id, { deleteSessions: true })
+  return runtime.projects.remove(project.id)
 }
 
 export async function submitDesktopMessage(
@@ -394,7 +385,7 @@ export async function submitDesktopMessage(
         includeArchived: false,
       })
       session =
-        existingSessions[0] ??
+        existingSessions.find((s) => s.kind !== 'hub') ??
         (await runtime.sessions.create({
           projectId: project.id,
           kind: 'work',
@@ -415,11 +406,14 @@ export async function submitDesktopMessage(
         .status(session.id)
         .catch(() => undefined)
       if (status?.activeRunId) {
+        const steerImages = msg.images?.length
+          ? msg.images.map(({ data, mimeType }) => ({ data, mimeType }))
+          : undefined
         const cancelSteerTrack = msg.clientMessageId
           ? clientIdTracker.trackSteer(session.id, text, msg.clientMessageId)
           : undefined
         try {
-          await runtime.steer(session.id, text)
+          await runtime.steer(session.id, text, steerImages)
         } catch (error) {
           cancelSteerTrack?.()
           throw error

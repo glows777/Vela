@@ -11,6 +11,8 @@ export type Session = {
   /** Linked project id, or `null` for Quick Chat sessions. */
   projectId: string | null
   topic?: { rootId: string; threadId: string }
+  /** True when this Local session is a legacy pre-cutover triage hub. */
+  isHub?: boolean
   task: string
   state: 'running' | 'queued' | 'waiting' | 'done' | 'stopped'
   requester: { id: string; name: string }
@@ -240,6 +242,7 @@ type LocalEvent = {
       type: 'reset'
       data: { reason: 'connected'; reload: ('sessions' | 'messages')[] }
     }
+  | { type: 'session_reset'; data: Record<string, never> }
   | { type: 'run_started'; data: Record<string, never> }
   | {
       type: 'run_finished'

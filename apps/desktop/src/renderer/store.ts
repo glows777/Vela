@@ -9,7 +9,6 @@ import type {
   Project,
   Session,
   SettingsState,
-  SubmitReceipt,
 } from '../shared/bridge.ts'
 import { errorMessage } from './errors.ts'
 import { sessionProjectId } from './format.ts'
@@ -21,8 +20,11 @@ import {
 import {
   applyLocalEventState,
   initialSnapshot,
+  larkNotice,
   mergeSessionMessages,
   type Snapshot,
+  sessionMap,
+  topicTitle,
   withoutKey,
 } from './store-state.ts'
 import { vela } from './vela.ts'
@@ -99,6 +101,20 @@ function mergeSessions(sessions: Session[]) {
   publish({ sessions: merged })
 }
 
+const historyGeneration = new Map<string, number>()
+
+const bumpHistoryGeneration = (sessionId: string): number => {
+  const next = (historyGeneration.get(sessionId) ?? 0) + 1
+  historyGeneration.set(sessionId, next)
+  return next
+}
+
+const clearLocalSessionState = (sessionId: string) => {
+  bumpHistoryGeneration(sessionId)
+  complete.delete(sessionId)
+  loading.delete(sessionId)
+}
+
 /** One forward page walk for Local/Quick Chat history. */
 async function readLocalHistory(
   place: string,
@@ -106,8 +122,13 @@ async function readLocalHistory(
   firstOnly: boolean,
 ) {
   const report = pageError(place)
+  const generation = historyGeneration.get(sessionId) ?? 0
   try {
-    mergeMessages(sessionId, await readLocalHistoryPages(sessionId, firstOnly))
+    const incoming = await readLocalHistoryPages(sessionId, firstOnly)
+    if ((historyGeneration.get(sessionId) ?? 0) !== generation) {
+      return false
+    }
+    mergeMessages(sessionId, incoming)
     return true
   } catch (cause) {
     report(errorMessage(cause))
@@ -285,16 +306,19 @@ async function readFrame() {
     ...(names.includes('local') ? await vela.sessions('local') : []),
     ...(names.includes('lark') ? await vela.sessions('lark') : []),
   ]
+  const connectionChannels =
+    projects.some((p) => p.channel === 'lark') && !names.includes('lark')
+      ? [...names, 'lark']
+      : names
   const connections = Object.fromEntries(
     await Promise.all(
-      names.map(async (name) => [name, await connectionFor(name)] as const),
+      connectionChannels.map(
+        async (name) => [name, await connectionFor(name)] as const,
+      ),
     ),
   )
   return { projects, sessions, connections }
 }
-
-const sessionMap = (sessions: Session[]) =>
-  Object.fromEntries(sessions.map((session) => [session.sessionId, session]))
 
 async function refresh() {
   const report = pageError()
@@ -363,24 +387,30 @@ export async function openProject(input: { cwd: string; name?: string }) {
 }
 
 export async function removeProject(projectId: string): Promise<boolean> {
-  const removed = await vela.removeProject({ projectId })
-  if (removed) {
-    const nextSessions = { ...snapshot.sessions }
-    const nextMessages = { ...snapshot.messages }
-    for (const [sid, session] of Object.entries(nextSessions)) {
-      if (session.projectId === projectId) {
-        delete nextSessions[sid]
-        delete nextMessages[sid]
-        complete.delete(sid)
+  try {
+    const removed = await vela.removeProject({ projectId })
+    if (removed) {
+      const nextSessions = { ...snapshot.sessions }
+      const nextMessages = { ...snapshot.messages }
+      for (const [sid, session] of Object.entries(nextSessions)) {
+        if (session.projectId === projectId) {
+          delete nextSessions[sid]
+          delete nextMessages[sid]
+          clearLocalSessionState(sid)
+        }
       }
+      publish({
+        projects: snapshot.projects.filter((p) => p.id !== projectId),
+        sessions: nextSessions,
+        messages: nextMessages,
+        error: '',
+      })
     }
-    publish({
-      projects: snapshot.projects.filter((p) => p.id !== projectId),
-      sessions: nextSessions,
-      messages: nextMessages,
-    })
+    return removed
+  } catch (cause) {
+    pageError()(errorMessage(cause))
+    return false
   }
-  return removed
 }
 
 export async function createSession(
@@ -408,18 +438,27 @@ export async function renameSession(
   return renamed
 }
 
-export async function deleteSession(sessionId: string): Promise<boolean> {
-  const deleted = await vela.deleteSession({ sessionId })
-  if (deleted) {
-    complete.delete(sessionId)
-    publish({
-      sessions: withoutKey(snapshot.sessions, sessionId),
-      messages: withoutKey(snapshot.messages, sessionId),
-      failures: withoutKey(snapshot.failures, sessionId),
-      progress: withoutKey(snapshot.progress, sessionId),
-    })
+export async function deleteSession(
+  sessionId: string,
+  report = pageError(),
+): Promise<boolean> {
+  try {
+    const deleted = await vela.deleteSession({ sessionId })
+    if (deleted) {
+      clearLocalSessionState(sessionId)
+      publish({
+        sessions: withoutKey(snapshot.sessions, sessionId),
+        messages: withoutKey(snapshot.messages, sessionId),
+        failures: withoutKey(snapshot.failures, sessionId),
+        progress: withoutKey(snapshot.progress, sessionId),
+      })
+      report('')
+    }
+    return deleted
+  } catch (cause) {
+    report(errorMessage(cause))
+    return false
   }
-  return deleted
 }
 
 /** A Local submission: optimistic bubble is replaced by the recorded copy. */
@@ -471,16 +510,6 @@ const placeOf = (sessionId: string | undefined) =>
     ? 'group'
     : 'topic'
 
-const larkNotice = (result: SubmitReceipt, place: string) => {
-  const reason = result.error
-    ? ` ${result.error.trim().replace(/\.$/, '')}.`
-    : ''
-  if (result.outcome === 'posted') {
-    return `Vela posted it in the ${place}, but the rest of the submission failed.${reason} It did not send it again; check the ${place}.`
-  }
-  return `It may have been posted.${reason} Vela did not send it again; check the ${place} before sending.`
-}
-
 async function submitLark(
   input: LarkSubmit,
   {
@@ -529,12 +558,6 @@ async function submitLark(
   }
 }
 
-const topicTitle = (text: string) =>
-  text
-    .split('\n')
-    .find((line) => line.trim() !== '')
-    ?.trim() ?? text.trim()
-
 /** A message in a Lark group chat. */
 export async function sendInProject(
   project: Extract<Project, { channel: 'lark' }>,
@@ -557,44 +580,56 @@ export async function startSession(
 ) {
   const body = text.trim()
   if (!body) return false
+  const reportHome = pageError('home')
+  if (body.length > 100_000) {
+    reportHome('Message is too long (maximum 100,000 characters)')
+    return false
+  }
   const generation = viewGeneration
-  if (destination === 'quick') {
-    const session = await createSession(null, body.slice(0, 60))
+  if (destination === 'quick' || destination.channel === 'local') {
+    const targetProjectId = destination === 'quick' ? null : destination.id
+    let session: Session
+    try {
+      session = await createSession(targetProjectId, body.slice(0, 60))
+    } catch (cause) {
+      reportHome(errorMessage(cause))
+      return false
+    }
     const accepted = await sendLocal(
-      null,
+      targetProjectId,
       session.sessionId,
       body,
-      pageError('quick'),
+      reportHome,
     )
-    if (accepted && generation === viewGeneration) {
+    if (!accepted) {
+      await vela.deleteSession({ sessionId: session.sessionId }).catch(() => {})
+      clearLocalSessionState(session.sessionId)
+      publish({
+        sessions: withoutKey(snapshot.sessions, session.sessionId),
+        messages: withoutKey(snapshot.messages, session.sessionId),
+      })
+      return false
+    }
+    if (generation === viewGeneration) {
       openDestination(session.sessionId)
     }
-    return accepted
+    return true
   }
-  const open = (notice: string, createdSessionId?: string) => {
-    if (generation !== viewGeneration) return
-    openDestination(createdSessionId)
-    if (notice) pageError(`project:${destination.id}`)(notice)
-  }
-  if (destination.channel === 'lark') {
-    return submitLark(
-      {
-        chatId: destination.id,
-        newTopic: { title: topicTitle(body) },
-        text: body,
+  return submitLark(
+    {
+      chatId: destination.id,
+      newTopic: { title: topicTitle(body) },
+      text: body,
+    },
+    {
+      report: reportHome,
+      onAccepted: (notice) => {
+        if (generation !== viewGeneration) return
+        openDestination()
+        if (notice) pageError(`project:${destination.id}`)(notice)
       },
-      { onAccepted: (notice) => open(notice) },
-    )
-  }
-  const session = await createSession(destination.id, body.slice(0, 60))
-  const accepted = await sendLocal(
-    destination.id,
-    session.sessionId,
-    body,
-    pageError(`project:${destination.id}`),
+    },
   )
-  if (accepted) open('', session.sessionId)
-  return accepted
 }
 
 /** Send a message inside a specific session (Quick chat, Local work session, or Lark topic). */
@@ -656,6 +691,7 @@ function apply(value: Extract<Event, { type: 'local' }>['value']) {
     publish,
     mergeSessions,
     mergeMessages,
+    onSessionReset: clearLocalSessionState,
   })
 }
 

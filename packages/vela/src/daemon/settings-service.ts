@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadOwnerRuntimeConfig, type VelaSettings } from '../config/index.ts'
-import { resolveModel } from '../driver/diagnostics.ts'
 import {
   type Credential,
   type CredentialStore,
@@ -11,7 +10,7 @@ import {
   type ThinkingLevel,
   verifyProviderModel,
 } from '../driver/index.ts'
-import type { LarkTransport } from '../lark/transport.ts'
+import { ModelRegistry } from '../providers/models/index.ts'
 import { loadModels } from '../providers/models-config.ts'
 import type { VelaRuntime } from '../runtime-sdk-types.ts'
 import { saveLarkSection, saveModelSetup, usableModel } from '../settings.ts'
@@ -21,7 +20,6 @@ import {
   THINKING_LEVELS,
 } from '../shared/provider-types.ts'
 import type {
-  RuntimeLarkDiscoveryGroup,
   RuntimeLarkSetupInput,
   RuntimeModelSetupInput,
   RuntimeSettingsProvider,
@@ -29,7 +27,6 @@ import type {
 } from '../shared/settings-types.ts'
 
 const VERIFY_TIMEOUT_MS = 60_000
-const DISCOVERY_TIMEOUT_MS = 120_000
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -52,7 +49,7 @@ function readRawSettingsMetadata(agentDir: string): {
   return { custom, rawLark }
 }
 
-function readEffectiveOwnerConfig(
+export function readEffectiveOwnerConfig(
   agentDir: string,
   hostEnv: Record<string, string | undefined>,
 ): { settings: VelaSettings; larkParseError?: string } {
@@ -63,7 +60,7 @@ function readEffectiveOwnerConfig(
   }
 }
 
-function isLarkDisabledByExtension(
+export function isLarkDisabledByExtension(
   extensions: readonly string[] | undefined,
 ): boolean {
   let disabled = false
@@ -90,7 +87,7 @@ export function larkStartupDiagnostic(cause: unknown): string {
   return 'Lark could not start. Check lark in config.json, then try again.'
 }
 
-function resolveLarkSection(
+export function resolveLarkSection(
   settings: VelaSettings,
   hostEnv: Record<string, string | undefined>,
 ): Record<string, unknown> {
@@ -103,7 +100,7 @@ function resolveLarkSection(
   }
 }
 
-function parseLarkChatIds(section: Record<string, unknown>): string[] {
+export function parseLarkChatIds(section: Record<string, unknown>): string[] {
   const entries =
     typeof section.chats === 'string' ? section.chats.split(',') : section.chats
   const chats = Array.isArray(entries)
@@ -122,13 +119,38 @@ function parseLarkChatIds(section: Record<string, unknown>): string[] {
   return [...new Set(chats)]
 }
 
+function isLocalOnlyOAuthBlocked(
+  ref: string,
+  providers: Record<string, ProviderDefinition>,
+  credentials: CredentialStore,
+  blockLocalOnlyOAuth?: boolean,
+): { blocked: boolean; provider?: string } {
+  if (!blockLocalOnlyOAuth) return { blocked: false }
+  const slash = ref.indexOf('/')
+  if (slash <= 0) return { blocked: false }
+  const provider = ref.slice(0, slash)
+  const cred = credentials.get(provider)
+  const def = providers[provider]
+  const registry = new ModelRegistry(providers, credentials, undefined, {
+    blockLocalOnlyOAuth: true,
+  })
+  const blocked =
+    cred?.type === 'oauth' &&
+    Boolean(cred.localOnly || def?.oauth?.localOnly) &&
+    !registry.authSource(provider)
+  return blocked ? { blocked: true, provider } : { blocked: false }
+}
+
 function resolvesModel(
   ref: string,
   providers: Record<string, ProviderDefinition>,
   credentials: CredentialStore,
+  blockLocalOnlyOAuth?: boolean,
 ): boolean {
   try {
-    resolveModel(ref, { providers, credentials })
+    new ModelRegistry(providers, credentials, undefined, {
+      blockLocalOnlyOAuth,
+    }).resolve(ref)
     return true
   } catch {
     return false
@@ -152,46 +174,82 @@ export async function getRuntimeSettingsState(params: {
   agentDir: string
   hostEnv: Record<string, string | undefined>
   runtime: VelaRuntime
+  ephemeral?: boolean
+  credentials?: CredentialStore
+  hasCustomCredentials?: boolean
+  extraProviders?: Record<string, ProviderDefinition>
+  blockLocalOnlyOAuth?: boolean
   directModel?: boolean
   isLarkLoaded?: () => boolean
+  isLarkEnabledInDb?: () => boolean
   getLarkConfigError?: () => string | undefined
 }): Promise<RuntimeSettingsState> {
   const { agentDir, hostEnv, runtime } = params
   try {
     const [{ settings, larkParseError }, { custom, rawLark }, statuses] =
-      await Promise.all([
-        Promise.resolve(readEffectiveOwnerConfig(agentDir, hostEnv)),
-        Promise.resolve(readRawSettingsMetadata(agentDir)),
-        runtime.channels.list(),
-      ])
+      params.ephemeral
+        ? [
+            { settings: {} as VelaSettings, larkParseError: undefined },
+            {
+              custom: new Set<string>(),
+              rawLark: {} as Record<string, unknown>,
+            },
+            await runtime.channels.list(),
+          ]
+        : await Promise.all([
+            Promise.resolve(readEffectiveOwnerConfig(agentDir, hostEnv)),
+            Promise.resolve(readRawSettingsMetadata(agentDir)),
+            runtime.channels.list(),
+          ])
     const available = await runtime.models({ env: hostEnv })
-    const providersMap = loadModels({
-      agentDir,
-      env: hostEnv,
-      providers: settings.providers ?? {},
-    })
-    const credentials = fileCredentialStore(join(agentDir, 'auth.json'))
+    const loadedProviders = params.ephemeral
+      ? {}
+      : loadModels({
+          agentDir,
+          env: hostEnv,
+          providers: settings.providers ?? {},
+        })
+    const providersMap: Record<string, ProviderDefinition> = {
+      ...loadedProviders,
+      ...(params.extraProviders ?? {}),
+    }
+    const credentials =
+      params.credentials ??
+      (params.ephemeral
+        ? memoryCredentialStore()
+        : fileCredentialStore(join(agentDir, 'auth.json')))
+    const modelRegistry = new ModelRegistry(
+      providersMap,
+      credentials,
+      undefined,
+      { blockLocalOnlyOAuth: params.blockLocalOnlyOAuth },
+    )
     const providers: RuntimeSettingsProvider[] = Object.entries(
       providersMap,
-    ).map(([name, definition]: [string, ProviderDefinition]) => ({
-      name,
-      ...(definition.authSource
-        ? { credential: definition.authSource(credentials.get(name)) }
-        : {}),
-      custom: custom.has(name),
-      models: (definition.models ?? []).map(
-        ({ id, contextWindow, reasoning }) => ({
-          id,
-          ...(contextWindow === undefined ? {} : { contextWindow }),
-          ...(reasoning === undefined ? {} : { reasoning }),
-        }),
-      ),
-    }))
+    ).map(([name, definition]: [string, ProviderDefinition]) => {
+      const source = modelRegistry.authSource(name)
+      return {
+        name,
+        ...(source ? { credential: source } : {}),
+        custom: custom.has(name),
+        models: (definition.models ?? []).map(
+          ({ id, contextWindow, reasoning }) => ({
+            id,
+            ...(contextWindow === undefined ? {} : { contextWindow }),
+            ...(reasoning === undefined ? {} : { reasoning }),
+          }),
+        ),
+      }
+    })
 
     const larkSection = resolveLarkSection(settings, hostEnv)
     const disabledByExtension = isLarkDisabledByExtension(settings.extensions)
     const larkStatus = statuses.find((s) => s.name === 'lark')
-    const enabled = !disabledByExtension && larkStatus?.enabled !== false
+    const enabled =
+      !disabledByExtension &&
+      (larkStatus
+        ? larkStatus.enabled !== false
+        : (params.isLarkEnabledInDb?.() ?? true))
     const rawStartupError = larkParseError ?? params.getLarkConfigError?.()
     const startupError =
       enabled && rawStartupError
@@ -205,6 +263,15 @@ export async function getRuntimeSettingsState(params: {
 
     const model = settings.model
     const hasAvailableModel = available.length > 0
+    const blockedOAuth =
+      model !== undefined
+        ? isLocalOnlyOAuthBlocked(
+            model,
+            providersMap,
+            credentials,
+            params.blockLocalOnlyOAuth,
+          )
+        : { blocked: false }
     return {
       folder: agentDir,
       files: {
@@ -217,15 +284,28 @@ export async function getRuntimeSettingsState(params: {
           ? hasAvailableModel
             ? { required: false }
             : { required: true, reason: 'no-model' }
-          : resolvesModel(model, providersMap, credentials)
-            ? usableSetup(
-                usableModel({
-                  providers: providersMap,
-                  credentials,
+          : blockedOAuth.blocked
+            ? {
+                required: true,
+                reason: 'missing-credential',
+                ...(blockedOAuth.provider
+                  ? { provider: blockedOAuth.provider }
+                  : {}),
+              }
+            : resolvesModel(
                   model,
-                }),
-              )
-            : { required: true, reason: 'unknown-model' },
+                  providersMap,
+                  credentials,
+                  params.blockLocalOnlyOAuth,
+                )
+              ? usableSetup(
+                  usableModel({
+                    providers: providersMap,
+                    credentials,
+                    model,
+                  }),
+                )
+              : { required: true, reason: 'unknown-model' },
       ...(model === undefined ? {} : { model }),
       ...(settings.thinkingLevel === undefined
         ? {}
@@ -309,22 +389,33 @@ export async function saveRuntimeModelSetup(params: {
   hostEnv: Record<string, string | undefined>
   runtime: VelaRuntime
   input: unknown
+  ephemeral?: boolean
+  credentials?: CredentialStore
+  hasCustomCredentials?: boolean
+  extraProviders?: Record<string, ProviderDefinition>
+  blockLocalOnlyOAuth?: boolean
   directModel?: boolean
   isLarkLoaded?: () => boolean
+  isLarkEnabledInDb?: () => boolean
   getLarkConfigError?: () => string | undefined
 }): Promise<RuntimeSettingsState> {
+  if (params.ephemeral) {
+    throw new Error('Settings cannot be modified on an ephemeral runtime')
+  }
   const { agentDir, hostEnv, runtime } = params
   const input = validateModelSetupInput(params.input)
   const { provider, model, key } = input
   const existingConfig = readEffectiveOwnerConfig(agentDir, hostEnv).settings
-  if (
-    input.custom &&
-    loadModels({
-      agentDir,
-      env: hostEnv,
-      providers: existingConfig.providers ?? {},
-    })[provider]
-  ) {
+  const loadedBefore = loadModels({
+    agentDir,
+    env: hostEnv,
+    providers: existingConfig.providers ?? {},
+  })
+  const mergedBefore: Record<string, ProviderDefinition> = {
+    ...loadedBefore,
+    ...(params.extraProviders ?? {}),
+  }
+  if (input.custom && mergedBefore[provider]) {
     throw new Error(
       `A provider named ${provider} already exists. Pick it above to change its model or key.`,
     )
@@ -336,31 +427,38 @@ export async function saveRuntimeModelSetup(params: {
         models: [{ id: model }],
       }
     : undefined
-  const providers = loadModels({
-    agentDir,
-    env: hostEnv,
-    providers: existingConfig.providers ?? {},
-    ...(preset ? { overrides: { [provider]: preset } } : {}),
-  })
+  const providers: Record<string, ProviderDefinition> = {
+    ...loadModels({
+      agentDir,
+      env: hostEnv,
+      providers: existingConfig.providers ?? {},
+      ...(preset ? { overrides: { [provider]: preset } } : {}),
+    }),
+    ...(preset ? {} : (params.extraProviders ?? {})),
+  }
   const definition = providers[provider]
   if (!definition) throw new Error(`No provider named ${provider}`)
   const authPath = join(agentDir, 'auth.json')
-  const stored = fileCredentialStore(authPath).get(provider)
+  const activeCredStore = params.credentials ?? fileCredentialStore(authPath)
+  const stored = activeCredStore.get(provider)
   const storedOrNew = key ? { type: 'api_key' as const, key } : stored
   const memory = memoryCredentialStore(
     storedOrNew ? { [provider]: storedOrNew } : {},
   )
-  const source = definition.authSource
-    ? definition.authSource(memory.get(provider))
-    : 'configured'
+  const memoryRegistry = new ModelRegistry(providers, memory, undefined, {
+    blockLocalOnlyOAuth: params.blockLocalOnlyOAuth,
+  })
+  const source = memoryRegistry.authSource(provider)
   if (!source) {
     throw new Error(
-      `No API key for ${provider}. Enter one; it is saved in ${authPath}.`,
+      params.blockLocalOnlyOAuth && storedOrNew?.type === 'oauth'
+        ? `Local-only sign-in for ${provider} cannot be used on this host. Enter an API key.`
+        : `No API key for ${provider}. Enter one; it is saved in ${authPath}.`,
     )
   }
   const ref = `${provider}/${model}`
   try {
-    resolveModel(ref, { providers, credentials: memory })
+    memoryRegistry.resolve(ref)
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : String(error))
   }
@@ -375,7 +473,7 @@ export async function saveRuntimeModelSetup(params: {
     const kept =
       key === undefined ? rotatedOAuth(stored, memory.get(provider)) : undefined
     if (kept) {
-      await fileCredentialStore(authPath).modify(provider, async () => kept)
+      await activeCredStore.modify(provider, async () => kept)
     }
     if (
       error instanceof Error &&
@@ -395,11 +493,14 @@ export async function saveRuntimeModelSetup(params: {
   const toSave = key
     ? { type: 'api_key' as const, key }
     : rotatedOAuth(stored, memory.get(provider))
+  if (toSave && params.hasCustomCredentials && params.credentials) {
+    await params.credentials.modify(provider, async () => toSave)
+  }
   await saveModelSetup({
     agentDir,
     ref,
     providers,
-    ...(toSave ? { credential: toSave } : {}),
+    ...(toSave && !params.hasCustomCredentials ? { credential: toSave } : {}),
     ...(preset ? { preset } : {}),
     ...(input.thinkingLevel === undefined
       ? {}
@@ -410,8 +511,14 @@ export async function saveRuntimeModelSetup(params: {
     agentDir,
     hostEnv,
     runtime,
+    ephemeral: params.ephemeral,
+    credentials: params.credentials,
+    hasCustomCredentials: params.hasCustomCredentials,
+    extraProviders: params.extraProviders,
+    blockLocalOnlyOAuth: params.blockLocalOnlyOAuth,
     directModel: params.directModel,
     isLarkLoaded: params.isLarkLoaded,
+    isLarkEnabledInDb: params.isLarkEnabledInDb,
     getLarkConfigError: params.getLarkConfigError,
   })
 }
@@ -435,44 +542,67 @@ export async function saveRuntimeLarkSetup(params: {
   hostEnv: Record<string, string | undefined>
   runtime: VelaRuntime
   input: RuntimeLarkSetupInput
+  ephemeral?: boolean
+  credentials?: CredentialStore
+  hasCustomCredentials?: boolean
+  extraProviders?: Record<string, ProviderDefinition>
+  blockLocalOnlyOAuth?: boolean
   directModel?: boolean
   isLarkLoaded?: () => boolean
+  isLarkEnabledInDb?: () => boolean
   getLarkConfigError?: () => string | undefined
   verifyCredentials?: (appId: string, appSecret: string) => Promise<void>
+  hasPendingOutboxDeliveries?: (chatId?: string) => boolean
 }): Promise<RuntimeSettingsState> {
+  if (params.ephemeral) {
+    throw new Error('Settings cannot be modified on an ephemeral runtime')
+  }
   const { agentDir, hostEnv, runtime, input } = params
+  const stateParams = {
+    agentDir,
+    hostEnv,
+    runtime,
+    ephemeral: params.ephemeral,
+    credentials: params.credentials,
+    hasCustomCredentials: params.hasCustomCredentials,
+    extraProviders: params.extraProviders,
+    blockLocalOnlyOAuth: params.blockLocalOnlyOAuth,
+    directModel: params.directModel,
+    isLarkLoaded: params.isLarkLoaded,
+    isLarkEnabledInDb: params.isLarkEnabledInDb,
+    getLarkConfigError: params.getLarkConfigError,
+  }
   if ('enabled' in input && typeof input.enabled === 'boolean') {
     if (!input.enabled) {
-      await assertLarkIdle(runtime)
+      await assertLarkScopeIdle(runtime, {
+        message:
+          'A Lark session is still running or queued. Wait for it to finish before changing Lark settings.',
+        hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
+      })
     }
     await runtime.channels.setEnabled('lark', input.enabled)
     if (input.enabled) {
       await runtime.reloadConfig()
     }
-    return getRuntimeSettingsState({
-      agentDir,
-      hostEnv,
-      runtime,
-      directModel: params.directModel,
-      isLarkLoaded: params.isLarkLoaded,
-      getLarkConfigError: params.getLarkConfigError,
-    })
+    return getRuntimeSettingsState(stateParams)
   }
   if ('removeChat' in input && typeof input.removeChat === 'string') {
+    const chatId = input.removeChat.trim()
+    if (chatId) {
+      await assertLarkScopeIdle(runtime, {
+        chatId,
+        message:
+          'This Lark group still has a reply running or waiting to send. Wait for it to finish before removing it.',
+        hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
+      })
+    }
     await saveLarkSection({
       agentDir,
       removeChat: input.removeChat,
       env: hostEnv,
     })
     await runtime.reloadConfig()
-    return getRuntimeSettingsState({
-      agentDir,
-      hostEnv,
-      runtime,
-      directModel: params.directModel,
-      isLarkLoaded: params.isLarkLoaded,
-      getLarkConfigError: params.getLarkConfigError,
-    })
+    return getRuntimeSettingsState(stateParams)
   }
   if (
     !('appId' in input) ||
@@ -520,18 +650,21 @@ export async function saveRuntimeLarkSetup(params: {
     appSecret: input.appSecret,
   })
   await runtime.reloadConfig()
-  return getRuntimeSettingsState({
-    agentDir,
-    hostEnv,
-    runtime,
-    directModel: params.directModel,
-    isLarkLoaded: params.isLarkLoaded,
-    getLarkConfigError: params.getLarkConfigError,
-  })
+  return getRuntimeSettingsState(stateParams)
 }
 
-async function assertLarkIdle(runtime: VelaRuntime): Promise<void> {
-  const bindings = await runtime.bindings.list({ channel: 'lark' })
+export async function assertLarkScopeIdle(
+  runtime: VelaRuntime,
+  options: {
+    chatId?: string
+    message: string
+    hasPendingOutboxDeliveries?: (chatId?: string) => boolean
+  },
+): Promise<void> {
+  const allLarkBindings = await runtime.bindings.list({ channel: 'lark' })
+  const bindings = options.chatId
+    ? allLarkBindings.filter((b) => b.externalId === options.chatId)
+    : allLarkBindings
   const larkSessionIds = new Set(
     bindings
       .map((b) => b.sessionId)
@@ -552,150 +685,10 @@ async function assertLarkIdle(runtime: VelaRuntime): Promise<void> {
     }
     const st = await runtime.sessions.status(s.id)
     if (st.activeRunId || st.runningJobs > 0 || s.state === 'running') {
-      throw new Error(
-        'A Lark session is still running or queued. Wait for it to finish before changing Lark settings.',
-      )
+      throw new Error(options.message)
     }
   }
-}
-
-export async function discoverRuntimeLarkGroup(params: {
-  agentDir: string
-  hostEnv: Record<string, string | undefined>
-  runtime: VelaRuntime
-  signal?: AbortSignal
-  pauseLark?: () => Promise<void>
-  resumeLark?: () => Promise<void>
-  createDiscoveryTransport?: () => Promise<LarkTransport | undefined>
-  timeoutMs?: number
-}): Promise<RuntimeLarkDiscoveryGroup | undefined> {
-  const { agentDir, hostEnv, runtime, signal } = params
-  if (signal?.aborted) return undefined
-  const [{ settings }, statuses] = await Promise.all([
-    Promise.resolve(readEffectiveOwnerConfig(agentDir, hostEnv)),
-    runtime.channels.list(),
-  ])
-  const disabledByExtension = isLarkDisabledByExtension(settings.extensions)
-  const larkStatus = statuses.find((s) => s.name === 'lark')
-  const enabled = !disabledByExtension && larkStatus?.enabled !== false
-  const larkSection = resolveLarkSection(settings, hostEnv)
-  const appId =
-    typeof larkSection.appId === 'string' ? larkSection.appId.trim() : ''
-  const appSecret =
-    typeof larkSection.appSecret === 'string'
-      ? larkSection.appSecret.trim()
-      : ''
-  const customTransport = await params.createDiscoveryTransport?.()
-  if (!enabled || (!customTransport && (!appId || !appSecret))) {
-    customTransport?.stop()
-    throw new Error('Configure Lark to run in this app before adding a group.')
-  }
-  const excludedChatIds = new Set(parseLarkChatIds(larkSection))
-  for (const chat of await runtime.channels.chats('lark').catch(() => [])) {
-    excludedChatIds.add(chat.chatId)
-  }
-
-  const timeoutSignal = AbortSignal.timeout(
-    params.timeoutMs ?? DISCOVERY_TIMEOUT_MS,
-  )
-  const combinedSignal = signal
-    ? AbortSignal.any([signal, timeoutSignal])
-    : timeoutSignal
-
-  await assertLarkIdle(runtime)
-  await params.pauseLark?.()
-  try {
-    const { connectLarkSetup, discoverLarkGroup } = await import(
-      '../lark/index.ts'
-    )
-    if (customTransport) {
-      try {
-        return await discoverLarkGroup(
-          customTransport,
-          combinedSignal,
-          excludedChatIds,
-        )
-      } finally {
-        customTransport.stop()
-      }
-    }
-    const connection = await connectLarkSetup(appId, appSecret, combinedSignal)
-    try {
-      return await connection.waitForMention(excludedChatIds)
-    } finally {
-      connection.stop()
-    }
-  } catch (error) {
-    if (signal?.aborted) return undefined
-    if (timeoutSignal.aborted) {
-      throw new Error('No group mention received in two minutes. Try again.')
-    }
-    const msg = error instanceof Error ? error.message : String(error)
-    throw new Error(appSecret ? msg.replaceAll(appSecret, '[redacted]') : msg)
-  } finally {
-    await params.resumeLark?.().catch(() => {})
-  }
-}
-
-export async function confirmRuntimeLarkGroup(params: {
-  agentDir: string
-  hostEnv: Record<string, string | undefined>
-  runtime: VelaRuntime
-  chatId: string
-}): Promise<void> {
-  if (!params.chatId.trim()) {
-    throw new Error('No pending group approval.')
-  }
-  await assertLarkIdle(params.runtime)
-  await saveLarkSection({
-    agentDir: params.agentDir,
-    addChat: params.chatId.trim(),
-    env: params.hostEnv,
-  })
-  await params.runtime.reloadConfig()
-}
-
-export function createRuntimeSettingsApi(params: {
-  agentDir: string
-  hostEnv: Record<string, string | undefined>
-  runtime: VelaRuntime
-  directModel?: boolean
-  isLarkLoaded?: () => boolean
-  getLarkConfigError?: () => string | undefined
-  pauseLark?: () => Promise<void>
-  resumeLark?: () => Promise<void>
-  createDiscoveryTransport?: () => Promise<LarkTransport | undefined>
-  verifyCredentials?: (appId: string, appSecret: string) => Promise<void>
-}): VelaRuntime['settings'] {
-  const discoveryControllers = new Set<AbortController>()
-  return {
-    get: () => getRuntimeSettingsState(params),
-    saveModel: (input) => saveRuntimeModelSetup({ ...params, input }),
-    saveLark: (input) => saveRuntimeLarkSetup({ ...params, input }),
-    discoverLarkGroup: async (opts) => {
-      const controller = new AbortController()
-      const onAbort = () =>
-        controller.abort(
-          opts?.signal?.reason ?? new DOMException('Cancelled', 'AbortError'),
-        )
-      opts?.signal?.addEventListener('abort', onAbort, { once: true })
-      discoveryControllers.add(controller)
-      try {
-        return await discoverRuntimeLarkGroup({
-          ...params,
-          signal: controller.signal,
-        })
-      } finally {
-        discoveryControllers.delete(controller)
-        opts?.signal?.removeEventListener('abort', onAbort)
-      }
-    },
-    confirmLarkGroup: (chatId) =>
-      confirmRuntimeLarkGroup({ ...params, chatId }),
-    cancelLarkSetup: async () => {
-      for (const ctrl of [...discoveryControllers]) {
-        ctrl.abort(new DOMException('Cancelled', 'AbortError'))
-      }
-    },
+  if (options.hasPendingOutboxDeliveries?.(options.chatId)) {
+    throw new Error(options.message)
   }
 }

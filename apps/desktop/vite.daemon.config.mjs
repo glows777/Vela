@@ -1,15 +1,28 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 
 const require = createRequire(import.meta.url)
+const velaSdkVersion = JSON.parse(
+  readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../packages/vela/package.json',
+    ),
+    'utf8',
+  ),
+).version
 const photonWasm = join(
   dirname(require.resolve('@silvia-odwyer/photon-node')),
   'photon_rs_bg.wasm',
 )
 
 export default defineConfig({
+  define: {
+    __VELA_SDK_VERSION__: JSON.stringify(velaSdkVersion),
+  },
   plugins: [
     {
       name: 'photon-wasm',

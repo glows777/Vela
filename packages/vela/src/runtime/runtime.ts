@@ -335,6 +335,7 @@ export class VelaRuntimeEngine {
       disposed: this.disposed,
       db: this.db,
       sessions: this.sessions,
+      blobs: this.blobs,
       drivers: this.drivers,
       activeWorkers: this.activeWorkers,
       submitPrompt: (input) => this.submitPrompt(input),

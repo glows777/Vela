@@ -177,7 +177,11 @@ export function SessionView({
         </div>
       </div>
       {status ? <p className={styles.subtle}>{status}</p> : null}
-      <Conversation label="Session messages" place={place} centered>
+      <Conversation
+        label="Session messages"
+        place={`session:${session.sessionId}`}
+        centered
+      >
         {failure ? <ErrorCard message={failure.message} /> : null}
         {messages.length === 0 ? (
           <p className={styles.empty}>
@@ -221,7 +225,10 @@ export function SessionView({
           onCancel={() => setConfirmDelete(undefined)}
           onConfirm={() => {
             setConfirmDelete(undefined)
-            void deleteSession(session.sessionId).then((ok) => {
+            void deleteSession(
+              session.sessionId,
+              lark ? setNotice : undefined,
+            ).then((ok) => {
               if (ok) onDeleted?.()
             })
           }}

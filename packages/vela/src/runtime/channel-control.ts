@@ -1,4 +1,6 @@
+import { Buffer } from 'node:buffer'
 import type { VelaDatabase } from '../db/index.ts'
+import type { BlobStore } from './blobs.ts'
 import {
   getHostPostAuthorInDb,
   ingestChannelMessageInRuntime,
@@ -269,11 +271,19 @@ export async function steerSessionInRuntime(params: {
   disposed: boolean
   db: VelaDatabase
   sessions: SessionStoreControl
+  blobs?: BlobStore
   drivers: ReadonlyMap<string, AgentDriver>
   activeWorkers: ReadonlyMap<string, unknown>
   submitPrompt: (input: {
     sessionId: string
     text: string
+    attachments?: Array<{
+      kind: 'image'
+      blobId: string
+      name: string
+      mimeType: string
+      inlineOnly?: boolean
+    }>
     source: 'user'
     wake: boolean
   }) => unknown
@@ -286,6 +296,7 @@ export async function steerSessionInRuntime(params: {
     disposed,
     db,
     sessions,
+    blobs,
     drivers,
     activeWorkers,
     submitPrompt,
@@ -318,7 +329,29 @@ export async function steerSessionInRuntime(params: {
   }
   if (noQueueFallback) return false
   resetStreak()
-  submitPrompt({ sessionId, text, source: 'user', wake: true })
+  const attachments =
+    blobs && images?.length
+      ? await Promise.all(
+          images.map(async (img, i) => {
+            const ext = img.mimeType.split('/')[1] || 'png'
+            const blob = await blobs.storeInbound({
+              sessionId,
+              ...(session.projectId ? { projectId: session.projectId } : {}),
+              filename: `image-${i + 1}.${ext}`,
+              mimeType: img.mimeType,
+              bytes: Buffer.from(img.data, 'base64'),
+            })
+            return {
+              kind: 'image' as const,
+              blobId: blob.id,
+              name: blob.filename,
+              mimeType: img.mimeType,
+              inlineOnly: true,
+            }
+          }),
+        )
+      : undefined
+  submitPrompt({ sessionId, text, attachments, source: 'user', wake: true })
   return true
 }
 
@@ -503,24 +536,36 @@ function resolveSessionChannelBinding(
 ): ChannelBinding | undefined {
   const directRows = db.all<{ id: string }>(
     `SELECT id FROM channel_bindings
-     WHERE session_id = ? AND enabled = 1
-     ORDER BY created_at ASC, rowid ASC`,
+     WHERE session_id = ?
+     ORDER BY enabled DESC, created_at ASC, rowid ASC`,
     session.id,
   )
   for (const row of directRows) {
     const binding = bindings.get(row.id)
-    if (binding && isBindingActive(db, bindings, binding)) return binding
+    if (binding) return binding
   }
   if (session.projectId && session.kind === 'hub') {
     const rootRows = db.all<{ id: string }>(
       `SELECT id FROM channel_bindings
-       WHERE project_id = ? AND thread_id IS NULL AND enabled = 1
-       ORDER BY created_at ASC, rowid ASC`,
+       WHERE project_id = ? AND thread_id IS NULL
+       ORDER BY enabled DESC, created_at ASC, rowid ASC`,
       session.projectId,
     )
     for (const row of rootRows) {
       const binding = bindings.get(row.id)
-      if (binding && isBindingActive(db, bindings, binding)) return binding
+      if (binding) return binding
+    }
+  }
+  if (session.projectId) {
+    const projectRows = db.all<{ id: string }>(
+      `SELECT id FROM channel_bindings
+       WHERE project_id = ? AND thread_id IS NULL
+       ORDER BY enabled DESC, created_at ASC, rowid ASC`,
+      session.projectId,
+    )
+    for (const row of projectRows) {
+      const binding = bindings.get(row.id)
+      if (binding) return binding
     }
   }
   return undefined
@@ -537,32 +582,39 @@ export async function listRuntimeOrChannelMessages(
   if (!session) throw new Error(`Session ${input.sessionId} not found`)
   const binding = resolveSessionChannelBinding(db, bindings, session)
   if (binding) {
+    if (!isBindingActive(db, bindings, binding)) {
+      throw new Error(
+        `Channel "${binding.channel}" is disabled for session ${session.id}`,
+      )
+    }
     const adapter = channels.get(binding.channel)
-    if (adapter?.listMessages) {
-      if (
-        input.cursor &&
-        (input.cursor.startsWith(DB_CURSOR_PREFIX) ||
-          /^\d+$/.test(input.cursor))
-      ) {
-        throw new Error(
-          'Pagination cursor is no longer valid because the message source changed to channel; restart pagination from the beginning',
-        )
-      }
-      const rawCursor = decodeChannelCursor(binding, input.cursor)
-      const page = await adapter.listMessages({
-        sessionId: session.id,
-        externalChatId: binding.externalId,
-        threadId: binding.threadId,
-        kind: binding.kind,
-        cursor: rawCursor,
-        limit: input.limit,
-      })
-      return {
-        ...page,
-        ...(page.nextCursor
-          ? { nextCursor: encodeChannelCursor(binding, page.nextCursor) }
-          : {}),
-      }
+    if (!adapter?.listMessages) {
+      throw new Error(
+        `Channel "${binding.channel}" is unavailable for session ${session.id}`,
+      )
+    }
+    if (
+      input.cursor &&
+      (input.cursor.startsWith(DB_CURSOR_PREFIX) || /^\d+$/.test(input.cursor))
+    ) {
+      throw new Error(
+        'Pagination cursor is no longer valid because the message source changed to channel; restart pagination from the beginning',
+      )
+    }
+    const rawCursor = decodeChannelCursor(binding, input.cursor)
+    const page = await adapter.listMessages({
+      sessionId: session.id,
+      externalChatId: binding.externalId,
+      threadId: binding.threadId,
+      kind: binding.kind,
+      cursor: rawCursor,
+      limit: input.limit,
+    })
+    return {
+      ...page,
+      ...(page.nextCursor
+        ? { nextCursor: encodeChannelCursor(binding, page.nextCursor) }
+        : {}),
     }
   }
   if (input.cursor?.startsWith(CHANNEL_CURSOR_PREFIX)) {

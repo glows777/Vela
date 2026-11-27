@@ -3,8 +3,13 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { getDaemonStatus, startDaemon, stopDaemon } from '../daemon/index.ts'
-import { registerExtensionHostModules } from '../driver/config/extensions.ts'
+import { registerBuiltinExtensionHostModules } from '../daemon/extension-host.ts'
+import {
+  getDaemonStatus,
+  startDaemon,
+  startDaemonServer,
+  stopDaemon,
+} from '../daemon/index.ts'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import { newSessionId, resolveModel } from '../driver/diagnostics.ts'
 import type { ImageContent } from '../driver/index.ts'
@@ -64,24 +69,7 @@ if (args.daemonHelp) {
 const env = process.env
 const cwd = process.cwd()
 const agentDir = resolve(args.agentDir ?? defaultAgentDir(env))
-registerExtensionHostModules({
-  '@glows777/vela/extension-api': () => import('../extension-api.ts'),
-  '@glows777/vela': () =>
-    Promise.all([
-      import('../daemon/index.ts'),
-      import('../driver/index.ts'),
-      import('../driver/diagnostics.ts'),
-      import('../extension-api.ts'),
-      import('../lark/index.ts'),
-      import('../load-config.ts'),
-      import('../mcp/index.ts'),
-      import('../runtime/index.ts'),
-      import('../runtime-sdk.ts'),
-      import('../settings.ts'),
-      import('../vela.ts'),
-    ]).then((mods) => Object.assign({}, ...mods)),
-  zod: () => import('zod'),
-})
+registerBuiltinExtensionHostModules({ startDaemonServer })
 
 if (args.daemon) {
   const logger = createConsoleLogger({

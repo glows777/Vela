@@ -103,13 +103,24 @@ interface BunBuildPlugin {
       }) => { path: string; namespace?: string } | undefined,
     ): void
     onLoad(
-      opts: { filter: RegExp; namespace: string },
-      cb: (args: { path: string }) => { contents: string; loader: 'js' },
+      opts: { filter: RegExp; namespace?: string },
+      cb: (args: {
+        path: string
+      }) =>
+        | { contents: string; loader: 'js' | 'jsx' | 'ts' | 'tsx' }
+        | undefined,
     ): void
   }): void
 }
 
+interface BunTranspilerLike {
+  scanImports(code: string): Array<{ kind: string; path: string }>
+}
+
 interface BunLike {
+  Transpiler?: new (options: {
+    loader: 'js' | 'jsx' | 'ts' | 'tsx'
+  }) => BunTranspilerLike
   build(options: {
     entrypoints: string[]
     target: 'bun'
@@ -121,6 +132,150 @@ interface BunLike {
     logs: unknown[]
     outputs: Array<{ text(): Promise<string> }>
   }>
+}
+
+function bunLoaderForPath(filePath: string): 'js' | 'jsx' | 'ts' | 'tsx' {
+  if (filePath.endsWith('.tsx')) return 'tsx'
+  if (filePath.endsWith('.jsx')) return 'jsx'
+  if (/\.(?:mjs|cjs|js)$/.test(filePath)) return 'js'
+  return 'ts'
+}
+
+function isIdentChar(ch: string): boolean {
+  return /[A-Za-z0-9_$]/.test(ch)
+}
+
+function skipBalancedTemplateExpr(src: string, start: number): number {
+  let i = start
+  let depth = 1
+  while (i < src.length && depth > 0) {
+    const ch = src[i]!
+    if (ch === "'" || ch === '"') {
+      i = skipQuoted(src, i, ch)
+    } else if (ch === '`') {
+      i = skipTemplate(src, i)
+    } else if (ch === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i + 2)
+      i = nl === -1 ? src.length : nl + 1
+    } else if (ch === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2)
+      i = end === -1 ? src.length : end + 2
+    } else {
+      if (ch === '{') depth += 1
+      else if (ch === '}') depth -= 1
+      i += 1
+    }
+  }
+  return i
+}
+
+function skipQuoted(src: string, start: number, quote: string): number {
+  let i = start + 1
+  while (i < src.length) {
+    const ch = src[i]!
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    i += 1
+    if (ch === quote) break
+  }
+  return i
+}
+
+function skipTemplate(src: string, start: number): number {
+  let i = start + 1
+  while (i < src.length) {
+    const ch = src[i]!
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    if (ch === '$' && src[i + 1] === '{') {
+      i = skipBalancedTemplateExpr(src, i + 2)
+      continue
+    }
+    i += 1
+    if (ch === '`') break
+  }
+  return i
+}
+
+/** Rewrites bare `import.meta.{url,dir,path}` tokens in source code for one module path without touching string literals or comments. */
+function rewriteImportMetaForFile(source: string, filePath: string): string {
+  const metaReplacements: Record<string, string> = {
+    url: JSON.stringify(pathToFileURL(filePath).href),
+    dir: JSON.stringify(dirname(filePath)),
+    path: JSON.stringify(filePath),
+  }
+  const rewriteSlice = (start: number, end: number): string => {
+    let out = ''
+    let i = start
+    while (i < end) {
+      const ch = source[i]!
+      if (ch === "'" || ch === '"') {
+        const next = skipQuoted(source, i, ch)
+        out += source.slice(i, next)
+        i = next
+        continue
+      }
+      if (ch === '`') {
+        let j = i + 1
+        out += '`'
+        while (j < end) {
+          const tc = source[j]!
+          if (tc === '\\') {
+            out += source.slice(j, j + 2)
+            j += 2
+            continue
+          }
+          if (tc === '$' && source[j + 1] === '{') {
+            const exprEnd = skipBalancedTemplateExpr(source, j + 2)
+            out += `\${${rewriteSlice(j + 2, exprEnd - 1)}}`
+            j = exprEnd
+            continue
+          }
+          out += tc
+          j += 1
+          if (tc === '`') break
+        }
+        i = j
+        continue
+      }
+      if (ch === '/' && source[i + 1] === '/') {
+        const nl = source.indexOf('\n', i + 2)
+        const next = nl === -1 || nl > end ? end : nl + 1
+        out += source.slice(i, next)
+        i = next
+        continue
+      }
+      if (ch === '/' && source[i + 1] === '*') {
+        const close = source.indexOf('*/', i + 2)
+        const next = close === -1 || close + 2 > end ? end : close + 2
+        out += source.slice(i, next)
+        i = next
+        continue
+      }
+      if (
+        source.startsWith('import.meta.', i) &&
+        (i === 0 || !isIdentChar(source[i - 1]!))
+      ) {
+        const afterDot = i + 'import.meta.'.length
+        let propEnd = afterDot
+        while (propEnd < end && isIdentChar(source[propEnd]!)) propEnd += 1
+        const prop = source.slice(afterDot, propEnd)
+        if (prop in metaReplacements) {
+          out += metaReplacements[prop]!
+          i = propEnd
+          continue
+        }
+      }
+      out += ch
+      i += 1
+    }
+    return out
+  }
+  return rewriteSlice(0, source.length)
 }
 
 function buildExtensionWithBun(
@@ -149,11 +304,6 @@ function buildExtensionWithBun(
         entrypoints: [key],
         target: 'bun',
         format: 'esm',
-        define: {
-          'import.meta.url': JSON.stringify(pathToFileURL(key).href),
-          'import.meta.dir': JSON.stringify(dirname(key)),
-          'import.meta.path': JSON.stringify(key),
-        },
         plugins: [
           {
             name: 'vela-extension-host',
@@ -175,6 +325,17 @@ function buildExtensionWithBun(
                   contents: `module.exports = globalThis[Symbol.for('vela.jiti.hostModules')][${JSON.stringify(args.path)}];\n`,
                   loader: 'js',
                 }),
+              )
+              build.onLoad(
+                { filter: /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/, namespace: 'file' },
+                (args) => {
+                  const text = readFileSync(args.path, 'utf8')
+                  if (!text.includes('import.meta.')) return undefined
+                  return {
+                    contents: rewriteImportMetaForFile(text, args.path),
+                    loader: bunLoaderForPath(args.path),
+                  }
+                },
               )
             },
           },
@@ -288,18 +449,31 @@ function getJiti(aliasZod: boolean): Promise<JitiInstance> {
   return pending
 }
 
-function needsHostBundlerUnderBun(sourcePath: string): boolean {
+function needsHostBundlerUnderBun(bun: BunLike, sourcePath: string): boolean {
   let source = ''
   try {
     source = readFileSync(sourcePath, 'utf8')
   } catch {
     return false
   }
-  const importsVela = /['"]@glows777\/vela(?:\/extension-api)?['"]/.test(source)
+  const runtimeImports =
+    typeof bun.Transpiler === 'function'
+      ? new bun.Transpiler({ loader: bunLoaderForPath(sourcePath) })
+          .scanImports(source)
+          .map((item) => item.path)
+      : [
+          ...source.matchAll(
+            /['"](@glows777\/vela(?:\/extension-api)?|zod)['"]/g,
+          ),
+        ].map((m) => m[1]!)
+  const importsVela = runtimeImports.some(
+    (spec) =>
+      spec === '@glows777/vela' || spec === '@glows777/vela/extension-api',
+  )
   if (importsVela && !hasLocalPackage(sourcePath, '@glows777/vela')) {
     return true
   }
-  const importsBareZod = /['"]zod['"]/.test(source)
+  const importsBareZod = runtimeImports.includes('zod')
   if (importsBareZod && !hasLocalPackage(sourcePath, 'zod')) {
     return true
   }
@@ -319,7 +493,7 @@ export async function importExtension(
   let factory: unknown
   const bun = (globalThis as { Bun?: BunLike }).Bun
   if (bun) {
-    if (needsHostBundlerUnderBun(path)) {
+    if (needsHostBundlerUnderBun(bun, path)) {
       const builtUrl = await buildExtensionWithBun(bun, path)
       const mod = (await import(builtUrl)) as { default?: unknown }
       factory = mod.default
