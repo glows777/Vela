@@ -45,6 +45,8 @@ export function parseGenericWebhookEvent(
     throw new Error('Event key is outside the configured source namespace')
   return webhookEventSchema.parse({
     ...payload,
+    summary: payload.summary,
+    ...(payload.details !== undefined ? { details: payload.details } : {}),
     source: options.source,
     deliveryId,
   })

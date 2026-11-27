@@ -193,7 +193,20 @@ test('RuntimeWebhookReceiver validates HMAC, filters GitHub labels/own comments,
       })
     ).status,
   ).toBe(503)
-  // Duplicate delivery ID is ignored on retry even after 503
+  // Failed 503 delivery did NOT consume the delivery ID; retry succeeds, then subsequent redelivery is deduped
+  expect(
+    (
+      await fetch(`http://127.0.0.1:${port}/events/github`, {
+        method: 'POST',
+        headers: {
+          'x-github-event': 'pull_request',
+          'x-github-delivery': 'd-pr',
+          'x-hub-signature-256': signPayload('gh-secret', prClosed),
+        },
+        body: prClosed,
+      })
+    ).status,
+  ).toBe(202)
   expect(
     (
       await fetch(`http://127.0.0.1:${port}/events/github`, {
@@ -228,6 +241,7 @@ test('RuntimeWebhookReceiver validates HMAC, filters GitHub labels/own comments,
 
   expect(received).toEqual([
     { source: 'github', key: 'github:glows777/Vela#issues', final: undefined },
+    { source: 'github', key: 'github:glows777/Vela#pr/99', final: true },
     { source: 'sentry', key: 'sentry:issue-7', final: true },
   ])
 })

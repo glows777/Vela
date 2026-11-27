@@ -174,7 +174,12 @@ export async function startProjectSession(
     brief: string
     replyToMessageId?: string
     currentHandoffDepth?: number
-    attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
+    attachments?: Array<{
+      blobId: string
+      name: string
+      mimeType?: string
+      inlineOnly?: boolean
+    }>
   },
 ): Promise<{ sessionId: string; kind: 'topic' | 'work'; title: string }> {
   const title = input.title.trim()
@@ -208,6 +213,7 @@ export async function startProjectSession(
     blobId: string
     name: string
     mimeType?: string
+    inlineOnly?: boolean
   }> = []
   let child: SessionRecord
   try {
@@ -223,6 +229,7 @@ export async function startProjectSession(
           blobId: cloned.id,
           name: att.name,
           ...(att.mimeType ? { mimeType: att.mimeType } : {}),
+          ...(att.inlineOnly ? { inlineOnly: true } : {}),
         })
       }
     }

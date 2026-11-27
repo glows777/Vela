@@ -70,6 +70,7 @@ export {
   githubWebhookOptions,
   HttpError,
   HttpListener,
+  normalizeWebhookConfigKey,
   parseGenericWebhookEvent,
   parseGithubWebhookEvents,
   type RuntimeWebhookEvent,

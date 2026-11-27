@@ -1,5 +1,6 @@
 export {
   extractGithubRepositories,
+  normalizeWebhookConfigKey,
   RuntimeWebhookReceiver,
   type RuntimeWebhookStatus,
   type WebhookReceiverConfig,

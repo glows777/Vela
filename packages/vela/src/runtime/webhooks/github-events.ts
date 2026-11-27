@@ -8,8 +8,8 @@ export const webhookEventSchema = z
     source: identity,
     key: identity,
     deliveryId: identity,
-    summary: z.string().min(1),
-    details: z.string().optional(),
+    summary: z.string().min(1).max(500),
+    details: z.string().max(8192).optional(),
     final: z.boolean().optional(),
   })
   .strict()

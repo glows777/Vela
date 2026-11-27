@@ -88,10 +88,42 @@ function loadOwnerRuntimeConfig(
   assertNoLegacyConfigFiles(agentDir)
   const file = join(agentDir, 'config.json')
   if (!existsSync(file)) return {}
-  return interpolateConfigLayer(
-    parseConfig(readFileSync(file, 'utf8'), file),
+  const text = readFileSync(file, 'utf8')
+  let invalidWebhooks: unknown
+  let hasInvalidWebhooks = false
+  let parseText = text
+  try {
+    const raw = JSON.parse(text) as unknown
+    if (
+      raw &&
+      typeof raw === 'object' &&
+      !Array.isArray(raw) &&
+      Object.hasOwn(raw, 'webhooks')
+    ) {
+      const value = (raw as Record<string, unknown>).webhooks
+      if (
+        value !== undefined &&
+        (!value || typeof value !== 'object' || Array.isArray(value))
+      ) {
+        hasInvalidWebhooks = true
+        invalidWebhooks = value
+        const { webhooks: _omitted, ...rest } = raw as Record<string, unknown>
+        parseText = JSON.stringify(rest)
+      }
+    }
+  } catch {
+    /* Let parseConfig raise its normal malformed JSON error */
+  }
+  const interpolated = interpolateConfigLayer(
+    parseConfig(parseText, file),
     hostEnv,
   )
+  return hasInvalidWebhooks
+    ? {
+        ...interpolated,
+        webhooks: invalidWebhooks as Record<string, unknown>,
+      }
+    : interpolated
 }
 
 function statSignature(file: string): string {
@@ -373,6 +405,7 @@ export function createRuntime(
     const reloadConfigInternal = (force: boolean): Promise<void> => {
       if (isEphemeral) return Promise.resolve()
       const next = reloadQueue.then(async () => {
+        if (disposing) return
         const nextConfigSig = statSignature(configPath)
         const nextAuthSig = statSignature(authPath)
         if (
@@ -383,6 +416,7 @@ export function createRuntime(
           return
         }
         const updated = computeConfigState()
+        if (disposing) return
         currentWebhookConfig = {
           webhooks: updated.ownerConfig.webhooks,
           eventDefaultTarget: updated.ownerConfig.eventDefaultTarget,
@@ -404,6 +438,7 @@ export function createRuntime(
           dreamEnabled: updated.dreamEnabled,
           offline: options.offline,
         })
+        if (disposing) return
         await options.onConfigReloaded?.(currentWebhookConfig)
         lastConfigSig = nextConfigSig
         lastAuthSig = nextAuthSig
@@ -630,6 +665,7 @@ export function createRuntime(
       dispose() {
         disposing ??= (async () => {
           try {
+            await reloadQueue.catch(() => {})
             await engine.dispose()
           } finally {
             if (ownsDb && db.open) db.close()

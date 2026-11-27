@@ -133,12 +133,18 @@ export class SubscriptionManager {
     details?: string
     final?: boolean
     payload?: Record<string, unknown>
-  }): { matchedSessionIds: string[]; enqueuedCount: number } {
+  }): {
+    matchedSessionIds: string[]
+    matchedCount: number
+    enqueuedCount: number
+  } {
     const wakeSessions = new Set<string>()
+    let matchedCount = 0
     let enqueuedCount = 0
 
     this.db.transaction(() => {
       const subs = this.findMatching(input.source, input.eventKey)
+      matchedCount = subs.length
       const seenSessions = new Set<string>()
       const insertedSessions = new Set<string>()
       for (const sub of subs) {
@@ -148,7 +154,7 @@ export class SubscriptionManager {
           sessionId: sub.sessionId,
           projectId: sub.projectId,
           source: 'webhook',
-          dedupeKey: `${input.source}:${input.dedupeKey}:${sub.sessionId}`,
+          dedupeKey: `${input.source}:${input.dedupeKey}:${input.eventKey}:${sub.sessionId}`,
           wake: true,
           payload: {
             type: 'webhook',
@@ -180,6 +186,6 @@ export class SubscriptionManager {
     for (const sessionId of wakeSessions) {
       this.onWakeSession?.(sessionId)
     }
-    return { matchedSessionIds: [...wakeSessions], enqueuedCount }
+    return { matchedSessionIds: [...wakeSessions], matchedCount, enqueuedCount }
   }
 }

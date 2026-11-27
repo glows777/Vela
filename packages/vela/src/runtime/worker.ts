@@ -248,7 +248,17 @@ export function claimNextTurnInDb(params: {
       payload: item.payload,
       createdAt: item.createdAt,
     }))
-    const initialTarget = outboxTargetFromInputs(inputs)
+    const initialTarget =
+      outboxTargetFromInputs(inputs) ??
+      (inputs.some(
+        (i) =>
+          i.wake &&
+          !i.passive &&
+          i.source === 'handoff' &&
+          i.payload.type !== 'handoff_note',
+      )
+        ? resolveOutboxTargetInDb(db, session, inputs)
+        : undefined)
     if (initialTarget) {
       db.run(
         `INSERT INTO kv_meta (key, value_json, updated_at)
@@ -560,9 +570,31 @@ export function finalizeTurnInDb(params: {
   })
 }
 
+function inputFlagsFromInputs(inputs: readonly DriverInboxItem[]): {
+  isHandoff?: true
+  mentionRecipient?: true
+} {
+  const hasHandoff = inputs.some(
+    (item) =>
+      item.wake &&
+      !item.passive &&
+      item.source === 'handoff' &&
+      item.payload.type !== 'handoff_note',
+  )
+  const hasMention = inputs.some(
+    (item) =>
+      item.wake && !item.passive && item.payload.mentionRecipient === true,
+  )
+  return {
+    ...(hasHandoff ? { isHandoff: true } : {}),
+    ...(hasMention ? { mentionRecipient: true } : {}),
+  }
+}
+
 function outboxTargetFromInputs(
   inputs: readonly DriverInboxItem[],
 ): OutboxTarget | undefined {
+  const flags = inputFlagsFromInputs(inputs)
   for (const requireWake of [true, false]) {
     for (let i = inputs.length - 1; i >= 0; i--) {
       const item = inputs[i]!
@@ -570,6 +602,7 @@ function outboxTargetFromInputs(
         item.source === 'channel' ||
         item.source === 'timer' ||
         item.source === 'webhook' ||
+        item.source === 'handoff' ||
         (item.source === 'approval' && item.payload.waitForInput === true)
       if (!isRouteSource || item.passive) {
         continue
@@ -593,7 +626,6 @@ function outboxTargetFromInputs(
               ? payload.creatorId
               : undefined
         const isRoutine = item.source === 'timer' && payload.kind === 'routine'
-        const isHandoff = item.source === 'handoff'
         return {
           channel: payload.channel,
           externalChatId: payload.externalChatId,
@@ -602,8 +634,11 @@ function outboxTargetFromInputs(
             : {}),
           ...(replyToMessageId ? { replyToMessageId } : {}),
           ...(recipientId ? { recipientId } : {}),
+          ...(flags.mentionRecipient || payload.mentionRecipient === true
+            ? { mentionRecipient: true }
+            : {}),
           ...(isRoutine ? { isRoutine: true } : {}),
-          ...(isHandoff ? { isHandoff: true } : {}),
+          ...(flags.isHandoff ? { isHandoff: true } : {}),
         }
       }
     }
@@ -620,6 +655,16 @@ export function resolveOutboxTargetInDb(
   const directInput = outboxTargetFromInputs(inputs)
   if (directInput) return directInput
 
+  const flags = inputFlagsFromInputs(inputs)
+  const applyFlags = (target: OutboxTarget): OutboxTarget =>
+    flags.isHandoff || flags.mentionRecipient
+      ? {
+          ...target,
+          ...(flags.isHandoff ? { isHandoff: true } : {}),
+          ...(flags.mentionRecipient ? { mentionRecipient: true } : {}),
+        }
+      : target
+
   if (runId) {
     const stored = db.get<{ value_json: string }>(
       'SELECT value_json FROM kv_meta WHERE key = ?',
@@ -633,7 +678,7 @@ export function resolveOutboxTargetInDb(
           typeof parsed.channel === 'string' &&
           typeof parsed.externalChatId === 'string'
         ) {
-          return parsed
+          return applyFlags(parsed)
         }
       } catch {}
     }
@@ -650,11 +695,11 @@ export function resolveOutboxTargetInDb(
     session.id,
   )
   if (direct) {
-    return {
+    return applyFlags({
       channel: direct.channel,
       externalChatId: direct.external_id,
       ...(direct.thread_id ? { threadId: direct.thread_id } : {}),
-    }
+    })
   }
   if (session.projectId && session.kind === 'hub') {
     const root = db.get<{ channel: string; external_id: string }>(
@@ -664,7 +709,10 @@ export function resolveOutboxTargetInDb(
       session.projectId,
     )
     if (root) {
-      return { channel: root.channel, externalChatId: root.external_id }
+      return applyFlags({
+        channel: root.channel,
+        externalChatId: root.external_id,
+      })
     }
   }
   return undefined

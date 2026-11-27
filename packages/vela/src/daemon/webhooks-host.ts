@@ -1,4 +1,5 @@
 import {
+  normalizeWebhookConfigKey,
   type RuntimeWebhookEvent,
   RuntimeWebhookReceiver,
   type RuntimeWebhookStatus,
@@ -6,7 +7,7 @@ import {
 import { errorMessage, type VelaLogger } from '../shared/logger.ts'
 
 export interface DaemonWebhookConfig {
-  webhooks?: Record<string, unknown>
+  webhooks?: unknown
   eventDefaultTarget?: { channel: string; chatId: string }
 }
 
@@ -20,6 +21,7 @@ export class DaemonWebhooksHost {
   private lastConfigJson = 'undefined'
   private lastError?: string
   private syncQueue: Promise<void> = Promise.resolve()
+  private stopped = false
 
   constructor(
     private readonly publishEvent: (
@@ -30,9 +32,13 @@ export class DaemonWebhooksHost {
   ) {}
 
   sync(config: DaemonWebhookConfig, force = false): Promise<void> {
+    if (this.stopped) return Promise.resolve()
     const next = this.syncQueue
       .catch(() => {})
-      .then(() => this.applySync(config, force))
+      .then(() => {
+        if (this.stopped) return
+        return this.applySync(config, force)
+      })
     this.syncQueue = next
     return next
   }
@@ -41,11 +47,9 @@ export class DaemonWebhooksHost {
     config: DaemonWebhookConfig,
     force: boolean,
   ): Promise<void> {
+    if (this.stopped) return
     this.defaultTarget = config.eventDefaultTarget
-    const nextJson =
-      config.webhooks !== undefined
-        ? JSON.stringify(config.webhooks)
-        : 'undefined'
+    const nextJson = normalizeWebhookConfigKey(config.webhooks)
     const shouldRetryErrored =
       force && config.webhooks !== undefined && !this.receiver
     if (nextJson === this.lastConfigJson && !shouldRetryErrored) {
@@ -57,7 +61,7 @@ export class DaemonWebhooksHost {
       await this.receiver.stop().catch(() => {})
       this.receiver = undefined
     }
-    if (config.webhooks === undefined) {
+    if (this.stopped || config.webhooks === undefined) {
       return
     }
     try {
@@ -69,6 +73,10 @@ export class DaemonWebhooksHost {
         this.logger,
       )
       await receiver.start()
+      if (this.stopped) {
+        await receiver.stop().catch(() => {})
+        return
+      }
       this.receiver = receiver
     } catch (error) {
       this.lastError = errorMessage(error)
@@ -91,6 +99,7 @@ export class DaemonWebhooksHost {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true
     await this.syncQueue.catch(() => {})
     if (this.receiver) {
       await this.receiver.stop().catch(() => {})

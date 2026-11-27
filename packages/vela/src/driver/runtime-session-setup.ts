@@ -41,6 +41,7 @@ import {
 } from './runtime-extensions.ts'
 import {
   buildRuntimePromptSections,
+  preserveChannelControlTools,
   runtimeToolModifiers,
 } from './runtime-prompt.ts'
 import {
@@ -662,9 +663,20 @@ export async function prepareSessionSetup(params: {
       },
       mergedDefaultTools,
     )
-    if (loadout?.selection) registry.setSelection(loadout.selection)
-    else if (loadout?.modifiers)
+    if (loadout?.selection) {
+      const finalSelection =
+        override?.tools === undefined && !override?.noTools
+          ? preserveChannelControlTools(loadout.selection, {
+              hasChannelBinding,
+              sessionKind,
+              projectId,
+              excludeTools: override?.excludeTools,
+            })
+          : loadout.selection
+      registry.setSelection(finalSelection)
+    } else if (loadout?.modifiers) {
       registry.setDefaultToolModifiers([...baseModifiers, ...loadout.modifiers])
+    }
   }
 
   if (state.sessionActiveTools.has(sessionId)) {

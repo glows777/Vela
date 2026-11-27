@@ -431,13 +431,16 @@ export class SessionStoreControl {
         project.config_json,
       )
       const topicModel =
-        input.kind === 'topic' && typeof projectConfig?.topicModel === 'string'
-          ? projectConfig.topicModel
+        input.kind === 'topic' &&
+        typeof projectConfig?.topicModel === 'string' &&
+        projectConfig.topicModel.trim()
+          ? projectConfig.topicModel.trim()
           : undefined
       const topicThinking =
         input.kind === 'topic' &&
-        typeof projectConfig?.topicThinkingLevel === 'string'
-          ? projectConfig.topicThinkingLevel
+        typeof projectConfig?.topicThinkingLevel === 'string' &&
+        projectConfig.topicThinkingLevel.trim()
+          ? projectConfig.topicThinkingLevel.trim()
           : undefined
       driver = input.driver ?? project.default_driver
       inheritedModel ??= topicModel ?? project.default_model

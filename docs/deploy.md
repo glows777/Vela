@@ -2,7 +2,7 @@
 
 `vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, serving CLI clients and SDK `connectRuntime()` callers over `<VELA_DIR>/vela.sock`.
 
-> **Channel gateway transition note (S4a -> S4b):** `vela serve` is retired, and `vela daemon run` does not yet start `lark`, `local`, or `webhooks` listeners (channel and webhook migration lands in S4b). If your deployment serves **Lark, Local HTTP/SSE channels, or GitHub/generic webhooks**, run a small Node.js host script calling `createVela()` + `startChannels()` from a local package directory (see [Serving channels during the transition](#serving-channels-during-the-transition) below) instead of pointing systemd at `vela daemon run`.
+> **Channel gateway transition note (S4b-1 -> S4b-2):** `vela serve` is retired, and `vela daemon run` now hosts `webhooks` (`POST /events/github` and `POST /events/generic`) directly and hot-reloads them on `config.json` changes or `SIGHUP`. **Lark and Local HTTP/SSE channels** remain on the transitional SDK host (`createVela()` + `startChannels()`) until S4b-2 completes. If you run both `vela daemon` and the transitional SDK host during this step, do **not** configure `webhooks` on both with the same port (omit `extensionConfig.channel.eventReceiver` on the SDK host or stop one of them).
 
 The daemon has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
 
@@ -122,7 +122,7 @@ The running process keeps the old code until the restart. A run in progress is s
 
 ## Serving channels during the transition
 
-Until S4b wires channels and webhooks directly onto `vela daemon`, **Lark, Local HTTP/SSE channels, and GitHub/generic webhooks** all run on the legacy SDK host (`createVela()` + `startChannels()`).
+Until S4b-2 migrates **Lark and Local HTTP/SSE channels** onto `vela daemon`, run those channel adapters on the legacy SDK host (`createVela()` + `startChannels()`), while `vela daemon` hosts HTTP webhooks (`webhooks`) and CLI/SDK IPC.
 
 Node.js ESM does **not** resolve bare package imports (`import ... from '@glows777/vela'`) from a global `npm install -g` installation. Create a dedicated directory with a local `@glows777/vela` install under the `vela` user:
 

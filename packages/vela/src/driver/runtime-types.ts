@@ -237,7 +237,12 @@ export interface ActiveRunMeta {
   handoffDepth?: number
   channelTarget?: { channel: string; externalChatId: string; threadId?: string }
   humanProvenance?: { inboxEventId: string; senderName?: string }
-  attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
+  attachments?: Array<{
+    blobId: string
+    name: string
+    mimeType?: string
+    inlineOnly?: boolean
+  }>
   markSilent: () => void
 }
 

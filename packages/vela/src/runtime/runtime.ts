@@ -21,6 +21,7 @@ import {
   listChannelStatusesInRuntime,
   listRuntimeOrChannelMessages,
   setChannelEnabledInDb,
+  submitChannelHostMessageInRuntime,
 } from './channel-control.ts'
 import type {
   ChannelAdapter,
@@ -130,7 +131,8 @@ export class VelaRuntimeEngine {
     this.eventBus = new RuntimeEventBus(this.db)
     this.outbox = new OutboxDispatcher(
       this.db,
-      (name) => this.channels.get(name),
+      (name) =>
+        this.isChannelEnabled(name) ? this.channels.get(name) : undefined,
       () => this.syncWakeTimer(),
       (sessionId) => this.scheduleSession(sessionId),
     )
@@ -224,10 +226,15 @@ export class VelaRuntimeEngine {
 
   isChannelEnabled = (name: string): boolean =>
     isChannelEnabledInDb(this.db, name)
-  setChannelEnabled = (name: string, enabled: boolean): void =>
+  setChannelEnabled = (name: string, enabled: boolean): void => {
     setChannelEnabledInDb(this.db, name, enabled)
+    if (enabled && !this.disposed) {
+      void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
+    }
+  }
 
   listChannelChats(channel: string): Promise<ChannelChatInfo[]> {
+    if (!this.isChannelEnabled(channel)) return Promise.resolve([])
     return this.channels.get(channel)?.listChats?.() ?? Promise.resolve([])
   }
 
@@ -235,10 +242,12 @@ export class VelaRuntimeEngine {
     channel: string,
     input: ChannelHostSubmitInput,
   ): Promise<ChannelHostSubmitResult> {
-    const adapter = this.channels.get(channel)
-    if (!adapter?.submitFromHost)
-      throw new Error(`Channel "${channel}" does not support host submission`)
-    return adapter.submitFromHost(input)
+    return submitChannelHostMessageInRuntime(
+      this.db,
+      this.channels,
+      channel,
+      input,
+    )
   }
 
   getChannelToolsForSession(
@@ -267,7 +276,9 @@ export class VelaRuntimeEngine {
       sessions: this.sessions,
       bindings: this.bindings,
       subscriptions: this.subscriptions,
+      channels: this.channels,
       scheduleSession: (sid) => this.scheduleSession(sid),
+      logger: this.logger,
       event,
       defaultTarget,
     })
@@ -584,7 +595,9 @@ export class VelaRuntimeEngine {
     const timerDue = this.db.get<{ next_at: string | null }>(
       `SELECT min(next_fire_at) AS next_at FROM timers WHERE enabled = 1 AND next_fire_at IS NOT NULL`,
     )?.next_at
-    const registeredChannels = [...this.channels.keys()]
+    const registeredChannels = [...this.channels.keys()].filter((name) =>
+      this.isChannelEnabled(name),
+    )
     const outboxDue = this.outbox.nextPendingWakeAt(registeredChannels)
     let earliestMs = Number.POSITIVE_INFINITY
     for (const candidate of [timerDue, outboxDue]) {
@@ -755,6 +768,7 @@ export class VelaRuntimeEngine {
             if (this.channels.size > 0) void this.flushOutboxBestEffort()
           },
           getChannelAdapter: (name) => this.channels.get(name),
+          isChannelEnabled: (name) => this.isChannelEnabled(name),
           logger: this.logger,
         })
       } finally {

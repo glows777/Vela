@@ -125,9 +125,41 @@ export function enqueueInboxEvent(
   })
 }
 
+function inboxRouteInfo(row: InboxRow): {
+  routeKey?: string
+  needsAnnouncement: boolean
+} {
+  if (row.passive === 1) return { needsAnnouncement: false }
+  let payload: Record<string, unknown>
+  try {
+    payload = JSON.parse(row.payload_json) as Record<string, unknown>
+  } catch {
+    return { needsAnnouncement: false }
+  }
+  const routeKey =
+    typeof payload.channel === 'string' &&
+    typeof payload.externalChatId === 'string'
+      ? JSON.stringify([
+          payload.channel,
+          payload.externalChatId,
+          typeof payload.threadId === 'string' ? payload.threadId : null,
+        ])
+      : undefined
+  const isRoutine = row.source === 'timer' && payload.kind === 'routine'
+  const isDefaultWebhook =
+    row.source === 'webhook' && payload.isDefaultTarget === true
+  const needsAnnouncement =
+    (isRoutine || isDefaultWebhook) &&
+    Boolean(routeKey) &&
+    typeof payload.threadId !== 'string' &&
+    typeof payload.replyToMessageId !== 'string'
+  return { routeKey, needsAnnouncement }
+}
+
 /**
- * Claims all `pending` events for `sessionId` into `runId` iff at least one pending event
- * has `wake = 1`. Accumulates `passive = 1` and `wake = 0` events into the same batch.
+ * Claims pending events for `sessionId` into `runId` iff at least one pending event
+ * has `wake = 1`. Stops splitting before incompatible external routing targets or
+ * multiple announcement-needing turns so one group never hijacks or drops another's batch.
  */
 export function claimInboxBatchInTx(
   db: VelaDatabase,
@@ -148,14 +180,54 @@ export function claimInboxBatchInTx(
     sessionId,
   ) as unknown as InboxRow[]
   if (!rows.length) return []
-  db.run(
-    `UPDATE inbox_events
-     SET status = 'processing', run_id = ?
-     WHERE session_id = ? AND status = 'pending'`,
-    runId,
-    sessionId,
-  )
-  return rows.map((row) =>
+
+  const selected: InboxRow[] = []
+  let activeRouteKey: string | undefined
+  let hasAnnouncementItem = false
+  for (const row of rows) {
+    const info = inboxRouteInfo(row)
+    if (selected.length > 0) {
+      if (info.routeKey && activeRouteKey && info.routeKey !== activeRouteKey) {
+        break
+      }
+      if (info.needsAnnouncement && (hasAnnouncementItem || activeRouteKey)) {
+        break
+      }
+      if (
+        hasAnnouncementItem &&
+        info.routeKey &&
+        info.routeKey !== activeRouteKey
+      ) {
+        break
+      }
+    }
+    selected.push(row)
+    if (info.routeKey && !activeRouteKey) activeRouteKey = info.routeKey
+    if (info.needsAnnouncement) hasAnnouncementItem = true
+  }
+  if (!selected.some((row) => row.wake === 1)) {
+    return []
+  }
+
+  if (selected.length === rows.length) {
+    db.run(
+      `UPDATE inbox_events
+       SET status = 'processing', run_id = ?
+       WHERE session_id = ? AND status = 'pending'`,
+      runId,
+      sessionId,
+    )
+  } else {
+    const placeholders = selected.map(() => '?').join(', ')
+    db.run(
+      `UPDATE inbox_events
+       SET status = 'processing', run_id = ?
+       WHERE id IN (${placeholders})`,
+      runId,
+      ...selected.map((row) => row.id),
+    )
+  }
+  return selected.map((row) =>
     rowToInbox({ ...row, status: 'processing', run_id: runId }),
   )
 }

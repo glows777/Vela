@@ -199,5 +199,5 @@ export async function githubSetup(
 }
 
 function nextSteps(): string {
-  return 'Restart your SDK channel host (`createVela()` + `startChannels()`; see docs/deploy.md) after setup — `vela daemon` does not yet serve webhook listeners before S4b. An enabled, connected channel is required to receive routed events. Hook creation does not verify tunnel reachability or listener delivery; check Recent deliveries in GitHub. Hooks at an old URL are left unchanged; clean them up manually.'
+  return 'Restart or reload `vela daemon` (config changes reload automatically / via SIGHUP, or restart your SDK channel host if you run one separately — do not run two webhook listeners on the same port). An enabled, connected channel (Lark migration lands in S4b-2) is required to deliver routed events. Hook creation does not verify tunnel reachability or listener delivery; check Recent deliveries in GitHub. Hooks at an old URL are left unchanged; clean them up manually.'
 }

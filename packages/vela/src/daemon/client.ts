@@ -10,6 +10,7 @@ import { ensureDaemonRunning, stripTransientDaemonEnv } from './launcher.ts'
 import { resolveDaemonPaths } from './paths.ts'
 import {
   createNdjsonParser,
+  DAEMON_PROTOCOL_VERSION,
   type DaemonHello,
   type DaemonWireMessage,
   deserializeError,
@@ -67,6 +68,7 @@ export async function connectRuntime(
     })
   }
 
+  const expectedProto = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION
   const socket = await openSocket(paths.socketPath, options.timeoutMs ?? 15_000)
   const { runtime, verifyHello } = createSocketRuntimeClient(
     paths.agentDir,
@@ -77,6 +79,11 @@ export async function connectRuntime(
     if (hello.agentDir !== paths.agentDir) {
       throw new Error(
         `Socket ${paths.socketPath} belongs to ${hello.agentDir}, expected ${paths.agentDir}`,
+      )
+    }
+    if (hello.protocolVersion !== expectedProto) {
+      throw new Error(
+        `Daemon protocol version mismatch at ${paths.socketPath}: expected ${expectedProto}, got ${hello.protocolVersion}`,
       )
     }
     return runtime

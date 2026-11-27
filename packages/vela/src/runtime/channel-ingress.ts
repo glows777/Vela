@@ -17,6 +17,57 @@ import type { RuntimeEventBus } from './event-bus.ts'
 import { enqueueInboxEvent } from './inbox.ts'
 import { type ControlShortcut, parseControlShortcut } from './shortcuts.ts'
 
+const CHANNEL_ENABLED_PREFIX = 'channel_enabled:'
+
+export function isChannelEnabledInDb(db: VelaDatabase, name: string): boolean {
+  const row = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    `${CHANNEL_ENABLED_PREFIX}${name}`,
+  )
+  if (!row) return true
+  try {
+    return JSON.parse(row.value_json) !== false
+  } catch {
+    return true
+  }
+}
+
+export function setChannelEnabledInDb(
+  db: VelaDatabase,
+  name: string,
+  enabled: boolean,
+): void {
+  db.run(
+    `INSERT INTO kv_meta (key, value_json, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+    `${CHANNEL_ENABLED_PREFIX}${name}`,
+    JSON.stringify(enabled),
+    new Date().toISOString(),
+  )
+}
+
+export function getActiveHubSession(
+  db: VelaDatabase,
+  projects: ProjectStore,
+  sessions: SessionStoreControl,
+  projectId: string,
+): SessionRecord | undefined {
+  const project = projects.get(projectId)
+  if (!project) return undefined
+  if (project.hubSessionId) {
+    const linked = sessions.get(project.hubSessionId)
+    if (linked && !linked.archived) return linked
+  }
+  const existingHub = db.get<{ id: string }>(
+    `SELECT id FROM sessions
+     WHERE project_id = ? AND kind = 'hub' AND archived = 0
+     ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+    projectId,
+  )
+  return existingHub ? sessions.get(existingHub.id) : undefined
+}
+
 function resolveChannelTargetInDb(params: {
   db: VelaDatabase
   projects: ProjectStore
@@ -47,7 +98,9 @@ function resolveChannelTargetInDb(params: {
     const session = exact.sessionId
       ? sessions.get(exact.sessionId)
       : exact.projectId
-        ? getOrCreateHubSession(db, projects, sessions, exact.projectId)
+        ? allowCreateTopic
+          ? getOrCreateHubSession(db, projects, sessions, exact.projectId)
+          : getActiveHubSession(db, projects, sessions, exact.projectId)
         : undefined
     return session ? { binding: exact, session } : undefined
   }
@@ -88,7 +141,7 @@ function resolveChannelTargetInDb(params: {
   return { binding: topicBinding, session: topicSession }
 }
 
-export function getOrCreateHubSession(
+function getOrCreateHubSession(
   db: VelaDatabase,
   projects: ProjectStore,
   sessions: SessionStoreControl,
@@ -173,6 +226,10 @@ export async function ingestChannelMessageInRuntime(params: {
     executeShortcut,
     scheduleSession,
   } = params
+
+  if (!isChannelEnabledInDb(db, msg.channel)) {
+    return
+  }
 
   const inFlight = params.inFlightDeliveries
   const channelDedupeKey = msg.dedupeKey
@@ -321,6 +378,9 @@ export async function ingestChannelMessageInRuntime(params: {
             ...(msg.rawText !== undefined ? { rawText: msg.rawText } : {}),
             ...(msg.mentioned !== undefined
               ? { mentioned: msg.mentioned }
+              : {}),
+            ...(msg.mentionRecipient !== undefined
+              ? { mentionRecipient: msg.mentionRecipient }
               : {}),
             timestamp: msg.timestamp,
             ...(attachments.length ? { attachments } : {}),

@@ -30,6 +30,7 @@ export async function executeRuntimeClaimedTurn(params: {
   wakeSession: (sessionId: string) => void
   flushOutbox: () => void
   getChannelAdapter?: (name: string) => ChannelAdapter | undefined
+  isChannelEnabled?: (name: string) => boolean
   logger?: VelaLogger
 }): Promise<{ lostOwnership: boolean; status?: DriverTurnResult['status'] }> {
   const { db, eventBus, driver, claimed, abortController } = params
@@ -74,6 +75,8 @@ export async function executeRuntimeClaimedTurn(params: {
           inputs: claimed.inputs,
           outboxTarget: initialTarget,
           getChannelAdapter: params.getChannelAdapter,
+          isChannelEnabled: params.isChannelEnabled,
+          abortSignal: abortController.signal,
           logger: params.logger ?? {
             debug() {},
             info() {},

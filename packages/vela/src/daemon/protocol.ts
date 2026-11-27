@@ -10,7 +10,7 @@ import type {
   StreamDeltaEvent,
 } from '../runtime/index.ts'
 
-export const DAEMON_PROTOCOL_VERSION = 1
+export const DAEMON_PROTOCOL_VERSION = 2
 const MAX_WIRE_FRAME_BYTES = 128 * 1024 * 1024
 
 export interface DaemonHello {
@@ -275,5 +275,72 @@ export function createNdjsonParser(
       }
       onMessage(parsed)
     }
+  }
+}
+
+export function parseChannelSetEnabledParams(p: unknown): {
+  name: string
+  enabled: boolean
+} {
+  const obj = p as Record<string, unknown> | null | undefined
+  if (
+    !obj ||
+    typeof obj !== 'object' ||
+    typeof obj.name !== 'string' ||
+    !obj.name.trim() ||
+    typeof obj.enabled !== 'boolean'
+  ) {
+    throw new Error(
+      'Invalid channels.setEnabled params: expected { name: string, enabled: boolean }',
+    )
+  }
+  return { name: obj.name.trim(), enabled: obj.enabled }
+}
+
+export function parseChannelChatsParams(p: unknown): { channel: string } {
+  const obj = p as Record<string, unknown> | null | undefined
+  if (
+    !obj ||
+    typeof obj !== 'object' ||
+    typeof obj.channel !== 'string' ||
+    !obj.channel.trim()
+  ) {
+    throw new Error(
+      'Invalid channels.chats params: expected { channel: string }',
+    )
+  }
+  return { channel: obj.channel.trim() }
+}
+
+export function parseChannelSubmitParams(p: unknown): {
+  channel: string
+  input: import('../runtime/channels.ts').ChannelHostSubmitInput
+} {
+  const obj = p as Record<string, unknown> | null | undefined
+  const input = obj?.input as Record<string, unknown> | null | undefined
+  const author = input?.author as Record<string, unknown> | null | undefined
+  if (
+    !obj ||
+    typeof obj !== 'object' ||
+    typeof obj.channel !== 'string' ||
+    !obj.channel.trim() ||
+    !input ||
+    typeof input !== 'object' ||
+    typeof input.chatId !== 'string' ||
+    !input.chatId.trim() ||
+    typeof input.text !== 'string' ||
+    !author ||
+    typeof author !== 'object' ||
+    typeof author.id !== 'string' ||
+    typeof author.name !== 'string'
+  ) {
+    throw new Error(
+      'Invalid channels.submit params: expected { channel, input: { chatId, text, author: { id, name } } }',
+    )
+  }
+  return {
+    channel: obj.channel.trim(),
+    input:
+      input as unknown as import('../runtime/channels.ts').ChannelHostSubmitInput,
   }
 }

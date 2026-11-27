@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
 import {
@@ -52,15 +52,53 @@ export interface RuntimeWebhookStatus {
 }
 
 const MAX_SEEN = 1000
+const REPLAY_WINDOW_MS = 5 * 60 * 1000
 
-/** Extracts validated `webhooks.github.repositories` list for prompt guidance without throwing on unrelated configs. */
+function uniqueSorted(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+}
+
+/** Extracts normalized `webhooks.github.repositories` list for prompt guidance without throwing on unrelated configs. */
 export function extractGithubRepositories(
   webhooksConfig: unknown,
 ): string[] | undefined {
   if (!webhooksConfig || typeof webhooksConfig !== 'object') return undefined
   const parsed = webhookReceiverConfigSchema.safeParse(webhooksConfig)
   if (!parsed.success || !parsed.data.github) return undefined
-  return [...parsed.data.github.repositories]
+  return uniqueSorted(parsed.data.github.repositories)
+}
+
+/** Normalizes webhook receiver configuration so order-insensitive sets produce a stable fingerprint. */
+export function normalizeWebhookConfigKey(config: unknown): string {
+  if (config === undefined) return 'undefined'
+  const parsed = webhookReceiverConfigSchema.safeParse(config)
+  if (!parsed.success) return JSON.stringify(config) ?? String(config)
+  const data = parsed.data
+  const normalizedGithub = data.github
+    ? {
+        secret: data.github.secret,
+        repositories: uniqueSorted(data.github.repositories),
+        apps: uniqueSorted(data.github.apps),
+        issueLabels: Array.isArray(data.github.issueLabels)
+          ? uniqueSorted(data.github.issueLabels)
+          : {
+              ...(data.github.issueLabels.all
+                ? { all: uniqueSorted(data.github.issueLabels.all) }
+                : {}),
+              ...(data.github.issueLabels.any
+                ? { any: uniqueSorted(data.github.issueLabels.any) }
+                : {}),
+            },
+      }
+    : undefined
+  const normalizedGeneric = data.generic
+    ? { secret: data.generic.secret, source: data.generic.source }
+    : undefined
+  return JSON.stringify({
+    port: data.port,
+    ...(normalizedGithub ? { github: normalizedGithub } : {}),
+    ...(normalizedGeneric ? { generic: normalizedGeneric } : {}),
+  })
 }
 
 /** Daemon-hosted HTTP webhook receiver verifying HMAC signatures and writing durable `inbox_events`. */
@@ -68,6 +106,8 @@ export class RuntimeWebhookReceiver {
   private readonly options: WebhookReceiverConfig
   private readonly listener = new HttpListener()
   private readonly seen = new Set<string>()
+  private readonly inFlight = new Set<string>()
+  private readonly replayFingerprints = new Map<string, number>()
   private readonly logger: VelaLogger
 
   constructor(
@@ -147,57 +187,135 @@ export class RuntimeWebhookReceiver {
       const adapter = github ? 'github' : 'generic'
       if (req.method !== 'POST') throw new HttpError(405, 'POST required')
       const raw = await readBody(req)
-      const header =
-        req.headers[github ? 'x-hub-signature-256' : 'x-vela-signature-256']
-      const expected = createHmac('sha256', (github ?? generic!).secret)
-        .update(raw)
-        .digest()
-      if (
-        typeof header !== 'string' ||
-        !/^sha256=[a-f0-9]{64}$/i.test(header) ||
-        !timingSafeEqual(expected, Buffer.from(header.slice(7), 'hex'))
-      )
-        throw new HttpError(403, 'Invalid signature')
       const id = req.headers[github ? 'x-github-delivery' : 'x-vela-delivery']
       const type = req.headers['x-github-event']
+      const header =
+        req.headers[github ? 'x-hub-signature-256' : 'x-vela-signature-256']
+      const tsHeader = generic ? req.headers['x-vela-timestamp'] : undefined
       if (
         typeof id !== 'string' ||
         !id.trim() ||
         id.length > 512 ||
         (github && typeof type !== 'string')
-      )
+      ) {
+        // Still validate signature first when headers are missing? Wait: verify raw signature before header validation so invalid signatures always return 403!
+        const expectedRaw = createHmac('sha256', (github ?? generic!).secret)
+          .update(raw)
+          .digest()
+        if (
+          typeof header !== 'string' ||
+          !/^sha256=[a-f0-9]{64}$/i.test(header) ||
+          !timingSafeEqual(expectedRaw, Buffer.from(header.slice(7), 'hex'))
+        ) {
+          throw new HttpError(403, 'Invalid signature')
+        }
         throw new HttpError(
           400,
           `Missing or invalid ${github ? 'GitHub' : 'generic'} delivery headers`,
         )
+      }
+
+      let signedPayloadUsed = false
+      if (tsHeader !== undefined) {
+        if (typeof tsHeader !== 'string' || tsHeader.length > 64) {
+          throw new HttpError(400, 'Invalid generic timestamp header')
+        }
+        const trimmedTs = tsHeader.trim()
+        const numericTs = /^\d+$/.test(trimmedTs) ? Number(trimmedTs) : NaN
+        const tsMs = Number.isFinite(numericTs)
+          ? numericTs < 1e12
+            ? numericTs * 1000
+            : numericTs
+          : Date.parse(trimmedTs)
+        if (
+          !Number.isFinite(tsMs) ||
+          Math.abs(Date.now() - tsMs) > REPLAY_WINDOW_MS
+        ) {
+          throw new HttpError(403, 'Expired or invalid timestamp')
+        }
+        const expectedBound = createHmac('sha256', generic!.secret)
+          .update(`${tsHeader}.${id}.`)
+          .update(raw)
+          .digest()
+        if (
+          typeof header !== 'string' ||
+          !/^sha256=[a-f0-9]{64}$/i.test(header) ||
+          !timingSafeEqual(expectedBound, Buffer.from(header.slice(7), 'hex'))
+        ) {
+          throw new HttpError(403, 'Invalid signature')
+        }
+        signedPayloadUsed = true
+      } else {
+        const expected = createHmac('sha256', (github ?? generic!).secret)
+          .update(raw)
+          .digest()
+        if (
+          typeof header !== 'string' ||
+          !/^sha256=[a-f0-9]{64}$/i.test(header) ||
+          !timingSafeEqual(expected, Buffer.from(header.slice(7), 'hex'))
+        ) {
+          throw new HttpError(403, 'Invalid signature')
+        }
+      }
+
       const cacheKey = JSON.stringify([adapter, id])
-      if (this.seen.has(cacheKey)) {
+      if (this.seen.has(cacheKey) || this.inFlight.has(cacheKey)) {
         respond(202, 'Duplicate delivery ignored')
         return
       }
-      this.seen.add(cacheKey)
-      if (this.seen.size > MAX_SEEN)
-        this.seen.delete(this.seen.values().next().value!)
-      let events: RuntimeWebhookEvent[]
-      try {
-        const input = JSON.parse(raw.toString('utf8'))
-        events = github
-          ? parseGithubWebhookEvents(
-              type as string,
-              input,
-              id,
-              github,
-              this.logger,
-            )
-          : [parseGenericWebhookEvent(input, id, generic!)]
-      } catch {
-        throw new HttpError(
-          400,
-          `Invalid ${github ? 'GitHub' : 'generic'} payload`,
-        )
+      const replayHash = signedPayloadUsed
+        ? undefined
+        : createHash('sha256')
+            .update(adapter)
+            .update('\0')
+            .update(raw)
+            .digest('hex')
+      const nowMs = Date.now()
+      if (replayHash) {
+        const expiresAt = this.replayFingerprints.get(replayHash)
+        if (expiresAt !== undefined && expiresAt > nowMs) {
+          respond(202, 'Duplicate replay ignored')
+          return
+        }
       }
-      for (const event of events) await this.publish(event)
-      respond(202, 'Accepted; execution is not guaranteed')
+      this.inFlight.add(cacheKey)
+      try {
+        let events: RuntimeWebhookEvent[]
+        try {
+          const input = JSON.parse(raw.toString('utf8'))
+          events = github
+            ? parseGithubWebhookEvents(
+                type as string,
+                input,
+                id,
+                github,
+                this.logger,
+              )
+            : [parseGenericWebhookEvent(input, id, generic!)]
+        } catch {
+          throw new HttpError(
+            400,
+            `Invalid ${github ? 'GitHub' : 'generic'} payload`,
+          )
+        }
+        for (const event of events) await this.publish(event)
+        this.seen.add(cacheKey)
+        if (this.seen.size > MAX_SEEN) {
+          this.seen.delete(this.seen.values().next().value!)
+        }
+        if (replayHash) {
+          this.replayFingerprints.delete(replayHash)
+          this.replayFingerprints.set(replayHash, nowMs + REPLAY_WINDOW_MS)
+          if (this.replayFingerprints.size > MAX_SEEN) {
+            this.replayFingerprints.delete(
+              this.replayFingerprints.keys().next().value!,
+            )
+          }
+        }
+        respond(202, 'Accepted; execution is not guaranteed')
+      } finally {
+        this.inFlight.delete(cacheKey)
+      }
     } catch (error) {
       if (error instanceof HttpError) respond(error.status, error.message)
       else {

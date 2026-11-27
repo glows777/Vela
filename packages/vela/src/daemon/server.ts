@@ -38,6 +38,9 @@ import {
   type DaemonWireMessage,
   encodeWireLine,
   getAppVersion,
+  parseChannelChatsParams,
+  parseChannelSetEnabledParams,
+  parseChannelSubmitParams,
   serializeError,
 } from './protocol.ts'
 import { DaemonWebhooksHost } from './webhooks-host.ts'
@@ -388,10 +391,18 @@ export async function startDaemonServer(
     'bindings.setEnabled': (p) => runtime.bindings.setEnabled(p.id, p.enabled),
     'bindings.remove': (p) => runtime.bindings.remove(p.id),
     'channels.list': () => runtime.channels.list(),
-    'channels.setEnabled': (p) =>
-      runtime.channels.setEnabled(p.name, p.enabled),
-    'channels.chats': (p) => runtime.channels.chats(p.channel),
-    'channels.submit': (p) => runtime.channels.submit(p.channel, p.input),
+    'channels.setEnabled': (p) => {
+      const { name, enabled } = parseChannelSetEnabledParams(p)
+      return runtime.channels.setEnabled(name, enabled)
+    },
+    'channels.chats': (p) => {
+      const { channel } = parseChannelChatsParams(p)
+      return runtime.channels.chats(channel)
+    },
+    'channels.submit': (p) => {
+      const { channel, input } = parseChannelSubmitParams(p)
+      return runtime.channels.submit(channel, input)
+    },
     'blobs.get': (p) => runtime.blobs.get(p.id),
     'blobs.list': (p) => runtime.blobs.list(p.sessionId, p.direction),
     'blobs.read': (p) => runtime.blobs.read(p.id),

@@ -159,6 +159,8 @@
     subscribeEvents?: ((listener: RuntimeEventListener) => () => void) | undefined
   interface ChannelAnnouncementInput
     externalChatId: string
+    idempotencyKey?: string | undefined
+    signal?: AbortSignal | undefined
     text: string
     threadId?: string | undefined
   interface ChannelAnnouncementResult
@@ -233,6 +235,7 @@
     dedupeKey: string
     externalChatId: string
     kind: ChannelBindingKind
+    mentionRecipient?: boolean | undefined
     mentioned?: boolean | undefined
     messageId?: string | undefined
     passive?: boolean | undefined

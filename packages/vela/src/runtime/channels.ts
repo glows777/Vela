@@ -47,6 +47,7 @@ export interface ChannelInboundMessage {
   senderName: string
   text: string
   mentioned?: boolean
+  mentionRecipient?: boolean
   passive?: boolean
   wake?: boolean
   /** Do not auto-create a topic or DM session if no active binding exists yet. */
@@ -121,6 +122,8 @@ export interface ChannelAnnouncementInput {
   externalChatId: string
   threadId?: string
   text: string
+  idempotencyKey?: string
+  signal?: AbortSignal
 }
 
 export interface ChannelAnnouncementResult {

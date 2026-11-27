@@ -1,13 +1,17 @@
 import type { VelaDatabase } from '../db/index.ts'
 import { errorMessage, type VelaLogger } from '../shared/logger.ts'
 import {
-  getOrCreateHubSession,
+  getActiveHubSession,
   ingestChannelMessageInRuntime,
+  isChannelEnabledInDb,
+  setChannelEnabledInDb,
 } from './channel-ingress.ts'
 import type {
   ChannelAdapter,
   ChannelAdapterContext,
   ChannelBinding,
+  ChannelHostSubmitInput,
+  ChannelHostSubmitResult,
   ChannelStatusInfo,
   ChannelToolSpec,
 } from './channels.ts'
@@ -26,8 +30,6 @@ import {
 import type { SubscriptionManager } from './subscriptions.ts'
 import type { RuntimeWebhookEvent } from './webhooks/github-events.ts'
 import type { OutboxTarget } from './worker.ts'
-
-const CHANNEL_ENABLED_PREFIX = 'channel_enabled:'
 
 export function createChannelAdapterContext(params: {
   db: VelaDatabase
@@ -72,32 +74,60 @@ export function createChannelAdapterContext(params: {
   }
 }
 
-export function isChannelEnabledInDb(db: VelaDatabase, name: string): boolean {
-  const row = db.get<{ value_json: string }>(
-    'SELECT value_json FROM kv_meta WHERE key = ?',
-    `${CHANNEL_ENABLED_PREFIX}${name}`,
-  )
-  if (!row) return true
-  try {
-    return JSON.parse(row.value_json) !== false
-  } catch {
-    return true
-  }
+export { isChannelEnabledInDb, setChannelEnabledInDb }
+
+const CHANNEL_CURSOR_PREFIX = 'ch:'
+const WEBHOOK_DELIVERY_PREFIX = 'webhook_delivery:'
+const MAX_WEBHOOK_DELIVERIES = 2000
+
+function isRootGroupDisabled(
+  bindings: ChannelBindingStore,
+  binding: ChannelBinding,
+): boolean {
+  if (!binding.threadId) return false
+  const root = bindings.findByExternal(binding.channel, binding.externalId)
+  return Boolean(root && !root.enabled)
 }
 
-export function setChannelEnabledInDb(
+function isBindingActive(
   db: VelaDatabase,
-  name: string,
-  enabled: boolean,
-): void {
-  db.run(
-    `INSERT INTO kv_meta (key, value_json, updated_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
-    `${CHANNEL_ENABLED_PREFIX}${name}`,
-    JSON.stringify(enabled),
-    new Date().toISOString(),
+  bindings: ChannelBindingStore,
+  binding: ChannelBinding,
+): boolean {
+  return (
+    binding.enabled &&
+    isChannelEnabledInDb(db, binding.channel) &&
+    !isRootGroupDisabled(bindings, binding)
   )
+}
+
+function encodeChannelCursor(binding: ChannelBinding, cursor: string): string {
+  return `${CHANNEL_CURSOR_PREFIX}${encodeURIComponent(binding.channel)}:${encodeURIComponent(binding.id)}:${cursor}`
+}
+
+function decodeChannelCursor(
+  binding: ChannelBinding,
+  cursor: string | undefined,
+): string | undefined {
+  if (!cursor?.startsWith(CHANNEL_CURSOR_PREFIX)) return cursor
+  const rest = cursor.slice(CHANNEL_CURSOR_PREFIX.length)
+  const firstSep = rest.indexOf(':')
+  const secondSep = firstSep === -1 ? -1 : rest.indexOf(':', firstSep + 1)
+  if (firstSep === -1 || secondSep === -1) {
+    throw new Error(
+      'Invalid channel pagination cursor; restart pagination from the beginning',
+    )
+  }
+  const cursorChannel = decodeURIComponent(rest.slice(0, firstSep))
+  const cursorBindingId = decodeURIComponent(
+    rest.slice(firstSep + 1, secondSep),
+  )
+  if (cursorChannel !== binding.channel || cursorBindingId !== binding.id) {
+    throw new Error(
+      'Pagination cursor belongs to a different channel binding; restart pagination from the beginning',
+    )
+  }
+  return rest.slice(secondSep + 1)
 }
 
 function resolveSessionChannelBinding(
@@ -105,26 +135,26 @@ function resolveSessionChannelBinding(
   bindings: ChannelBindingStore,
   session: SessionRecord,
 ): ChannelBinding | undefined {
-  const directRow = db.get<{ id: string }>(
+  const directRows = db.all<{ id: string }>(
     `SELECT id FROM channel_bindings
      WHERE session_id = ? AND enabled = 1
-     ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+     ORDER BY created_at ASC, rowid ASC`,
     session.id,
   )
-  if (directRow) {
-    const binding = bindings.get(directRow.id)
-    if (binding) return binding
+  for (const row of directRows) {
+    const binding = bindings.get(row.id)
+    if (binding && isBindingActive(db, bindings, binding)) return binding
   }
   if (session.projectId && session.kind === 'hub') {
-    const rootRow = db.get<{ id: string }>(
+    const rootRows = db.all<{ id: string }>(
       `SELECT id FROM channel_bindings
        WHERE project_id = ? AND thread_id IS NULL AND enabled = 1
-       ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+       ORDER BY created_at ASC, rowid ASC`,
       session.projectId,
     )
-    if (rootRow) {
-      const binding = bindings.get(rootRow.id)
-      if (binding) return binding
+    for (const row of rootRows) {
+      const binding = bindings.get(row.id)
+      if (binding && isBindingActive(db, bindings, binding)) return binding
     }
   }
   return undefined
@@ -143,15 +173,27 @@ export async function listRuntimeOrChannelMessages(
   if (binding) {
     const adapter = channels.get(binding.channel)
     if (adapter?.listMessages) {
-      return adapter.listMessages({
+      const rawCursor = decodeChannelCursor(binding, input.cursor)
+      const page = await adapter.listMessages({
         sessionId: session.id,
         externalChatId: binding.externalId,
         threadId: binding.threadId,
         kind: binding.kind,
-        cursor: input.cursor,
+        cursor: rawCursor,
         limit: input.limit,
       })
+      return {
+        ...page,
+        ...(page.nextCursor
+          ? { nextCursor: encodeChannelCursor(binding, page.nextCursor) }
+          : {}),
+      }
     }
+  }
+  if (input.cursor?.startsWith(CHANNEL_CURSOR_PREFIX)) {
+    throw new Error(
+      'Pagination cursor is no longer valid because the channel source changed; restart pagination from the beginning',
+    )
   }
   return listRuntimeSessionMessages(db, input)
 }
@@ -172,11 +214,31 @@ export function listChannelStatusesInRuntime(
     rows.push({
       name,
       enabled,
-      connected: Boolean(adapter && (state ? state.connected : true)),
+      connected:
+        enabled && Boolean(adapter && (state ? state.connected : true)),
       ...(error ? { error } : {}),
     })
   }
   return rows
+}
+
+export function submitChannelHostMessageInRuntime(
+  db: VelaDatabase,
+  channels: ReadonlyMap<string, ChannelAdapter>,
+  channel: string,
+  input: ChannelHostSubmitInput,
+): Promise<ChannelHostSubmitResult> {
+  if (!isChannelEnabledInDb(db, channel)) {
+    return Promise.resolve({
+      outcome: 'not-sent',
+      error: `Channel "${channel}" is disabled`,
+    })
+  }
+  const adapter = channels.get(channel)
+  if (!adapter?.submitFromHost) {
+    throw new Error(`Channel "${channel}" does not support host submission`)
+  }
+  return adapter.submitFromHost(input)
 }
 
 export function getChannelToolsForSessionInDb(
@@ -205,7 +267,9 @@ export function getChannelToolsForSessionInDb(
               parsed.externalChatId,
               parsed.threadId,
             ) ?? bindings.findByExternal(parsed.channel, parsed.externalChatId)
-          if (binding && !binding.enabled) binding = undefined
+          if (binding && !isBindingActive(db, bindings, binding)) {
+            binding = undefined
+          }
         }
       } catch {
         /* ignore malformed run_target */
@@ -220,13 +284,39 @@ export function getChannelToolsForSessionInDb(
   return tools.length > 0 ? { binding, tools } : undefined
 }
 
+function recordWebhookDeliveryInTx(db: VelaDatabase, key: string): void {
+  db.run(
+    `INSERT OR IGNORE INTO kv_meta (key, value_json, updated_at) VALUES (?, ?, ?)`,
+    key,
+    '1',
+    new Date().toISOString(),
+  )
+  const countRow = db.get<{ cnt: number }>(
+    `SELECT count(*) AS cnt FROM kv_meta WHERE key LIKE ?`,
+    `${WEBHOOK_DELIVERY_PREFIX}%`,
+  )
+  const cnt = countRow?.cnt ?? 0
+  if (cnt > MAX_WEBHOOK_DELIVERIES) {
+    const excess = cnt - MAX_WEBHOOK_DELIVERIES
+    db.run(
+      `DELETE FROM kv_meta WHERE key IN (
+         SELECT key FROM kv_meta WHERE key LIKE ? ORDER BY updated_at ASC, rowid ASC LIMIT ?
+       )`,
+      `${WEBHOOK_DELIVERY_PREFIX}%`,
+      excess,
+    )
+  }
+}
+
 export function ingestWebhookEventInRuntime(params: {
   db: VelaDatabase
   projects: ProjectStore
   sessions: SessionStoreControl
   bindings: ChannelBindingStore
   subscriptions: SubscriptionManager
+  channels?: ReadonlyMap<string, ChannelAdapter>
   scheduleSession: (sessionId: string) => void
+  logger?: VelaLogger
   event: RuntimeWebhookEvent
   defaultTarget?: { channel: string; chatId: string }
 }): {
@@ -240,69 +330,123 @@ export function ingestWebhookEventInRuntime(params: {
     sessions,
     bindings,
     subscriptions,
+    channels,
     scheduleSession,
+    logger,
     event,
     defaultTarget,
   } = params
-  const dispatched = subscriptions.dispatchEvent({
-    source: event.source,
-    eventKey: event.key,
-    dedupeKey: event.deliveryId,
-    summary: event.summary,
-    details: event.details,
-    final: event.final,
-  })
-  if (dispatched.matchedSessionIds.length > 0 || !defaultTarget) {
-    return dispatched
-  }
-  const channel = defaultTarget.channel.trim()
-  const chatId = defaultTarget.chatId.trim()
-  if (!channel || !chatId) return dispatched
-
-  const binding = bindings.findByExternal(channel, chatId)
-  if (!binding?.enabled) return dispatched
-  const targetSession = binding.sessionId
-    ? sessions.get(binding.sessionId)
-    : binding.projectId
-      ? getOrCreateHubSession(db, projects, sessions, binding.projectId)
-      : undefined
-  if (!targetSession) return dispatched
-
-  const enqueued = enqueueInboxEvent(db, {
-    sessionId: targetSession.id,
-    projectId: binding.projectId ?? targetSession.projectId,
-    source: 'webhook',
-    dedupeKey: `${event.source}:${event.deliveryId}:default:${targetSession.id}`,
-    wake: true,
-    payload: {
-      type: 'webhook',
-      eventSource: event.source,
+  const deliveryRecordKey = `${WEBHOOK_DELIVERY_PREFIX}${event.source}:${event.deliveryId}:${event.key}`
+  const toSchedule = new Set<string>()
+  const result = db.transaction(() => {
+    const prior = db.get<{ key: string }>(
+      'SELECT key FROM kv_meta WHERE key = ?',
+      deliveryRecordKey,
+    )
+    const dispatched = subscriptions.dispatchEvent({
+      source: event.source,
       eventKey: event.key,
-      deliveryId: event.deliveryId,
+      dedupeKey: event.deliveryId,
       summary: event.summary,
-      ...(event.details !== undefined ? { details: event.details } : {}),
-      ...(event.final !== undefined ? { final: event.final } : {}),
-      isDefaultTarget: true,
-      channel,
-      externalChatId: chatId,
-    },
+      details: event.details,
+      final: event.final,
+    })
+    for (const sid of dispatched.matchedSessionIds) toSchedule.add(sid)
+
+    if (dispatched.matchedCount > 0 || prior) {
+      if (dispatched.matchedCount > 0) {
+        recordWebhookDeliveryInTx(db, deliveryRecordKey)
+      }
+      return {
+        matchedSessionIds: dispatched.matchedSessionIds,
+        enqueuedCount: dispatched.enqueuedCount,
+      }
+    }
+    if (!defaultTarget) {
+      return {
+        matchedSessionIds: dispatched.matchedSessionIds,
+        enqueuedCount: dispatched.enqueuedCount,
+      }
+    }
+    const channel = defaultTarget.channel.trim()
+    const chatId = defaultTarget.chatId.trim()
+    if (!channel || !chatId || !isChannelEnabledInDb(db, channel)) {
+      return {
+        matchedSessionIds: dispatched.matchedSessionIds,
+        enqueuedCount: dispatched.enqueuedCount,
+      }
+    }
+
+    const binding = bindings.findByExternal(channel, chatId)
+    if (!binding || !isBindingActive(db, bindings, binding)) {
+      return {
+        matchedSessionIds: dispatched.matchedSessionIds,
+        enqueuedCount: dispatched.enqueuedCount,
+      }
+    }
+    if (channels && !binding.threadId) {
+      const adapter = channels.get(channel)
+      if (!adapter?.announce) {
+        logger?.warn(
+          `[${channel}] Skipping unmatched webhook ${event.key}: default group target requires a connected channel with announce()`,
+        )
+        return {
+          matchedSessionIds: dispatched.matchedSessionIds,
+          enqueuedCount: dispatched.enqueuedCount,
+        }
+      }
+    }
+    const targetSession = binding.sessionId
+      ? sessions.get(binding.sessionId)
+      : binding.projectId
+        ? getActiveHubSession(db, projects, sessions, binding.projectId)
+        : undefined
+    if (!targetSession) {
+      return {
+        matchedSessionIds: dispatched.matchedSessionIds,
+        enqueuedCount: dispatched.enqueuedCount,
+      }
+    }
+
+    const enqueued = enqueueInboxEvent(db, {
+      sessionId: targetSession.id,
+      projectId: binding.projectId ?? targetSession.projectId,
+      source: 'webhook',
+      dedupeKey: `${event.source}:${event.deliveryId}:${event.key}:default:${targetSession.id}`,
+      wake: true,
+      payload: {
+        type: 'webhook',
+        eventSource: event.source,
+        eventKey: event.key,
+        deliveryId: event.deliveryId,
+        summary: event.summary,
+        ...(event.details !== undefined ? { details: event.details } : {}),
+        ...(event.final !== undefined ? { final: event.final } : {}),
+        isDefaultTarget: true,
+        channel,
+        externalChatId: chatId,
+      },
+    })
+    recordWebhookDeliveryInTx(db, deliveryRecordKey)
+    if (enqueued.inserted) {
+      toSchedule.add(targetSession.id)
+    }
+    return {
+      matchedSessionIds: dispatched.matchedSessionIds,
+      defaultTargetSessionId: targetSession.id,
+      enqueuedCount: dispatched.enqueuedCount + (enqueued.inserted ? 1 : 0),
+    }
   })
-  if (enqueued.inserted) {
-    scheduleSession(targetSession.id)
+
+  for (const sid of toSchedule) {
+    scheduleSession(sid)
   }
-  return {
-    matchedSessionIds: dispatched.matchedSessionIds,
-    defaultTargetSessionId: targetSession.id,
-    enqueuedCount: dispatched.enqueuedCount + (enqueued.inserted ? 1 : 0),
-  }
+  return result
 }
 
-function buildAnnouncementText(
-  trigger: string,
-  item: DriverInboxItem,
-): string | undefined {
+function buildAnnouncementText(item: DriverInboxItem): string | undefined {
   const p = item.payload
-  if (trigger === 'timer' && item.source === 'timer' && p.kind === 'routine') {
+  if (item.source === 'timer' && p.kind === 'routine') {
     const firedMs = Date.parse(String(p.firedAt ?? ''))
     const scheduledMs = Date.parse(String(p.scheduledAt ?? ''))
     const lateByMs =
@@ -317,11 +461,7 @@ function buildAnnouncementText(
         : 'Vela'
     return `⏰ ${String(p.message ?? '')} (set by ${creator}${late})`
   }
-  if (
-    trigger === 'webhook' &&
-    item.source === 'webhook' &&
-    p.isDefaultTarget === true
-  ) {
+  if (item.source === 'webhook' && p.isDefaultTarget === true) {
     const header = `[Event ${String(p.eventSource ?? 'webhook')}:${String(p.eventKey ?? '')}] ${String(p.summary ?? '')}`
     return header.replace(/\s+/g, ' ').trim().slice(0, 500)
   }
@@ -331,7 +471,7 @@ function buildAnnouncementText(
 /**
  * Posts a required top-level group announcement (routine `⏰` header or unmatched
  * `eventDefaultTarget` external event) before invoking the agent driver.
- * If announcement fails, skips the turn cleanly without falling back to a prior human message.
+ * If announcement fails (or is unavailable for default-target webhooks / disabled channels), skips the turn cleanly.
  */
 export async function prepareTurnAnnouncement(params: {
   db: VelaDatabase
@@ -340,6 +480,8 @@ export async function prepareTurnAnnouncement(params: {
   inputs: DriverInboxItem[]
   outboxTarget: OutboxTarget | undefined
   getChannelAdapter: (name: string) => ChannelAdapter | undefined
+  isChannelEnabled?: (name: string) => boolean
+  abortSignal?: AbortSignal
   logger: VelaLogger
 }): Promise<{
   skipTurn: boolean
@@ -349,24 +491,30 @@ export async function prepareTurnAnnouncement(params: {
   const {
     db,
     runId,
-    trigger,
     inputs,
     outboxTarget,
     getChannelAdapter,
+    isChannelEnabled,
+    abortSignal,
     logger,
   } = params
   if (!outboxTarget || outboxTarget.threadId || outboxTarget.replyToMessageId) {
-    return { skipTurn: false, outboxTarget, inputs }
-  }
-  const adapter = getChannelAdapter(outboxTarget.channel)
-  if (!adapter?.announce) {
     return { skipTurn: false, outboxTarget, inputs }
   }
   let triggerItem: DriverInboxItem | undefined
   let text: string | undefined
   for (let i = inputs.length - 1; i >= 0; i--) {
     const candidate = inputs[i]!
-    const built = buildAnnouncementText(trigger, candidate)
+    const p = candidate.payload
+    if (
+      p.channel !== outboxTarget.channel ||
+      p.externalChatId !== outboxTarget.externalChatId ||
+      (typeof p.threadId === 'string' ? p.threadId : undefined) !==
+        outboxTarget.threadId
+    ) {
+      continue
+    }
+    const built = buildAnnouncementText(candidate)
     if (built !== undefined) {
       triggerItem = candidate
       text = built
@@ -374,6 +522,25 @@ export async function prepareTurnAnnouncement(params: {
     }
   }
   if (!triggerItem || !text) {
+    return { skipTurn: false, outboxTarget, inputs }
+  }
+  if (isChannelEnabled && !isChannelEnabled(outboxTarget.channel)) {
+    logger.warn(
+      `[${outboxTarget.channel}] Announcement skipped: channel is disabled`,
+    )
+    return { skipTurn: true, outboxTarget: undefined, inputs }
+  }
+  const adapter = getChannelAdapter(outboxTarget.channel)
+  if (!adapter?.announce) {
+    if (
+      triggerItem.source === 'webhook' &&
+      triggerItem.payload.isDefaultTarget === true
+    ) {
+      logger.warn(
+        `[${outboxTarget.channel}] Announcement skipped: default webhook target requires connected channel announce()`,
+      )
+      return { skipTurn: true, outboxTarget: undefined, inputs }
+    }
     return { skipTurn: false, outboxTarget, inputs }
   }
 
@@ -399,9 +566,15 @@ export async function prepareTurnAnnouncement(params: {
 
   if (!replyToMessageId) {
     try {
+      const timeoutSignal = AbortSignal.timeout(30_000)
+      const signal = abortSignal
+        ? AbortSignal.any([abortSignal, timeoutSignal])
+        : timeoutSignal
       const result = await adapter.announce({
         externalChatId: outboxTarget.externalChatId,
         text,
+        idempotencyKey: triggerItem.id,
+        signal,
       })
       replyToMessageId = result?.externalMessageId
       if (!replyToMessageId) {

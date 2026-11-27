@@ -80,13 +80,18 @@ export class HttpListener {
     return this.boundPort
   }
 
-  /** Start once; `onListening` runs after the port is bound. */
+  /** Start listening (safe to call again after `stop()` or failed startup); `onListening` runs after the port is bound. */
   start(
     port: number,
     handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
     onListening?: (port: number) => void,
   ): Promise<void> {
-    this.starting ??= this.listen(port, handle, onListening)
+    if (!this.starting) {
+      this.starting = this.listen(port, handle, onListening).catch((error) => {
+        this.starting = undefined
+        throw error
+      })
+    }
     return this.starting
   }
 
@@ -116,7 +121,7 @@ export class HttpListener {
     }
   }
 
-  /** Stop accepting, run `beforeClose`, disconnect idle keep-alives and wait for admitted requests. */
+  /** Stop accepting, run `beforeClose`, close idle sockets, drain admitted requests within a bounded window, then close remaining connections. */
   async stop(beforeClose?: () => void): Promise<void> {
     this.accepting = false
     await this.starting?.catch(() => {})
@@ -125,10 +130,30 @@ export class HttpListener {
     const server = this.server
     this.server = undefined
     this.boundPort = undefined
+    this.starting = undefined
     if (!server) return
     const closed = new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
+      server.close((error) => {
+        if (
+          error &&
+          (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING'
+        ) {
+          reject(error)
+        } else {
+          resolve()
+        }
+      }),
     )
+    server.closeIdleConnections?.()
+    if (this.active.size > 0) {
+      await Promise.race([
+        Promise.all([...this.active]),
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 2000)
+          timer.unref?.()
+        }),
+      ])
+    }
     server.closeAllConnections()
     await Promise.all([closed, ...this.active])
   }
