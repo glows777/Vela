@@ -245,11 +245,11 @@ If you only need a different base URL or key for an OpenAI- or Anthropic-compati
 
 Example: [echo-channel.ts](../examples/extensions/echo-channel.ts)
 
-A channel brings messages from outside (a chat app, a webhook) into Vela via Runtime's `ChannelAdapter` (`runtime.channels.register(...)`) rather than legacy extension hooks. See [Writing a channel](channels-reference.md#writing-a-channel) for the `ChannelAdapter` contract and event lifecycle.
+A channel brings messages from outside (a chat app, a webhook) into Vela via Runtime's `ChannelAdapter` (`await runtime.registerChannel(...)`) rather than legacy extension hooks. See [Writing a channel](channels-reference.md#writing-a-channel) for the `ChannelAdapter` contract and event lifecycle.
 
 ```ts
-runtime.channels.register({
-  channel: 'echo',
+await runtime.registerChannel({
+  name: 'echo',
   description: 'In-memory demo channel',
   start: async (ctx) => {
     /* forward incoming messages to ctx.ingest(...) */

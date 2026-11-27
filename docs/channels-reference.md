@@ -10,14 +10,14 @@ An embedded SDK host uses `createRuntime()` (or connects to `vela daemon` via `c
 import { createLarkChannelAdapter, createRuntime } from '@glows777/vela'
 
 const runtime = createRuntime({ agentDir })
-runtime.channels.register(createLarkChannelAdapter(larkOptions))
 await runtime.ready()
+await runtime.registerChannel(createLarkChannelAdapter(larkOptions))
+await runtime.recover()
 
 const channels = await runtime.channels.list()
 const chats = await runtime.channels.chats('lark')
 const off = runtime.events.subscribe((event) => handleRuntimeEvent(event))
-const receipt = await runtime.channels.submit({
-  channel: 'lark',
+const receipt = await runtime.channels.submit('lark', {
   chatId: 'oc_group',
   text: 'Please check the totals',
   author: { id: 'desktop-alex', name: 'Alex' },
@@ -34,15 +34,15 @@ await runtime.dispose()
 
 ### Lark groups and visible history
 
-With `createLarkChannelAdapter(options)` registered in a `VelaRuntime` (or hosted by `vela daemon`), hosts query configured groups via `runtime.channels.chats('lark')`, inspect channel-backed sessions via `runtime.sessions.list()`, read history via `runtime.sessions.messages(...)`, and post messages via `runtime.channels.submit(...)` (returning the session/message receipt). Live updates stream over `runtime.events.subscribe(...)` and `runtime.events.subscribeDeltas(...)`.
+With `createLarkChannelAdapter(options)` registered on `LocalVelaRuntime` via `await runtime.registerChannel(adapter)` (or hosted by `vela daemon`), hosts query configured groups via `runtime.channels.chats('lark')`, inspect channel-backed sessions via `runtime.sessions.list()`, read history via `runtime.sessions.messages(...)`, and post messages via `runtime.channels.submit('lark', ...)` (returning the session/message receipt). Live updates stream over `runtime.events.subscribe(...)` and `runtime.events.subscribeDeltas(...)`.
 
 ## Writing a channel
 
-Register a `ChannelAdapter` on `runtime.channels.register(adapter)`. The adapter types are exported by `@glows777/vela`, and [echo-channel.ts](../examples/extensions/echo-channel.ts) gives a minimal runnable example. Enforce chat allowlists before calling `ctx.ingest(...)`: admitted messages share their project/session transcript and tools.
+Register a `ChannelAdapter` with `await runtime.registerChannel(adapter)`. The adapter types are exported by `@glows777/vela`, and [echo-channel.ts](../examples/extensions/echo-channel.ts) gives a minimal runnable example. Enforce chat allowlists before calling `ctx.ingest(...)`: admitted messages share their project/session transcript and tools.
 
 | Member | Required | Contract |
 | --- | --- | --- |
-| `channel` | Yes | Stable channel identifier (e.g. `'lark'`, `'echo'`), recorded on `projects` and `channel_bindings` |
+| `name` | Yes | Stable channel identifier (e.g. `'lark'`, `'echo'`), recorded on `projects` and `channel_bindings` |
 | `start(ctx)` | Yes | Connect/start receiving input using `ctx.ingest(...)` and report status via `ctx.status(...)` if applicable |
 | `stop()` | Yes | Close transport/resources cleanly when `runtime.dispose()` shuts down |
 | `deliver(message)` | Yes | Deliver an outbound `ChannelOutboundMessage` (`reply`, `topic_start`, `forward`, `file`, `announce`) and return `{ delivered, rootId?, threadId?, externalMessageId? }` |
@@ -63,7 +63,7 @@ In an owned Lark topic, send `!stop`, `!restart`, `!status`, or `!timers` as the
 
 ### Restart recovery
 
-Runtime stores projects, sessions, bindings, timers, subscriptions, background jobs, inbox events, and outbox rows in a single transactional SQLite WAL database (`$VELA_DIR/vela.db`). On startup, `runtime.ready()` runs crash recovery across interrupted runs, due timers (`TimerScheduler` catches up at most once across downtime for routines), undelivered outbox entries, and orphaned background jobs.
+Runtime stores projects, sessions, bindings, timers, subscriptions, background jobs, inbox events, and outbox rows in a single transactional SQLite WAL database (`$VELA_DIR/vela.db`). On startup, `await runtime.ready()` initializes runtime extensions and `await runtime.recover()` runs crash recovery across interrupted runs, due timers (`TimerScheduler` catches up at most once across downtime for routines), undelivered outbox entries, and orphaned background jobs.
 
 ### Run feedback lifecycle
 

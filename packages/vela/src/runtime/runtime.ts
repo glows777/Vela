@@ -412,6 +412,7 @@ export class VelaRuntimeEngine {
   async stopSession(
     sessionId: string,
     reason = 'Stopped by user',
+    options?: { expectedRunId?: string },
   ): Promise<boolean> {
     this.enterStopFence(sessionId)
     try {
@@ -426,6 +427,7 @@ export class VelaRuntimeEngine {
         isDisposed: () => this.disposed,
         sessionId,
         reason,
+        expectedRunId: options?.expectedRunId,
       })
     } finally {
       this.leaveStopFence(sessionId)

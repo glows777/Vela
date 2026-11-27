@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   connectLarkSetup,
@@ -7,7 +7,6 @@ import {
   discoverLarkGroup,
   type LocalVelaRuntime,
   parseLarkChats,
-  resolveShellPath,
 } from '@glows777/vela/legacy-desktop'
 import { BrowserWindow, clipboard, dialog, shell } from 'electron'
 import {
@@ -22,6 +21,7 @@ import { wrapLarkAdapter } from './lark-adapter-bridge.ts'
 import { larkStartupDiagnostic } from './lark-settings.ts'
 import { saveModel } from './model-setup.ts'
 import {
+  DesktopClientIdTracker,
   extractMessageText,
   fetchLarkDesktopMessages,
   fetchLocalDesktopMessages,
@@ -34,7 +34,11 @@ import {
   toDesktopSession,
 } from './runtime-bridge.ts'
 import { handleDesktopRoutineRequest } from './runtime-routines.ts'
-import { type loadDesktopConfig, readSettings } from './settings.ts'
+import {
+  loadDesktopConfig,
+  readSettings,
+  withoutLocalOnlyOAuth,
+} from './settings.ts'
 
 const larkChatLink = (chatId: string) =>
   `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(chatId)}`
@@ -54,11 +58,11 @@ export async function openHost(
     parseLarkChats(larkSettings.chats)
   }
 
-  const model = process.env.VELA_MODEL?.startsWith('faux:')
+  const fauxModel = process.env.VELA_MODEL?.startsWith('faux:')
     ? await (await import('@glows777/vela/testing')).loadFauxScenario(
         process.env.VELA_MODEL.slice(5),
       )
-    : config.settings.model
+    : undefined
   const fixtureDir = process.env.VELA_DESKTOP_LARK_DIR
   const transport =
     loadLark && process.env.VELA_DESKTOP_LARK === 'fake'
@@ -78,19 +82,33 @@ export async function openHost(
       if (!window.isDestroyed()) window.webContents.send(EVENT, event)
   }
 
+  const configPath = join(config.agentDir, 'config.json')
+  let cachedProviderSig = ''
+  let cachedProviders = config.providers
+  const getDesktopProviders = () => {
+    try {
+      const st = statSync(configPath)
+      const sig = `${st.ino}:${st.mtimeMs}:${st.size}`
+      if (sig !== cachedProviderSig) {
+        cachedProviders = loadDesktopConfig(cwd, config.agentDir).providers
+        cachedProviderSig = sig
+      }
+    } catch {
+      cachedProviders = config.providers
+    }
+    return cachedProviders
+  }
+
+  const desktopCredentials = withoutLocalOnlyOAuth(
+    getDesktopProviders,
+    config.credentials,
+  )
+
   const runtime = createRuntime({
     agentDir: config.agentDir,
     hostEnv: process.env,
-    defaultModel: model,
-    defaultThinkingLevel: config.settings.thinkingLevel,
-    shellPath: resolveShellPath(config.settings.shellPath, {
-      env: process.env,
-      platform: process.platform,
-    }),
-    providers: config.providers,
-    credentials: config.credentials,
-    limits: config.settings.limits,
-    extensionConfig: config.extensionConfig,
+    ...(fauxModel ? { defaultModel: fauxModel } : {}),
+    credentials: desktopCredentials,
     logger: {
       debug() {},
       info() {},
@@ -102,11 +120,7 @@ export async function openHost(
   })
 
   const off: (() => void)[] = []
-  const pendingClientIds = new Map<
-    string,
-    Array<{ text: string; clientMessageId: string }>
-  >()
-  const clientIdsByMessage = new Map<string, string>()
+  const clientIdTracker = new DesktopClientIdTracker()
   const lastRunStatusBySession = new Map<string, string | null>()
   const retryTimersBySession = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -202,7 +216,7 @@ export async function openHost(
     }
   }
 
-  const directModel = typeof model === 'object'
+  const directModel = Boolean(fauxModel)
   const settings = async () => {
     try {
       const available = await runtime.models({
@@ -226,7 +240,6 @@ export async function openHost(
 
   try {
     await runtime.ready()
-    await runtime.recover()
 
     if (loadLark) {
       const bridgedRuntime: LocalVelaRuntime = {
@@ -247,6 +260,8 @@ export async function openHost(
       }
     }
 
+    await runtime.recover()
+
     const enabledChatIds = new Set(
       (await runtime.channels.chats('lark')).map((c) => c.chatId),
     )
@@ -256,6 +271,7 @@ export async function openHost(
       runtime.events.subscribe((event) => {
         if (event.type === 'run_started') {
           lastRunStatusBySession.set(event.sessionId, 'running')
+          clientIdTracker.onRunStarted(event.runId, event.inboxEventIds)
         } else if (event.type === 'run_finished') {
           lastRunStatusBySession.set(event.sessionId, event.status)
         }
@@ -266,20 +282,23 @@ export async function openHost(
             if (!info) return
             if (info.channel === 'local') {
               let mappedMsg: Message | undefined
+              let extraClientIds: string[] = []
               if (event.type === 'message_committed') {
                 const rawMsg = event.message as {
                   role?: string
                   content?: unknown
                 }
                 const text = extractMessageText(rawMsg.content)
-                let clientMessageId: string | undefined
+                let primaryClientId: string | undefined
                 if (rawMsg.role === 'user') {
-                  const queue = pendingClientIds.get(event.sessionId)
-                  const idx = queue?.findIndex((q) => q.text === text) ?? -1
-                  if (queue && idx >= 0) {
-                    clientMessageId = queue.splice(idx, 1)[0]!.clientMessageId
-                    clientIdsByMessage.set(event.messageId, clientMessageId)
-                  }
+                  const matchedIds = clientIdTracker.consumeForUserMessage(
+                    event.sessionId,
+                    event.runId,
+                    text,
+                    event.messageId,
+                  )
+                  primaryClientId = matchedIds[0]
+                  extraClientIds = matchedIds.slice(1)
                 }
                 mappedMsg = toDesktopMessage(
                   {
@@ -293,7 +312,7 @@ export async function openHost(
                     display: event.display,
                     createdAt: event.timestamp,
                   },
-                  clientMessageId,
+                  primaryClientId,
                 )
               }
               if (
@@ -316,6 +335,29 @@ export async function openHost(
                 mappedMsg,
               )) {
                 publish(desktopEvent)
+              }
+              if (mappedMsg && extraClientIds.length > 0) {
+                extraClientIds.forEach((extraId, idx) => {
+                  publish({
+                    type: 'local',
+                    channel: 'local',
+                    value: {
+                      version: 1,
+                      id: `evt-${event.seq}-batch-${idx + 1}`,
+                      time: event.timestamp,
+                      projectId: info.chatId,
+                      sessionId: event.sessionId,
+                      ...(event.type === 'message_committed' && event.runId
+                        ? { runId: event.runId }
+                        : {}),
+                      type: 'message',
+                      data: { ...mappedMsg!, clientMessageId: extraId },
+                    },
+                  })
+                })
+              }
+              if (event.type === 'run_finished') {
+                clientIdTracker.onRunFinished(event.runId)
               }
               if (event.type === 'auto_retry_start') {
                 const timer = setTimeout(() => {
@@ -563,7 +605,7 @@ export async function openHost(
           return submitDesktopMessage(
             runtime,
             loadLark,
-            pendingClientIds,
+            clientIdTracker,
             request,
           )
         case 'stop':
@@ -588,7 +630,7 @@ export async function openHost(
           return fetchLocalDesktopMessages(
             runtime,
             request.input,
-            clientIdsByMessage,
+            clientIdTracker,
           )
         case 'larkMessages':
           if (!loadLark) throw new Error('Lark is not available in this app')
@@ -686,8 +728,8 @@ export async function openHost(
       async checkIdle() {
         const all = await runtime.sessions.list({ includeArchived: false })
         for (const s of all) {
-          const st = await runtime.sessions.status(s.id).catch(() => undefined)
-          if (st?.activeRunId || s.state === 'running') {
+          const st = await runtime.sessions.status(s.id)
+          if (st.activeRunId || st.runningJobs > 0 || s.state === 'running') {
             throw new Error(
               'A session is still running or queued. Wait for it to finish before changing Lark settings.',
             )
@@ -696,6 +738,7 @@ export async function openHost(
       },
       dispose: async () => {
         disposed = true
+        clientIdTracker.clear()
         for (const timer of retryTimersBySession.values()) clearTimeout(timer)
         retryTimersBySession.clear()
         for (const stop of off) stop()
@@ -705,6 +748,7 @@ export async function openHost(
     }
   } catch (error) {
     disposed = true
+    clientIdTracker.clear()
     for (const timer of retryTimersBySession.values()) clearTimeout(timer)
     retryTimersBySession.clear()
     for (const stop of off) stop()

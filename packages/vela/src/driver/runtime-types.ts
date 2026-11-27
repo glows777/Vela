@@ -170,6 +170,7 @@ export interface RuntimeReloadableConfig {
   enabledModels?: readonly string[]
   githubRepositories?: readonly string[]
   dreamEnabled?: boolean
+  autoCompaction?: boolean
   offline?: boolean
 }
 
@@ -218,6 +219,7 @@ export interface VelaAgentDriverOptions {
   promptTemplates?: readonly PromptTemplate[]
   offline?: boolean
   dreamEnabled?: boolean
+  autoCompaction?: boolean
   trustOverride?: (location: ExecutionLocation) => boolean | Promise<boolean>
   toolApprovalCheck?: (
     toolName: string,

@@ -120,6 +120,7 @@ export function createVelaAgentDriver(
       enabledModels: options.enabledModels,
       githubRepositories: options.githubRepositories,
       dreamEnabled: options.dreamEnabled,
+      autoCompaction: options.autoCompaction,
       offline: options.offline ?? false,
     },
     sessionOverrides: new Map(),
@@ -453,6 +454,7 @@ export function createVelaAgentDriver(
         forwardEvent,
         effectiveLimits,
       )
+      contextManager.autoCompaction = state.reloadable.autoCompaction ?? true
 
       const alreadyHasRunMessages = Boolean(
         options.db.get<{ ok: number }>(

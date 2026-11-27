@@ -65,18 +65,33 @@ async function resolveRoutineScope(
   channel: string,
   chatId: string,
 ): Promise<{ projectId: string; hubSessionId: string | null }> {
+  const bindings = await runtime.bindings.list({ channel: 'lark' })
   if (channel === 'local') {
     const project = await runtime.projects.get(chatId)
-    if (!project) throw new Error(`Unknown project ${chatId}`)
+    if (
+      !project ||
+      project.archived ||
+      bindings.some((b) => b.projectId === project.id)
+    ) {
+      throw new Error(`Unknown project ${chatId}`)
+    }
     return { projectId: project.id, hubSessionId: project.hubSessionId }
   }
-  const bindings = await runtime.bindings.list({ channel })
-  const root = bindings.find((b) => b.externalId === chatId && !b.threadId)
+  const root = bindings.find(
+    (b) =>
+      b.channel === channel &&
+      b.externalId === chatId &&
+      !b.threadId &&
+      b.enabled,
+  )
   if (!root?.projectId) throw new Error('Unknown or disabled channel target')
   const project = await runtime.projects.get(root.projectId)
+  if (!project || project.archived) {
+    throw new Error('Unknown or disabled channel target')
+  }
   return {
     projectId: root.projectId,
-    hubSessionId: project?.hubSessionId ?? null,
+    hubSessionId: project.hubSessionId ?? null,
   }
 }
 
@@ -144,9 +159,14 @@ export async function handleDesktopRoutineRequest(
         request.channel,
         request.target.chatId,
       )
-      const sessionId = request.target.rootId
-        ? request.target.rootId
-        : hubSessionId
+      let sessionId = hubSessionId
+      if (request.target.rootId) {
+        const targetSession = await runtime.sessions.get(request.target.rootId)
+        if (!targetSession || targetSession.projectId !== projectId) {
+          throw new Error('Unknown or disabled channel target')
+        }
+        sessionId = targetSession.id
+      }
       if (!sessionId) throw new Error('Unknown or disabled channel target')
       const zone = routineTimezone(
         request.channel === 'lark' && typeof larkSettings.timezone === 'string'
@@ -209,7 +229,13 @@ export async function handleDesktopRoutineRequest(
         new Map(sessionList.map((s) => [s.id, s])),
       )
     }
-    case 'cancelRoutine':
-      return runtime.timers.delete(request.id)
+    case 'cancelRoutine': {
+      const { projectId } = await resolveRoutineScope(
+        runtime,
+        request.channel,
+        request.chatId,
+      )
+      return runtime.timers.delete(request.id, { projectId, kind: 'routine' })
+    }
   }
 }

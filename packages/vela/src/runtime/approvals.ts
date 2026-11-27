@@ -478,9 +478,12 @@ export function cancelPendingApprovalsForSession(
   eventBus: RuntimeEventBus,
   sessionId: string,
   reason = 'Cancelled by session control action',
+  runId?: string,
 ): number {
   return db.transaction(() => {
-    const pending = listRuntimePendingApprovals(db, sessionId)
+    const pending = listRuntimePendingApprovals(db, sessionId).filter((item) =>
+      runId === undefined ? true : item.runId === runId,
+    )
     for (const item of pending) {
       resolveRuntimeApproval(db, eventBus, {
         approvalId: item.id,

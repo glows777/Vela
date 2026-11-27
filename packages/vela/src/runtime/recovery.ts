@@ -349,16 +349,28 @@ async function stopExternalSessionRuns(params: {
   sessionId: string
   reason: string
   isStopped: () => boolean
+  expectedRunId?: string
 }): Promise<{ cancelled: boolean; stillOwnedRemotely: boolean }> {
-  const { db, activeOwners, sessionId, reason, isStopped } = params
-  const otherLiveRuns = db.all<{
-    id: string
-    owner_token: string | null
-  }>(
-    `SELECT id, owner_token FROM runs
-     WHERE session_id = ? AND status IN ('queued', 'running')`,
-    sessionId,
-  )
+  const { db, activeOwners, sessionId, reason, isStopped, expectedRunId } =
+    params
+  const otherLiveRuns = expectedRunId
+    ? db.all<{
+        id: string
+        owner_token: string | null
+      }>(
+        `SELECT id, owner_token FROM runs
+         WHERE session_id = ? AND id = ? AND status IN ('queued', 'running')`,
+        sessionId,
+        expectedRunId,
+      )
+    : db.all<{
+        id: string
+        owner_token: string | null
+      }>(
+        `SELECT id, owner_token FROM runs
+         WHERE session_id = ? AND status IN ('queued', 'running')`,
+        sessionId,
+      )
   let cancelled = false
   const externalRunIds: string[] = []
   for (const run of otherLiveRuns) {
@@ -413,18 +425,30 @@ export function stopSessionRunsInDb(
   sessionId: string,
   reason: string,
   activeOwners: ReadonlySet<string> = new Set(),
+  expectedRunId?: string,
 ): { cancelled: boolean; liveOtherRuns: boolean } {
   const now = new Date().toISOString()
   return db.transaction(() => {
-    const rows = db.all<{
-      id: string
-      status: string
-      owner_token: string | null
-    }>(
-      `SELECT id, status, owner_token FROM runs
-       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
-      sessionId,
-    )
+    const rows = expectedRunId
+      ? db.all<{
+          id: string
+          status: string
+          owner_token: string | null
+        }>(
+          `SELECT id, status, owner_token FROM runs
+           WHERE session_id = ? AND id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+          sessionId,
+          expectedRunId,
+        )
+      : db.all<{
+          id: string
+          status: string
+          owner_token: string | null
+        }>(
+          `SELECT id, status, owner_token FROM runs
+           WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+          sessionId,
+        )
     if (
       rows.some(
         (r) =>
@@ -434,12 +458,14 @@ export function stopSessionRunsInDb(
       return { cancelled: false, liveOtherRuns: true }
     }
     if (rows.length === 0) {
-      db.run(
-        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
-         WHERE id = ? AND state IN ('running', 'waiting_human')`,
-        now,
-        sessionId,
-      )
+      if (!expectedRunId) {
+        db.run(
+          `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+           WHERE id = ? AND state IN ('running', 'waiting_human')`,
+          now,
+          sessionId,
+        )
+      }
       return { cancelled: false, liveOtherRuns: false }
     }
     const placeholders = rows.map(() => '?').join(', ')
@@ -468,12 +494,21 @@ export function stopSessionRunsInDb(
         `run_input_meta:${r.id}`,
       )
     }
-    db.run(
-      `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
-       WHERE id = ? AND state IN ('running', 'waiting_human')`,
-      now,
-      sessionId,
-    )
+    const otherLiveRun = expectedRunId
+      ? db.get<{ id: string }>(
+          `SELECT id FROM runs WHERE session_id = ? AND id != ? AND status IN ('queued', 'running', 'waiting_human') LIMIT 1`,
+          sessionId,
+          expectedRunId,
+        )
+      : undefined
+    if (!otherLiveRun) {
+      db.run(
+        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+         WHERE id = ? AND state IN ('running', 'waiting_human')`,
+        now,
+        sessionId,
+      )
+    }
     const latestStoppedRun = rows.at(-1)
     if (session && latestStoppedRun) {
       recordChildStatusNoteForHubInTx(
@@ -524,12 +559,13 @@ export async function stopSessionInRuntime(params: {
   backgroundJobs: BackgroundJobManager
   activeWorkers: ReadonlyMap<
     string,
-    { controller: AbortController; promise: Promise<void> }
+    { runId: string; controller: AbortController; promise: Promise<void> }
   >
   activeOwners: ReadonlySet<string>
   isDisposed: () => boolean
   sessionId: string
   reason: string
+  expectedRunId?: string
 }): Promise<boolean> {
   const {
     db,
@@ -542,13 +578,45 @@ export async function stopSessionInRuntime(params: {
     isDisposed,
     sessionId,
     reason,
+    expectedRunId,
   } = params
   let cancelledRun = false
   let cancelledApprovals = 0
   let stoppedJobs = 0
   for (let pass = 0; pass < 2; pass++) {
     const active = activeWorkers.get(sessionId)
-    if (active) {
+    if (expectedRunId !== undefined) {
+      const hasTargetedDbRun = Boolean(
+        db.get<{ id: string }>(
+          `SELECT id FROM runs
+           WHERE session_id = ? AND id = ? AND status IN ('queued', 'running', 'waiting_human')
+           LIMIT 1`,
+          sessionId,
+          expectedRunId,
+        ),
+      )
+      const hasTargetedApproval = Boolean(
+        db.get<{ id: string }>(
+          `SELECT id FROM approvals
+           WHERE session_id = ? AND run_id = ? AND status = 'pending'
+           LIMIT 1`,
+          sessionId,
+          expectedRunId,
+        ),
+      )
+      const activeMatches = active?.runId === expectedRunId
+      if (!activeMatches && !hasTargetedDbRun && !hasTargetedApproval) {
+        return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
+      }
+      if (active && activeMatches) {
+        cancelledRun = true
+        active.controller.abort(new DOMException(reason, 'AbortError'))
+        const session = sessions.get(sessionId)
+        const driver = session ? drivers.get(session.driver) : undefined
+        await driver?.abort?.(sessionId)
+        await active.promise.catch(() => {})
+      }
+    } else if (active) {
       cancelledRun = true
       active.controller.abort(new DOMException(reason, 'AbortError'))
       const session = sessions.get(sessionId)
@@ -562,6 +630,7 @@ export async function stopSessionInRuntime(params: {
       sessionId,
       reason,
       isStopped: isDisposed,
+      expectedRunId,
     })
     if (external.stillOwnedRemotely) return false
     if (external.cancelled) cancelledRun = true
@@ -570,16 +639,26 @@ export async function stopSessionInRuntime(params: {
       eventBus,
       sessionId,
       reason,
+      expectedRunId,
     )
-    stoppedJobs += backgroundJobs.stopSessionJobs(sessionId)
+    if (expectedRunId === undefined) {
+      stoppedJobs += backgroundJobs.stopSessionJobs(sessionId)
+    }
     const dbStopped = stopSessionRunsInDb(
       db,
       sessions.get(sessionId),
       sessionId,
       reason,
       activeOwners,
+      expectedRunId,
     )
     if (dbStopped.cancelled) cancelledRun = true
+    if (
+      expectedRunId !== undefined &&
+      (cancelledRun || cancelledApprovals > 0)
+    ) {
+      stoppedJobs += backgroundJobs.stopSessionJobs(sessionId)
+    }
     if (!dbStopped.liveOtherRuns) {
       return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
     }

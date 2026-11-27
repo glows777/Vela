@@ -219,7 +219,11 @@ export interface VelaRuntime {
     input: RuntimePromptInput,
   ): Promise<{ eventId: string; inserted: boolean }>
   steer(sessionId: string, text: string): Promise<void>
-  stop(sessionId: string, reason?: string): Promise<boolean>
+  stop(
+    sessionId: string,
+    reason?: string,
+    options?: { expectedRunId?: string },
+  ): Promise<boolean>
   waitForIdle(sessionId?: string): Promise<void>
   readonly jobs: {
     list(sessionId?: string): Promise<BackgroundTask[]>
@@ -276,7 +280,10 @@ export interface VelaRuntime {
         nowMs?: number
       },
     ): Promise<TimerRecord | undefined>
-    delete(id: string): Promise<boolean>
+    delete(
+      id: string,
+      filter?: { projectId?: string; kind?: TimerKind },
+    ): Promise<boolean>
   }
   readonly subscriptions: {
     list(filter?: {
@@ -425,6 +432,7 @@ export interface CreateRuntimeOptions {
   mcp?: boolean
   offline?: boolean
   dreamEnabled?: boolean
+  autoCompaction?: boolean
   /** Owner Docker environment definitions or a pre-constructed `EnvironmentRegistry`. Defaults to `<agentDir>/config.json` unless `ephemeral`. */
   environments?: Record<string, unknown> | EnvironmentRegistry
   drivers?: AgentDriver[]

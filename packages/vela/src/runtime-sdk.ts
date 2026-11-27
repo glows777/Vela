@@ -420,6 +420,8 @@ export function createRuntime(
       promptTemplates: options.promptTemplates,
       offline: options.offline,
       dreamEnabled: initial.dreamEnabled,
+      autoCompaction:
+        options.autoCompaction ?? initial.ownerConfig.autoCompaction,
       trustOverride: options.trustOverride,
       toolApprovalCheck: options.toolApprovalCheck,
       resolveSpecialModel: createSpecialModelResolver(),
@@ -490,6 +492,8 @@ export function createRuntime(
             updated.ownerConfig.webhooks,
           ),
           dreamEnabled: updated.dreamEnabled,
+          autoCompaction:
+            options.autoCompaction ?? updated.ownerConfig.autoCompaction,
           offline: options.offline,
         })
         if (disposing) return
@@ -609,7 +613,8 @@ export function createRuntime(
       steer: async (sessionId, text) => {
         await engine.steerSession(sessionId, text)
       },
-      stop: (sessionId, reason) => engine.stopSession(sessionId, reason),
+      stop: (sessionId, reason, opts) =>
+        engine.stopSession(sessionId, reason, opts),
       waitForIdle: (sessionId) => engine.waitForIdle(sessionId),
       jobs: {
         list: async (sessionId) => velaDriver.control.listJobs(sessionId),
@@ -627,7 +632,7 @@ export function createRuntime(
         createRoutine: async (input) => engine.timers.createRoutine(input),
         createFollowup: async (input) => engine.timers.createFollowup(input),
         update: async (id, patch) => engine.timers.update(id, patch),
-        delete: async (id) => engine.timers.delete(id),
+        delete: async (id, filter) => engine.timers.delete(id, filter),
       },
       subscriptions: {
         list: async (filter) => engine.subscriptions.list(filter),

@@ -396,10 +396,28 @@ export class TimerScheduler {
     return updated
   }
 
-  delete(id: string): boolean {
+  delete(
+    id: string,
+    filter?: { projectId?: string; kind?: TimerKind },
+  ): boolean {
     const res = this.db.transaction(() => {
-      const deleted = this.db.run('DELETE FROM timers WHERE id = ?', id)
-      this.db.run('DELETE FROM kv_meta WHERE key = ?', `timer_target:${id}`)
+      const clauses = ['id = ?']
+      const params: Array<string> = [id]
+      if (filter?.projectId !== undefined) {
+        clauses.push('project_id = ?')
+        params.push(filter.projectId)
+      }
+      if (filter?.kind !== undefined) {
+        clauses.push('kind = ?')
+        params.push(filter.kind)
+      }
+      const deleted = this.db.run(
+        `DELETE FROM timers WHERE ${clauses.join(' AND ')}`,
+        ...params,
+      )
+      if (deleted.changes > 0) {
+        this.db.run('DELETE FROM kv_meta WHERE key = ?', `timer_target:${id}`)
+      }
       return deleted
     })
     if (res.changes > 0) this.onScheduleChanged?.()

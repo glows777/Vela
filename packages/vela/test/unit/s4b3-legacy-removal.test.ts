@@ -8,7 +8,8 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { loadConfig } from '@glows777/vela'
+import { createRuntime, loadConfig } from '@glows777/vela'
+import { createFauxModel, loadFauxScenario } from '@glows777/vela/testing'
 
 const dirs: string[] = []
 const procs: ReturnType<typeof Bun.spawn>[] = []
@@ -231,3 +232,200 @@ if (mode === 'crash') {
   }
   expect(state.delivered).toEqual(['Crash recovered reply'])
 }, 20_000)
+
+test('runtime.stop honors expectedRunId and does not cancel a subsequent run', async () => {
+  const agentDir = tempDir('vela-stop-runid-')
+  const fauxPath = join(agentDir, 'faux.json')
+  writeFileSync(
+    fauxPath,
+    JSON.stringify({
+      responses: [
+        { text: 'first done' },
+        {
+          toolCalls: [{ name: 'bash', input: { command: 'sleep 2' } }],
+        },
+        { text: 'second done' },
+      ],
+    }),
+  )
+  const model = await loadFauxScenario(fauxPath)
+  const runtime = createRuntime({
+    agentDir,
+    defaultModel: model,
+    mcp: false,
+    trustOverride: () => true,
+  })
+  try {
+    await runtime.ready()
+    await runtime.recover()
+    const project = await runtime.projects.create({
+      name: 'StopTest',
+      cwd: agentDir,
+      hubSessionId: true,
+    })
+    const sessionId = project.hubSessionId!
+    const runIds: string[] = []
+    const off = runtime.events.subscribe((evt) => {
+      if (evt.sessionId === sessionId && evt.type === 'run_started') {
+        runIds.push(evt.runId)
+      }
+    })
+    try {
+      await runtime.prompt(sessionId, { text: 'run one', source: 'user' })
+      await runtime.waitForIdle(sessionId)
+      expect(runIds.length).toBe(1)
+      const firstRunId = runIds[0]!
+
+      await runtime.prompt(sessionId, { text: 'run two', source: 'user' })
+      await until(() => runIds.length === 2, 'second run started')
+      const secondRunId = runIds[1]!
+
+      expect(
+        await runtime.stop(sessionId, 'stale stop', {
+          expectedRunId: firstRunId,
+        }),
+      ).toBe(false)
+      const stAfterStale = await runtime.sessions.status(sessionId)
+      expect(stAfterStale.activeRunId).toBe(secondRunId)
+
+      expect(
+        await runtime.stop(sessionId, 'exact stop', {
+          expectedRunId: secondRunId,
+        }),
+      ).toBe(true)
+      await runtime.waitForIdle(sessionId)
+    } finally {
+      off()
+    }
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('timers.delete respects optional projectId and kind scope', async () => {
+  const runtime = createRuntime({
+    ephemeral: true,
+    defaultModel: createFauxModel(),
+    mcp: false,
+  })
+  try {
+    await runtime.ready()
+    const projA = await runtime.projects.create({
+      name: 'A',
+      hubSessionId: true,
+    })
+    const projB = await runtime.projects.create({
+      name: 'B',
+      hubSessionId: true,
+    })
+    const timerB = await runtime.timers.createRoutine({
+      projectId: projB.id,
+      sessionId: projB.hubSessionId,
+      message: 'B routine',
+      schedule: { time: '12:00' },
+    })
+    expect(
+      await runtime.timers.delete(timerB.id, {
+        projectId: projA.id,
+        kind: 'routine',
+      }),
+    ).toBe(false)
+    expect((await runtime.timers.list({ projectId: projB.id })).length).toBe(1)
+
+    expect(
+      await runtime.timers.delete(timerB.id, {
+        projectId: projB.id,
+        kind: 'routine',
+      }),
+    ).toBe(true)
+    expect((await runtime.timers.list({ projectId: projB.id })).length).toBe(0)
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('autoCompaction config reloads via reloadConfig and registerChannel + channels.submit sequence works', async () => {
+  const agentDir = tempDir('vela-autocompact-')
+  writeFileSync(
+    join(agentDir, 'config.json'),
+    JSON.stringify({
+      autoCompaction: false,
+      limits: { summaryThreshold: 1 },
+    }),
+  )
+  const runtime = createRuntime({
+    agentDir,
+    defaultModel: createFauxModel(),
+    mcp: false,
+  })
+  try {
+    await runtime.ready()
+    let registeredIngest:
+      | ((msg: {
+          channel: string
+          dedupeKey: string
+          externalChatId: string
+          kind: 'group'
+          senderId: string
+          senderName: string
+          text: string
+          timestamp: string
+        }) => Promise<void>)
+      | undefined
+    await runtime.registerChannel({
+      name: 'echo',
+      async start(ctx) {
+        registeredIngest = (m) => ctx.ingest(m)
+      },
+      async stop() {},
+      async deliver() {
+        return { externalMessageId: 'ext-1' }
+      },
+      async submitFromHost(input) {
+        await registeredIngest?.({
+          channel: 'echo',
+          dedupeKey: `host:${input.chatId}:${Date.now()}`,
+          externalChatId: input.chatId,
+          kind: 'group',
+          senderId: input.author.id,
+          senderName: input.author.name,
+          text: input.text,
+          timestamp: new Date().toISOString(),
+        })
+        return { outcome: 'posted', messageId: 'ext-host-1' }
+      },
+    })
+    await runtime.recover()
+
+    const submitRes = await runtime.channels.submit('echo', {
+      chatId: 'room-1',
+      text: 'Hello channel',
+      author: { id: 'u1', name: 'Alice' },
+    })
+    expect(submitRes.outcome).toBe('posted')
+
+    const compactions: string[] = []
+    runtime.events.subscribe((evt) => {
+      if (evt.type === 'compaction_started') compactions.push(evt.reason)
+    })
+    const proj = await runtime.projects.create({
+      name: 'AC',
+      hubSessionId: true,
+    })
+    await runtime.prompt(proj.hubSessionId!, { text: 'hi', source: 'user' })
+    await runtime.waitForIdle(proj.hubSessionId!)
+    expect(compactions).toEqual([])
+
+    writeFileSync(
+      join(agentDir, 'config.json'),
+      JSON.stringify({
+        autoCompaction: true,
+        limits: { summaryThreshold: 1 },
+      }),
+    )
+    await runtime.reloadConfig()
+    expect(await runtime.sessions.get(proj.hubSessionId!)).toBeDefined()
+  } finally {
+    await runtime.dispose()
+  }
+})

@@ -249,6 +249,7 @@ export function createRuntimeControl(
       },
       effectiveLimits,
     )
+    contextManager.autoCompaction = state.reloadable.autoCompaction ?? true
     return { tracker, messages, effectiveLimits, contextManager }
   }
 
@@ -307,6 +308,9 @@ export function createRuntimeControl(
           ? { githubRepositories: next.githubRepositories }
           : {}),
         ...('dreamEnabled' in next ? { dreamEnabled: next.dreamEnabled } : {}),
+        ...('autoCompaction' in next
+          ? { autoCompaction: next.autoCompaction }
+          : {}),
         ...('offline' in next && next.offline !== undefined
           ? { offline: next.offline }
           : {}),

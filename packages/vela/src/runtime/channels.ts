@@ -188,6 +188,7 @@ export interface ChannelAdapterContext {
   getProject?(id: string): ProjectRecord | undefined
   recordHostPostAuthor?(externalMessageId: string, authorName: string): void
   getHostPostAuthor?(externalMessageId: string): string | undefined
+  reportStatus?(status: ChannelConnectionState): void
 }
 
 /** First-class external messaging adapter hosted by `Runtime`. */
