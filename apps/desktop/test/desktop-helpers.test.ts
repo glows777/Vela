@@ -9,6 +9,10 @@ import {
   routineLocalTime,
   routineTimezone,
 } from '../src/main/routine-time.ts'
+import {
+  initialSnapshot,
+  submitLocalFlow,
+} from '../src/renderer/store-state.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -44,4 +48,75 @@ test('routine-time resolves IANA timezones, wall clock instants, and next occurr
   const after = Date.parse('2026-11-28T00:00:00.000Z')
   const next = nextOccurrence({ time: '09:30' }, after, 'Asia/Shanghai')
   expect(next).toBe(Date.parse('2026-11-28T01:30:00.000Z'))
+})
+
+test('submitLocalFlow rejects disconnected preflight errors and preserves mid-flight transport uncertainty', async () => {
+  let snapshot = {
+    ...initialSnapshot,
+    messages: {} as typeof initialSnapshot.messages,
+  }
+  const publish = (patch: Partial<typeof snapshot>) => {
+    snapshot = { ...snapshot, ...patch }
+  }
+  const mergeMessages = (
+    sid: string,
+    incoming: (typeof initialSnapshot.messages)[string],
+  ) => {
+    snapshot = {
+      ...snapshot,
+      messages: {
+        ...snapshot.messages,
+        [sid]: [...(snapshot.messages[sid] ?? []), ...incoming],
+      },
+    }
+  }
+
+  let preflightUnknown = false
+  let preflightError = ''
+  const preflightOutcome = await submitLocalFlow({
+    projectId: null,
+    sessionId: 's-preflight',
+    text: 'draft stays',
+    getSnapshot: () => snapshot,
+    publish,
+    mergeMessages,
+    onUnknown: () => {
+      preflightUnknown = true
+    },
+    submit: async () => {
+      throw new Error(
+        'Background service disconnected and is reconnecting. Please try again.',
+      )
+    },
+    report: (err) => {
+      preflightError = err
+    },
+    formatError: (e) => (e instanceof Error ? e.message : String(e)),
+  })
+  expect(preflightOutcome).toBe('rejected')
+  expect(preflightUnknown).toBe(false)
+  expect(preflightError).toContain('reconnecting')
+  expect(snapshot.messages['s-preflight']).toEqual([])
+
+  let midflightUnknown = false
+  const midflightOutcome = await submitLocalFlow({
+    projectId: null,
+    sessionId: 's-midflight',
+    text: 'may have landed',
+    getSnapshot: () => snapshot,
+    publish,
+    mergeMessages,
+    onUnknown: () => {
+      midflightUnknown = true
+    },
+    submit: async () => {
+      throw new Error('Disconnected from Vela daemon')
+    },
+    report: () => {},
+    formatError: (e) => (e instanceof Error ? e.message : String(e)),
+  })
+  expect(midflightOutcome).toBe('unknown')
+  expect(midflightUnknown).toBe(true)
+  expect(snapshot.messages['s-midflight']).toHaveLength(1)
+  expect(snapshot.messages['s-midflight']?.[0]?.text).toBe('may have landed')
 })

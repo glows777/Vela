@@ -90,7 +90,7 @@ export const byTime = (messages: Message[]) =>
 
 function isUncertainSubmitError(cause: unknown): boolean {
   const msg = cause instanceof Error ? cause.message : String(cause ?? '')
-  return /Background service disconnected|Daemon (?:client|runtime client)|Disconnected from Vela daemon|ECONNRESET|EPIPE|ECONNREFUSED|ENOENT|socket|IPC|closed|disposed/i.test(
+  return /Disconnected from Vela daemon|ECONNRESET|EPIPE|socket hang up|IPC/i.test(
     msg,
   )
 }
