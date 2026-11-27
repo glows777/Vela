@@ -319,6 +319,7 @@
   function createRuntime: (options?: CreateRuntimeOptions) => LocalVelaRuntime
   interface CreateRuntimeOptions
     agentDir?: string | undefined
+    allowLocalOnlyOAuth?: boolean | undefined
     autoCompaction?: boolean | undefined
     contextFiles?: readonly ContextFile[] | undefined
     credentials?: CredentialStore | undefined
@@ -331,6 +332,7 @@
     ephemeralSessions?: boolean | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     hostEnv?: Record<string, string | undefined> | undefined
+    ignoredChannels?: readonly string[] | undefined
     limits?: Partial<VelaLimits> | undefined
     logger?: VelaLogger | undefined
     mcp?: boolean | undefined
@@ -733,7 +735,7 @@
     registerChannel: (adapter: ChannelAdapter) => Promise<void>
     registerDriver: (driver: AgentDriver) => void
     reloadConfig: () => Promise<void>
-    steer: (sessionId: string, text: string) => Promise<void>
+    steer: (sessionId: string, text: string, images?: Array<{ data: string; mimeType: string; }>) => Promise<void>
     stop: (sessionId: string, reason?: string, options?: { expectedRunId?: string; }) => Promise<boolean>
     unregisterChannel: (name: string) => Promise<void>
     waitForIdle: (sessionId?: string) => Promise<void>
@@ -1066,6 +1068,9 @@
       error?: string
       errorKind?: AgentErrorKind
       errorHint?: string
+      }
+      | {
+      type: 'session_reset'
       }
   interface RuntimeMessagePage
     messages: RuntimeMessageRecord[]
@@ -1774,7 +1779,7 @@
     ready: () => Promise<void>
     recover: () => Promise<RuntimeRecoverySummary>
     reloadConfig: () => Promise<void>
-    steer: (sessionId: string, text: string) => Promise<void>
+    steer: (sessionId: string, text: string, images?: Array<{ data: string; mimeType: string; }>) => Promise<void>
     stop: (sessionId: string, reason?: string, options?: { expectedRunId?: string; }) => Promise<boolean>
     waitForIdle: (sessionId?: string) => Promise<void>
   class VelaSession

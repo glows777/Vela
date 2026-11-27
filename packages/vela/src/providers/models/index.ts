@@ -145,15 +145,27 @@ export class ModelRegistry {
   private readonly providers = new Map<string, ProviderDefinition>()
   private readonly authQueues = new Map<string, Promise<unknown>>()
   readonly credentials: CredentialStore
+  readonly blocksLocalOnlyOAuth: boolean
 
   constructor(
     providers: Record<string, ProviderDefinition> = {},
     credentials: CredentialStore = memoryCredentialStore(),
     private readonly registrations?: OAuthRegistrationStore,
+    options: { blockLocalOnlyOAuth?: boolean } = {},
   ) {
     this.credentials = credentials
+    this.blocksLocalOnlyOAuth = options.blockLocalOnlyOAuth === true
     for (const [name, provider] of Object.entries(providers))
       this.register(name, provider)
+  }
+
+  private isLocalOnlyBlocked(
+    def: ProviderDefinition | undefined,
+    channel?: string,
+  ): boolean {
+    return Boolean(
+      def?.oauth?.localOnly && (this.blocksLocalOnlyOAuth || channel),
+    )
   }
 
   private serializeAuth<T>(
@@ -207,12 +219,11 @@ export class ModelRegistry {
   authSource(name: string, channel?: string): string | undefined {
     const def = this.providers.get(name)
     if (!def) return
-    if (!def.authSource) return 'configured'
     const stored = this.credentials.get(name)
-    if (channel && def.oauth?.localOnly && stored?.type === 'oauth') {
-      return def.authSource(undefined)
-    }
-    return def.authSource(stored)
+    const blockedOAuth =
+      this.isLocalOnlyBlocked(def, channel) && stored?.type === 'oauth'
+    if (!def.authSource) return blockedOAuth ? undefined : 'configured'
+    return def.authSource(blockedOAuth ? undefined : stored)
   }
 
   /**
@@ -220,9 +231,10 @@ export class ModelRegistry {
    * sign-in rather than an API key and not blocked by a remote channel; undefined otherwise.
    */
   planLabel(provider: string, channel?: string): string | undefined {
-    const oauth = this.providers.get(provider)?.oauth
+    const def = this.providers.get(provider)
+    const oauth = def?.oauth
     if (!oauth?.isSubscription) return
-    if (oauth.localOnly && channel) return
+    if (this.isLocalOnlyBlocked(def, channel)) return
     if (this.credentials.get(provider)?.type !== 'oauth') return
     return oauth.planLabel
   }
@@ -235,7 +247,7 @@ export class ModelRegistry {
     const def = this.providers.get(provider)
     const stored = this.credentials.get(provider)
     if (stored?.type === 'oauth') {
-      if (def?.oauth?.localOnly && channel) {
+      if (this.isLocalOnlyBlocked(def, channel)) {
         return this.authSource(provider, channel) ? 'api_key' : undefined
       }
       return 'oauth'
@@ -513,7 +525,7 @@ export class ModelRegistry {
     const ctx: ProviderContext = {
       provider,
       credential: async () => {
-        if (def.oauth?.localOnly && options.channel?.()) {
+        if (this.isLocalOnlyBlocked(def, options.channel?.())) {
           const stored = this.credentials.get(provider)
           if (stored?.type === 'api_key') return stored
           return undefined
@@ -525,7 +537,7 @@ export class ModelRegistry {
     localOnlyOAuthChecks.set(
       ctx,
       () =>
-        Boolean(def.oauth?.localOnly && Boolean(options.channel?.())) &&
+        this.isLocalOnlyBlocked(def, options.channel?.()) &&
         this.credentials.get(provider)?.type === 'oauth',
     )
     const planLabel = this.planLabel(provider, options.channel?.())

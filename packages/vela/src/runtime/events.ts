@@ -134,6 +134,9 @@ export type RuntimeEventPayload =
       errorKind?: AgentErrorKind
       errorHint?: string
     }
+  | {
+      type: 'session_reset'
+    }
 
 /** Persisted Runtime event carrying a strictly monotonic `seq` cursor. */
 export type RuntimeEvent = RuntimeEventPayload & {

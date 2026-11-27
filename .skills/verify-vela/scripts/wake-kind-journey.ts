@@ -89,7 +89,9 @@ fake.deliver(
 await until('discussion evaluated', () => model.calls.length === 3)
 
 // 3. A host-submitted message delivered through Runtime channel submit
-const hubSession = (await runtime.sessions.list({ kind: 'hub' }))[0]!
+const hubSession = (await runtime.sessions.list()).find(
+  (s) => s.kind === 'hub',
+)!
 await runtime.channels.submit('lark', {
   chatId: 'oc_group',
   sessionId: hubSession.id,

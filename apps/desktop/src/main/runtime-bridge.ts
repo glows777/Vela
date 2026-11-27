@@ -46,11 +46,21 @@ export function resolveSessionOwnership(
   session: SessionRecord,
   bindings: readonly ChannelBinding[],
   larkProjectIds: ReadonlySet<string>,
+  projectsById?: ReadonlyMap<string, ProjectRecord>,
 ): SessionOwnership | undefined {
   const direct = bindings.find(
     (b) => b.channel === 'lark' && b.sessionId === session.id,
   )
   if (direct) {
+    const root = direct.threadId
+      ? bindings.find(
+          (b) =>
+            b.channel === 'lark' &&
+            b.externalId === direct.externalId &&
+            !b.threadId,
+        )
+      : direct
+    if (!direct.enabled || !root?.enabled) return undefined
     const rootId =
       typeof direct.config?.rootId === 'string' && direct.config.rootId
         ? direct.config.rootId
@@ -71,15 +81,15 @@ export function resolveSessionOwnership(
         b.projectId === session.projectId &&
         !b.threadId,
     )
-    if (root) {
-      return {
-        channel: 'lark',
-        chatId: root.externalId,
-        chatKind: root.kind,
-        ...(session.kind === 'topic' || session.kind === 'work'
-          ? { topic: { rootId: session.id, threadId: session.id } }
-          : {}),
-      }
+    const project = projectsById?.get(session.projectId)
+    const isHub = project
+      ? session.id === project.hubSessionId
+      : session.kind === 'hub'
+    if (!root?.enabled || !isHub) return undefined
+    return {
+      channel: 'lark',
+      chatId: root.externalId,
+      chatKind: root.kind,
     }
   }
   const chatId = session.projectId ?? session.id
@@ -477,16 +487,31 @@ export async function submitDesktopMessage(
     if (!sessionId) {
       throw new Error(`Project ${msg.channelId} has no hub session`)
     }
-    if (msg.topic?.threadId) {
-      const topicSession = await runtime.sessions.get(sessionId)
-      if (
-        !topicSession ||
-        (topicSession.projectId !== project.id &&
-          topicSession.id !== project.hubSessionId)
-      ) {
-        throw new Error(
-          `Session ${sessionId} does not belong to project ${project.id}`,
-        )
+    const targetSession = await runtime.sessions.get(sessionId)
+    if (
+      !targetSession ||
+      (targetSession.projectId !== project.id &&
+        targetSession.id !== project.hubSessionId)
+    ) {
+      throw new Error(
+        `Session ${sessionId} does not belong to project ${project.id}`,
+      )
+    }
+    if (targetSession.kind !== 'hub') {
+      const status = await runtime.sessions
+        .status(sessionId)
+        .catch(() => undefined)
+      if (status?.activeRunId) {
+        const steerImages = msg.images?.map((img) => ({
+          data: img.data,
+          mimeType: img.mimeType,
+        }))
+        await runtime.steer(sessionId, text, steerImages)
+        return {
+          outcome: 'posted' as const,
+          sessionId,
+          messageId: sessionId,
+        }
       }
     }
     const attachments = msg.images?.length
@@ -576,12 +601,6 @@ export async function stopDesktopTarget(
             b.config?.rootId === request.target.rootId),
       )
       sessionId = topicBinding?.sessionId ?? undefined
-      if (!sessionId && rootBinding.projectId) {
-        const directSession = await runtime.sessions.get(request.target.rootId)
-        if (directSession?.projectId === rootBinding.projectId) {
-          sessionId = directSession.id
-        }
-      }
     } else {
       sessionId =
         rootBinding.sessionId ??
@@ -691,19 +710,14 @@ export async function fetchLarkDesktopMessages(
       b.enabled &&
       b.sessionId === input.sessionId,
   )
-  let sessionMatchesProject = false
+  let sessionMatchesHub = false
   if (!sessionMatchesBinding && rootBinding.projectId) {
     const project = await runtime.projects.get(rootBinding.projectId)
     if (project?.hubSessionId === input.sessionId) {
-      sessionMatchesProject = true
-    } else {
-      const session = await runtime.sessions.get(input.sessionId)
-      if (session && session.projectId === rootBinding.projectId) {
-        sessionMatchesProject = true
-      }
+      sessionMatchesHub = true
     }
   }
-  if (!sessionMatchesBinding && !sessionMatchesProject) {
+  if (!sessionMatchesBinding && !sessionMatchesHub) {
     throw new Error(
       `Session ${input.sessionId} does not belong to Lark chat ${input.chatId}`,
     )

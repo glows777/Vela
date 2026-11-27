@@ -429,3 +429,79 @@ test('autoCompaction config reloads via reloadConfig and registerChannel + chann
     await runtime.dispose()
   }
 })
+
+test('ignoredChannels skips channel recovery/timers and allowLocalOnlyOAuth:false blocks extension localOnly OAuth', async () => {
+  const agentDir = tempDir('vela-ignored-chan-')
+  const runtimeA = createRuntime({
+    agentDir,
+    defaultModel: createFauxModel(),
+    mcp: false,
+  })
+  const proj = await runtimeA.projects.create({
+    name: 'LarkIgnored',
+    hubSessionId: true,
+  })
+  await runtimeA.bindings.upsert({
+    channel: 'lark',
+    externalId: 'oc_pend',
+    kind: 'group',
+    projectId: proj.id,
+    sessionId: proj.hubSessionId,
+    enabled: true,
+  })
+  await runtimeA.prompt(proj.hubSessionId!, {
+    text: 'should stay pending for daemon',
+    source: 'user',
+    wake: true,
+  })
+  await runtimeA.dispose()
+
+  const extPath = join(agentDir, 'ext.ts')
+  writeFileSync(
+    extPath,
+    `
+    export default function (api) {
+      api.registerProvider('local-oauth-ext', {
+        oauth: { localOnly: true },
+        models: [{ id: 'm1', name: 'M1' }],
+        createModel(id, ctx) {
+          return {
+            async doGenerate() {
+              const cred = await ctx.credential()
+              return { content: [{ type: 'text', text: cred ? 'leaked' : 'blocked' }], usage: {} }
+            }
+          }
+        }
+      })
+    }
+  `,
+  )
+  writeFileSync(
+    join(agentDir, 'auth.json'),
+    JSON.stringify({
+      'local-oauth-ext': { type: 'oauth', access: 'secret-token' },
+    }),
+  )
+  writeFileSync(
+    join(agentDir, 'config.json'),
+    JSON.stringify({
+      model: 'local-oauth-ext/m1',
+      extensions: [extPath],
+    }),
+  )
+  const runtimeB = createRuntime({
+    agentDir,
+    ignoredChannels: ['lark'],
+    allowLocalOnlyOAuth: false,
+    mcp: false,
+  })
+  try {
+    await runtimeB.ready()
+    const rec = await runtimeB.recover()
+    expect(rec.wokenSessions).not.toContain(proj.hubSessionId!)
+    const models = await runtimeB.models({ channel: undefined })
+    expect(models.some((m) => m.provider === 'local-oauth-ext')).toBe(false)
+  } finally {
+    await runtimeB.dispose()
+  }
+})

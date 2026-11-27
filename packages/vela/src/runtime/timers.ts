@@ -474,7 +474,10 @@ export class TimerScheduler {
     return undefined
   }
 
-  tick(nowMs = Date.now()): { fired: string[]; guardrailBlocked: string[] } {
+  tick(
+    nowMs = Date.now(),
+    isIgnoredTimer?: (timer: TimerRecord) => boolean,
+  ): { fired: string[]; guardrailBlocked: string[] } {
     const nowIso = new Date(nowMs).toISOString()
     const fired: string[] = []
     const guardrailBlocked: string[] = []
@@ -490,6 +493,7 @@ export class TimerScheduler {
 
       for (const raw of dueRows) {
         const timer = rowToTimer(raw)
+        if (isIgnoredTimer?.(timer)) continue
         const targetSessionId = this.resolveTargetSessionId(timer)
         if (!targetSessionId) {
           if (timer.kind === 'followup') {

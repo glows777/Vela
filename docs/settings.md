@@ -149,7 +149,7 @@ Built-in extensions read top-level sections (`lark`, `web`, `memory`, `webhooks`
 
 The CLI fills built-in sections from environment variables first (`TAVILY_API_KEY`, `LARK_APP_ID` and the others listed in [CLI](cli.md#environment-variables)); values in `config.json` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
 
-`lark.timezone` is the single IANA timezone for scheduled wake-ups (for example `Asia/Shanghai`); omitted, it uses the process timezone. Startup rejects invalid names. Reminder creation accepts local dates/times in this zone, and both tool confirmations and `!routines` show it explicitly. Recurring schedules follow the configured wall time; changing the zone shifts their UTC occurrences. Saved one-off instants do not change. See [scheduled wake-ups](channels.md#scheduled-wake-ups-m4) for weekday, DST and cancellation behavior.
+`lark.timezone` is the single IANA timezone for scheduled wake-ups (for example `Asia/Shanghai`); omitted, it uses the process timezone. Startup rejects invalid names. Reminder creation accepts local dates/times in this zone, and both tool confirmations and `!timers` show it explicitly. Recurring schedules follow the configured wall time; changing the zone shifts their UTC occurrences. Saved one-off instants do not change. See [scheduled wake-ups](channels.md#scheduled-wake-ups-m4) for weekday, DST and cancellation behavior.
 
 ## Data directory
 

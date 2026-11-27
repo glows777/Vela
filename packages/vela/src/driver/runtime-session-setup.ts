@@ -1,25 +1,18 @@
-import { join } from 'node:path'
-import type { VelaDatabase } from '../db/index.ts'
-import { canonicalLocalPath, savedTrust } from '../db/trust.ts'
-import type { OAuthRegistrationStore } from '../providers/auth/types.ts'
+import type { ResolvedModel, ThinkingLevel } from '../providers/models/index.ts'
 import {
   DEFAULT_THINKING_LEVEL,
   ModelRegistry,
-  type ResolvedModel,
   resolveModelInput,
-  type ThinkingLevel,
 } from '../providers/models/index.ts'
-import { loadModels, type ProviderConfig } from '../providers/models-config.ts'
+import { loadModels } from '../providers/models-config.ts'
 import { getActiveChannelForSession } from '../runtime/control-ops.ts'
 import type { SessionRecord } from '../runtime/domain.ts'
-import type { DriverTurnResult } from '../runtime/driver.ts'
 import {
   MEMORY_RULES,
   type MemoryDirs,
-  type MemoryRegistry,
   type MemoryStore,
 } from '../runtime/memory/index.ts'
-import type { VelaLogger } from '../shared/logger.ts'
+import type { VelaLimits } from '../shared/limits.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import { resolveShellPath } from '../shared/shell-path.ts'
 import { mergeDefaultTools, selectTools } from '../shared/tool-selection.ts'
@@ -31,11 +24,15 @@ import { createSessionLocalExecutionEnv } from './execution/local.ts'
 import { resolveLocation } from './execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import type { ExtensionRunner } from './extensions/runner.ts'
-import type { MemoryDream } from './memory/dream.ts'
 import type { ModelMessage } from './messages.ts'
 import { localDateString } from './prompt/environment.ts'
 import type { SystemPromptBuilder } from './prompt/index.ts'
-import type { RuntimeBackgroundController } from './runtime-background.ts'
+import {
+  type DriverSharedState,
+  releaseCachedSessionRunner,
+  retireOrDisposeCachedRunner,
+  withSessionRunnerLock,
+} from './runtime-dispose.ts'
 import {
   type RuntimeExtensionHost,
   resolveEffectiveDisabledBuiltins,
@@ -56,167 +53,19 @@ import {
   createRuntimeSessionToolRegistry,
 } from './runtime-tools.ts'
 import type {
-  ActiveRunMeta,
   RuntimeMcpLease,
-  RuntimeReloadableConfig,
   RuntimeSessionOverride,
   RuntimeSpecialModelHandle,
-  VelaAgentDriverOptions,
 } from './runtime-types.ts'
-import type { BashExecutionEntry } from './session/entries.ts'
 import type { SessionStore } from './session/index.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
 import { ToolRegistry } from './tools/registry.ts'
 import type { VelaSession } from './vela-session.ts'
 
-export interface CachedSessionRunner {
-  key: string
-  runner: ExtensionRunner
-  registry: ToolRegistry
-  errors: string[]
-  releaseHost: () => void
-  started: boolean
-  lastView?: VelaSession
-  refs: number
-  retired?: boolean
-}
+export type { DriverSharedState }
 
-async function disposeCachedSessionRunner(
-  entry: CachedSessionRunner,
-): Promise<void> {
-  try {
-    if (entry.started && entry.lastView) {
-      await entry.runner.sessionShutdown(entry.lastView).catch(() => {})
-    }
-    await entry.runner.shutdown().catch(() => {})
-  } finally {
-    entry.releaseHost()
-  }
-}
-
-export async function retireOrDisposeCachedRunner(
-  entry: CachedSessionRunner,
-): Promise<void> {
-  entry.retired = true
-  if (entry.refs === 0) {
-    await disposeCachedSessionRunner(entry)
-  }
-}
-
-async function releaseCachedSessionRunner(
-  entry: CachedSessionRunner,
-): Promise<void> {
-  entry.refs = Math.max(0, entry.refs - 1)
-  if (entry.retired && entry.refs === 0) {
-    await disposeCachedSessionRunner(entry)
-  }
-}
-
-function withSessionRunnerLock<T>(
-  state: DriverSharedState,
-  sessionId: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const prev = state.sessionRunnerLocks.get(sessionId) ?? Promise.resolve()
-  const next = prev.catch(() => {}).then(fn)
-  const tail = next.then(
-    () => {
-      if (state.sessionRunnerLocks.get(sessionId) === tail) {
-        state.sessionRunnerLocks.delete(sessionId)
-      }
-    },
-    () => {
-      if (state.sessionRunnerLocks.get(sessionId) === tail) {
-        state.sessionRunnerLocks.delete(sessionId)
-      }
-    },
-  )
-  state.sessionRunnerLocks.set(sessionId, tail)
-  return next
-}
-
-export async function disposeDriverSharedState(
-  state: DriverSharedState,
-): Promise<void> {
-  if (state.disposed) return
-  state.disposed = true
-  state.disposeController.abort(
-    new DOMException('Driver disposed', 'AbortError'),
-  )
-  for (const controller of state.activeAbort.values()) {
-    controller.abort(new DOMException('Driver disposed', 'AbortError'))
-  }
-  for (const controller of state.activeBash.values()) {
-    controller.abort(new DOMException('Driver disposed', 'AbortError'))
-  }
-  await Promise.allSettled([...state.activeTurns])
-  await Promise.allSettled([...state.activeBashPromises])
-  await Promise.allSettled(
-    [...state.activeDreams.values()].map((d) => d.stop()),
-  )
-  await Promise.allSettled([...state.pendingDreamTasks])
-  state.activeDreams.clear()
-  await Promise.allSettled(
-    [...state.sessionBackgrounds.values()].map((bg) => bg.stopAll()),
-  )
-  state.sessionBackgrounds.clear()
-  await Promise.allSettled(
-    [...state.activeMcpLeases].map((lease) => lease.release()),
-  )
-  state.activeMcpLeases.clear()
-  await Promise.allSettled(
-    [...state.specialModels.values()].map((s) => s.flush?.()),
-  )
-  state.specialModels.clear()
-  const runners = [...state.sessionRunners.values()]
-  state.sessionRunners.clear()
-  state.sessionResourceSnapshots.clear()
-  state.sessionActiveTools.clear()
-  await Promise.allSettled(
-    runners.map((entry) => retireOrDisposeCachedRunner(entry)),
-  )
-  await state.options.mcp?.dispose?.()
-  await state.extHost.shutdown().catch(() => {})
-}
-
-export interface DriverSharedState {
-  options: VelaAgentDriverOptions
-  db: VelaDatabase
-  logger: VelaLogger
-  models: ModelRegistry
-  registrations?: OAuthRegistrationStore
-  rawConfigProviders?: Record<string, ProviderConfig>
-  memoryRegistry: MemoryRegistry
-  extHost: RuntimeExtensionHost
-  reloadable: Required<Pick<RuntimeReloadableConfig, 'offline'>> &
-    Omit<RuntimeReloadableConfig, 'offline'>
-  sessionOverrides: Map<string, RuntimeSessionOverride>
-  specialModels: Map<string, RuntimeSpecialModelHandle>
-  sessionRunners: Map<string, CachedSessionRunner>
-  sessionRunnerLocks: Map<string, Promise<void>>
-  sessionActiveTools: Map<string, string[] | undefined>
-  sessionResourceSnapshots: Map<
-    string,
-    {
-      key: string
-      resources: TrustedRuntimeResources
-      projectSettings?: ProjectSettings
-    }
-  >
-  activeAbort: Map<string, AbortController>
-  activeSteering: Map<string, ModelMessage[]>
-  activeRunMeta: Map<string, ActiveRunMeta>
-  sessionBackgrounds: Map<string, RuntimeBackgroundController>
-  pendingBashBySession: Map<string, BashExecutionEntry[]>
-  activeBash: Map<string, AbortController>
-  activeBashPromises: Set<Promise<unknown>>
-  activeDreams: Map<string, MemoryDream>
-  pendingDreamTasks: Set<Promise<void>>
-  activeMcpLeases: Set<RuntimeMcpLease>
-  activeTurns: Set<Promise<DriverTurnResult>>
-  disposeController: AbortController
-  disposed: boolean
-}
+import { join } from 'node:path'
+import { canonicalLocalPath, savedTrust } from '../db/trust.ts'
 
 export interface PreparedSessionEnv {
   location: ExecutionLocation
@@ -227,6 +76,8 @@ export interface PreparedSessionEnv {
   sessionName?: string
   effectiveEnv: Record<string, string | undefined>
   effectiveOffline: boolean
+  effectiveAutoCompaction: boolean
+  effectiveLimitsConfig?: Partial<VelaLimits>
   activeModels: ModelRegistry
   override?: RuntimeSessionOverride
   modelInput?: ModelInput
@@ -278,6 +129,7 @@ export function resolveSessionModels(
     merged,
     state.models.credentials,
     state.registrations,
+    { blockLocalOnlyOAuth: state.models.blocksLocalOnlyOAuth },
   )
 }
 
@@ -337,6 +189,7 @@ export async function prepareSessionSetup(params: {
     location.environment,
   )
 
+  let resolvedProjectShellPath: string | undefined
   const spillDir = state.options.spillRoot
     ? join(state.options.spillRoot, sessionId, 'tool-results')
     : join(state.options.agentDir, 'sessions', sessionId, 'tool-results')
@@ -344,10 +197,15 @@ export async function prepareSessionSetup(params: {
     if (location.environment === 'local') {
       return createSessionLocalExecutionEnv({
         cwd: location.cwd,
-        shellPath: resolveShellPath(state.reloadable.shellPath, {
-          env: effectiveEnv,
-          platform: process.platform,
-        }),
+        shellPath: resolveShellPath(
+          state.options.explicitShellPath ??
+            resolvedProjectShellPath ??
+            state.reloadable.shellPath,
+          {
+            env: effectiveEnv,
+            platform: process.platform,
+          },
+        ),
         tempRoot: spillDir,
       })
     }
@@ -442,6 +300,22 @@ export async function prepareSessionSetup(params: {
     state.sessionResourceSnapshots.set(sessionId, cachedSnapshot)
   }
   const { resources, projectSettings } = cachedSnapshot
+  resolvedProjectShellPath = projectSettings?.settings.shellPath
+  const effectiveAutoCompaction =
+    state.options.explicitAutoCompaction ??
+    projectSettings?.settings.autoCompaction ??
+    state.reloadable.autoCompaction ??
+    true
+  const effectiveLimitsConfig =
+    state.reloadable.limits ||
+    projectSettings?.settings.limits ||
+    state.options.explicitLimits
+      ? {
+          ...state.reloadable.limits,
+          ...projectSettings?.settings.limits,
+          ...state.options.explicitLimits,
+        }
+      : undefined
 
   const specialModel = state.specialModels.get(sessionId)
   const modelInput: ModelInput | undefined =
@@ -759,6 +633,8 @@ export async function prepareSessionSetup(params: {
     sessionName: sessionRow?.name ?? saved?.name,
     effectiveEnv,
     effectiveOffline,
+    effectiveAutoCompaction,
+    effectiveLimitsConfig,
     activeModels,
     override,
     modelInput,

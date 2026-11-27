@@ -38,7 +38,6 @@ const model = createFauxModel({
 const agentDir = resolve('host-data')
 const runtime = createRuntime({
   agentDir,
-  cwd: process.cwd(),
   defaultModel: model,
   mcp: false,
 })
@@ -82,7 +81,8 @@ try {
       network.topics.some((m) => m.title.includes('Existing topic ready')),
     'existing topic ready',
   )
-  const topicSession = (await runtime.sessions.list({ kind: 'topic' }))[0]!
+  const allSessions = await runtime.sessions.list()
+  const topicSession = allSessions.find((s) => s.kind === 'topic')!
   const receipt = await runtime.channels.submit('lark', {
     chatId: 'oc_group',
     sessionId: topicSession.id,
@@ -146,20 +146,37 @@ try {
     }),
   )
   await until(() => model.calls.length === 5, 'held run')
-  const hubSession = (await runtime.sessions.list({ kind: 'hub' })).find(
-    (s) => s.name === 'oc_group' || s.projectId === topicSession.projectId,
+  const hubSession = (await runtime.sessions.list()).find(
+    (s) =>
+      s.kind === 'hub' &&
+      (s.name === 'oc_group' || s.projectId === topicSession.projectId),
   )!
+  const activeRunId = (await runtime.sessions.status(hubSession.id)).activeRunId
+  assert.ok(activeRunId, 'held run must have an activeRunId')
   network.deliver(
     larkEvent({
       message_id: 'queued-anchor',
       content: JSON.stringify({ text: '@_user_1 Queued request' }),
     }),
   )
-  assert.equal(await runtime.stop(hubSession.id, 'host-stop'), true)
+  assert.equal(
+    await runtime.stop(hubSession.id, 'host-stop', {
+      expectedRunId: activeRunId,
+    }),
+    true,
+  )
+  await until(
+    () =>
+      model.calls.length >= 6 ||
+      network.sent.some((m) => m.text === 'Queued work completed'),
+  )
+  const staleStopResult = await runtime.stop(hubSession.id, 'stale-stop', {
+    expectedRunId: activeRunId,
+  })
+  assert.equal(staleStopResult, false)
   await until(() =>
     network.sent.some((message) => message.text === 'Queued work completed'),
   )
-  assert.equal(await runtime.stop(hubSession.id, 'stale-stop'), false)
   assert.equal(model.pending(), 0)
   console.log('Stop ended held run and preserved later queued input')
 } finally {

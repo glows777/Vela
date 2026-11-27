@@ -1,9 +1,14 @@
 import { withProviderHooks } from '../providers/index.ts'
+import { resolveModel } from '../providers/models/index.ts'
 import type { DriverInboxItem, DriverTurnRequest } from '../runtime/driver.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import type { ExtensionRunner } from './extensions/runner.ts'
 import { type ModelMessage, normalizeUserMessage } from './messages.ts'
-import type { PreparedSessionEnv } from './runtime-session-setup.ts'
+import type { DriverSharedState } from './runtime-dispose.ts'
+import {
+  type PreparedSessionEnv,
+  resolveSessionModels,
+} from './runtime-session-setup.ts'
 import type { VelaAgentDriverOptions } from './runtime-types.ts'
 import type { SessionStore } from './session/index.ts'
 import type { ToolRegistry } from './tools/registry.ts'
@@ -214,4 +219,68 @@ export function wrapModelWithExtensionHooks(
         ...event,
       }),
   })
+}
+
+/** Resolves or invalidates an implicitly selected `mock` / `faux:` / `VELA_RECORD` model handle when defaults reload. */
+export async function maybeResolveImplicitSpecialModel(
+  state: DriverSharedState,
+  sessionId: string,
+  savedModel?: string,
+): Promise<void> {
+  if (!state.options.resolveSpecialModel) {
+    return
+  }
+  const override = state.sessionOverrides.get(sessionId)
+  const envRecord = override?.recordPath ?? state.options.hostEnv?.VELA_RECORD
+  const explicitDefaultModel = state.reloadable.defaultModel !== undefined
+  const defaultModelStr =
+    typeof state.reloadable.defaultModel === 'string'
+      ? state.reloadable.defaultModel
+      : undefined
+  const envModel =
+    override?.model ??
+    (explicitDefaultModel ? defaultModelStr : state.options.hostEnv?.VELA_MODEL)
+
+  if (state.specialModels.has(sessionId)) {
+    const prev = state.specialModelSources.get(sessionId)
+    if (
+      prev &&
+      prev.envModel === envModel &&
+      prev.envRecord === envRecord &&
+      prev.defaultModel === state.reloadable.defaultModel
+    ) {
+      return
+    }
+    if (!prev) return
+    const stale = state.specialModels.get(sessionId)
+    state.specialModels.delete(sessionId)
+    state.specialModelSources.delete(sessionId)
+    await stale?.flush?.().catch(() => {})
+  }
+  if (!envRecord && envModel !== 'mock' && !envModel?.startsWith('faux:')) {
+    return
+  }
+  let fallbackModel: ModelInput | undefined
+  if (envRecord && envModel !== 'mock' && !envModel?.startsWith('faux:')) {
+    const activeModels = resolveSessionModels(state, override)
+    const candidate =
+      override?.model ?? savedModel ?? state.reloadable.defaultModel
+    fallbackModel = resolveModel(candidate, {
+      providers: activeModels.providerDefinitions(),
+      credentials: activeModels.credentials,
+    })
+  }
+  const special = await state.options.resolveSpecialModel({
+    modelRef: envModel,
+    recordPath: envRecord,
+    fallbackModel,
+  })
+  if (special) {
+    state.specialModels.set(sessionId, special)
+    state.specialModelSources.set(sessionId, {
+      envModel,
+      envRecord,
+      defaultModel: state.reloadable.defaultModel,
+    })
+  }
 }

@@ -50,7 +50,6 @@ const dataDir = process.env.VELA_DIR
 assert.ok(dataDir, 'Run through the isolated verify-vela helper')
 const runtime = createRuntime({
   agentDir: join(dataDir, 'runtime'),
-  cwd: process.cwd(),
   defaultModel: model,
   mcp: false,
 })
@@ -119,6 +118,9 @@ try {
   console.log('ingest acknowledged durable admission before model completion')
 
   await until(() => model.calls.length === 1)
+  const heldRunId = (await runtime.sessions.status(admitted.sessionId))
+    .activeRunId
+  assert.ok(heldRunId, 'held run must have activeRunId')
   await fixtureCtx.ingestWithReceipt!({
     channel: 'fixture',
     dedupeKey: 'later-1',
@@ -129,12 +131,22 @@ try {
     text: 'later queued input',
     timestamp: new Date().toISOString(),
   })
-  assert.equal(await runtime.stop(admitted.sessionId, 'journey-stop'), true)
+  assert.equal(
+    await runtime.stop(admitted.sessionId, 'journey-stop', {
+      expectedRunId: heldRunId,
+    }),
+    true,
+  )
   await until(() =>
     sent.some((message) => message.text === 'later message completed'),
   )
   assert.equal(model.calls.length, 2)
-  assert.equal(await runtime.stop(admitted.sessionId, 'stale-stop'), false)
+  assert.equal(
+    await runtime.stop(admitted.sessionId, 'stale-stop', {
+      expectedRunId: heldRunId,
+    }),
+    false,
+  )
   console.log('Stop preserves later queued input and rejects stale stop')
 
   // 2. Separate channel isolation & direct topic wake without extra hub model turn

@@ -316,10 +316,7 @@ export function createRuntime(
         ownerExtensionConfig,
         options.extensionConfig,
       )
-      const limits =
-        ownerConfig.limits || options.limits
-          ? { ...ownerConfig.limits, ...options.limits }
-          : undefined
+      const limits = ownerConfig.limits
       const dreamEnabled =
         options.dreamEnabled ??
         (typeof ownerConfig.memory?.dream === 'boolean'
@@ -345,6 +342,7 @@ export function createRuntime(
       initial.providers,
       credentials,
       registrations,
+      { blockLocalOnlyOAuth: options.allowLocalOnlyOAuth === false },
     )
     const environments =
       options.environments instanceof EnvironmentRegistry
@@ -366,6 +364,7 @@ export function createRuntime(
       agentDir,
       environments,
       drivers: options.drivers,
+      ignoredChannels: options.ignoredChannels,
       logger,
     })
 
@@ -401,8 +400,10 @@ export function createRuntime(
       credentials,
       registrations,
       models,
-      shellPath: options.shellPath ?? initial.ownerConfig.shellPath,
+      shellPath: initial.ownerConfig.shellPath,
+      explicitShellPath: options.shellPath,
       limits: initial.limits,
+      explicitLimits: options.limits,
       tools: options.tools,
       defaultTools: initial.ownerConfig.tools,
       extensionConfig: initial.extensionConfig,
@@ -420,8 +421,8 @@ export function createRuntime(
       promptTemplates: options.promptTemplates,
       offline: options.offline,
       dreamEnabled: initial.dreamEnabled,
-      autoCompaction:
-        options.autoCompaction ?? initial.ownerConfig.autoCompaction,
+      autoCompaction: initial.ownerConfig.autoCompaction,
+      explicitAutoCompaction: options.autoCompaction,
       trustOverride: options.trustOverride,
       toolApprovalCheck: options.toolApprovalCheck,
       resolveSpecialModel: createSpecialModelResolver(),
@@ -482,7 +483,7 @@ export function createRuntime(
             options.defaultThinkingLevel ?? updated.ownerConfig.thinkingLevel,
           providers: updated.providers,
           rawConfigProviders: updated.configProviders,
-          shellPath: options.shellPath ?? updated.ownerConfig.shellPath,
+          shellPath: updated.ownerConfig.shellPath,
           limits: updated.limits,
           defaultTools: updated.ownerConfig.tools,
           extensionConfig: updated.extensionConfig,
@@ -492,8 +493,7 @@ export function createRuntime(
             updated.ownerConfig.webhooks,
           ),
           dreamEnabled: updated.dreamEnabled,
-          autoCompaction:
-            options.autoCompaction ?? updated.ownerConfig.autoCompaction,
+          autoCompaction: updated.ownerConfig.autoCompaction,
           offline: options.offline,
         })
         if (disposing) return
@@ -610,8 +610,8 @@ export function createRuntime(
         const res = engine.submitPrompt({ ...input, sessionId })
         return { eventId: res.event.id, inserted: res.inserted }
       },
-      steer: async (sessionId, text) => {
-        await engine.steerSession(sessionId, text)
+      steer: async (sessionId, text, images) => {
+        await engine.steerSession(sessionId, text, images)
       },
       stop: (sessionId, reason, opts) =>
         engine.stopSession(sessionId, reason, opts),
@@ -698,6 +698,7 @@ export function createRuntime(
             { ...models.providerDefinitions(), ...overlaid },
             credentials,
             registrations,
+            { blockLocalOnlyOAuth: models.blocksLocalOnlyOAuth },
           )
         }
         return opts?.all

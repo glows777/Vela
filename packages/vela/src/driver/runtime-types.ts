@@ -196,7 +196,9 @@ export interface VelaAgentDriverOptions {
   /** @internal Shared ModelRegistry (for live OAuth registrations & planLabel consistency). */
   models?: ModelRegistry
   shellPath?: string
+  explicitShellPath?: string
   limits?: Partial<VelaLimits>
+  explicitLimits?: Partial<VelaLimits>
   tools?: ToolDefinition[]
   defaultTools?: readonly string[]
   extensionConfig?: Record<string, Record<string, unknown>>
@@ -220,6 +222,7 @@ export interface VelaAgentDriverOptions {
   offline?: boolean
   dreamEnabled?: boolean
   autoCompaction?: boolean
+  explicitAutoCompaction?: boolean
   trustOverride?: (location: ExecutionLocation) => boolean | Promise<boolean>
   toolApprovalCheck?: (
     toolName: string,

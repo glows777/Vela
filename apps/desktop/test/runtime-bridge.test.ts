@@ -242,7 +242,7 @@ test('fetchLocalDesktopMessages paginates >100 messages alongside failed runs an
   }
 })
 
-test('DesktopClientIdTracker correlates batched inboxEventIds onto user commits', () => {
+test('DesktopClientIdTracker correlates batched inboxEventIds onto user commits regardless of event order', () => {
   const tracker = new DesktopClientIdTracker()
   tracker.trackPrompt('in-1', 'c-1')
   tracker.trackPrompt('in-2', 'c-2')
@@ -255,6 +255,135 @@ test('DesktopClientIdTracker correlates batched inboxEventIds onto user commits'
   )
   expect(matched).toEqual(['c-1', 'c-2'])
   expect(tracker.getForMessage('msg-1')).toBe('c-1')
+
+  // When run_started emits synchronously before trackPrompt records the inbox event ID
+  tracker.onRunStarted('run-2', ['in-3'])
+  tracker.trackPrompt('in-3', 'c-3')
+  const reverseOrder = tracker.consumeForUserMessage(
+    'sess-1',
+    'run-2',
+    'third',
+    'msg-2',
+  )
+  expect(reverseOrder).toEqual(['c-3'])
+  expect(tracker.getForMessage('msg-2')).toBe('c-3')
+})
+
+test('fetchLarkDesktopMessages rejects disabled topic even under enabled group, reset drops old failures, and routines enforce local creation + project timezone', async () => {
+  const runtime = createRuntime({
+    ephemeral: true,
+    defaultModel: createFauxModel(),
+    mcp: false,
+  })
+  try {
+    await runtime.ready()
+    const proj = await runtime.projects.create({
+      name: 'TZProj',
+      hubSessionId: true,
+      config: { timezone: 'Pacific/Honolulu' },
+    })
+    const larkGroup = await runtime.projects.create({
+      name: 'GroupProj',
+      hubSessionId: true,
+    })
+    const topicSess = await runtime.sessions.create({
+      projectId: larkGroup.id,
+      kind: 'topic',
+      name: 'Disabled topic',
+    })
+    await runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'oc_grp_en',
+      kind: 'group',
+      projectId: larkGroup.id,
+      sessionId: larkGroup.hubSessionId,
+      enabled: true,
+    })
+    await runtime.bindings.upsert({
+      channel: 'lark',
+      externalId: 'oc_grp_en',
+      threadId: 'omt_dis',
+      kind: 'group',
+      projectId: larkGroup.id,
+      sessionId: topicSess.id,
+      enabled: false,
+    })
+    await expect(
+      fetchLarkDesktopMessages(runtime, {
+        chatId: 'oc_grp_en',
+        sessionId: topicSess.id,
+      }),
+    ).rejects.toThrow(/does not belong/)
+
+    await expect(
+      handleDesktopRoutineRequest(
+        runtime,
+        {},
+        {
+          method: 'createRoutine',
+          channel: 'lark',
+          target: { chatId: 'oc_grp_en' },
+          input: { message: 'nope', schedule: { time: '09:00' } },
+        },
+      ),
+    ).rejects.toThrow(/Local projects/)
+
+    const listed = (await handleDesktopRoutineRequest(
+      runtime,
+      {},
+      {
+        method: 'listRoutines',
+        channel: 'local',
+        chatId: proj.id,
+      },
+    )) as { timezone: string }
+    const created = (await handleDesktopRoutineRequest(
+      runtime,
+      {},
+      {
+        method: 'createRoutine',
+        channel: 'local',
+        target: { chatId: proj.id },
+        input: { message: 'Honolulu routine', schedule: { time: '09:00' } },
+      },
+    )) as { timezone: string }
+    expect(listed.timezone).toBe('Pacific/Honolulu')
+    expect(created.timezone).toBe('Pacific/Honolulu')
+
+    await runtime.sessions.reset(proj.hubSessionId!)
+    const hist = await fetchLocalDesktopMessages(
+      {
+        ...runtime,
+        events: {
+          ...runtime.events,
+          list: async () => [
+            {
+              seq: 1,
+              sessionId: proj.hubSessionId!,
+              projectId: proj.id,
+              runId: 'old-fail',
+              timestamp: '2026-01-01T00:00:00.000Z',
+              type: 'run_finished' as const,
+              status: 'failed' as const,
+              error: 'Old error',
+            },
+            {
+              seq: 2,
+              sessionId: proj.hubSessionId!,
+              projectId: proj.id,
+              timestamp: '2026-01-02T00:00:00.000Z',
+              type: 'session_reset' as const,
+            },
+          ],
+        },
+      },
+      { projectId: proj.id, sessionId: proj.hubSessionId!, limit: 50 },
+      new DesktopClientIdTracker(),
+    )
+    expect(hist.messages).toEqual([])
+  } finally {
+    await runtime.dispose()
+  }
 })
 
 test('wrapLarkAdapter emits reset on reconnect and isolates post-deliver publish failures', async () => {

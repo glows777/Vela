@@ -355,7 +355,7 @@ export async function startDaemonServer(
     'sessions.export': (p) =>
       runtime.sessions.export(p.sessionId, p.format, p.outputPath, p.baseCwd),
     'runtime.prompt': (p) => runtime.prompt(p.sessionId, p.input),
-    'runtime.steer': (p) => runtime.steer(p.sessionId, p.text),
+    'runtime.steer': (p) => runtime.steer(p.sessionId, p.text, p.images),
     'runtime.stop': (p) => runtime.stop(p.sessionId, p.reason, p.options),
     'runtime.waitForIdle': (p) => runtime.waitForIdle(p?.sessionId),
     'jobs.list': (p) => runtime.jobs.list(p?.sessionId),

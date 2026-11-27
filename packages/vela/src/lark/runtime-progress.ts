@@ -551,7 +551,7 @@ export class LarkRuntimeProgressManager {
     }
 
     const active = this.activeRuns.get(event.sessionId)
-    if (!active || active.runId !== event.runId) return
+    if (!active || !('runId' in event) || active.runId !== event.runId) return
 
     if (event.type === 'tool_started') {
       active.progress?.recordToolStart(

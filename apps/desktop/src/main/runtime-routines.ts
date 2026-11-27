@@ -113,6 +113,21 @@ function normalizeDesktopRoutineSchedule(
   return { at }
 }
 
+function resolveDesktopRoutineTimezone(
+  projectConfig: Record<string, unknown> | null | undefined,
+  channel: string,
+  larkSettings: Record<string, unknown>,
+): string {
+  return routineTimezone(
+    (typeof projectConfig?.timezone === 'string'
+      ? projectConfig.timezone
+      : undefined) ??
+      (channel === 'lark' && typeof larkSettings.timezone === 'string'
+        ? larkSettings.timezone
+        : undefined),
+  )
+}
+
 /** Handles desktop Routine CRUD RPCs via `runtime.timers`. */
 export async function handleDesktopRoutineRequest(
   runtime: LocalVelaRuntime,
@@ -132,14 +147,10 @@ export async function handleDesktopRoutineRequest(
         request.chatId,
       )
       const project = await runtime.projects.get(projectId)
-      const timezone = routineTimezone(
-        (typeof project?.config?.timezone === 'string'
-          ? project.config.timezone
-          : undefined) ??
-          (request.channel === 'lark' &&
-          typeof larkSettings.timezone === 'string'
-            ? larkSettings.timezone
-            : undefined),
+      const timezone = resolveDesktopRoutineTimezone(
+        project?.config,
+        request.channel,
+        larkSettings,
       )
       const timers = await runtime.timers.list({
         projectId,
@@ -154,6 +165,11 @@ export async function handleDesktopRoutineRequest(
       }
     }
     case 'createRoutine': {
+      if (request.channel !== 'local') {
+        throw new Error(
+          'Routines can only be created for Local projects from the desktop app',
+        )
+      }
       const { projectId, hubSessionId } = await resolveRoutineScope(
         runtime,
         request.channel,
@@ -168,10 +184,11 @@ export async function handleDesktopRoutineRequest(
         sessionId = targetSession.id
       }
       if (!sessionId) throw new Error('Unknown or disabled channel target')
-      const zone = routineTimezone(
-        request.channel === 'lark' && typeof larkSettings.timezone === 'string'
-          ? larkSettings.timezone
-          : undefined,
+      const project = await runtime.projects.get(projectId)
+      const zone = resolveDesktopRoutineTimezone(
+        project?.config,
+        request.channel,
+        larkSettings,
       )
       const schedule = normalizeDesktopRoutineSchedule(
         request.input.schedule,
@@ -180,18 +197,7 @@ export async function handleDesktopRoutineRequest(
       const timer = await runtime.timers.createRoutine({
         projectId,
         sessionId,
-        channel: request.channel === 'lark' ? 'lark' : null,
-        ...(request.channel === 'lark'
-          ? {
-              target: {
-                channel: 'lark',
-                externalChatId: request.target.chatId,
-                ...(request.target.rootId
-                  ? { threadId: request.target.rootId }
-                  : {}),
-              },
-            }
-          : {}),
+        channel: null,
         creatorId: localCreator.id,
         creatorName: localCreator.name,
         message: request.input.message,

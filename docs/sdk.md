@@ -89,7 +89,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `ready()` | Resolves when host extensions (including async factories) have loaded; rejects if one failed. Session project preparation is awaited separately |
 | `extensions(sessionId?)` | Loaded extensions for the prepared open session: host plus its project, including registered tools, commands, providers and channels |
 | `commands(sessionId?)` | Slash commands from the host and the prepared open session's project |
-| `dispose(options?)` | Closes all open sessions and deletes any temporary data directory. Default cancels running work; accepts `{ graceful: true }` to drain in-flight work before shutdown. |
+| `dispose()` | Closes all open sessions, stops active turns, and deletes any temporary data directory. |
 
 The optional selectors above inspect existing sessions; they do not open or prepare one. Await `session.resources()` before inspecting a newly opened/resumed project's extensions or commands. An unknown explicit session id throws. No-argument calls retain the default-session view (host-only before that session is prepared), not a union of all projects. `ready()` still waits for host initialization, with no new session selector.
 

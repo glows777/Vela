@@ -12,6 +12,7 @@ const LIVE_JOB_HANDLES = new Map<
     dbKey: string | VelaDatabase
     ownerToken: string
     sessionId: string
+    runId: string | null
     abort: () => void
   }
 >()
@@ -172,6 +173,7 @@ export class BackgroundJobManager {
       dbKey: resolveDbKey(this.db),
       ownerToken,
       sessionId: input.sessionId,
+      runId: input.runId ?? null,
       abort: input.abort ?? (() => {}),
     })
     return this.get(id)!
@@ -245,12 +247,13 @@ export class BackgroundJobManager {
     return this.get(input.id)
   }
 
-  stopSessionJobs(sessionId: string): number {
+  stopSessionJobs(sessionId: string, runId?: string): number {
     const dbKey = resolveDbKey(this.db)
     const now = new Date().toISOString()
     let stopped = 0
     for (const [jobId, handle] of LIVE_JOB_HANDLES) {
       if (handle.dbKey !== dbKey || handle.sessionId !== sessionId) continue
+      if (runId !== undefined && handle.runId !== runId) continue
       LIVE_JOB_HANDLES.delete(jobId)
       try {
         handle.abort()
@@ -263,10 +266,17 @@ export class BackgroundJobManager {
         .filter((h) => h.dbKey === dbKey && h.db.open)
         .map((h) => h.ownerToken),
     )
-    const rows = this.db.all<{ id: string }>(
-      `SELECT id FROM background_jobs WHERE session_id = ? AND status = 'running'`,
-      sessionId,
-    )
+    const rows =
+      runId !== undefined
+        ? this.db.all<{ id: string }>(
+            `SELECT id FROM background_jobs WHERE session_id = ? AND run_id = ? AND status = 'running'`,
+            sessionId,
+            runId,
+          )
+        : this.db.all<{ id: string }>(
+            `SELECT id FROM background_jobs WHERE session_id = ? AND status = 'running'`,
+            sessionId,
+          )
     for (const row of rows) {
       const ownerRow = this.db.get<{ value_json: string }>(
         'SELECT value_json FROM kv_meta WHERE key = ?',
@@ -306,7 +316,10 @@ export class BackgroundJobManager {
   }
 
   /** On startup, reconciles orphaned `running` jobs as `interrupted` and notifies via `inbox_events`. */
-  recoverInterrupted(nowIso = new Date().toISOString()): string[] {
+  recoverInterrupted(
+    nowIso = new Date().toISOString(),
+    skipSession?: (sessionId: string) => boolean,
+  ): string[] {
     const dbKey = resolveDbKey(this.db)
     const interrupted: string[] = []
     const wakeSessions = new Set<string>()
@@ -326,6 +339,7 @@ export class BackgroundJobManager {
         `SELECT * FROM background_jobs WHERE status = 'running' ORDER BY started_at ASC`,
       ) as unknown as BackgroundJobRow[]
       for (const raw of rows) {
+        if (skipSession?.(raw.session_id)) continue
         const localHandle = LIVE_JOB_HANDLES.get(raw.id)
         if (localHandle && localHandle.dbKey === dbKey) continue
         const ownerRow = this.db.get<{ value_json: string }>(

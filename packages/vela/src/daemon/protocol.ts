@@ -12,7 +12,7 @@ import type {
   StreamDeltaEvent,
 } from '../runtime/index.ts'
 
-export const DAEMON_PROTOCOL_VERSION = 2
+export const DAEMON_PROTOCOL_VERSION = 3
 const MAX_WIRE_FRAME_BYTES = 128 * 1024 * 1024
 
 export interface DaemonHello {

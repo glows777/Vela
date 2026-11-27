@@ -109,6 +109,8 @@ export async function openHost(
     hostEnv: process.env,
     ...(fauxModel ? { defaultModel: fauxModel } : {}),
     credentials: desktopCredentials,
+    allowLocalOnlyOAuth: false,
+    ...(loadLark ? {} : { ignoredChannels: ['lark'] }),
     logger: {
       debug() {},
       info() {},
@@ -161,32 +163,41 @@ export async function openHost(
   }
 
   const getLarkContext = async () => {
-    const bindings = await runtime.bindings.list({ channel: 'lark' })
+    const [bindings, allProjects] = await Promise.all([
+      runtime.bindings.list({ channel: 'lark' }),
+      runtime.projects.list({ includeArchived: true }),
+    ])
     const larkProjectIds = new Set(
       bindings
         .map((b) => b.projectId)
         .filter((id): id is string => Boolean(id)),
     )
-    return { bindings, larkProjectIds }
+    const projectsById = new Map(allProjects.map((p) => [p.id, p]))
+    return { bindings, larkProjectIds, projectsById }
   }
 
   const buildDesktopSession = async (
     sessionId: string,
     bindings?: Awaited<ReturnType<LocalVelaRuntime['bindings']['list']>>,
     larkProjectIds?: ReadonlySet<string>,
+    projectsById?: ReadonlyMap<
+      string,
+      Awaited<ReturnType<LocalVelaRuntime['projects']['list']>>[number]
+    >,
   ): Promise<
     { session: Session; chatId: string; channel: 'local' | 'lark' } | undefined
   > => {
     const record = await runtime.sessions.get(sessionId)
     if (!record) return undefined
     const ctx =
-      bindings && larkProjectIds
-        ? { bindings, larkProjectIds }
+      bindings && larkProjectIds && projectsById
+        ? { bindings, larkProjectIds, projectsById }
         : await getLarkContext()
     const ownership = resolveSessionOwnership(
       record,
       ctx.bindings,
       ctx.larkProjectIds,
+      ctx.projectsById,
     )
     if (!ownership) return undefined
     const status = await runtime.sessions
@@ -255,7 +266,7 @@ export async function openHost(
       })
       await larkHost.sync(runtime.getLarkConfig(), true)
       const knownError = larkHost.knownChannelInfo().errors.get('lark')
-      if (knownError && runtime.getLarkConfig().larkError) {
+      if (knownError) {
         throw new Error(knownError)
       }
     }
@@ -469,7 +480,7 @@ export async function openHost(
     )
 
     const sessions = async (channel: string, chatId?: string) => {
-      const { bindings, larkProjectIds } = await getLarkContext()
+      const { bindings, larkProjectIds, projectsById } = await getLarkContext()
       const all = await runtime.sessions.list({ includeArchived: false })
       const out: Session[] = []
       for (const record of all) {
@@ -477,6 +488,7 @@ export async function openHost(
           record,
           bindings,
           larkProjectIds,
+          projectsById,
         )
         if (!ownership || ownership.channel !== channel) continue
         if (chatId && ownership.chatId !== chatId) continue

@@ -26,7 +26,6 @@ import { recordChildStatusNoteForHubInTx } from './recovery.ts'
 
 export {
   canWakeSessionInDb,
-  computeNextWakeDelayMs,
   recoverRuntimeState,
   stopSessionInRuntime,
   stopSessionRunsInDb,
@@ -717,4 +716,33 @@ export function resolveOutboxTargetInDb(
     }
   }
   return undefined
+}
+
+export async function disposeRuntimeResources(input: {
+  channels: ReadonlyArray<[string, { stop(): Promise<void> }]>
+  workerPromises: ReadonlyArray<Promise<void>>
+  drainOutbox: () => Promise<unknown>
+  drivers: Iterable<{ dispose?: () => void | Promise<void> }>
+  disposeEnvironments: () => Promise<void>
+  logError: (message: string) => void
+}): Promise<void> {
+  await Promise.allSettled([
+    ...input.channels.map(([name, adapter]) =>
+      adapter
+        .stop()
+        .catch((error) =>
+          input.logError(`[runtime] failed stopping channel ${name}: ${error}`),
+        ),
+    ),
+    ...input.workerPromises,
+  ])
+  await input
+    .drainOutbox()
+    .catch((error) => input.logError(`[runtime] outbox drain failed: ${error}`))
+  for (const driver of input.drivers) {
+    await Promise.resolve(driver.dispose?.()).catch((error) =>
+      input.logError(`[runtime] driver dispose failed: ${error}`),
+    )
+  }
+  await input.disposeEnvironments()
 }

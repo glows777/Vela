@@ -218,7 +218,11 @@ export interface VelaRuntime {
     sessionId: string,
     input: RuntimePromptInput,
   ): Promise<{ eventId: string; inserted: boolean }>
-  steer(sessionId: string, text: string): Promise<void>
+  steer(
+    sessionId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType: string }>,
+  ): Promise<void>
   stop(
     sessionId: string,
     reason?: string,
@@ -433,6 +437,10 @@ export interface CreateRuntimeOptions {
   offline?: boolean
   dreamEnabled?: boolean
   autoCompaction?: boolean
+  /** Channels owned outside this Runtime instance (ignored during `recover()` and scheduled wakes). */
+  ignoredChannels?: readonly string[]
+  /** Allow `localOnly` OAuth tokens (e.g. terminal ChatGPT OAuth) when no channel is bound; default `true`. */
+  allowLocalOnlyOAuth?: boolean
   /** Owner Docker environment definitions or a pre-constructed `EnvironmentRegistry`. Defaults to `<agentDir>/config.json` unless `ephemeral`. */
   environments?: Record<string, unknown> | EnvironmentRegistry
   drivers?: AgentDriver[]

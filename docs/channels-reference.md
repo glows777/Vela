@@ -21,6 +21,7 @@ const receipt = await runtime.channels.submit('lark', {
   chatId: 'oc_group',
   text: 'Please check the totals',
   author: { id: 'desktop-alex', name: 'Alex' },
+  newTopic: { title: 'Totals check' },
 })
 off()
 await runtime.dispose()

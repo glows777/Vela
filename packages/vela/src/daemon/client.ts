@@ -349,7 +349,8 @@ function createSocketRuntimeClient(
         rpc('sessions.export', { sessionId, format, outputPath, baseCwd }),
     },
     prompt: (sessionId, input) => rpc('runtime.prompt', { sessionId, input }),
-    steer: (sessionId, text) => rpc('runtime.steer', { sessionId, text }),
+    steer: (sessionId, text, images) =>
+      rpc('runtime.steer', { sessionId, text, images }),
     stop: (sessionId, reason, options) =>
       rpc('runtime.stop', { sessionId, reason, options }),
     waitForIdle: (sessionId) =>

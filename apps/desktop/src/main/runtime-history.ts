@@ -71,6 +71,8 @@ export function toDesktopMessage(
  */
 export class DesktopClientIdTracker {
   private readonly byInboxId = new Map<string, string>()
+  private readonly runIdByInboxId = new Map<string, string>()
+  private readonly inboxIdsByRunId = new Map<string, string[]>()
   private readonly bySteerText = new Map<
     string,
     Array<{ text: string; clientMessageId: string }>
@@ -79,6 +81,14 @@ export class DesktopClientIdTracker {
   private readonly byMessageId = new Map<string, string>()
 
   trackPrompt(inboxEventId: string, clientMessageId: string): void {
+    const existingRunId = this.runIdByInboxId.get(inboxEventId)
+    if (existingRunId) {
+      this.runIdByInboxId.delete(inboxEventId)
+      const list = this.byRunId.get(existingRunId) ?? []
+      list.push(clientMessageId)
+      this.byRunId.set(existingRunId, list)
+      return
+    }
     this.byInboxId.set(inboxEventId, clientMessageId)
   }
 
@@ -103,16 +113,32 @@ export class DesktopClientIdTracker {
   onRunStarted(runId: string, inboxEventIds?: readonly string[]): void {
     if (!inboxEventIds?.length) return
     const ids: string[] = []
+    const trackedInboxIds = this.inboxIdsByRunId.get(runId) ?? []
     for (const inboxId of inboxEventIds) {
       const clientId = this.byInboxId.get(inboxId)
       if (clientId) {
         this.byInboxId.delete(inboxId)
         ids.push(clientId)
+      } else {
+        this.runIdByInboxId.set(inboxId, runId)
+        trackedInboxIds.push(inboxId)
       }
+    }
+    if (trackedInboxIds.length > 0) {
+      this.inboxIdsByRunId.set(runId, trackedInboxIds)
     }
     if (ids.length > 0) {
       const prev = this.byRunId.get(runId) ?? []
       this.byRunId.set(runId, [...prev, ...ids])
+    }
+  }
+
+  private cleanupRunInboxIndex(runId: string): void {
+    const inboxIds = this.inboxIdsByRunId.get(runId)
+    if (!inboxIds) return
+    this.inboxIdsByRunId.delete(runId)
+    for (const inboxId of inboxIds) {
+      this.runIdByInboxId.delete(inboxId)
     }
   }
 
@@ -124,6 +150,7 @@ export class DesktopClientIdTracker {
   ): string[] {
     let ids: string[] = []
     if (runId) {
+      this.cleanupRunInboxIndex(runId)
       const batched = this.byRunId.get(runId)
       if (batched?.length) {
         this.byRunId.delete(runId)
@@ -145,6 +172,7 @@ export class DesktopClientIdTracker {
   }
 
   onRunFinished(runId: string): void {
+    this.cleanupRunInboxIndex(runId)
     this.byRunId.delete(runId)
   }
 
@@ -154,6 +182,8 @@ export class DesktopClientIdTracker {
 
   clear(): void {
     this.byInboxId.clear()
+    this.runIdByInboxId.clear()
+    this.inboxIdsByRunId.clear()
     this.bySteerText.clear()
     this.byRunId.clear()
     this.byMessageId.clear()
@@ -227,6 +257,10 @@ async function listAllSessionFailureMessages(
       })
       .catch(() => [])
     for (const evt of page) {
+      if (evt.type === 'session_reset') {
+        byId.clear()
+        continue
+      }
       if (
         evt.type === 'run_finished' &&
         (evt.status === 'failed' || evt.status === 'interrupted') &&
