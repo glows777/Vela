@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer'
 import { basename } from 'node:path'
-import type { ChannelDefinition } from '../legacy-channels/index.ts'
 import { imageMetadata, imageMimeType } from '../shared/images/index.ts'
 import {
   LarkResponseError,
@@ -83,24 +82,5 @@ export async function sendLarkFile(
       'Lark did not confirm delivery. Check this conversation before asking me to resend.',
       { cause: error },
     )
-  }
-}
-
-export function channelFileSender(
-  transport: LarkTransport,
-  changed: (
-    route: Parameters<NonNullable<ChannelDefinition['sendFile']>>[0],
-  ) => void,
-): NonNullable<ChannelDefinition['sendFile']> {
-  return async (route, file) => {
-    await sendLarkFile(transport, {
-      chatId: route.channelId,
-      name: basename(file.path),
-      bytes: file.bytes,
-      replyToId: route.topic?.rootId ?? route.replyToId,
-      replyInThread: route.topic ? true : undefined,
-      uuid: route.deliveryId,
-    })
-    changed(route)
   }
 }

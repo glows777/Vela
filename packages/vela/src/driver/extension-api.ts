@@ -8,7 +8,6 @@ export {
   type VelaJsonSchema,
 } from '../shared/tool-schema.ts'
 export type { AgentErrorKind, VelaEvent } from './agent/events.ts'
-export { agentErrorHint, failureHint } from './agent/retry.ts'
 export type {
   ExtensionConfigContext,
   ExtensionConfigDefinition,
@@ -27,7 +26,6 @@ export type {
   VelaMessage,
   VelaPart,
 } from './messages.ts'
-export { publishChannelEvent } from './session/channel-events.ts'
 export { messageText } from './session/message-queue.ts'
 export type { SessionOptions } from './session/options.ts'
 export { defineJsonSchemaTool } from './tools/json-schema.ts'

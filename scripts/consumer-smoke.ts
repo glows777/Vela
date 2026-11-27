@@ -32,14 +32,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   connectRuntime,
+  createLarkChannelAdapter,
   createRuntime,
   createVela,
   EnvironmentRegistry,
   importExtension,
   inspectSession,
   inspectVela,
-  lark,
-  local,
+  type LarkChannelAdapterOptions,
+  type LarkMessageEvent,
+  type LarkTransport,
+  type LocalVelaRuntime,
   mcp,
   memory,
   SpilledToolOutput,
@@ -51,10 +54,6 @@ import {
   type CreateRuntimeOptions,
   type DaemonStatus,
   type ImageContent,
-  type LarkMessageEvent,
-  type LarkOptions,
-  type LarkTransport,
-  type LocalVelaRuntime,
   type McpOptions,
   type PendingApprovalInfo,
   type ResolvedApprovalInfo,
@@ -79,8 +78,8 @@ if (typeof defineJsonSchemaTool !== 'function')
   throw new Error('missing @glows777/vela/extension-api export')
 if (typeof SpilledToolOutput !== 'function')
   throw new Error('missing SpilledToolOutput export')
-if (typeof lark !== 'function' || typeof local !== 'function')
-  throw new Error('missing built-in channel factories')
+if (typeof createLarkChannelAdapter !== 'function')
+  throw new Error('missing createLarkChannelAdapter export')
 if (typeof connectRuntime !== 'function')
   throw new Error('missing connectRuntime export')
 const _approvalTypeCheck = (
@@ -247,31 +246,42 @@ const transport: LarkTransport = {
   async searchMessages() { return { items: [] } },
   async listMessages() { return [] },
 }
-const larkOptions: LarkOptions = { appId: 'offline', owners: ['ou_alice'], transport }
-const larkVela = createVela({
-  contextFiles: false,
-  model: createFauxModel({ responses: [fauxText('lark received')] }),
-  extensions: [lark(larkOptions)],
+const larkOptions: LarkChannelAdapterOptions = {
+  appId: 'offline',
+  owners: ['ou_alice'],
+  transport,
+}
+const larkRuntime = createRuntime({
+  ephemeral: true,
+  defaultModel: createFauxModel({ responses: [fauxText('lark received')] }),
+  mcp: false,
 })
 try {
-  await larkVela.startChannels()
-  let done!: () => void
-  const replied = new Promise<void>((r) => { done = r })
-  const off = larkVela.subscribe((e) => { if (e.type === 'channel_reply' && e.text.includes('lark received')) done() })
+  await larkRuntime.ready()
+  await larkRuntime.registerChannel(createLarkChannelAdapter(larkOptions))
   larkReceive!({
     sender: { sender_type: 'user', sender_id: { open_id: 'ou_alice' } },
-    message: { chat_id: 'direct', chat_type: 'p2p', message_id: 'm1', message_type: 'text', content: JSON.stringify({ text: 'hello' }), create_time: String(Date.now()) },
+    message: {
+      chat_id: 'direct',
+      chat_type: 'p2p',
+      message_id: 'm1',
+      message_type: 'text',
+      content: JSON.stringify({ text: 'hello' }),
+      create_time: String(Date.now()),
+    },
   })
-  await replied
-  off()
+  const deadline = Date.now() + 5_000
+  while (
+    !larkSent.some((text) => text.includes('lark received')) &&
+    Date.now() < deadline
+  ) {
+    await new Promise((r) => setTimeout(r, 20))
+  }
   assert(larkSent.some((text) => text.includes('lark received')))
   console.log('lark fake transport round trip ok')
 } finally {
-  await larkVela.dispose()
+  await larkRuntime.dispose()
 }
-
-if (typeof vela.publishEvent !== 'function')
-  throw new Error('publishEvent missing')
 
 const _runtimeTypeCheck = (
   _rt?: VelaRuntime,
@@ -518,97 +528,36 @@ async function reserveFreePort(): Promise<number> {
   })
 }
 
-async function nodeGatewaySmoke(app: string) {
-  const localPort = await reserveFreePort()
-  let webhookPort = await reserveFreePort()
-  while (webhookPort === localPort) webhookPort = await reserveFreePort()
-
-  const gatewayDir = join(app, 'gateway-agent')
-  await mkdir(gatewayDir, { recursive: true })
-  const token = 'smoke-local-token'
+async function nodeDaemonSmoke(app: string) {
+  const webhookPort = await reserveFreePort()
+  const daemonDir = join(app, 'daemon-agent')
+  await mkdir(daemonDir, { recursive: true })
   const webhookSecret = 'smoke-webhook-secret'
   await writeFile(
-    join(gatewayDir, 'config.json'),
+    join(daemonDir, 'config.json'),
     JSON.stringify({
-      local: { enabled: true, token: '$VELA_LOCAL_TOKEN', port: localPort },
       webhooks: {
         port: webhookPort,
         generic: { secret: '$VELA_WEBHOOK_SECRET', source: 'smoke' },
       },
     }),
   )
-  await writeFile(
-    join(app, 'gateway.mjs'),
-    [
-      "import { createVela, lark, larkConfig, local, loadConfig } from '@glows777/vela'",
-      '',
-      'const config = loadConfig({',
-      '  cwd: process.cwd(),',
-      '  agentDir: process.env.VELA_DIR,',
-      '  env: process.env,',
-      '  extensionConfigs: [larkConfig],',
-      '})',
-      'const larkCfg = config.extensionConfig.lark',
-      'const localCfg = config.settings.local',
-      'const extensions = [',
-      '  ...(larkCfg?.appId && larkCfg?.appSecret ? [lark()] : []),',
-      "  ...(localCfg?.enabled && typeof localCfg.token === 'string' && localCfg.token",
-      '    ? [',
-      '        local({',
-      '          token: localCfg.token,',
-      "          ...(typeof localCfg.port === 'number' ? { port: localCfg.port } : {}),",
-      "          ...(typeof localCfg.timezone === 'string'",
-      '            ? { timezone: localCfg.timezone }',
-      '            : {}),',
-      '        }),',
-      '      ]',
-      '    : []),',
-      ']',
-      'const vela = createVela({',
-      '  cwd: config.cwd,',
-      '  agentDir: config.agentDir,',
-      '  dataDir: config.dataDir,',
-      '  model: config.settings.model,',
-      '  thinkingLevel: config.settings.thinkingLevel,',
-      '  providers: config.providers,',
-      '  credentials: config.credentials,',
-      '  limits: config.settings.limits,',
-      '  extensions,',
-      '  extensionConfig: config.extensionConfig,',
-      '  eventDefaultTarget: config.settings.eventDefaultTarget,',
-      '})',
-      'let shuttingDown = false',
-      "for (const sig of ['SIGINT', 'SIGTERM']) {",
-      '  process.on(sig, () => {',
-      '    if (shuttingDown) process.exit(130)',
-      '    shuttingDown = true',
-      '    const timer = setTimeout(() => process.exit(143), 30_000)',
-      '    timer.unref()',
-      '    void vela.dispose({ graceful: true }).finally(() => {',
-      '      clearTimeout(timer)',
-      '      process.exit(0)',
-      '    })',
-      '  })',
-      '}',
-      'await vela.ready()',
-      'await vela.startChannels()',
-      '',
-    ].join('\n'),
-  )
 
-  const proc = Bun.spawn(['node', 'gateway.mjs'], {
-    cwd: app,
-    env: {
-      PATH: process.env.PATH ?? '',
-      HOME: join(app, 'home'),
-      VELA_DIR: gatewayDir,
-      VELA_LOCAL_TOKEN: token,
-      VELA_WEBHOOK_SECRET: webhookSecret,
+  const proc = Bun.spawn(
+    ['node', './node_modules/.bin/vela', 'daemon', 'run'],
+    {
+      cwd: app,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: join(app, 'home'),
+        VELA_DIR: daemonDir,
+        VELA_WEBHOOK_SECRET: webhookSecret,
+      },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
     },
-    stdin: 'ignore',
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
+  )
   let stdout = ''
   let stderr = ''
   const readingStdout = (async () => {
@@ -621,44 +570,11 @@ async function nodeGatewaySmoke(app: string) {
   })()
   try {
     const deadline = Date.now() + 20_000
-    let localReady = false
-    while (Date.now() < deadline) {
-      if (proc.exitCode !== null)
-        throw new Error(
-          `packaged gateway.mjs exited early (${proc.exitCode}): ${stderr || stdout}`,
-        )
-      try {
-        const res = await fetch(`http://127.0.0.1:${localPort}/v1/info`, {
-          headers: { authorization: `Bearer ${token}` },
-        })
-        if (res.status === 200) {
-          const info = (await res.json()) as { channel?: string }
-          if (info.channel !== 'local')
-            throw new Error(
-              `unexpected gateway /v1/info payload: ${JSON.stringify(info)}`,
-            )
-          localReady = true
-          break
-        }
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message.startsWith('unexpected gateway')
-        )
-          throw error
-      }
-      await new Promise((done) => setTimeout(done, 50))
-    }
-    if (!localReady)
-      throw new Error(
-        `packaged gateway.mjs local listener did not become ready: ${stderr || stdout}`,
-      )
-
     let webhookStatus = 0
     while (Date.now() < deadline) {
       if (proc.exitCode !== null)
         throw new Error(
-          `packaged gateway.mjs exited before webhook check (${proc.exitCode}): ${stderr || stdout}`,
+          `packaged vela daemon exited before webhook check (${proc.exitCode}): ${stderr || stdout}`,
         )
       try {
         const res = await fetch(
@@ -681,7 +597,7 @@ async function nodeGatewaySmoke(app: string) {
     }
     if (webhookStatus !== 403)
       throw new Error(
-        `packaged gateway.mjs webhook listener expected 403 on bad signature, got ${webhookStatus}: ${stderr || stdout}`,
+        `packaged vela daemon webhook listener expected 403 on bad signature, got ${webhookStatus}: ${stderr || stdout}`,
       )
 
     proc.kill('SIGTERM')
@@ -689,9 +605,9 @@ async function nodeGatewaySmoke(app: string) {
     await Promise.all([readingStdout, readingStderr])
     if (code !== 0)
       throw new Error(
-        `packaged gateway.mjs SIGTERM exit failed (${code}): ${stderr || stdout}`,
+        `packaged vela daemon SIGTERM exit failed (${code}): ${stderr || stdout}`,
       )
-    console.log('packaged gateway.mjs local+webhook lifecycle ok')
+    console.log('packaged vela daemon webhook lifecycle ok')
   } finally {
     if (proc.exitCode === null) proc.kill('SIGKILL')
     await proc.exited
@@ -783,7 +699,7 @@ try {
       await $`${runtime} smoke.ts`.cwd(app)
       await cli(app, runtime, pkg.version)
       if (pkg.name === '@glows777/vela' && runtime === 'node')
-        await nodeGatewaySmoke(app)
+        await nodeDaemonSmoke(app)
       console.log(`PASS ${pkg.name} on ${runtime}`)
     }
   console.log('packed @glows777/vela consumer checks passed on Node and Bun')

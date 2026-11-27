@@ -199,5 +199,5 @@ export async function githubSetup(
 }
 
 function nextSteps(): string {
-  return 'Runtime callers (`vela daemon`) host webhook listeners directly and reload automatically / via SIGHUP (routing via SQLite subscriptions). If you still serve Lark on the transitional legacy SDK host (`createVela()` + `startChannels()` until S4b-2), keep the webhook listener on that SDK host and do not run `vela daemon` on the same webhook port. An enabled, connected channel is required to deliver routed events. Hook creation does not verify tunnel reachability or listener delivery; check Recent deliveries in GitHub. Hooks at an old URL are left unchanged; clean them up manually.'
+  return 'Runtime callers (`vela daemon`) host webhook listeners directly and reload automatically / via SIGHUP (routing via SQLite subscriptions). An enabled, connected channel is required to deliver routed events. Hook creation does not verify tunnel reachability or listener delivery; check Recent deliveries in GitHub. Hooks at an old URL are left unchanged; clean them up manually.'
 }

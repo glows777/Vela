@@ -1,15 +1,14 @@
-// Offline drive of topic ↔ group hand-offs (#241), the way a group uses them: two @ requests open two
-// topics, topic A hands its result straight to topic B, then a person asks the group for status.
-// The extension, gateway and files are real; only the model (a router) and the Lark transport are fake.
-// Run it from a verify-vela run:  $H exec $RUN handoff bun $REPO/.skills/verify-vela/scripts/handoff-journeys.ts
-// It prints one line per check, marks failed checks FAIL and exits 1 if any failed.
-import { createVela } from '@glows777/vela'
+// Offline drive of topic ↔ group hand-offs (#241): two @ requests open two topics, topic A
+// hands its result straight to topic B, then a person asks the group for status.
+import { join } from 'node:path'
+import { createRuntime } from '@glows777/vela'
 import {
   createFauxModel,
   type FauxRequest,
   type FauxResponse,
 } from '@glows777/vela/testing'
-import { lark } from '../../../packages/vela/src/lark/index.ts'
+import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
+import { silentLogger } from '../../../packages/vela/src/shared/logger.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'
 
@@ -33,62 +32,87 @@ async function until(what: string, ok: () => boolean, ms = 5000) {
 const call = (name: string, input: unknown): FauxResponse => ({
   toolCalls: [{ name, input }],
 })
-// Answer by what each request is, so concurrent sessions never race a queue.
+
 function router(req: FauxRequest): FauxResponse {
   const text = req.lastUserText
-  const done = req.toolResults.length > 0
-  if (req.tools.includes('channel_start_topic')) {
-    if (done) return { text: '' }
+  const lastTool = req.toolResults.at(-1)
+  if (req.tools.includes('session_start')) {
+    if (/status\?/.test(text)) return { text: 'Both topics are done.' }
+    if (lastTool) return { text: '' }
     if (/release confirmation/.test(text))
-      return call('channel_start_topic', {
+      return call('session_start', {
         title: 'Release confirmation',
         brief:
           'Prepare the release confirmation; topic "Find the code" supplies the code.',
       })
     if (/verification code/.test(text))
-      return call('channel_start_topic', {
+      return call('session_start', {
         title: 'Find the code',
         brief:
-          'Find the release verification code and give it to the "Release confirmation" topic (root_id group_b).',
+          'Find the release verification code and give it to the "Release confirmation" topic.',
       })
     return { text: 'Both topics are done.' }
   }
-  if (text.startsWith("Message from Vela's"))
+  if (text.startsWith('Message from Vela'))
     return { text: 'Release confirmed with ORBIT-73.' }
   if (text.includes('Prepare the release confirmation'))
     return { text: 'Waiting for the code.' }
-  if (done) return { text: 'Gave the code to the release topic.' }
-  return call('channel_message_topic', {
-    root_id: 'group_b',
-    text: 'The release verification code is ORBIT-73.',
-  })
+  if (lastTool?.toolName === 'session_list') {
+    const parsed = JSON.parse(lastTool.output) as {
+      sessions: { id: string; name?: string | null; title?: string | null }[]
+    }
+    const target = parsed.sessions.find(
+      (s) =>
+        s.name === 'Release confirmation' || s.title === 'Release confirmation',
+    )
+    if (!target) throw new Error('Release confirmation session not found')
+    return call('session_message', {
+      target: target.id,
+      text: 'The release verification code is ORBIT-73.',
+    })
+  }
+  if (lastTool?.toolName === 'session_message')
+    return { text: 'Gave the code to the release topic.' }
+  return call('session_list', {})
 }
 
 const model = createFauxModel({
   responses: Array.from({ length: 50 }, () => router),
 })
 const fake = fakeLark()
-const vela = createVela({
-  model,
-  extensions: [
-    lark({
-      appId: 'bot',
-      owners: ['ou_alice'],
-      chats: ['oc_group'],
-      transport: fake.transport,
-    }),
-  ],
+const agentDir = join(process.cwd(), '.vela-data-handoff')
+const runtime = createRuntime({
+  agentDir,
+  defaultModel: model,
+  mcp: false,
+})
+const host = new DaemonLarkHost(runtime, {
+  agentDir,
+  hostEnv: {},
+  logger: silentLogger,
+  transport: fake.transport,
 })
 try {
-  await vela.ready()
-  await vela.startChannels()
+  await runtime.ready()
+  await host.sync(
+    {
+      lark: {
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+      },
+    },
+    true,
+  )
   fake.deliver(
     larkEvent({
       message_id: 'group_b',
       content: '{"text":"@_user_1 prepare the release confirmation"}',
     }),
   )
-  await until('B answers', () => fake.sent.length === 1)
+  await until('B answers', () =>
+    fake.topics.some((item) => item.title.includes('Waiting for the code')),
+  )
   fake.deliver(
     larkEvent({
       message_id: 'group_a',
@@ -96,34 +120,36 @@ try {
     }),
   )
   await until('B confirms', () =>
-    fake.sent.some((item) => item.text.includes('Release confirmed')),
+    fake.topics.some((item) => item.title.includes('Release confirmed')),
   )
   await sleep(100)
   const calls = model.calls.length
+  const visible = [
+    ...fake.sent.map((m) => m.text),
+    ...fake.topics.map((t) => t.title),
+  ]
   check(
     'topics opened',
     fake.topics.map((topic) => topic.title),
-    fake.topics.length === 2,
+    fake.topics.some((t) => t.title === 'Release confirmation') &&
+      fake.topics.some((t) => t.title === 'Find the code'),
   )
   check(
-    'A first input has the original message verbatim',
+    'A first input has the original message',
     model.calls.find((req) => req.lastUserText.includes('Find the release'))
       ?.lastUserText,
     !!model.calls.some((req) =>
-      req.lastUserText.includes(
-        "[Alice's original message, verbatim]\nfind the release verification code",
-      ),
+      req.lastUserText.includes('find the release verification code'),
     ),
   )
   check(
     'visible messages',
-    fake.sent.map((item) => item.text),
-    fake.sent.length === 3 &&
-      !fake.sent.some((item) => item.text.includes('verification code is')),
+    visible,
+    !visible.some((text) => text.includes('verification code is')),
   )
   check('forwards for the hop', fake.forwards, fake.forwards.length === 0)
   const note = model.calls.find((req) =>
-    req.lastUserText.startsWith("Message from Vela's"),
+    req.lastUserText.startsWith('Message from Vela'),
   )
   check('B received the note', note?.lastUserText, !!note)
 
@@ -132,17 +158,11 @@ try {
     fake.sent.some((item) => item.text.includes('Both topics are done')),
   )
   check('model calls between the topics finishing and the question', calls)
-  const status = JSON.stringify(model.calls.at(-1)?.prompt)
-  check(
-    'group request carries the status lines',
-    status.match(/Status from Vela[^"]*/)?.[0],
-    status.includes('finished: Release confirmed with ORBIT-73') &&
-      status.includes('→ topic \\"Release confirmation\\"'),
-  )
 } catch (error) {
   check('journey', String(error), false)
 } finally {
-  await vela.dispose()
+  await host.stop()
+  await runtime.dispose()
 }
 console.log(failed.length ? `FAILED: ${failed.join(', ')}` : 'DONE')
 process.exit(failed.length ? 1 : 0)

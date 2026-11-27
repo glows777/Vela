@@ -5,7 +5,7 @@ import {
 } from '@glows777/vela/testing'
 import type { CommandContext } from '../../packages/vela/src/cli/commands/index.ts'
 import { createCliDispatcher } from '../../packages/vela/src/cli/dispatcher.ts'
-import type { InternalSessionOptions } from '../../packages/vela/src/driver/session/options.ts'
+import type { SessionOptions } from '../../packages/vela/src/driver/session/options.ts'
 import { velaInternals } from './compat-vela.ts'
 import { legacyVelaAsRuntime } from './legacy-vela-runtime.ts'
 
@@ -15,7 +15,7 @@ export {
 } from '@glows777/vela/testing'
 
 export type TestVelaOptions = Omit<CoreTestVelaOptions, 'session'> & {
-  session?: InternalSessionOptions
+  session?: SessionOptions
 }
 
 /**

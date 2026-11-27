@@ -1,11 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
 import * as sdk from '@larksuiteoapi/node-sdk'
 import { silentLogger } from '../../../src/driver/index.ts'
-import { LarkChannel } from '../../../src/lark/channel.ts'
+import { LarkConnection } from '../../../src/lark/connection.ts'
+import { createLarkChannelAdapter } from '../../../src/lark/runtime-adapter.ts'
 import {
   type LarkTransport,
   larkTransport,
 } from '../../../src/lark/transport.ts'
+import type { ChannelAdapterContext } from '../../../src/runtime/channels.ts'
 
 type Connection = { connected: boolean; error?: string }
 type Callbacks = {
@@ -19,6 +21,7 @@ const originalClose = sdk.WSClient.prototype.close
 const originalAdapter = sdk.defaultHttpInstance.defaults.adapter
 const originalInfo = console.info
 const sockets: Callbacks[] = []
+
 function intercept() {
   console.info = () => {}
   sdk.WSClient.prototype.start = async function () {
@@ -35,6 +38,7 @@ function intercept() {
     config,
   })
 }
+
 afterEach(() => {
   sdk.WSClient.prototype.start = originalStart
   sdk.WSClient.prototype.close = originalClose
@@ -42,12 +46,16 @@ afterEach(() => {
   console.info = originalInfo
   sockets.length = 0
 })
-function channel(transport?: LarkTransport) {
-  return new LarkChannel({
+
+const noopCtx: ChannelAdapterContext = {
+  async ingest() {},
+}
+
+function makeAdapter(transport?: LarkTransport) {
+  return createLarkChannelAdapter({
     appId: 'connection-test',
     appSecret: 'private-secret',
     owners: [],
-    dataDir: '/tmp',
     logger: silentLogger,
     transport,
   })
@@ -55,10 +63,18 @@ function channel(transport?: LarkTransport) {
 
 test('real SDK start resolution is not readiness; lifecycle callbacks update and clear safe connection errors', async () => {
   intercept()
-  const c = channel()
+  const conn = new LarkConnection()
   const states: Connection[] = []
-  const unsubscribe = c.onConnection((value) => states.push(value))
-  await c.start()
+  const unsubscribe = conn.subscribe((value) => states.push(value))
+  const { report, transport } = conn.begin({
+    appId: 'connection-test',
+    appSecret: 'private-secret',
+  })
+  expect(transport).toBeDefined()
+  await transport!.start(
+    () => {},
+    () => ({ toast: { type: 'info', content: '' } }),
+  )
   expect(states.at(-1)).toEqual({ connected: false })
   const socket = sockets[0]!
   expect(socket.onReady).toBeFunction()
@@ -80,31 +96,44 @@ test('real SDK start resolution is not readiness; lifecycle callbacks update and
   })
   socket.onReconnected!()
   expect(states.at(-1)).toEqual({ connected: true })
-  await c.stop()
+  conn.stop()
   expect(states.at(-1)).toEqual({ connected: false })
   const count = states.length
   socket.onReady!()
   socket.onError!(new Error('late'))
   expect(states).toHaveLength(count)
-  unsubscribe()
-  await c.start()
+  report({ connected: true })
   expect(states).toHaveLength(count)
-  await c.stop()
+  unsubscribe()
 })
 
 test('callbacks from a replaced real connection cannot change the current connection', async () => {
   intercept()
-  const c = channel()
+  const conn = new LarkConnection()
   const states: Connection[] = []
-  c.onConnection((value) => states.push(value))
-  await c.start()
+  conn.subscribe((value) => states.push(value))
+  const firstRun = conn.begin({
+    appId: 'connection-test',
+    appSecret: 'private-secret',
+  })
+  await firstRun.transport!.start(
+    () => {},
+    () => ({ toast: { type: 'info', content: '' } }),
+  )
   const first = sockets[0]!
-  await c.start()
+  const secondRun = conn.begin({
+    appId: 'connection-test',
+    appSecret: 'private-secret',
+  })
+  await secondRun.transport!.start(
+    () => {},
+    () => ({ toast: { type: 'info', content: '' } }),
+  )
   sockets[1]!.onReady!()
   first.onError!(new Error('old connection'))
   first.onReconnecting!()
   expect(states.at(-1)).toEqual({ connected: true })
-  await c.stop()
+  conn.stop()
 })
 
 test('quiet setup retains ready, error, reconnect callbacks and ignores callbacks after stop', async () => {
@@ -142,36 +171,39 @@ test('custom transports use start success/failure fallback and ignore completion
     start: async () => {},
     stop() {},
   } as unknown as LarkTransport
-  const c = channel(transport)
-  const states: Connection[] = []
-  c.onConnection((value) => states.push(value))
-  await c.start()
-  expect(states.at(-1)).toEqual({ connected: true })
+  const adapter = makeAdapter(transport)
+  await adapter.start(noopCtx)
+  expect(adapter.status()).toEqual({ connected: true })
   transport.start = async () => {
     throw new Error('private-secret')
   }
-  await expect(c.start()).rejects.toThrow('private-secret')
-  expect(states.at(-1)).toEqual({
+  await expect(adapter.start(noopCtx)).rejects.toThrow('private-secret')
+  expect(adapter.status()).toEqual({
     connected: false,
     error: 'Lark connection failed',
   })
   let finish!: () => void
+  let started!: () => void
+  const hasStarted = new Promise<void>((resolve) => {
+    started = resolve
+  })
   transport.start = () =>
     new Promise<void>((resolve) => {
       finish = resolve
+      started()
     })
-  const starting = c.start()
-  await Promise.resolve()
-  await c.stop()
+  const starting = adapter.start(noopCtx)
+  await hasStarted
+  await adapter.stop()
   finish()
   await starting
-  expect(states.at(-1)).toEqual({ connected: false })
+  expect(adapter.status()).toEqual({ connected: false })
 })
 
-test('real SDK text create, reply and topic requests receive the channel delivery UUID unchanged', async () => {
+test('real SDK text create, reply and topic requests receive stable outbox UUIDs', async () => {
   intercept()
-  const c = channel()
-  await c.start()
+  const adapter = makeAdapter()
+  await adapter.start(noopCtx)
   const requests: { url: string; data: Record<string, unknown> }[] = []
   sdk.defaultHttpInstance.defaults.adapter = async (config) => {
     requests.push({
@@ -196,40 +228,39 @@ test('real SDK text create, reply and topic requests receive the channel deliver
     }
   }
   try {
-    await c.send({
-      channelId: 'chat',
+    await adapter.deliver({
+      outboxId: 'create-stable-id',
+      channel: 'lark',
+      externalChatId: 'chat',
       text: 'new message',
-      deliveryId: 'create-stable-id',
     })
-    await c.send({
-      channelId: 'chat',
-      replyToId: 'incoming',
+    await adapter.deliver({
+      outboxId: 'reply-stable-id',
+      channel: 'lark',
+      externalChatId: 'chat',
+      replyToMessageId: 'incoming',
       text: 'reply',
-      deliveryId: 'reply-stable-id',
     })
-    await c.topicCapabilities.startTopic(
-      {
-        channelId: 'chat',
-        senderId: 'owner',
-        senderName: 'Owner',
-        replyToId: 'incoming',
-        text: 'start',
-      },
-      'topic title',
-      'topic-stable-id',
-    )
-    await c.send({
-      channelId: 'chat',
+    await adapter.deliver({
+      outboxId: 'topic-stable-id',
+      kind: 'topic_start',
+      channel: 'lark',
+      externalChatId: 'chat',
+      replyToMessageId: 'incoming',
+      title: 'topic title',
+      text: 'topic title',
+    })
+    await adapter.deliver({
+      outboxId: 'create-stable-id',
+      channel: 'lark',
+      externalChatId: 'chat',
       text: 'new message',
-      deliveryId: 'create-stable-id',
     })
-    await c.send({ channelId: 'chat', text: 'legacy caller' })
     expect(requests.map((request) => request.data.uuid)).toEqual([
-      'create-stable-id',
-      'reply-stable-id',
-      'topic-stable-id',
-      'create-stable-id',
-      undefined,
+      'create-stable-id:send',
+      'reply-stable-id:reply',
+      'topic-stable-id:topic',
+      'create-stable-id:send',
     ])
     expect(requests[0]).toMatchObject({
       url: expect.stringContaining('/im/v1/messages'),
@@ -247,9 +278,8 @@ test('real SDK text create, reply and topic requests receive the channel deliver
         content: JSON.stringify({ text: 'topic title' }),
       },
     })
-    expect(requests[4]?.data).not.toHaveProperty('uuid')
   } finally {
-    await c.stop()
+    await adapter.stop()
   }
 })
 

@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import type { VelaExtension } from '@glows777/vela'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import type {
   ModelMessage,
@@ -8,7 +9,6 @@ import type {
   SessionMessageEntry,
   SessionTreeNode,
 } from '../../packages/vela/src/driver/index.ts'
-import type { ChannelExtension as VelaExtension } from '../../packages/vela/src/legacy-channels/index.ts'
 import {
   fauxError,
   fauxSummary,

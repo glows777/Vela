@@ -331,17 +331,19 @@ export async function runAttempt(
     typeof import('@glows777/vela/testing')
   >(config.runtime, paths.testing)
   const channelTesting = existsSync(join(config.runtime, paths.channelTesting))
-    ? await load<
-        typeof import('../../packages/vela/src/legacy-channels/testing.ts')
-      >(config.runtime, paths.channelTesting)
+    ? await load<{ drainChannels(vela: unknown): Promise<void> }>(
+        config.runtime,
+        paths.channelTesting,
+      )
     : undefined
-  const historicalVela = channelTesting
-    ? undefined
-    : await load<{
-        velaInternals(vela: unknown): {
-          gateway: { queues: Map<string, Promise<void>> }
-        }
-      }>(config.runtime, paths.legacyVela)
+  const historicalVela =
+    channelTesting || !existsSync(join(config.runtime, paths.legacyVela))
+      ? undefined
+      : await load<{
+          velaInternals(vela: unknown): {
+            gateway: { queues: Map<string, Promise<void>> }
+          }
+        }>(config.runtime, paths.legacyVela)
   const extensions: NonNullable<
     Parameters<typeof createTestVela>[0]
   >['extensions'] = []
@@ -408,9 +410,11 @@ export async function runAttempt(
       config.runtime,
       paths.lark,
     )
-    const lark = adapter[
-      paths.channelName
-    ] as typeof import('../../packages/vela/src/lark/index.ts')['lark']
+    const lark = adapter[paths.channelName] as (
+      opts: Record<string, unknown>,
+    ) => NonNullable<
+      NonNullable<Parameters<typeof createTestVela>[0]>['extensions']
+    >[number]
     fake = helpers.fakeLark()
     eventFactory = helpers.larkEvent
     extensions.push(
@@ -459,14 +463,27 @@ export async function runAttempt(
       : config.scenario === 'G8'
         ? ['g8_store', 'g8_recall']
         : ['g7_store', 'g7_recall']
-  const { channelSessionId } = await load<
-    typeof import('../../packages/vela/src/legacy-channels/session-id.ts')
-  >(config.runtime, paths.channelId)
+  const { channelSessionId } = existsSync(join(config.runtime, paths.channelId))
+    ? await load<{
+        channelSessionId(
+          channel: string,
+          chatId: string,
+          rootId?: string,
+        ): string
+      }>(config.runtime, paths.channelId)
+    : {
+        channelSessionId: (channel: string, chatId: string, rootId?: string) =>
+          rootId ? `${channel}-${chatId}-${rootId}` : `${channel}-${chatId}`,
+      }
   const scope =
     exitScenario || workspaceScenario
-      ? await load<
-          typeof import('../../packages/vela/src/legacy-channels/scope.ts')
-        >(config.runtime, paths.scope)
+      ? await load<{
+          chatDirectory(
+            dataDir: string,
+            channel: string,
+            chatId: string,
+          ): string
+        }>(config.runtime, paths.scope)
       : undefined
   const bun = (...args: string[]) =>
     command(config.cwd, [process.execPath, '--no-env-file', ...args])
@@ -521,9 +538,11 @@ export async function runAttempt(
   const drain = async () => {
     if (channelError) return
     if (channelTesting) return channelTesting.drainChannels(t.vela)
+    if (!historicalVela) return
     // Historical snapshots are immutable and predate the testing entry.
-    const gateway = historicalVela!.velaInternals(t.vela)
-      .gateway as unknown as { queues: Map<string, Promise<void>> }
+    const gateway = historicalVela.velaInternals(t.vela).gateway as unknown as {
+      queues: Map<string, Promise<void>>
+    }
     while (gateway.queues.size && !channelError)
       await Promise.all([...gateway.queues.values()])
   }
@@ -644,7 +663,9 @@ export async function runAttempt(
     }
     await t.vela.ready()
     if (fake && eventFactory) {
-      await t.vela.startChannels()
+      await (
+        t.vela as unknown as { startChannels(): Promise<void> }
+      ).startChannels()
       if (exitScenario) {
         evidence.inputs = []
         for (const [index, text] of prompts(config.scenario).entries()) {

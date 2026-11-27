@@ -5,17 +5,6 @@ export {
 } from './daemon/index.ts'
 export { agentErrorHint, createLocalExecutionEnv } from './driver/index.ts'
 export type {
-  LocalEvent,
-  LocalEventData,
-  LocalHost,
-  LocalMessage,
-  LocalOptions,
-  LocalProgress,
-  LocalProject,
-  LocalSession,
-} from './legacy-channels/index.ts'
-export { LocalError, local } from './legacy-channels/index.ts'
-export type {
   AgentDriver,
   AgentDriverCapabilities,
   ApprovalRecord,
@@ -221,7 +210,6 @@ export {
   memoryCredentialStore,
   messageText,
   type PromptOptions,
-  publishChannelEvent,
   resolveBinary,
   type SavedSessionOptions,
   SESSION_FORMAT_VERSION,
@@ -259,6 +247,7 @@ export {
   configStrings,
   customMessageIfChanged,
   customMessageMissing,
+  type ExtensionAPI,
   type InputEvent,
   type InputEventResult,
   lastCustomMessage,
@@ -275,6 +264,7 @@ export {
   type ToolResultEvent,
   type ToolResultEventResult,
   type TreePreparation,
+  type VelaExtension,
 } from './extension-api.ts'
 export type {
   LarkCard,
@@ -289,21 +279,8 @@ export {
   createLarkChannelAdapter,
   LarkChannelAdapter,
   type LarkChannelAdapterOptions,
-  type LarkHost,
-  type LarkHostEvent,
-  type LarkOptions,
-  type LarkVisibleMessage,
-  lark,
   larkConfig,
 } from './lark/index.ts'
-export type {
-  ChannelDefinition,
-  ChannelEvent,
-  ChannelExtension as VelaExtension,
-  ChannelExtensionAPI as ExtensionAPI,
-  IncomingMessage,
-  OutgoingMessage,
-} from './legacy-channels/index.ts'
 export {
   type ExtensionEntry,
   importExtension,

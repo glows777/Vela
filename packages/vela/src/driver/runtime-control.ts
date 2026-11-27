@@ -15,12 +15,12 @@ import { resolveRequestSnapshot } from './context/request.ts'
 import type { ModelMessage } from './messages.ts'
 import { createInspectAndBashControl } from './runtime-control-inspect.ts'
 import { createTreeControl } from './runtime-control-tree.ts'
+import { retireOrDisposeCachedRunner } from './runtime-dispose.ts'
 import {
   type DriverSharedState,
   type PreparedSessionEnv,
   prepareSessionSetup,
   resolveSessionModels,
-  retireOrDisposeCachedRunner,
 } from './runtime-session-setup.ts'
 import type {
   RuntimeReloadableConfig,
@@ -207,7 +207,10 @@ export function createRuntimeControl(
         saved.latestAssistantUsage.trailingMessages,
       )
     }
-    const effectiveLimits = limitsForModel(info ?? {}, state.reloadable.limits)
+    const effectiveLimits = limitsForModel(info ?? {}, {
+      ...state.reloadable.limits,
+      ...prepared.effectiveLimitsConfig,
+    })
     const contextManager = new ContextManager(
       store,
       tracker,
@@ -249,6 +252,7 @@ export function createRuntimeControl(
       },
       effectiveLimits,
     )
+    contextManager.autoCompaction = prepared.effectiveAutoCompaction
     return { tracker, messages, effectiveLimits, contextManager }
   }
 
@@ -293,6 +297,7 @@ export function createRuntimeControl(
       }
       state.reloadable = {
         ...state.reloadable,
+        ...('shellPath' in next ? { shellPath: next.shellPath } : {}),
         ...('limits' in next ? { limits: next.limits } : {}),
         ...('defaultTools' in next ? { defaultTools: next.defaultTools } : {}),
         ...('extensionConfig' in next
@@ -306,6 +311,9 @@ export function createRuntimeControl(
           ? { githubRepositories: next.githubRepositories }
           : {}),
         ...('dreamEnabled' in next ? { dreamEnabled: next.dreamEnabled } : {}),
+        ...('autoCompaction' in next
+          ? { autoCompaction: next.autoCompaction }
+          : {}),
         ...('offline' in next && next.offline !== undefined
           ? { offline: next.offline }
           : {}),

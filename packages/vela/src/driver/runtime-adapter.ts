@@ -3,7 +3,6 @@ import {
   limitsForModel,
   ModelRegistry,
   reasoningOption,
-  resolveModel,
   THINKING_LEVELS,
 } from '../providers/models/index.ts'
 import {
@@ -14,7 +13,6 @@ import {
 } from '../runtime/driver.ts'
 import { MemoryRegistry } from '../runtime/memory/index.ts'
 import { errorMessage, silentLogger } from '../shared/logger.ts'
-import type { ModelInput } from '../shared/provider-types.ts'
 import type { VelaEvent } from './agent/events.ts'
 import { classifyAgentError, failureHint } from './agent/retry.ts'
 import { ContextManager } from './context/manager.ts'
@@ -26,6 +24,10 @@ import {
   type RuntimeControlHandle,
 } from './runtime-control.ts'
 import {
+  type DriverSharedState,
+  disposeDriverSharedState,
+} from './runtime-dispose.ts'
+import {
   recordRuntimeDreamTurn,
   scheduleRuntimeAutoDream,
 } from './runtime-dream.ts'
@@ -35,11 +37,8 @@ import {
   RuntimeExtensionHost,
 } from './runtime-extensions.ts'
 import {
-  type DriverSharedState,
-  disposeDriverSharedState,
   type PreparedSessionEnv,
   prepareSessionSetup,
-  resolveSessionModels,
 } from './runtime-session-setup.ts'
 import {
   assistantText,
@@ -51,6 +50,7 @@ import {
 import {
   applyBeforeAgentStartHooks,
   applyInputExtensionHooks,
+  maybeResolveImplicitSpecialModel,
   wireRuntimeToolInterception,
   wrapModelWithExtensionHooks,
 } from './runtime-turn-hooks.ts'
@@ -112,6 +112,7 @@ export function createVelaAgentDriver(
       defaultThinkingLevel: options.defaultThinkingLevel,
       providers: options.providers,
       rawConfigProviders: options.rawConfigProviders,
+      shellPath: options.shellPath,
       limits: options.limits,
       defaultTools: options.defaultTools,
       extensionConfig: options.extensionConfig,
@@ -119,10 +120,12 @@ export function createVelaAgentDriver(
       enabledModels: options.enabledModels,
       githubRepositories: options.githubRepositories,
       dreamEnabled: options.dreamEnabled,
+      autoCompaction: options.autoCompaction,
       offline: options.offline ?? false,
     },
     sessionOverrides: new Map(),
     specialModels: new Map(),
+    specialModelSources: new Map(),
     sessionRunners: new Map(),
     sessionRunnerLocks: new Map(),
     sessionActiveTools: new Map(),
@@ -200,44 +203,6 @@ export function createVelaAgentDriver(
     },
   }
 
-  async function maybeResolveImplicitSpecialModel(
-    sessionId: string,
-    savedModel?: string,
-  ): Promise<void> {
-    if (state.specialModels.has(sessionId) || !options.resolveSpecialModel) {
-      return
-    }
-    const override = state.sessionOverrides.get(sessionId)
-    const envRecord = override?.recordPath ?? options.hostEnv?.VELA_RECORD
-    const defaultModelStr =
-      typeof state.reloadable.defaultModel === 'string'
-        ? state.reloadable.defaultModel
-        : undefined
-    const envModel =
-      override?.model ?? defaultModelStr ?? options.hostEnv?.VELA_MODEL
-    if (!envRecord && envModel !== 'mock' && !envModel?.startsWith('faux:')) {
-      return
-    }
-    let fallbackModel: ModelInput | undefined
-    if (envRecord && envModel !== 'mock' && !envModel?.startsWith('faux:')) {
-      const activeModels = resolveSessionModels(state, override)
-      const candidate =
-        override?.model ?? savedModel ?? state.reloadable.defaultModel
-      fallbackModel = resolveModel(candidate, {
-        providers: activeModels.providerDefinitions(),
-        credentials: activeModels.credentials,
-      })
-    }
-    const special = await options.resolveSpecialModel({
-      modelRef: envModel,
-      recordPath: envRecord,
-      fallbackModel,
-    })
-    if (special) {
-      state.specialModels.set(sessionId, special)
-    }
-  }
-
   async function runSingleTurn(
     request: DriverTurnRequest,
   ): Promise<DriverTurnResult> {
@@ -296,7 +261,11 @@ export function createVelaAgentDriver(
       store = activeStore
       const saved = await activeStore.loadSaved()
 
-      await maybeResolveImplicitSpecialModel(request.sessionId, saved?.model)
+      await maybeResolveImplicitSpecialModel(
+        state,
+        request.sessionId,
+        saved?.model,
+      )
 
       const inputMeta = resolveRunInputMeta(options.db, request)
       const runState = resolveRunSilenceAndDepth(
@@ -434,7 +403,7 @@ export function createVelaAgentDriver(
       }
       const effectiveLimits = limitsForModel(
         resolved.info,
-        state.reloadable.limits,
+        prepared.effectiveLimitsConfig,
       )
       const forwardBase = createRuntimeEventForwarder(request, (msg) => {
         lastAssistant = msg
@@ -450,6 +419,7 @@ export function createVelaAgentDriver(
         forwardEvent,
         effectiveLimits,
       )
+      contextManager.autoCompaction = prepared.effectiveAutoCompaction
 
       const alreadyHasRunMessages = Boolean(
         options.db.get<{ ok: number }>(
@@ -624,13 +594,15 @@ export function createVelaAgentDriver(
               turnUserMsg = await prepareTurnMessages(false)
             }
           : undefined,
-        compactOnOverflow: async (sig) => {
-          await contextManager.compact(
-            await buildSnapshot(sig),
-            undefined,
-            'overflow',
-          )
-        },
+        compactOnOverflow: contextManager.autoCompaction
+          ? async (sig) => {
+              await contextManager.compact(
+                await buildSnapshot(sig),
+                undefined,
+                'overflow',
+              )
+            }
+          : undefined,
         hasSteering: () =>
           (state.activeSteering.get(request.sessionId)?.length ?? 0) > 0,
         takeSteering: () => {

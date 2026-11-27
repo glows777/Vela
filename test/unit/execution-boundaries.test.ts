@@ -11,7 +11,6 @@ test('quality reports host dependencies in workspace prompt, skill and backgroun
       "import 'node:fs/promises'",
     'vela/src/driver/skills/environment-skills.ts': "await import('fs')",
     'vela/src/driver/extensions/background/jobs.ts': "require('child_process')",
-    'vela/src/legacy-channels/attachments.ts': "export * from 'node:fs'",
   }
   try {
     for (const [file, content] of Object.entries(sources)) {

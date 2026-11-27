@@ -162,6 +162,7 @@ export interface RuntimeReloadableConfig {
   defaultThinkingLevel?: ThinkingLevel
   providers?: Record<string, ProviderDefinition>
   rawConfigProviders?: Record<string, ProviderConfig>
+  shellPath?: string
   limits?: Partial<VelaLimits>
   defaultTools?: readonly string[]
   extensionConfig?: Record<string, Record<string, unknown>>
@@ -169,6 +170,7 @@ export interface RuntimeReloadableConfig {
   enabledModels?: readonly string[]
   githubRepositories?: readonly string[]
   dreamEnabled?: boolean
+  autoCompaction?: boolean
   offline?: boolean
 }
 
@@ -193,7 +195,10 @@ export interface VelaAgentDriverOptions {
   registrations?: OAuthRegistrationStore
   /** @internal Shared ModelRegistry (for live OAuth registrations & planLabel consistency). */
   models?: ModelRegistry
+  shellPath?: string
+  explicitShellPath?: string
   limits?: Partial<VelaLimits>
+  explicitLimits?: Partial<VelaLimits>
   tools?: ToolDefinition[]
   defaultTools?: readonly string[]
   extensionConfig?: Record<string, Record<string, unknown>>
@@ -216,6 +221,8 @@ export interface VelaAgentDriverOptions {
   promptTemplates?: readonly PromptTemplate[]
   offline?: boolean
   dreamEnabled?: boolean
+  autoCompaction?: boolean
+  explicitAutoCompaction?: boolean
   trustOverride?: (location: ExecutionLocation) => boolean | Promise<boolean>
   toolApprovalCheck?: (
     toolName: string,

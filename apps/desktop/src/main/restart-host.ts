@@ -106,8 +106,8 @@ export async function startHost() {
   const save = async (
     input: Extract<Request, { method: 'saveLark' }>['input'],
   ) => {
-    const before = await read((live) => {
-      live.checkIdle()
+    const before = await read(async (live) => {
+      await live.checkIdle()
       return section()
     })
     const write = await prepareLarkWrite(
@@ -117,7 +117,7 @@ export async function startHost() {
       verify,
     )
     return exclusive(async (previous) => {
-      previous.checkIdle()
+      await previous.checkIdle()
       await write(section())
       // Approval belongs to the configuration in which the mention was observed.
       if (setup?.chatId) setup.clear()
@@ -134,7 +134,7 @@ export async function startHost() {
     return exclusive(async (previous) => {
       signal.throwIfAborted()
       const source = previous.groupSetup()
-      previous.checkIdle()
+      await previous.checkIdle()
       await stop(previous)
       try {
         signal.throwIfAborted()

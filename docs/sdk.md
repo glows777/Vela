@@ -33,7 +33,7 @@ Vela publishes a single npm package, `@glows777/vela`, with explicit export-map 
 
 | Entry | Public contract |
 |---|---|
-| `@glows777/vela` | Root SDK (`createRuntime`, `VelaRuntime`, `LocalVelaRuntime`, transitional `createVela`, built-in extensions, Lark and Local channel adapters) and CLI/TUI (`vela`) |
+| `@glows777/vela` | Root SDK (`createRuntime`, `connectRuntime`, `VelaRuntime`, `LocalVelaRuntime`, `createLarkChannelAdapter`, transitional `createVela`, built-in extensions) and CLI/TUI (`vela`) |
 | `@glows777/vela/extension-api` | Extension authoring types and hook helpers |
 | `@glows777/vela/testing` | Offline faux model, test harness (`createTestVela`), and scenario recording/replay |
 
@@ -60,7 +60,6 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `systemPrompt` | none | Replaces the default system prompt (pi's `customPrompt`): the text becomes the intro paragraph and `<tools>`, `<rules>` and `<docs>` are left out; the other sections stay. See [The system prompt](settings.md#the-system-prompt). |
 | `appendSystemPrompt` | none | Text appended to the system prompt in an `<addendum>` section. |
 | `docs` | none | `{ readme?, docs?, examples? }` for the `<docs>` section, or `false` for none. Folders that do not exist are left out, and without a `docs` folder the section stays off. `createVela()` from `@glows777/vela` points at its own package, so the installed README, `docs/` and `examples/` are found without configuration; a core-only SDK user names them here. |
-| `channelIdleMs` | `600000` | A channel session with no new message for this long is closed and resumed on the next message; `0` closes it after each reply; at most `2147483647` (other values throw). See [Channels](channels-reference.md#gateway-lifecycle). |
 | `extensionConfig` | `{}` | Config section per extension, keyed by extension name. An extension reads its own section as `vela.config`. |
 | `limits` | see below | Overrides for retry, compaction and timeout limits (`Partial<VelaLimits>`). Unknown keys throw. |
 | `logger` | silent | A `VelaLogger` for diagnostics that are not events. See [Logger](#logger). |
@@ -90,11 +89,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `ready()` | Resolves when host extensions (including async factories) have loaded; rejects if one failed. Session project preparation is awaited separately |
 | `extensions(sessionId?)` | Loaded extensions for the prepared open session: host plus its project, including registered tools, commands, providers and channels |
 | `commands(sessionId?)` | Slash commands from the host and the prepared open session's project |
-| `channels()` | Channels registered by extensions |
-| `channel(name)` | On the channel-aware SDK, looks up one registered channel after `ready()`. An unknown name throws. On the Local host, `readAttachment({ projectId, sessionId, messageId })` retrieves the bytes of a visible file message. See [SDK host access](channels-reference.md#sdk-host-access). |
-| `startChannels()` | Starts all channels. See [Channels](channels.md). |
-| `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels-reference.md#external-event-subscriptions). |
-| `dispose(options?)` | Stops channels, closes all sessions and deletes any temporary data directory. Default cancels running work; channel-aware Vela accepts `{ graceful: true }` to drain in-flight channel tools first. The embedding host must enforce its own deadline. |
+| `dispose()` | Closes all open sessions, stops active turns, and deletes any temporary data directory. |
 
 The optional selectors above inspect existing sessions; they do not open or prepare one. Await `session.resources()` before inspecting a newly opened/resumed project's extensions or commands. An unknown explicit session id throws. No-argument calls retain the default-session view (host-only before that session is prepared), not a union of all projects. `ready()` still waits for host initialization, with no new session selector.
 
@@ -313,7 +308,7 @@ When `agent_end.reason === 'error'`, `errorKind` is one of these `AgentErrorKind
 
 The original `error` and the rejection from `session.prompt()` stay unchanged. Successful, loop-stopped and aborted runs have no `errorKind`. Classification happens only on the terminal failure: retry policy and context recovery do not change. A recovered request still ends successfully. Errors before the agent loop (such as invalid session setup) do not produce this event.
 
-`agentErrorHint(errorKind)` returns one plain, shared next-step hint, or `undefined` when no kind is present. TUI, print mode and channel replies show it beside the original error; SDK hosts can use the same helper or map the closed kinds to their own UI. The type and helper are exported by `@glows777/vela` and `@glows777/vela/extension-api`.
+`agentErrorHint(errorKind)` returns one plain, shared next-step hint, or `undefined` when no kind is present. TUI, print mode and channel replies show it beside the original error; SDK hosts can use the same helper or map the closed kinds to their own UI. The type and helper are exported by `@glows777/vela`.
 
 ## Multiple sessions
 
@@ -501,7 +496,7 @@ See [the offline tool-image example](../examples/sdk/06-tool-images.ts) and [too
 
 ## Routing and host lifecycle
 
-`vela.session(id, { channel })` supplies a host's channel routing identity before session hooks and tool calls (`SessionScope` / `session.scope` is `@internal` and reserved for legacy-channel transition until removal). `context.sessionId` identifies the invoking session. Supply routing again on resume. `resume()` restores a channel saved in `vela.db`, and supplying that same channel again writes nothing. Fork and clone omit routing.
+`vela.session(id, { channel })` supplies a host's channel routing identity before session hooks and tool calls. `context.sessionId` identifies the invoking session. Supply routing again on resume. `resume()` restores a channel saved in `vela.db`, and supplying that same channel again writes nothing. Fork and clone omit routing.
 
 An existing unbound session accepts its first channel binding while preserving object identity and its original cwd, tools and model. The binding is synchronous, and its `channel` metadata is written like other session metadata: `listSessions()` shows the channel once that queued write completes (on `session.save()`, the next prompt, or `close()`). Repeating the same route is allowed. A channel already saved for the session is that binding after `resume()`, including when the new session was opened with a channel before `resume()`. A different channel throws an error named `SessionRoutingConflictError`, containing the session ID and both routes, without retry or rebinding. Other session options remain first-open-only.
 
@@ -509,9 +504,9 @@ An existing unbound session accepts its first channel binding while preserving o
 
 `createVela({ onSessionSaved(id), beforeDispose() })` supports host composition. A successful nonempty storage append calls `onSessionSaved`; no-op or failed saves do not. Observer errors are logged and cannot retry committed history. Disposal waits for extension factories, runs `beforeDispose` to stop ingress, attempts every session close, then shared extension shutdown and cleanup, aggregating errors.
 
-`publishChannelEvent(session, event)` accepts only `channel_message`, `channel_reply` and `channel_error`. `resolveBinary(vela, 'rg' | 'fd')` and `setDefaultToolModifiers(session, entries)` are plain frontend utilities. `inspectVela` and `inspectSession` return diagnostic snapshots and are **experimental**. Ordinary inspection never runs extension prompt hooks; `inspectSession(vela, session, { previewExtensions: true })` explicitly requests that preview. `session.usage` includes totals, context-window size and a copy of the last usage record.
+`resolveBinary(vela, 'rg' | 'fd')` and `setDefaultToolModifiers(session, entries)` are plain frontend utilities. `inspectVela` and `inspectSession` return diagnostic snapshots and are **experimental**. Ordinary inspection never runs extension prompt hooks; `inspectSession(vela, session, { previewExtensions: true })` explicitly requests that preview. `session.usage` includes totals, context-window size and a copy of the last usage record.
 
-The umbrella `@glows777/vela` preserves its root and `./testing` entries and the `vela` executable. Channel-aware `createVela`, `channels()`, `channel(name)`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
+The umbrella `@glows777/vela` preserves its root (including `createRuntime` and `connectRuntime`), `./testing` entries, and the `vela` executable. External channel adapters and daemon hosting use `createRuntime`, `ChannelAdapter`, and `createLarkChannelAdapter` rather than legacy `createVela` channel methods (`createChannelVela`, `startChannels`, `channels`, `channel`, `runningChannels`, `channelIdleMs`, `publishEvent`, `publishChannelEvent`, and `SessionScope` were retired in `S4b-3`; see [SDK host access](channels-reference.md#sdk-host-access)).
 
 `@glows777/vela` also exports the frontend inspection helpers (`inspectVela`, `inspectSession`, returning snapshots whose public shapes are recorded in `api/public-api.txt`). Internal frontend helpers for HTML/session views, session IDs, thinking choices, tool validation, and config trust/path decisions remain internal to the CLI/desktop package build.
 

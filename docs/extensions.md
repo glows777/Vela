@@ -245,20 +245,24 @@ If you only need a different base URL or key for an OpenAI- or Anthropic-compati
 
 Example: [echo-channel.ts](../examples/extensions/echo-channel.ts)
 
-A channel brings messages from outside (a chat app, a webhook) into Vela. Each chat shares one session, and replies go back through the channel's `send()`. Channel hooks remain experimental: Lark is the only channel implementation so far, and the hooks will be stabilized once a second channel is implemented. See [Writing a channel](channels-reference.md#writing-a-channel) for every hook and the `startRun` feedback lifecycle.
+A channel brings messages from outside (a chat app, a webhook) into Vela via Runtime's `ChannelAdapter` (`await runtime.registerChannel(...)`) rather than legacy extension hooks. See [Writing a channel](channels-reference.md#writing-a-channel) for the `ChannelAdapter` contract and event lifecycle.
 
 ```ts
-vela.registerChannel({
+await runtime.registerChannel({
   name: 'echo',
   description: 'In-memory demo channel',
-  start: () => {},
-  stop: () => {},
-  send: async (message) => { /* deliver message.text to message.recipientId */ },
-  onMessage: (handler) => { /* call handler(msg) for each incoming message */ },
+  start: async (ctx) => {
+    /* forward incoming messages to ctx.ingest(...) */
+  },
+  stop: async () => {},
+  deliver: async (msg) => {
+    /* deliver msg.text and return { delivered: true } */
+    return { delivered: true }
+  },
 })
 ```
 
-Every sender in the chat shares one session, its history and its tools. A channel must reject untrusted chats before delivering messages; see [Channels](channels.md). In-process SDK callers start channels with `vela.startChannels()`.
+Every sender in a group chat shares one Runtime project/session transcript and its tools. An adapter must reject untrusted chats before calling `ctx.ingest(...)`; see [Channels](channels.md).
 
 ### on
 

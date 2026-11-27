@@ -61,12 +61,10 @@ export interface VelaSettings {
   prompts?: string[]
   /** Extension files or directories (relative to this config file), plus `builtin:<name>` / `+builtin:<name>` / `-builtin:<name>` */
   extensions?: string[]
-  /** Transitional HTTP webhook receiver settings (replaces `extensionConfig.channel.eventReceiver` until S4b). */
+  /** Transitional HTTP webhook receiver settings (used by `vela daemon`). */
   webhooks?: Record<string, unknown>
   /** Unmatched external events fallback target (`{ channel, chatId }`). */
   eventDefaultTarget?: { channel: string; chatId: string }
-  /** Transitional local HTTP channel listener settings (until S4b removes `legacy-channels`). */
-  local?: Record<string, unknown>
   /** Third-party custom extension sections keyed by extension name; strings support `$VAR` / `${VAR}`. */
   extensionConfig?: Record<string, Record<string, unknown>>
 }
@@ -79,7 +77,6 @@ export const PROJECT_PRIVILEGED_KEYS = [
   'location',
   'providers',
   'lark',
-  'local',
   'webhooks',
   'eventDefaultTarget',
 ] as const
@@ -90,7 +87,6 @@ const RESERVED_EXTENSION_SECTIONS = new Map<string, string | null>([
   ['mcp', 'mcpServers'],
   ['memory', 'memory'],
   ['channel', 'webhooks'],
-  ['local', 'local'],
   ['background', null],
   ['todo', null],
 ])
@@ -100,7 +96,6 @@ const INTERPOLATED_SECTIONS = [
   'web',
   'memory',
   'webhooks',
-  'local',
   'extensionConfig',
 ] as const
 
@@ -303,7 +298,6 @@ const configObjectSchema = z.strictObject({
   extensions: z.array(z.string()).optional(),
   webhooks: z.record(z.string(), z.unknown()).optional(),
   eventDefaultTarget: z.unknown().optional(),
-  local: z.record(z.string(), z.unknown()).optional(),
   extensionConfig: z.record(z.string(), z.unknown()).optional(),
 })
 
@@ -352,6 +346,12 @@ export function parseConfig(
     )
       throw new Error(`${file}: ${key} must be an array of strings`)
   }
+  if (raw.local !== undefined) {
+    throw new Error(
+      `${file}: top-level "local" channel was removed in v0.9; use "vela daemon" / connectRuntime() instead (see docs/upgrading.md)`,
+    )
+  }
+
   for (const key of [
     'limits',
     'lark',
@@ -360,7 +360,6 @@ export function parseConfig(
     'mcpServers',
     'environments',
     'webhooks',
-    'local',
     'extensionConfig',
   ] as const) {
     if (raw[key] !== undefined && !isPlainObject(raw[key]))
@@ -539,7 +538,6 @@ export function toExtensionConfigView(
   if (settings.lark) view.lark = { ...settings.lark }
   if (settings.web) view.web = { ...settings.web }
   if (settings.memory) view.memory = { ...settings.memory }
-  if (settings.local) view.local = { ...settings.local }
   if (isPlainObject(settings.webhooks))
     view.channel = { ...(view.channel ?? {}), eventReceiver: settings.webhooks }
   return view

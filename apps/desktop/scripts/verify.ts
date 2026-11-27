@@ -176,7 +176,7 @@ await Bun.write(
       {
         toolCalls: [
           {
-            name: 'channel_start_topic',
+            name: 'session_start',
             input: {
               title: 'Fix the retry backoff',
               brief:
@@ -200,7 +200,7 @@ await Bun.write(
       {
         toolCalls: [
           {
-            name: 'channel_wait_for_input',
+            name: 'wait_for_input',
             input: { reason: 'Which colour should I use?' },
           },
         ],
@@ -213,7 +213,7 @@ await Bun.write(
       {
         toolCalls: [
           {
-            name: 'channel_start_topic',
+            name: 'session_start',
             input: {
               title: 'Write the Beta notes',
               brief: 'Write notes about this folder.',
@@ -2367,7 +2367,7 @@ async function larkJourneys() {
         {
           toolCalls: [
             {
-              name: 'channel_wait_for_input',
+              name: 'wait_for_input',
               input: { reason: 'Which colour should I use?' },
             },
           ],

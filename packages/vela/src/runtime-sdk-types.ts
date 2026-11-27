@@ -218,8 +218,16 @@ export interface VelaRuntime {
     sessionId: string,
     input: RuntimePromptInput,
   ): Promise<{ eventId: string; inserted: boolean }>
-  steer(sessionId: string, text: string): Promise<void>
-  stop(sessionId: string, reason?: string): Promise<boolean>
+  steer(
+    sessionId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType: string }>,
+  ): Promise<void>
+  stop(
+    sessionId: string,
+    reason?: string,
+    options?: { expectedRunId?: string },
+  ): Promise<boolean>
   waitForIdle(sessionId?: string): Promise<void>
   readonly jobs: {
     list(sessionId?: string): Promise<BackgroundTask[]>
@@ -276,7 +284,10 @@ export interface VelaRuntime {
         nowMs?: number
       },
     ): Promise<TimerRecord | undefined>
-    delete(id: string): Promise<boolean>
+    delete(
+      id: string,
+      filter?: { projectId?: string; kind?: TimerKind },
+    ): Promise<boolean>
   }
   readonly subscriptions: {
     list(filter?: {
@@ -414,6 +425,7 @@ export interface CreateRuntimeOptions {
   credentials?: CredentialStore
   defaultModel?: ModelInput
   defaultThinkingLevel?: ThinkingLevel
+  shellPath?: string
   limits?: Partial<VelaLimits>
   tools?: ToolDefinition[]
   extensionConfig?: Record<string, Record<string, unknown>>
@@ -424,6 +436,11 @@ export interface CreateRuntimeOptions {
   mcp?: boolean
   offline?: boolean
   dreamEnabled?: boolean
+  autoCompaction?: boolean
+  /** Channels owned outside this Runtime instance (ignored during `recover()` and scheduled wakes). */
+  ignoredChannels?: readonly string[]
+  /** Allow `localOnly` OAuth tokens (e.g. terminal ChatGPT OAuth) when no channel is bound; default `true`. */
+  allowLocalOnlyOAuth?: boolean
   /** Owner Docker environment definitions or a pre-constructed `EnvironmentRegistry`. Defaults to `<agentDir>/config.json` unless `ephemeral`. */
   environments?: Record<string, unknown> | EnvironmentRegistry
   drivers?: AgentDriver[]

@@ -21,77 +21,6 @@ function causes(error: unknown): unknown[] {
     : [error]
 }
 
-for (const failure of [-1, 0, 1, 2]) {
-  for (const asyncStop of [false, true]) {
-    test(`dispose attempts all cleanup after ${asyncStop ? 'async' : 'sync'} channel failure ${failure}`, async () => {
-      const dir = tempDir()
-      const stopped: number[] = []
-      const order: string[] = []
-      const fault = new Error('channel stop failed')
-      let notified = 0
-      const vela = createVela({
-        cwd: dir.path,
-        contextFiles: false,
-        model: createFauxModel({ responses: [fauxText('ready')] }),
-        extensions: [
-          function cleanup(api) {
-            for (let i = 0; i < 3; i++)
-              api.registerChannel({
-                name: `test${i}`,
-                description: 'cleanup probe',
-                start() {},
-                async send() {},
-                stop() {
-                  stopped.push(i)
-                  if (i === failure) {
-                    if (asyncStop) return Promise.reject(fault)
-                    throw fault
-                  }
-                },
-              })
-            api.on('session_shutdown', () => {
-              order.push('session')
-            })
-            api.onShutdown(() => {
-              order.push('extension')
-            })
-          },
-        ],
-      })
-      try {
-        await vela.ready()
-        await vela.startChannels()
-        const session = vela.session('probe')
-        await session.prompt('hello')
-        vela.subscribe(() => {
-          notified++
-        })
-        const first = vela.dispose()
-        expect(vela.dispose()).toBe(first)
-        const [result] = await Promise.allSettled([first])
-        expect(result!.status).toBe(failure === -1 ? 'fulfilled' : 'rejected')
-        if (result!.status === 'rejected')
-          expect(causes(result!.reason)).toEqual([fault])
-        expect(vela.dispose()).toBe(first)
-        expect(stopped).toEqual([0, 1, 2])
-        expect(order).toEqual(['session', 'extension'])
-        expect(vela.sessions()).toEqual([])
-        expect(existsSync(vela.dataDir)).toBe(false)
-        session.emit({
-          type: 'notify',
-          message: 'after disposal',
-          level: 'info',
-        })
-        expect(notified).toBe(0)
-        expect(() => vela.session('new')).toThrow('disposed')
-      } finally {
-        await vela.dispose().catch(() => {})
-        dir.cleanup()
-      }
-    })
-  }
-}
-
 test('shutdown hook errors reach disposal only after all sessions and extension handlers settle', async () => {
   const dir = tempDir()
   const gate = deferred()
@@ -216,54 +145,6 @@ test('a rejected session close does not skip other close attempts or shared tear
     gate.resolve()
     await realClose()
     await vela.dispose().catch(() => {})
-    dir.cleanup()
-  }
-})
-
-test('dispose waits for late factory registrations even after another async factory fails', async () => {
-  const dir = tempDir()
-  const gate = deferred()
-  const stopped: string[] = []
-  const vela = createVela({
-    cwd: dir.path,
-    contextFiles: false,
-    extensions: [
-      async function failed() {
-        throw new Error('factory failed')
-      },
-      async function late(api) {
-        await gate.promise
-        api.registerChannel({
-          name: 'late',
-          description: 'late',
-          start() {},
-          async send() {},
-          stop() {
-            stopped.push('channel')
-          },
-        })
-        api.onShutdown(() => {
-          stopped.push('extension')
-        })
-      },
-    ],
-  })
-  try {
-    await expect(vela.ready()).rejects.toThrow('factory failed')
-    const first = vela.dispose()
-    let settled = false
-    void first.then(() => {
-      settled = true
-    })
-    await Promise.resolve()
-    expect(settled).toBe(false)
-    gate.resolve()
-    await first
-    expect(stopped).toEqual(['channel', 'extension'])
-    expect(existsSync(vela.dataDir)).toBe(false)
-  } finally {
-    gate.resolve()
-    await vela.dispose()
     dir.cleanup()
   }
 })

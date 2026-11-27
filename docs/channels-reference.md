@@ -4,263 +4,82 @@ This page is for building on the channel interface: writing a channel, the gatew
 
 ## SDK host access
 
-An in-process SDK host uses `createChannelVela()` and one accessor, `vela.channel(name)`. Call `await vela.ready()` before looking up channels registered by async extensions, then `await vela.startChannels()` before authoritative snapshot reads or mutations. `ready()` alone does not load the channel directory or Local store. An unknown channel name throws.
+An embedded SDK host uses `createRuntime()` (or connects to `vela daemon` via `connectRuntime()`) and interacts with registered Runtime channels through `runtime.channels`:
 
 ```ts
-const vela = createChannelVela({ extensions: [lark(options), local(localOptions)] })
-await vela.ready()
-const channel = vela.channel('lark')
-const offSession = channel.onSession(({ session, run }) => updateSession(session, run))
-const offConnection = channel.onConnection(connection => showConnection(connection))
-await vela.startChannels()
-const sessions = channel.sessions()                 // all enabled chats in Lark
-const chatSessions = channel.sessions('oc_group')   // optional chat filter
-const connection = channel.connection()            // { connected: boolean, error?: string }
+import { createLarkChannelAdapter, createRuntime } from '@glows777/vela'
+
+const runtime = createRuntime({ agentDir })
+await runtime.ready()
+await runtime.registerChannel(createLarkChannelAdapter(larkOptions))
+await runtime.recover()
+
+const channels = await runtime.channels.list()
+const chats = await runtime.channels.chats('lark')
+const off = runtime.events.subscribe((event) => handleRuntimeEvent(event))
+const receipt = await runtime.channels.submit('lark', {
+  chatId: 'oc_group',
+  text: 'Please check the totals',
+  author: { id: 'desktop-alex', name: 'Alex' },
+  newTopic: { title: 'Totals check' },
+})
+off()
+await runtime.dispose()
 ```
 
-`ChannelHost` reuses `ChannelRuntime`'s `submit`, `stop`, `onSession` and `onStatus` types. It widens `sessions` to an optional chat ID and adds connection observation and idle-capable routines. Core `vela.sessions()` still lists open core sessions; `vela.channels()`, `runningChannels()` and `publishEvent()` are unchanged. For a cross-channel UI, enumerate `vela.channels()` and ask each view; there is no merged cross-channel runtime.
-
-- `sessions(chatId?)` returns detached `ChannelSessionSnapshot` values, including `waitingReason` and the current `runId`, with the same enabled-scope checks as the adapter. Listing never opens a model session.
-- `onSession` and `onStatus` preserve their existing event shapes. Subscriptions can be installed before startup, observe only future events, isolate listener exceptions and are cleared on disposal. Subscribe and then read snapshots to initialize a UI.
-- `submit(message)` resolves after durable admission, before preparation, model work or delivery. It rechecks channel access. A topic follow-up must match an owned root and thread in that chat; the host view forces `requireExistingSession: true`. Unknown or mismatched topics are rejected without creating a new one. Group/topic input needs a real service `replyToId` anchor, especially on Lark, whose reply operation uses that ID. Do not fabricate service IDs. Owner DMs keep the existing direct-message form without `replyToId`. To open a Lark topic from an app without an anchor, use the typed Lark host overload below; it creates a real anchor before submitting.
-- `stop({ chatId, rootId? }, runId)` targets the exact current preparation/run. Expired, repeated or unavailable stops return false; stopping does not discard later queued input.
-- Host access preserves channel enablement, project existence, topic ownership and configured tools. It does not expose model-run-only `scope`, `session`, `context`, `topics`, `topicCoverage`, `dispatch`, `skipReply` or `waitForInput` operations. After disposal, mutations fail and Stop returns false.
-
-### Routines while idle
-
-The host's `routines` member takes a logical target rather than an active model session ID. Creation requires an already admitted session and explicit creator attribution from the trusted SDK host. This identity is attribution, not an additional authorization mechanism. There is no second routine store or scheduler.
-
-```ts
-const routine = await channel.routines.create(
-  { chatId: 'oc_group', rootId: 'owned-root' },
-  {
-    message: 'Review the report',
-    schedule: { time: '09:00', days: ['mon'] },
-    creator: { id: 'ou_alice', name: 'Alice' },
-  },
-)
-const { timezone, routines } = channel.routines.list({ chatId: 'oc_group' })
-const edited = await channel.routines.edit(
-  { chatId: 'oc_group' },
-  routine.id,
-  { message: 'Review the report with the team', schedule: { time: '10:00' } },
-)
-await channel.routines.cancel({ chatId: 'oc_group' }, routine.id)
-```
-
-Edit changes the message and/or schedule in place: the id, creator, creation time and logical target stay, and the returned entry carries the new `nextRun`. It validates like creation and returns `undefined` for an id outside that chat/channel. The schedule format, deployment timezone, future-time validation, 20-per-chat cap, `nextRun` descriptions and cancellation behavior are the same as the model API. List/edit/cancel cover that chat's group/direct session and topics, never another channel/chat. A schedule edit applies from the edit time: an occurrence that already passed is not delivered late, while the last-fired watermark still prevents re-delivering an occurrence that already ran. Cancelling prevents future submissions, not work already admitted. Model-facing `runtime.routines` remains limited to an active channel run.
+`runtime.channels` provides JSON-serializable host operations (`list`, `setEnabled`, `chats`, `submit`), while `runtime.timers`, `runtime.subscriptions`, `runtime.bindings`, `runtime.sessions`, and `runtime.events` manage scheduling, event subscriptions, channel bindings, sessions, and live delta/status streams uniformly across CLI, daemon, and desktop hosts.
 
 ### Connection state
 
-`connection()` and `onConnection(listener)` share one `ChannelConnection` value: `{ connected: boolean, error?: string }`. Initial, deliberately stopped and unconfigured channels are not connected. Readiness clears a prior error. Lark uses actual SDK ready, error, reconnecting and reconnected callbacks; resolving transport startup alone is not proof of readiness. Errors are safe display strings. Stopped/replaced transport callbacks cannot revive a connection. Custom Lark transports keep the existing startup success/failure fallback without a new observation hook.
-
-For another adapter, optional `ChannelDefinition.onConnection(listener)` reports live state and returns an unsubscribe callback; without it, the gateway uses `start()` success/failure. Error strings from an adapter must be safe for host display. Connection state is informational: `runningChannels()` still means successful startup, and disconnects do not change routine scheduling or replay submitted messages.
-
-Local reports connected after its store and optional listener are ready. `local({})` (or `local({ timezone })`) starts the in-process core without opening any listener. Providing a nonempty `token` enables the existing authenticated loopback HTTP/SSE adapter; `port` alone never enables HTTP.
+`runtime.channels.list()` and channel status events expose live adapter state (`{ channel, enabled, status, chats }`). Initial, stopped, and unconfigured adapters report disconnected state until startup completes cleanly.
 
 ### Lark groups and visible history
 
-The SDK (`@glows777/vela`) returns a typed `LarkHost` from `createVela().channel('lark')`. Both Local and Lark attach their scoped host operations through the optional `ChannelDefinition.host(base)` decorator.
-
-```ts
-const vela = createVela({ extensions: [lark(options)] })
-await vela.ready()
-const host = vela.channel('lark')
-const off = host.onEvent(event => invalidateVisibleHistory(event))
-await vela.startChannels()
-
-const groups = await host.chats()
-const receipt = await host.submit({
-  chatId: 'oc_group',
-  newTopic: { title: 'Review the report' },
-  text: 'Please check the totals',
-  author: { id: 'desktop-alex', name: 'Alex' },
-})
-const { messages, nextCursor } = await host.messages({
-  chatId: 'oc_group',
-  sessionId: receipt.sessionId,
-  limit: 30,
-})
-off()
-```
-
-- `chats()` lists the enabled groups from saved configuration, so it answers before Lark connects and while it is disconnected. An entry carries the group's `name` when the built-in transport can read it; a custom `LarkTransport` has no name lookup, so its groups keep only the `chatId`, and a missing name never removes a group from the list. A host that shows groups reads this list rather than inferring groups from `sessions()`, which only knows chats that already received input.
-- `messages({ chatId, sessionId, cursor?, limit? })` reads one enabled group or one of its owned topics straight from Lark. A group's logical ID is `channelSessionId('lark', chatId)` (exported by `@glows777/vela`), even before its first run; topic IDs come from `sessions(chatId)`. Group pages are newest first and include topic roots, not thread replies. Topic pages are oldest first. The limit is 1–50 provider rows per page. Deleted or unsupported rows can produce a short or empty page with a next cursor. Keep passing the opaque cursor with the same chat and session until it is absent.
-- To post into an existing session, pass `sessionId` instead of `newTopic`. The bot posts signed text; the author ID is host attribution, not a Lark user ID or a permission. Group input still goes through group triage. Creating a topic posts the signed root and adds the title inside its thread before admitting the run directly in that topic. An existing topic reply targets the same thread. Follow work through `onSession`; the receipt identifies the session and posted message, not a particular queued run.
-- A failed submission is not automatically retried and throws `LarkSubmitError`, whose `outcome` says what reached Lark: `not-sent` (validation, an unknown or disabled target, or no connection, so nothing was posted), `uncertain` (the send failed or returned no message ID, so a message may already be visible), or `posted` (the signed message went out; opening the topic or admitting the run failed, and `messageId` names the posted message when known). Re-read visible history before sending again; only `not-sent` is safe to resend blindly. An error from the generic `submit(IncomingMessage)` overload is not a `LarkSubmitError`, because that path never posts.
-- `onEvent` is best effort: `history_changed` invalidates a group or a named topic, and `reset` tells the app to re-read visible history after connecting or reconnecting. Await `startChannels()` before acting on signals from startup, as with other host calls. Without group-message read permissions, or when `readUntagged` is off, some human messages may only appear after a re-read. Bot echo does not start work or duplicate an invalidation for the host post. Neither event is a durable delivery acknowledgement.
-
-### Local projects and visible history
-
-An assistant message with `file: { name, size }` identifies a snapshot of the file at send time. Use `await host.readAttachment({ projectId, sessionId, messageId: message.id })` for its bytes. The owning Local history and its message events expose the same metadata. SDK pickup survives workspace edits, deletion and host restart.
-
-`vela.channel('local')` returns a typed `LocalHost`, extending `ChannelHost` without another factory, store or runtime.
-
-```ts
-const vela = createChannelVela({ extensions: [local({ timezone: 'UTC' })] })
-await vela.ready()
-const host = vela.channel('local')
-const off = host.onEvent(event => updateLocalView(event))
-await vela.startChannels()
-const project = await host.openProject({ cwd: '/absolute/project', name: 'My project' })
-const receipt = await host.submit({
-  projectId: project.id,
-  sessionId: project.sessionId,
-  text: 'Summarize this project',
-  clientMessageId: 'composer-1',
-})
-const history = host.messages({ projectId: project.id, sessionId: receipt.sessionId })
-const sessions = host.sessions(project.id)
-// off(); await vela.dispose() when the host shuts down.
-```
-
-- `projects()` lists detached `LocalProject` values. `openProject({ cwd, name? })` preserves canonical-directory identity and the original name when reopened. It neither runs a model nor loads executable configuration from that project.
-- `sessions(projectId?)` lists one project's sessions or all Local projects, including an empty project's synthetic hub. It never creates a model session. `messages({ projectId, sessionId, after?, limit? })` returns detached visible history with exclusive cursors, default 50 and maximum 100 messages. Addresses and cursors are checked against the project. Text, names and history validation match HTTP.
-- The visible `submit({ projectId, sessionId, text, clientMessageId? })` overload persists the user message before durable runtime admission and returns `{ sessionId, messageId }` without waiting for completion. Failed admission rolls that message back. `clientMessageId` is correlation only, not retry deduplication. The existing `submit(IncomingMessage)` overload remains low-level: it requires a real reply anchor for group input and does not add a visible user message.
-- `onEvent(listener, { projectId? }?)` subscribes to future version-1 `LocalEvent` envelopes. Install it before startup, optionally filtering by a known project ID, then read snapshots. Each listener receives an independent snapshot; thrown/rejected callbacks do not block others. Unsubscribe or disposal clears the subscription. SDK listeners do not receive SSE's connection-only `reset`. When HTTP is enabled, SDK and SSE observe the same event IDs and payloads; disconnecting SSE does not stop SDK events or saved replies.
-- Project/history reads and mutations require successful startup and reject after disposal. `LocalError` exposes safe `invalid_request`, `not_found` or `unavailable` codes for validation and lifecycle failures. Storage/admission failures can throw their underlying error; reconcile durable history before retrying. Stop, status/session subscriptions, idle routines and connection methods retain the common host contracts.
-
-Project cwd, opaque identities, visible-history boundaries, shared triage/task dispatch and persistence are identical to the [Local HTTP protocol](channels.md#local). This API does not add remote access, replay, a new persistence format or a second scheduler.
+With `createLarkChannelAdapter(options)` registered on `LocalVelaRuntime` via `await runtime.registerChannel(adapter)` (or hosted by `vela daemon`), hosts query configured groups via `runtime.channels.chats('lark')`, inspect channel-backed sessions via `runtime.sessions.list()`, read history via `runtime.sessions.messages(...)`, and post messages via `runtime.channels.submit('lark', ...)` (returning the session/message receipt). Live updates stream over `runtime.events.subscribe(...)` and `runtime.events.subscribeDeltas(...)`.
 
 ## Writing a channel
 
-The shared channel contract is exercised by both Lark and the Local HTTP/SSE transport, including admission, task dispatch, run controls and recovery. The documented public interfaces follow the [SDK API stability policy](sdk.md#api-stability); the earlier blanket experimental qualification no longer applies. For the app-facing wire protocol, see [Local](channels.md#local).
-
-Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The channel types come from `@glows777/vela`. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway gives every sender the session's full access and a shared transcript.
+Register a `ChannelAdapter` with `await runtime.registerChannel(adapter)`. The adapter types are exported by `@glows777/vela`, and [echo-channel.ts](../examples/extensions/echo-channel.ts) gives a minimal runnable example. Enforce chat allowlists before calling `ctx.ingest(...)`: admitted messages share their project/session transcript and tools.
 
 | Member | Required | Contract |
 | --- | --- | --- |
-| `name`, `description` | Yes | Stable channel name (part of session identity) and description shown in channel listings. |
-| `canRecover(message, chatKind)` | No | Recheck current access for a stored group/direct conversation. Return false to leave it untouched during startup recovery. |
-| `start()` | Yes | Open the service connection when channels start; may be synchronous or asynchronous. Return `false` when the channel is not configured to connect; the gateway then skips its startup line, routines and recovery. A rejected start is logged without preventing other channels from starting. |
-| `sendFile(route, { path, bytes })` | No | Deliver one file to the current outbound route. Providing this capability makes `channel_send_file` eligible for the session's tool selection. |
-| `stop()` | Yes | Close transport/resources after the gateway drains active work. May be synchronous or asynchronous; failures are collected during shutdown. |
-| `send(message)` | Yes | Deliver an outgoing message; resolve after delivery, reject on failure. A successful send emits `channel_reply`; a failed send emits `channel_error`. |
-| `onMessage(handler)` | No | Capture the gateway's incoming handler at registration. Its promise settles after processing, reply and feedback. Deliver new inputs immediately if you want controls during a previous run; do not wait for the earlier handler before delivering them. |
-| `onConnection(listener)` | No | Report safe live connection state and return an unsubscribe callback; otherwise startup success/failure is used. |
-| `connect(runtime)` | No | Receive the scoped runtime operations below at registration, before `start()`. |
-| `topicCapabilities` | No | Implement `ChannelTopicCapabilities` to use the common topic tools and prompts. Platform creation, forwarding and visible-history retrieval stay in the adapter. |
-| `sessionOptions(message)` | No | Select `{ cwd?, tools?, model?, thinkingLevel? }` from the logical chat and current configuration. The gateway applies them and binds channel scope before resume/hooks on every opening path, including new physical generations. A `model` that cannot be resolved throws with the chat id before the session runs. |
-| `validateTools(names)` | No | Check configured names against all registered tools after extension loading. A thrown error rejects startup before transport or recovery. |
-| `prepareMessage(message, activeMessage?)` | No | Asynchronously resolve names/history/attachments when the input is ready. Return the prepared message, or `undefined` when handled without a prompt. A steer receives its active run's original trigger as the second argument; queued inputs do not. Exclude context already present in that trigger. |
-| `startRun(message, { acknowledge })` | No | Begin feedback after admission and before preparation; return a lifecycle with `event(update)` and `finish(outcome)`, or no handle. `acknowledge: false` creates presentation for a handed-off task whose original input already owns feedback. See below. |
+| `name` | Yes | Stable channel identifier (e.g. `'lark'`, `'echo'`), recorded on `projects` and `channel_bindings` |
+| `start(ctx)` | Yes | Connect/start receiving input using `ctx.ingest(...)` and report status via `ctx.status(...)` if applicable |
+| `stop()` | Yes | Close transport/resources cleanly when `runtime.dispose()` shuts down |
+| `deliver(message)` | Yes | Deliver an outbound `ChannelOutboundMessage` (`reply`, `topic_start`, `forward`, `file`, `announce`) and return `{ delivered, rootId?, threadId?, externalMessageId? }` |
+| `fetchAttachment?(attachment)` | No | Lazily download inbound image/file bytes when needed by a run |
+| `listChats?()` / `listMessages?()` / `submitFromHost?()` | No | Optional host inspection and submission hooks exposed via `runtime.channels` |
 
 ### Messages and runtime
 
-`IncomingMessage` contains `channelId`, `senderId`, `senderName` and `text`, with optional `chatKind: 'group' | 'direct'`, `images: ImageContent[]`, `replyToId`, `topic: { rootId, threadId }`, `requireExistingSession`, `isNewTopic` and opaque `raw`. The explicit `chatKind` is persisted and governs the conversation scope on reopening. Without it, the legacy topic/reply/handoff inference remains. A project hub uses the group topology even with one person; this does not grant access to other people. The sender identifies the speaker, not a separate session. A topic's root ID selects its session; its thread ID addresses the platform container. For untagged topic input, set `requireExistingSession: true`: admission rejects an unknown topic before preparation or feedback, without saving an empty session. The gateway sets `isNewTopic` from its ownership probe and sets it to false for active steers. Leave that field to the gateway.
-
-`OutgoingMessage` contains `channelId`, `text`, optional `recipientId`, `replyToId` and `topic`. The recipient identifies a person to mention; omit it when a reply addresses only the service message. Preserve topic and reply identity when sending. Lark uses the group trigger's service ID as `replyToId`; direct messages omit it. A control-card send must not advance the service's last-answer history boundary.
-
-`ChannelRuntime`, passed to `connect`, supplies channel-scoped operations. The adapter still owns authentication and chat enablement; these methods do not turn untrusted data into authorized commands. Session lookup and dispatch cannot cross the registered channel, and dispatch must stay in the source chat.
-
-- `submit(message)`: available after this channel starts and before shutdown. Rechecks `canRecover`, then resolves `{ sessionId }` only after directory admission succeeds; rejects disabled/unknown existing targets or storage failure. This receipt does not wait for preparation, model work or delivery. `onMessage` retains its existing completion-waiting contract. A queued input may still require a resend after a crash if it never reached saved model history; this is not exactly-once execution or persistent client-ID deduplication.
-- `sessions(chatId)`: detached snapshots of this channel's known project chat and topics, without opening sessions. Each includes the logical `sessionId`, chat identity/kind, optional topic address, task, requester, state, update time, optional waiting reason and optional `runId`. Physical restart generations are not exposed as targets. Disabled conversations are omitted. The opaque run ID is transient and is available during preparation and active model work, not after work settles while a reply is being delivered.
-- `stop({ chatId, rootId? }, runId)`: synchronously reserves cancellation for that exact current preparation/run, then resolves a boolean after existing abort handling. False means the run is unavailable, expired or already stopped. It uses the same cancellation boundary as channel controls and leaves other default-queued human messages intact. It does not retract a delivered reply or introduce a separate steer mode; human topic inputs retain automatic steering.
-- `onSession(listener)`: returns an unsubscribe function. Each callback receives a detached `ChannelSessionUpdate`: `{ session: ChannelSessionSnapshot, run?: { type: 'started', runId } | { type: 'finished', runId, outcome } }`. The gateway publishes snapshots on admission, preparation, execution and queue release. A run starts before preparation, so its ID can be used for Stop before the model starts; completion includes preparation failure and preparation Stop. `outcome` is `done`, `failed`, `stopped` or `silent`. A final queue-release snapshot reflects the settled state without an expired run ID. Run transitions describe the actual session run, independently of feedback ownership transferred to a child task. Listener exceptions are logged without changing delivery; listeners are cleared on channel shutdown. There is no replay buffer: subscribe and load `sessions(chatId)` for initial state.
-- `onStatus(listener)`: returns an unsubscribe function. A callback receives `{ chatId, rootId, text }` only after the status line is saved for this channel. It does not start a hub model call. Listener exceptions are logged without changing task delivery; listeners are cleared on channel shutdown. There is no replay buffer.
-
-- `routines.create(sessionId, message, schedule)`, `routines.edit(sessionId, id, { message?, schedule? })`, `routines.list(sessionId)` and `routines.cancel(sessionId, id)`: scoped to an active channel run and its chat. Create derives the creator and logical target from the trigger, resolves one-off local `at` values in the deployment timezone, and returns persisted data with display metadata. Edit rewrites the matching record in place, keeping its id and attribution, and returns the updated entry; it returns `undefined` when the id is not in that chat. A schedule change records the edit time so occurrences at or before it are not delivered late. List returns `{ timezone, routines }`; each entry includes `scheduleText`, `target` and local `nextRun` (null when there is no future occurrence). Cancel returns whether a matching record was removed. The shared `channel_routines` tool wraps these operations; storage, timers and the `!routines` command stay channel-generic.
-- `context(sessionId)`: the active run's trigger, or `undefined` when there is no active run. Do not retain it as a substitute for durable session data.
-- `session(id)`: the open session for a logical channel session id, or `undefined`. After `!restart` it resolves the current generation, not the previous one. For read-only display state that outlives one run, such as a progress card that rebuilds a checklist from `session.getBranch()`; do not prompt or close it.
-- `topics(chatId)`: this channel's recorded topics in that chat, each with `rootId`, `threadId`, a short `task` and `state` (`running`, `queued`, `waiting`, `done`, `stopped`). The directory survives process restarts. Topics from before M2 appear after their next admitted message; topicCoverage() describes that boundary.
-- `topicCoverage()`: describes when directory coverage began and the pre-M2 topic boundary.
-- `dispatch(sourceSessionId, message)`: enqueue a handoff without waiting for the destination task. The source run must still be live or this throws. It transfers input-feedback ownership, observes a new topic immediately and suppresses the source's duplicate final reply. A running topic target steers; an idle target queues normally. The channel must enforce its destination authorization before dispatching.
+`ChannelAdapterContext` provides `{ ingest }` at minimum, and daemon/runtime hosts wire full durable ingress into `inbox_events` (`channel_bindings`), outbox delivery (`outbox`), timers (`timers`), and webhook subscriptions (`subscriptions`) in `vela.db`. Outbound replies and topic starts are persisted in SQLite `outbox` and retried safely until `deliver(...)` acknowledges delivery.
 
 ### Shared topic capabilities
 
-The channel assembly registers one set of tools: `channel_start_topic`, `channel_forward_to_topic`, `channel_list_topics`, `channel_read_topic`, `channel_wait_for_input`, `channel_skip_reply` and `channel_routines`. They are visible only in channel-bound sessions. Group sessions dispatch; task sessions cannot start/forward another task; direct sessions keep routines but not group/topic tools. The gateway applies these scope restrictions before session hooks. A group session and its topics run the same execution and background tools (a narrowed `tools` list still limits either); a direct session keeps no background tools. A channel without topic capabilities does not receive the dispatch prompt or the platform-dependent start/forward/read tools.
-
-`ChannelTopicCapabilities` supplies:
-
-- `startTopic(message, title)`: return `{ messageId, rootId, threadId }` after the platform creates the visible topic title. The shared implementation builds the private brief, preserves requester attribution and dispatches once.
-- `forwardToTopic(message, target)`: forward the original message into the validated owned topic and return its normalized `IncomingMessage`. The common implementation checks the destination and dispatches without waiting for task completion.
-- `readTopic(chatId, threadId)`: return visible messages only; hidden hand-off notes are not visible history.
-- Optional `originalText(message)`, `triggerImages(message)` and `handled(message)` preserve platform-specific source text, image selection and history boundaries. Without an original-text hook, normalized input text is used.
-
-Lark implements those hooks with its existing transport. Its tool names have changed without aliases; `lark_search_history` remains Lark-only. Custom prompt sections for shared dispatch/task behavior are now `channelGroup` and `channelTopic`. This is a tool/prompt naming break, not a session-data migration.
+In Runtime sessions, platform-agnostic control tools (`session_start`, `session_forward`, `session_list`, `session_read`, `session_message`, `timers`, `subscriptions`, `wait_for_input`, `send_file`, `skip_reply`) are wired by `driver/runtime-tools.ts` according to session kind (`group` vs `topic` vs `direct`) and active tool selection. `lark_search_history` remains Lark-specific.
 
 ### Topic commands
 
-In an owned Lark topic, send `!stop`, `!restart` or `!status` with or without an @-mention. Commands must be the whole message; they bypass model input and automatic steering. Unmentioned commands in unowned topics are ignored without feedback or writes.
-
-`!stop` uses the progress card's Stop operation and keeps the session and its history. It also cancels input still preparing to start. An idle topic replies that no run is active.
-
-`!restart` stops and drains the old run, retains its saved session history, and atomically switches the directory's `activeSessionId`, appending the old ID to `previousSessionIds`. It replies "Restarted with a fresh session" without calling the model. The next topic message, including an unmentioned one, starts the new session and reads the full topic history. The logical topic and its listing stay the same; expired Stop controls cannot affect the new generation.
-
-`!status` replies during an active run without steering, stopping or calling the model. It shows the current model, estimated context tokens/window, and topic/group token and cost totals. A reopened session restores its saved model and context first. Status does not add a user entry or reset the topic's running/stopped state.
-
-Usage is appended to `<dataDir>/channels/usage.jsonl` as `{ key, chatId, model, ts, tokens, cost? }`. `tokens` contains uncached input, output, cache-read and cache-write counts; displayed totals sum all four. Each existing `usage` event adds one row; `compaction_end` adds the change in session totals since `compaction_start`, including a measured summary whose result was rejected. The existing request record distinguishes an unknown summary price from a known zero cost. Logical keys retain totals across `!restart` generations, idle closure and process restarts. Group totals include all recorded channel sessions in that group, including top-level dispatch work.
-
-Status says "Recorded since …" using the first ledger row. Earlier usage is not backfilled from `usage/requests.jsonl`, which lacks session identity. Unpriced requests still count tokens; mixed pricing shows only the known subtotal and the number of unpriced requests. An interrupted request without a usage report is not counted. Without a `dataDir`, accounting stays in memory. This is a single-process append-only ledger; malformed rows reject startup with the file and line, and write failures surface through the run's failure path. It is usage visibility, with no spending caps or promise of billing reconciliation.
+In an owned Lark topic, send `!stop`, `!restart`, `!status`, or `!timers` as the whole message to bypass model turns and inspect or control the topic run. `!stop` interrupts the active run cleanly while keeping history; `!restart` closes the active physical session generation cleanly; `!status` prints model/token/cost status; `!timers` lists configured timers in the local timezone without invoking the model.
 
 ### Restart recovery
 
-The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, shared by startup recovery, `runtime.topics(chatId)` and `channel_list_topics`. Updates are serialized and published by a synced temporary file and atomic rename. A malformed directory rejects `startChannels()` with its path; it never becomes an empty topic list. This is a single-process directory, like the gateway's session queues.
-
-Records contain the channel/chat kind, topic root/thread IDs, requester/reply target, task label, active and previous session IDs, run state, pending service-message IDs and timestamps. Input content remains in the session JSONL. The directory does not backfill pre-M2 topics or reconstruct hashed routing IDs; an older topic joins on its next admitted message. `runtime.topicCoverage()` reports that boundary.
-
-After the channel connects, the gateway drops passive work as described in [the channel guide](channels.md#untagged-top-level-discussion-and-cost) and restores indexed unfinished @/topic work through `session.resume()` and the existing run feedback lifecycle. A saved unanswered user turn (including images) is replayed by navigating to that turn's parent and prompting its saved input. The old branch remains in history. The topic receives an interruption/continuation notice before model work, and fresh Stop controls. A run whose branch already ends in a final assistant answer delivers that answer without another model call. Completed, waiting and explicitly stopped runs stay quiet.
-
-Graceful shutdown leaves interrupted runs and unsaved steers recoverable, while an explicit Stop remains terminal. An execution failure whose terminal explanation was delivered is complete for recovery purposes; a failed result delivery stays recoverable. Inputs handled during preparation, such as unsupported attachments, are removed from pending admissions. Resend notices reply to the unsaved message without mentioning the original task requester, who may be a different person.
-
-Admitted non-passive group message IDs without a saved user entry receive a reply asking the sender to send the message again. This includes steers still queued at process death: no adapter event or second copy of input is persisted. A small `channel.input` custom entry associates a saved input with its service-message ID; it is not model context. Tool execution may repeat from the saved input after a crash; there is no durable mid-tool resumption or exactly-once delivery guarantee.
-
-`canRecover(message, chatKind)` is an optional channel hook to recheck current access before opening a stored session or posting recovery feedback. Lark rechecks its configured chats and owner DMs. Its group classification uses normalized reply identity, so recovered group work keeps the channel prompt/tools without a live receive event. Unknown untagged topics are checked for existing ownership before directory writes or feedback. Startup reserves recovery in the same per-session queues used by new input.
+Runtime stores projects, sessions, bindings, timers, subscriptions, background jobs, inbox events, and outbox rows in a single transactional SQLite WAL database (`$VELA_DIR/vela.db`). On startup, `await runtime.ready()` initializes runtime extensions and `await runtime.recover()` runs crash recovery across interrupted runs, due timers (`TimerScheduler` catches up at most once across downtime for routines), undelivered outbox entries, and orphaned background jobs.
 
 ### Run feedback lifecycle
 
-`startRun` receives normalized message data; it must work without `raw` or an old receive-event object. For Lark presentation, persistable chat/topic IDs, original requester ID and reply/service message ID are sufficient; text/name data supplies the prompt and attribution. Live preprocessing may still use `raw`. Signals and callbacks are fresh runtime capabilities and are not persisted. The gateway stores routing metadata in its directory and reuses this hook for recovered work.
-
-The factory may acknowledge the newly admitted input before names/history/resources are prepared. For passive input the gateway calls it lazily with `{ acknowledge: true }` on the first non-empty assistant text delta and forwards no `controls` updates, so passive input still gets no control card. Its handle can outlive the source run: handoff carries the original handle to the destination; accepted steers finish with their receiving run. A new handoff presentation uses `acknowledge: false`, so it must not acknowledge the same input again. If initial feedback creation fails, the gateway reports it and may request presentation with `acknowledge: false` on the next update; this preserves Stop controls without retrying the failed reaction. A failure while creating those controls still prevents a topic prompt.
-
-`event(update)` receives one of:
-
-- **`controls`**: `{ type: 'controls', message, signal, choose, error }`. The message is the input whose controls are being presented. For a topic, this is the prepared run trigger immediately before prompting, with Stop only. For a non-topic message arriving during another run, this is the queued input, with Queue/Steer/Stop targeting that earlier run. No controls update is issued for an ordinary idle non-topic run or each automatic topic steer. Choose buttons from `message.topic`; `choose(action)` reserves synchronously and returns false for an expired/already-reserved choice, or an unsupported topic action. Remove callbacks on signal abort. Report asynchronous presentation errors through `error(error)`: the gateway reports them once per run; a live error says the task keeps running, while an error thrown from `finish` is reported as a final one.
-- **`agent`**: `{ type: 'agent', event }`, wrapping existing `VelaEvent` values from the run. Subscribe before prompting; handle tool/progress events without blocking the event stream. For `agent_settled`, stop heartbeat timers and return any outstanding writer-drain promise if writes must complete before the reply. The gateway waits for returned promises before delivery; it does not await each event while the model streams.
-
-The gateway awaits controls before a topic prompt, but does not block the preceding run on a queued input's controls. A topic controls failure is reported and prevents that prompt; failed non-topic controls leave the input queued. An agent-feedback error is reported without turning a successfully delivered task into a failed one.
-
-`finish(outcome)` is the single terminal input signal: `done`, `failed`, `stopped` or `silent`. It runs once after delivery, or after a terminal preparation/Stop failure. `silent` removes a deferred passive marker and adds no outcome reaction; other channels may treat it as no-op. Finalize the existing card and input reactions here and release resources. A failed send means `failed`, even if the model completed successfully. There is no separate `settled` lifecycle phase. Keep progress failure separate from task/delivery failure: admission, preparation and command failures are task failures, while a failed acknowledgement or card update is only presentation. Lark retries a failed live PATCH after 1, 2, 4 and 8 seconds (five attempts in all) and its final PATCH after 1 and 2 seconds. One input reports its presentation failure once: the live message says the task keeps running, and a final failure from `finish` is reported as the task having ended only when no earlier failure was reported. It still uses DONE when the result succeeds and is delivered.
-
-A minimal feedback implementation can use an existing UI writer:
-
-```ts
-const startRun: NonNullable<ChannelDefinition['startRun']> = async (message, { acknowledge }) => {
-  const feedback = await openFeedback(message, { acknowledge })
-  return {
-    event(update) {
-      if (update.type === 'controls') return feedback.showControls(update)
-      return feedback.onAgentEvent(update.event)
-    },
-    finish(outcome) { return feedback.finish(outcome) },
-  }
-}
-```
-
-Here `openFeedback` is your adapter's implementation: control creation may be asynchronous; ordinary progress events enqueue writes; completion drains/cancels timers and finalizes existing presentation. Channels without feedback can omit `startRun` entirely.
-
-### Migrating existing feedback hooks
-
-Replace `acknowledge`, `showTopicControls` and `showRunControls` with `startRun`. Move reaction creation to the factory, honor `{ acknowledge: false }`, move both control presentations into `event({ type: 'controls', ... })`, and forward agent events from the `agent` variant. Replace the old topic `stop()` callback with `choose('stop')`. Combine acknowledgement/card completion in `finish(outcome)`; `ChannelAcknowledgement` is removed. Update custom channel types along with the public API snapshot. Basic channels that never supplied these hooks need no change.
-
-Channel session events keep their shape: `channel_message` carries `channel`, `senderId`, `senderName`, `text`; `channel_reply` carries `channel`, `recipientId`, `text`; `channel_error` carries `channel`, `senderId`, `error`, `aborted`, plus `source: 'feedback'` when only the progress presentation failed; admission, preparation and command failures are not tagged. Subscribers also receive the session ID. Channel-local feedback updates do not add core event types.
+Progress updates stream from `runtime.events.subscribe(...)` and `runtime.events.subscribeDeltas(...)` (`run_started`, `run_ended`, tool/compaction deltas, `queue_updated`, and `audit`). Channel adapters such as `LarkChannelAdapter` drive typing/progress cards and final reactions (`OnIt` / `DONE` / `CrossMark`) from these runtime events and outbox completion hooks.
 
 ## Gateway lifecycle
 
-On receiving a message, the gateway:
+On receiving a channel message via `ctx.ingest(...)`, Runtime:
 
-1. Selects the shared session from `(channel name, channelId)` or `(channel name, channelId, topic.rootId)`. Non-plain or long ids get a hash suffix to prevent collisions.
-2. Serializes messages per session. Active topic inputs steer automatically; channel/DM inputs can offer Queue/Steer/Stop controls. Queued preparation and unsupported-message replies stay serialized, so a later reply cannot change the context boundary of an earlier question.
-3. For topics, opens/resumes before preparation and rejects unowned input marked `requireExistingSession` without writing an empty file. Opens/resumes the selected persisted session. A channel must reject untrusted chats **before** delivering them.
-4. Starts the optional `startRun` feedback lifecycle for admitted input before preparation, binds controls at the appropriate run boundary, and subscribes to agent events before prompting. Drains pending feedback events before the terminal reply and calls `finish(outcome)` after delivery. Emits `channel_message`, prompts the session, and sends the last assistant text through `send({ channelId, recipientId, text, replyToId?, topic? })`. It emits `channel_reply` after success or `channel_error` after a failed turn/send. Empty answers and input handled by an extension do not resend an earlier answer.
+1. Resolves or admits the `ChannelBinding` and target session (`group`, `topic`, or `direct`) in `vela.db`.
+2. Serializes or steers work per session queue; active topic/DM messages enqueue cleanly and record durable provenance (`inbox_events`).
+3. Runs `VelaAgentDriver` against the session's `ExecutionEnv`, appending `vela_messages` / `usage_records` and outbox deliveries transactionally.
+4. Delivers replies, topic starts, files, and announcements asynchronously via the adapter's idempotent `deliver(...)` and emits `channel` / `run_*` events.
 
-Session save failures are logged at error level with the session id. After three consecutive reported save failures, new messages receive a reply that the session can't be saved, without running another prompt. A successful storage write resets the count, including an explicit SDK `await session.save()` after storage is repaired. Empty saves do not clear the count.
-
-Before automatically closing an idle session, the gateway saves it. If that save fails, the same live session stays open with its pending history; the gateway does not start a periodic retry loop. While blocked, a new message first retries the pending save, and runs a prompt only after a real write succeeds. SDK callers reopening that id get the same session, so recovery does not create a competing history or another header. Channel activity after recovery restores normal idle cleanup. SDK-only recovery clears the count but leaves the session open until the next channel activity or an explicit close/dispose, so a save cannot schedule a close during SDK work. Failed sessions retain memory until recovery or disposal. Explicit SDK `close()`/`dispose()` and writes made by shutdown hooks keep their existing semantics; they can still discard unsaved data. In-session retries are unchanged.
-
-Extension notifications (`ctx.notify`) are emitted as `notify` session events. Sessions close after 10 idle minutes and resume on the next message; `createVela({ channelIdleMs })` changes that wait (`0` closes after each completed queue). Running sessions, queued chats, or a session with a running background command are not closed prematurely.
-
-**CLI & SDK:** `await vela.startChannels()` starts registered channels in an SDK host (`vela.channels()` lists them, `vela.dispose()` aborts running sessions, waits for pending work and stops channels). Standalone `vela serve` was retired in v0.9; CLI sessions connect to `vela daemon` and stay separate from channel sessions. Tool-policy validation errors reject startup before transport/recovery; a failed channel `start()` is logged without stopping other channels. (`/channel` in the TUI lists channel bindings.)
+`runtime.dispose()` stops registered channels, aborts active runs, drains pending persistence, and closes `vela.db`.
 
 ## Custom transports
 
@@ -280,11 +99,10 @@ For run controls, implement `sendCard(chatId, card, replyToId?)` returning the s
 
 ## External event subscriptions
 
-The SDK (`@glows777/vela`) can wake an existing conversation from the same process. In a channel conversation, `channel_subscriptions` creates, lists or removes subscriptions. Create takes an exact `source` and `key` and targets the current group, topic or DM; list/remove are limited to the current chat. Curated tool lists must include `channel_subscriptions` explicitly; tool selection still applies. Ordinary SDK sessions cannot use this tool.
+`RuntimeWebhookReceiver` or an embedded host wakes subscribed conversations via `runtime.ingestWebhookEvent(event)`. In a Runtime session, `subscriptions` creates, lists, or removes subscriptions. Create takes an exact `source` and `key` and targets the current project or session; list/remove are scoped to the caller.
 
 ```ts
-await vela.startChannels()
-await vela.publishEvent({
+await runtime.ingestWebhookEvent({
   source: 'local-build',
   key: 'project#review/171',
   deliveryId: 'build-42',
@@ -293,21 +111,17 @@ await vela.publishEvent({
 })
 ```
 
-Subscriptions persist in `<dataDir>/channels/subscriptions.json`, using atomic replacement, and follow the logical topic across `!restart` and idle closure. Events queue behind current work without steering it. A completed or waiting topic can wake again. `!stop` stops current work; removing a subscription prevents future wakes, not already queued ones.
+Subscriptions persist in `$VELA_DIR/vela.db` (`subscriptions` table) and follow the logical target across daemon restarts. Events enqueue durably into `inbox_events` behind current work without steering it. `!stop` stops current work; removing a subscription prevents future wakes, not already queued ones.
 
-Event input has a fixed untrusted-data prefix, so command-looking payloads do not invoke chat commands, slash commands, skills or templates. Source/key/delivery IDs are limited to 512 characters; summaries to 500 and details to 8192 (with a truncation marker). Source identity is supplied by the trusted in-process producer; this API does not authenticate remote callers or grant new tool authority.
+Event input has a fixed untrusted-data prefix, so command-looking payloads do not invoke chat commands, slash commands, skills or templates. Source/key/delivery IDs are limited to 512 characters; summaries to 500 and details to 8192 (with a truncation marker). Source identity is supplied by the authenticated receiver or trusted producer.
 
-`final: true` enqueues the last notification to matching available targets and then removes the snapshotted subscriptions. `publishEvent()` resolves after enqueue and final-state persistence, without waiting for the model. Disabled, missing or disconnected matching targets are skipped with diagnostics and never forwarded elsewhere. Only an event with no matching subscriptions can use `eventDefaultTarget: { channel, chatId }`, supplied as an SDK option or CLI setting; that top-level target must already exist and be enabled. Otherwise the event is dropped. Publication requires started channels and rejects once stopping begins.
-
-Delivery is best effort: there is no durable inbox or retry, so process failure may lose or repeat work. Embedded producers call the SDK directly; independent producers use the optional authenticated receivers below. There is no CLI event client. The existing notification workflow is separate.
-
-External top-level inputs never borrow a previous human reply ID. Lark establishes a new announcement receipt before prompting; admission or preparation errors are recorded in operator diagnostics without a synthetic feedback reply. Human input retains its own error feedback. CLI and direct SDK default-target addresses both trim surrounding whitespace.
+`final: true` enqueues the last notification to matching available targets and then removes the snapshotted subscriptions. `ingestWebhookEvent()` resolves after enqueue and final-state persistence, without waiting for the model. Only an event with no matching subscriptions can fall back to `eventDefaultTarget: { channel, chatId }` when configured; that target must already exist and be enabled.
 
 ### GitHub webhooks
 
 For the operator setup command, see [GitHub webhook setup](channels.md#github-webhook-setup). `vela setup github owner/repo --url https://your-tunnel-host` writes user settings and configures matching repository hooks through GitHub CLI.
 
-`vela daemon` reads `webhooks` from user-level `~/.vela/config.json` (project `webhooks` settings are stripped) and hosts both `lark` and the webhook HTTP listener automatically (for Runtime SQLite `subscriptions`). For transitional Local HTTP/SSE deployments running on the legacy SDK host before `S4b-3` removes `legacy-channels`, omit `webhooks` / `lark` on the SDK host so only `vela daemon` owns them (see [Deploy](deploy.md)). It is absent by default. To configure it manually, add top-level `webhooks` to `~/.vela/config.json`, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and let `vela daemon` reload automatically:
+`vela daemon` reads `webhooks` from user-level `~/.vela/config.json` (project `webhooks` settings are stripped) and hosts both `lark` and the webhook HTTP listener automatically (`RuntimeWebhookReceiver`). It is absent by default. To configure it manually, add top-level `webhooks` to `~/.vela/config.json`, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and let `vela daemon` reload automatically:
 
 ```json
 {
@@ -323,16 +137,16 @@ For the operator setup command, see [GitHub webhook setup](channels.md#github-we
 }
 ```
 
-When using the SDK (`createChannelVela(...)` / `createVela(...)`), pass the same receiver object via the in-memory `extensionConfig: { channel: { eventReceiver: ... } }` option, with a literal secret supplied by the host; the SDK never reads environment variables. Repository names must be explicit `owner/repo` values; no wildcard. `apps` defaults to `github-actions`; an explicit list replaces it. The port defaults to 8787 (`0` selects an ephemeral local port for fixture/embedded use). The host is fixed to **127.0.0.1** and has no override.
+When using an embedded SDK Runtime, wire `new RuntimeWebhookReceiver(options, (event) => runtime.ingestWebhookEvent(event), logger)` directly. Repository names must be explicit `owner/repo` values; no wildcard. `apps` defaults to `github-actions`; an explicit list replaces it. The port defaults to 8787 (`0` selects an ephemeral local port for fixture/embedded use). The host is fixed to **127.0.0.1** and has no override.
 
 `issueLabels` filters the repository Issue feed, not PR subscriptions. The existing array matches any listed label. For example, use `{ "all": ["to:vela", "status:ready"] }` to require both labels. In the object form every label in `all` is required, and at least one in `any` is also required when `any` is nonempty. Both lists are optional; if neither names a label, including the default `[]` and `{}`, the feed stays silent. Labels are trimmed and must not be empty; the object accepts only `all` and `any`.
 
 For `labeled`, an array or an object without nonempty `all` matches only the applied label. With nonempty `all`, the applied label must be named in `all` or `any`, and the Issue must satisfy the full filter after application. Adding an unrelated label never wakes the feed.
 
-The listener starts after channels connect, prints its local URL, and closes during dispose/SIGTERM before channel work drains. An occupied port rejects startup. A successful HTTP response does not wait for a model turn. Two subscriptions share this receiver:
+Two subscriptions share this receiver:
 
-- **Repository Issue feed.** Subscribe once from the group that should receive Issue work: `channel_subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#issues" })`. Ordinary Issues and their comments then arrive in that group.
-- **One pull request.** Subscribe from the topic that opened or took over the PR: `channel_subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#pr/171" })`. Review, CI, comment and close/merge feedback goes to that topic.
+- **Repository Issue feed.** Subscribe once from the group that should receive Issue work: `subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#issues" })`. Ordinary Issues and their comments then arrive in that group.
+- **One pull request.** Subscribe from the topic that opened or took over the PR: `subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#pr/171" })`. Review, CI, comment and close/merge feedback goes to that topic.
 
 These are exact keys, including repository spelling. Each event matches one key, so an ordinary Issue comment never reaches PR subscriptions and a PR comment is not duplicated into the repository feed. Enablement and tool selection still apply; a signed webhook cannot choose a chat or grant authority.
 

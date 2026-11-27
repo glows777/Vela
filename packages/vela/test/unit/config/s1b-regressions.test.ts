@@ -89,7 +89,6 @@ test('all privileged keys are stripped from project .vela/config.json', () => {
         custom: { api: 'openai-completions', models: [{ id: 'm' }] },
       },
       lark: { appId: 'user-app' },
-      local: { enabled: true, token: 'user-tok' },
       webhooks: { port: 8000 },
       eventDefaultTarget: { channel: 'lark', chatId: 'user-chat' },
     },
@@ -100,7 +99,6 @@ test('all privileged keys are stripped from project .vela/config.json', () => {
         custom: { api: 'anthropic-messages', models: [{ id: 'evil' }] },
       },
       lark: { appId: 'evil-app' },
-      local: { enabled: false, token: 'evil-tok' },
       webhooks: { port: 9999 },
       eventDefaultTarget: { channel: 'lark', chatId: 'evil-chat' },
       thinkingLevel: 'high',
@@ -111,7 +109,6 @@ test('all privileged keys are stripped from project .vela/config.json', () => {
     'location',
     'providers',
     'lark',
-    'local',
     'webhooks',
     'eventDefaultTarget',
   ])
@@ -120,13 +117,20 @@ test('all privileged keys are stripped from project .vela/config.json', () => {
   expect(loaded.settings.environments).toEqual({ dev: { image: 'user-image' } })
   expect(loaded.settings.location).toEqual({ environment: 'dev' })
   expect(loaded.settings.lark).toEqual({ appId: 'user-app' })
-  expect(loaded.settings.local).toEqual({ enabled: true, token: 'user-tok' })
   expect(loaded.settings.webhooks).toEqual({ port: 8000 })
   expect(loaded.settings.eventDefaultTarget).toEqual({
     channel: 'lark',
     chatId: 'user-chat',
   })
   expect(loaded.providers.custom?.models?.map((m) => m.id)).toEqual(['m'])
+
+  const legacyLocal = setupProject({
+    model: 'openai/gpt-5.5',
+    local: { enabled: true, token: 'user-tok' },
+  })
+  expect(() =>
+    loadConfig({ cwd: legacyLocal.cwd, agentDir: legacyLocal.agentDir }),
+  ).toThrow('top-level "local" channel was removed in v0.9')
 })
 
 test('Fix #1: $VAR expansion runs single-pass per layer and keeps environments literal', () => {
@@ -410,7 +414,6 @@ test('R1 #1: home directory retains owner privileged keys and custom providers',
       environments: { dev: { image: 'ubuntu:24.04' } },
       location: { environment: 'dev' },
       lark: { appId: 'owner-app' },
-      local: { enabled: true },
       webhooks: { port: 8787 },
       eventDefaultTarget: { channel: 'lark', chatId: 'oc_1' },
     }),
@@ -421,7 +424,6 @@ test('R1 #1: home directory retains owner privileged keys and custom providers',
   })
   expect(loaded.settings.location).toEqual({ environment: 'dev' })
   expect(loaded.settings.lark).toEqual({ appId: 'owner-app' })
-  expect(loaded.settings.local).toEqual({ enabled: true })
   expect(loaded.settings.webhooks).toEqual({ port: 8787 })
   expect(loaded.settings.eventDefaultTarget).toEqual({
     channel: 'lark',

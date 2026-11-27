@@ -349,8 +349,10 @@ function createSocketRuntimeClient(
         rpc('sessions.export', { sessionId, format, outputPath, baseCwd }),
     },
     prompt: (sessionId, input) => rpc('runtime.prompt', { sessionId, input }),
-    steer: (sessionId, text) => rpc('runtime.steer', { sessionId, text }),
-    stop: (sessionId, reason) => rpc('runtime.stop', { sessionId, reason }),
+    steer: (sessionId, text, images) =>
+      rpc('runtime.steer', { sessionId, text, images }),
+    stop: (sessionId, reason, options) =>
+      rpc('runtime.stop', { sessionId, reason, options }),
     waitForIdle: (sessionId) =>
       rpc('runtime.waitForIdle', sessionId ? { sessionId } : undefined),
     jobs: {
@@ -370,7 +372,7 @@ function createSocketRuntimeClient(
       createRoutine: (input) => rpc('timers.createRoutine', input),
       createFollowup: (input) => rpc('timers.createFollowup', input),
       update: (id, patch) => rpc('timers.update', { id, patch }),
-      delete: (id) => rpc('timers.delete', { id }),
+      delete: (id, filter) => rpc('timers.delete', { id, filter }),
     },
     subscriptions: {
       list: (filter) => rpc('subscriptions.list', filter),

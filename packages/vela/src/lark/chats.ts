@@ -2,17 +2,6 @@ import { z } from 'zod'
 import { THINKING_LEVELS } from '../driver/diagnostics.ts'
 import type { ThinkingLevel } from '../driver/index.ts'
 
-const LEGACY_GROUP_CONTROL_TOOLS = [
-  'channel_start_topic',
-  'channel_forward_to_topic',
-  'channel_list_topics',
-  'channel_read_topic',
-  'channel_skip_reply',
-  'channel_routines',
-  'channel_message_topic',
-  'channel_message_group',
-] as const
-
 const chatSchema = z
   .object({
     id: z.string().trim().min(1),
@@ -67,34 +56,6 @@ export function parseChats(value: unknown): LarkChat[] {
     throw new Error('Duplicate Lark chat id')
   for (const chat of chats) validateThinkingLevel(chat)
   return chats as LarkChat[]
-}
-
-export function groupSessionOptions(
-  chat: LarkChat,
-  cwd: string,
-  topic: boolean,
-) {
-  const environment = chat.environment ?? 'local'
-  return {
-    cwd,
-    location: {
-      environment,
-      cwd: environment === 'local' ? cwd : '/workspace',
-    },
-    model: (topic ? chat.topicModel : undefined) ?? chat.model,
-    thinkingLevel:
-      (topic ? chat.topicThinkingLevel : undefined) ?? chat.thinkingLevel,
-    tools:
-      chat.tools === undefined
-        ? undefined
-        : [
-            ...new Set([
-              ...chat.tools,
-              ...LEGACY_GROUP_CONTROL_TOOLS,
-              ...(topic ? ['channel_wait_for_input'] : []),
-            ]),
-          ],
-  }
 }
 
 export function larkChatBindingConfig(chat: LarkChat): Record<string, unknown> {

@@ -301,25 +301,6 @@ test('a project provider registration is diagnosed rather than added to host ide
   }
 })
 
-test('a project channel registration is diagnosed without creating a host channel', async () => {
-  const t = setup()
-  try {
-    writeFileSync(
-      join(t.a, '.vela/projectProbe.ts'),
-      `export default function projectProbe(api) { api.registerChannel({name:'projectChannel',description:'Must not become a host listener',onMessage(){},send:async()=>{}}) }`,
-    )
-    t.model.push(fauxText('done'))
-    await t.vela.session('a').prompt('hello')
-    expect(t.reports.join('\n')).toMatch(/channel.*host|host.*channel/i)
-    expect(t.vela.channels()).toEqual([])
-    await t.vela.startChannels()
-    expect(t.vela.runningChannels()).toEqual([])
-  } finally {
-    await t.vela.dispose()
-    t.dir.cleanup()
-  }
-})
-
 test('a failed async project factory disposes its resources once and does not break B', async () => {
   const t = setup()
   const ledger = join(t.dir.path, 'ledger.jsonl')

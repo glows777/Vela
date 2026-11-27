@@ -204,7 +204,7 @@ function resolveChannelTargetInDb(params: {
   const topicSession = sessions.create({
     projectId: root.projectId,
     kind: 'topic',
-    name: msg.text.trim().slice(0, 60) || 'Topic',
+    name: (msg.rawText ?? msg.text).trim().slice(0, 60) || 'Topic',
   })
   const topicBinding = bindings.upsert({
     channel: msg.channel,

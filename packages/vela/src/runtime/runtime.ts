@@ -55,6 +55,7 @@ import {
 import type { RuntimeEvent, StreamDeltaEvent } from './events.ts'
 import { enqueueInboxEvent, type InboxEventRecord } from './inbox.ts'
 import { OutboxDispatcher } from './outbox.ts'
+import { isSessionInChannels, scheduleRuntimeWakeTimer } from './recovery.ts'
 import { type ControlShortcut, executeControlShortcut } from './shortcuts.ts'
 import { SubscriptionManager } from './subscriptions.ts'
 import { TimerScheduler } from './timers.ts'
@@ -62,7 +63,7 @@ import { executeRuntimeClaimedTurn } from './turn-runner.ts'
 import {
   canWakeSessionInDb,
   claimNextTurnInDb,
-  computeNextWakeDelayMs,
+  disposeRuntimeResources,
   recoverRuntimeState,
   stopSessionInRuntime,
 } from './worker.ts'
@@ -72,6 +73,7 @@ export interface VelaRuntimeEngineOptions {
   agentDir: string
   environments?: EnvironmentRegistry
   drivers?: AgentDriver[]
+  ignoredChannels?: readonly string[]
   logger?: VelaLogger
 }
 
@@ -104,6 +106,7 @@ export class VelaRuntimeEngine {
   readonly backgroundJobs: BackgroundJobManager
 
   private readonly logger: VelaLogger
+  private readonly ignoredChannels: ReadonlySet<string>
   private readonly drivers = new Map<string, AgentDriver>()
   private readonly channels = new Map<string, ChannelAdapter>()
   private readonly activeWorkers = new Map<string, ActiveWorker>()
@@ -118,6 +121,7 @@ export class VelaRuntimeEngine {
     this.db = options.db
     this.agentDir = resolve(options.agentDir)
     this.logger = options.logger ?? silentLogger
+    this.ignoredChannels = new Set(options.ignoredChannels ?? [])
     if (options.db.path === ':memory:') {
       this.transientBlobDir = mkdtempSync(join(tmpdir(), 'vela-blobs-'))
       this.blobs = new BlobStore(this.db, join(this.transientBlobDir, 'blobs'))
@@ -412,6 +416,7 @@ export class VelaRuntimeEngine {
   async stopSession(
     sessionId: string,
     reason = 'Stopped by user',
+    options?: { expectedRunId?: string },
   ): Promise<boolean> {
     this.enterStopFence(sessionId)
     try {
@@ -426,6 +431,7 @@ export class VelaRuntimeEngine {
         isDisposed: () => this.disposed,
         sessionId,
         reason,
+        expectedRunId: options?.expectedRunId,
       })
     } finally {
       this.leaveStopFence(sessionId)
@@ -448,7 +454,13 @@ export class VelaRuntimeEngine {
         )
       }
       this.timers.cancelFollowupsForSession(sessionId)
-      return this.sessions.reset(sessionId)
+      const resetSession = this.sessions.reset(sessionId)
+      this.eventBus.append({
+        sessionId,
+        projectId: resetSession.projectId,
+        payload: { type: 'session_reset' },
+      })
+      return resetSession
     } finally {
       this.leaveStopFence(sessionId)
     }
@@ -521,6 +533,7 @@ export class VelaRuntimeEngine {
       timers: this.timers,
       activeOwners: this.activeOwners,
       nowMs,
+      ignoredChannels: this.ignoredChannels,
     })
     for (const sessionId of sessionsToWake) {
       this.scheduleSession(sessionId)
@@ -539,7 +552,9 @@ export class VelaRuntimeEngine {
     if (
       this.disposed ||
       this.activeWorkers.has(sessionId) ||
-      this.stoppingSessions.has(sessionId)
+      this.stoppingSessions.has(sessionId) ||
+      (this.ignoredChannels.size > 0 &&
+        isSessionInChannels(this.db, sessionId, this.ignoredChannels))
     ) {
       return
     }
@@ -576,6 +591,12 @@ export class VelaRuntimeEngine {
     sessionId: string,
     excludeInboxIds?: ReadonlySet<string>,
   ): boolean {
+    if (
+      this.ignoredChannels.size > 0 &&
+      isSessionInChannels(this.db, sessionId, this.ignoredChannels)
+    ) {
+      return false
+    }
     return canWakeSessionInDb(
       this.db,
       this.sessions,
@@ -590,31 +611,24 @@ export class VelaRuntimeEngine {
       this.nextWakeTimer = undefined
     }
     if (this.disposed || !this.db.open) return
-    const registeredChannels = [...this.channels.keys()].filter((name) =>
-      this.isChannelEnabled(name),
+    const registeredChannels = [...this.channels.keys()].filter(
+      (name) => this.isChannelEnabled(name) && !this.ignoredChannels.has(name),
     )
-    const delayMs = computeNextWakeDelayMs(
-      this.db,
-      this.outbox.nextPendingWakeAt(registeredChannels) ?? undefined,
-    )
-    if (delayMs === undefined) return
-    this.nextWakeTimer = setTimeout(() => {
-      this.nextWakeTimer = undefined
-      if (this.disposed || !this.db.open) return
-      const now = Date.now()
-      this.timers.tick(now)
-      if (this.channels.size > 0) {
-        void this.outbox
-          .flushOnce(now)
-          .catch((error) =>
-            this.logger.error(`[runtime] outbox flush failed: ${error}`),
-          )
-          .finally(() => this.syncWakeTimer())
-      } else {
-        this.syncWakeTimer()
-      }
-    }, delayMs)
-    this.nextWakeTimer.unref?.()
+    this.nextWakeTimer = scheduleRuntimeWakeTimer({
+      db: this.db,
+      timers: this.timers,
+      outbox: this.outbox,
+      registeredChannels,
+      ignoredChannels: this.ignoredChannels,
+      hasChannels: this.channels.size > 0,
+      onFire: () => {
+        this.nextWakeTimer = undefined
+        return !this.disposed && this.db.open
+      },
+      onSync: () => this.syncWakeTimer(),
+      onFlushError: (error) =>
+        this.logger.error(`[runtime] outbox flush failed: ${error}`),
+    })
   }
 
   async waitForIdle(sessionId?: string): Promise<void> {
@@ -656,29 +670,14 @@ export class VelaRuntimeEngine {
       )
     }
     try {
-      await Promise.allSettled([
-        ...channels.map(([name, adapter]) =>
-          adapter
-            .stop()
-            .catch((error) =>
-              this.logger.error(
-                `[runtime] failed stopping channel ${name}: ${error}`,
-              ),
-            ),
-        ),
-        ...[...this.activeWorkers.values()].map((w) => w.promise),
-      ])
-      await this.outbox
-        .drain()
-        .catch((error) =>
-          this.logger.error(`[runtime] outbox drain failed: ${error}`),
-        )
-      for (const driver of this.drivers.values()) {
-        await Promise.resolve(driver.dispose?.()).catch((error) =>
-          this.logger.error(`[runtime] driver dispose failed: ${error}`),
-        )
-      }
-      await this.environments.dispose()
+      await disposeRuntimeResources({
+        channels,
+        workerPromises: [...this.activeWorkers.values()].map((w) => w.promise),
+        drainOutbox: () => this.outbox.drain(),
+        drivers: this.drivers.values(),
+        disposeEnvironments: () => this.environments.dispose(),
+        logError: (msg) => this.logger.error(msg),
+      })
     } finally {
       if (this.transientBlobDir) {
         rmSync(this.transientBlobDir, { recursive: true, force: true })

@@ -20,6 +20,47 @@ import {
 import type { OutboxDispatcher } from './outbox.ts'
 import type { TimerScheduler } from './timers.ts'
 
+function isTimerInChannels(
+  db: VelaDatabase,
+  timer: { channel: string | null; sessionId: string | null },
+  channels: ReadonlySet<string>,
+): boolean {
+  if (channels.size === 0) return false
+  if (timer.channel && channels.has(timer.channel)) return true
+  if (timer.sessionId && isSessionInChannels(db, timer.sessionId, channels)) {
+    return true
+  }
+  return false
+}
+
+export function isSessionInChannels(
+  db: VelaDatabase,
+  sessionId: string,
+  channels: ReadonlySet<string>,
+): boolean {
+  if (channels.size === 0 || !db.open) return false
+  const list = [...channels]
+  const placeholders = list.map(() => '?').join(', ')
+  const direct = db.get<{ ok: number }>(
+    `SELECT 1 AS ok FROM channel_bindings
+     WHERE session_id = ? AND channel IN (${placeholders})
+     LIMIT 1`,
+    sessionId,
+    ...list,
+  )
+  if (direct) return true
+  const projectBound = db.get<{ ok: number }>(
+    `SELECT 1 AS ok
+     FROM sessions s
+     JOIN channel_bindings cb ON cb.project_id = s.project_id AND cb.thread_id IS NULL
+     WHERE s.id = ? AND cb.channel IN (${placeholders})
+     LIMIT 1`,
+    sessionId,
+    ...list,
+  )
+  return Boolean(projectBound)
+}
+
 /** Single-DB startup crash recovery across `background_jobs`, `outbox`, `runs`, `approvals`, `inbox_events`, and `timers`. */
 export function recoverRuntimeState(params: {
   db: VelaDatabase
@@ -28,16 +69,28 @@ export function recoverRuntimeState(params: {
   timers: TimerScheduler
   activeOwners: ReadonlySet<string>
   nowMs: number
+  ignoredChannels?: ReadonlySet<string>
 }): {
   interruptedJobs: string[]
   recoveredRuns: string[]
   requeuedInboxRuns: string[]
   sessionsToWake: Set<string>
 } {
-  const { db, backgroundJobs, outbox, timers, activeOwners, nowMs } = params
+  const {
+    db,
+    backgroundJobs,
+    outbox,
+    timers,
+    activeOwners,
+    nowMs,
+    ignoredChannels,
+  } = params
+  const hasIgnored = Boolean(ignoredChannels && ignoredChannels.size > 0)
+  const skipSession = (sessionId: string) =>
+    hasIgnored && isSessionInChannels(db, sessionId, ignoredChannels!)
   const nowIso = new Date(nowMs).toISOString()
-  const interruptedJobs = backgroundJobs.recoverInterrupted(nowIso)
-  outbox.recoverStaleSending()
+  const interruptedJobs = backgroundJobs.recoverInterrupted(nowIso, skipSession)
+  outbox.recoverStaleSending(ignoredChannels)
 
   const recoveredRuns: string[] = []
   const requeuedInboxRuns: string[] = []
@@ -54,6 +107,7 @@ export function recoverRuntimeState(params: {
        ORDER BY started_at ASC`,
     )
     for (const run of staleRuns) {
+      if (skipSession(run.session_id)) continue
       if (isOwnerLive(run.owner_token, activeOwners)) continue
       const runInboxStats = db.get<{ total: number; non_passive: number }>(
         `SELECT count(*) AS total,
@@ -162,6 +216,7 @@ export function recoverRuntimeState(params: {
       `SELECT id, session_id, project_id FROM runs WHERE status = 'waiting_human' ORDER BY started_at ASC`,
     )
     for (const run of waitingRuns) {
+      if (skipSession(run.session_id)) continue
       const pendingApproval = db.get<{ id: string }>(
         `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' LIMIT 1`,
         run.id,
@@ -205,6 +260,7 @@ export function recoverRuntimeState(params: {
       `SELECT id, session_id, run_id, passive FROM inbox_events WHERE status = 'processing'`,
     )
     for (const row of orphanedProcessing) {
+      if (row.session_id && skipSession(row.session_id)) continue
       const liveRun = row.run_id
         ? db.get<{ status: string; owner_token: string | null }>(
             'SELECT status, owner_token FROM runs WHERE id = ?',
@@ -264,21 +320,49 @@ export function recoverRuntimeState(params: {
     )
   })
 
-  timers.tick(nowMs)
+  timers.tick(nowMs, (timer) =>
+    Boolean(
+      hasIgnored &&
+        ((timer.channel && ignoredChannels!.has(timer.channel)) ||
+          (timer.sessionId && skipSession(timer.sessionId))),
+    ),
+  )
   for (const sessionId of listSessionsWithPendingWake(db)) {
-    sessionsToWake.add(sessionId)
+    if (!skipSession(sessionId)) {
+      sessionsToWake.add(sessionId)
+    }
   }
   return { interruptedJobs, recoveredRuns, requeuedInboxRuns, sessionsToWake }
 }
 
-export function computeNextWakeDelayMs(
+function computeNextWakeDelayMs(
   db: VelaDatabase,
   outboxDue: string | undefined,
+  ignoredChannels?: ReadonlySet<string>,
 ): number | undefined {
   if (!db.open) return undefined
-  const timerDue = db.get<{ next_at: string | null }>(
-    `SELECT min(next_fire_at) AS next_at FROM timers WHERE enabled = 1 AND next_fire_at IS NOT NULL`,
-  )?.next_at
+  const timerRows = db.all<{
+    channel: string | null
+    session_id: string | null
+    next_fire_at: string
+  }>(
+    `SELECT channel, session_id, next_fire_at FROM timers
+     WHERE enabled = 1 AND next_fire_at IS NOT NULL
+     ORDER BY next_fire_at ASC`,
+  )
+  let timerDue: string | undefined
+  for (const row of timerRows) {
+    if (
+      ignoredChannels?.size &&
+      ((row.channel && ignoredChannels.has(row.channel)) ||
+        (row.session_id &&
+          isSessionInChannels(db, row.session_id, ignoredChannels)))
+    ) {
+      continue
+    }
+    timerDue = row.next_fire_at
+    break
+  }
   let earliestMs = Number.POSITIVE_INFINITY
   for (const candidate of [timerDue, outboxDue]) {
     if (!candidate) continue
@@ -349,16 +433,28 @@ async function stopExternalSessionRuns(params: {
   sessionId: string
   reason: string
   isStopped: () => boolean
+  expectedRunId?: string
 }): Promise<{ cancelled: boolean; stillOwnedRemotely: boolean }> {
-  const { db, activeOwners, sessionId, reason, isStopped } = params
-  const otherLiveRuns = db.all<{
-    id: string
-    owner_token: string | null
-  }>(
-    `SELECT id, owner_token FROM runs
-     WHERE session_id = ? AND status IN ('queued', 'running')`,
-    sessionId,
-  )
+  const { db, activeOwners, sessionId, reason, isStopped, expectedRunId } =
+    params
+  const otherLiveRuns = expectedRunId
+    ? db.all<{
+        id: string
+        owner_token: string | null
+      }>(
+        `SELECT id, owner_token FROM runs
+         WHERE session_id = ? AND id = ? AND status IN ('queued', 'running')`,
+        sessionId,
+        expectedRunId,
+      )
+    : db.all<{
+        id: string
+        owner_token: string | null
+      }>(
+        `SELECT id, owner_token FROM runs
+         WHERE session_id = ? AND status IN ('queued', 'running')`,
+        sessionId,
+      )
   let cancelled = false
   const externalRunIds: string[] = []
   for (const run of otherLiveRuns) {
@@ -413,18 +509,30 @@ export function stopSessionRunsInDb(
   sessionId: string,
   reason: string,
   activeOwners: ReadonlySet<string> = new Set(),
+  expectedRunId?: string,
 ): { cancelled: boolean; liveOtherRuns: boolean } {
   const now = new Date().toISOString()
   return db.transaction(() => {
-    const rows = db.all<{
-      id: string
-      status: string
-      owner_token: string | null
-    }>(
-      `SELECT id, status, owner_token FROM runs
-       WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
-      sessionId,
-    )
+    const rows = expectedRunId
+      ? db.all<{
+          id: string
+          status: string
+          owner_token: string | null
+        }>(
+          `SELECT id, status, owner_token FROM runs
+           WHERE session_id = ? AND id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+          sessionId,
+          expectedRunId,
+        )
+      : db.all<{
+          id: string
+          status: string
+          owner_token: string | null
+        }>(
+          `SELECT id, status, owner_token FROM runs
+           WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_human')`,
+          sessionId,
+        )
     if (
       rows.some(
         (r) =>
@@ -434,12 +542,14 @@ export function stopSessionRunsInDb(
       return { cancelled: false, liveOtherRuns: true }
     }
     if (rows.length === 0) {
-      db.run(
-        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
-         WHERE id = ? AND state IN ('running', 'waiting_human')`,
-        now,
-        sessionId,
-      )
+      if (!expectedRunId) {
+        db.run(
+          `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+           WHERE id = ? AND state IN ('running', 'waiting_human')`,
+          now,
+          sessionId,
+        )
+      }
       return { cancelled: false, liveOtherRuns: false }
     }
     const placeholders = rows.map(() => '?').join(', ')
@@ -468,12 +578,21 @@ export function stopSessionRunsInDb(
         `run_input_meta:${r.id}`,
       )
     }
-    db.run(
-      `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
-       WHERE id = ? AND state IN ('running', 'waiting_human')`,
-      now,
-      sessionId,
-    )
+    const otherLiveRun = expectedRunId
+      ? db.get<{ id: string }>(
+          `SELECT id FROM runs WHERE session_id = ? AND id != ? AND status IN ('queued', 'running', 'waiting_human') LIMIT 1`,
+          sessionId,
+          expectedRunId,
+        )
+      : undefined
+    if (!otherLiveRun) {
+      db.run(
+        `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ?
+         WHERE id = ? AND state IN ('running', 'waiting_human')`,
+        now,
+        sessionId,
+      )
+    }
     const latestStoppedRun = rows.at(-1)
     if (session && latestStoppedRun) {
       recordChildStatusNoteForHubInTx(
@@ -524,12 +643,13 @@ export async function stopSessionInRuntime(params: {
   backgroundJobs: BackgroundJobManager
   activeWorkers: ReadonlyMap<
     string,
-    { controller: AbortController; promise: Promise<void> }
+    { runId: string; controller: AbortController; promise: Promise<void> }
   >
   activeOwners: ReadonlySet<string>
   isDisposed: () => boolean
   sessionId: string
   reason: string
+  expectedRunId?: string
 }): Promise<boolean> {
   const {
     db,
@@ -542,13 +662,45 @@ export async function stopSessionInRuntime(params: {
     isDisposed,
     sessionId,
     reason,
+    expectedRunId,
   } = params
   let cancelledRun = false
   let cancelledApprovals = 0
   let stoppedJobs = 0
   for (let pass = 0; pass < 2; pass++) {
     const active = activeWorkers.get(sessionId)
-    if (active) {
+    if (expectedRunId !== undefined) {
+      const hasTargetedDbRun = Boolean(
+        db.get<{ id: string }>(
+          `SELECT id FROM runs
+           WHERE session_id = ? AND id = ? AND status IN ('queued', 'running', 'waiting_human')
+           LIMIT 1`,
+          sessionId,
+          expectedRunId,
+        ),
+      )
+      const hasTargetedApproval = Boolean(
+        db.get<{ id: string }>(
+          `SELECT id FROM approvals
+           WHERE session_id = ? AND run_id = ? AND status = 'pending'
+           LIMIT 1`,
+          sessionId,
+          expectedRunId,
+        ),
+      )
+      const activeMatches = active?.runId === expectedRunId
+      if (!activeMatches && !hasTargetedDbRun && !hasTargetedApproval) {
+        return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
+      }
+      if (active && activeMatches) {
+        cancelledRun = true
+        active.controller.abort(new DOMException(reason, 'AbortError'))
+        const session = sessions.get(sessionId)
+        const driver = session ? drivers.get(session.driver) : undefined
+        await driver?.abort?.(sessionId)
+        await active.promise.catch(() => {})
+      }
+    } else if (active) {
       cancelledRun = true
       active.controller.abort(new DOMException(reason, 'AbortError'))
       const session = sessions.get(sessionId)
@@ -562,6 +714,7 @@ export async function stopSessionInRuntime(params: {
       sessionId,
       reason,
       isStopped: isDisposed,
+      expectedRunId,
     })
     if (external.stillOwnedRemotely) return false
     if (external.cancelled) cancelledRun = true
@@ -570,19 +723,65 @@ export async function stopSessionInRuntime(params: {
       eventBus,
       sessionId,
       reason,
+      expectedRunId,
     )
-    stoppedJobs += backgroundJobs.stopSessionJobs(sessionId)
+    if (expectedRunId === undefined) {
+      stoppedJobs += backgroundJobs.stopSessionJobs(sessionId)
+    }
     const dbStopped = stopSessionRunsInDb(
       db,
       sessions.get(sessionId),
       sessionId,
       reason,
       activeOwners,
+      expectedRunId,
     )
     if (dbStopped.cancelled) cancelledRun = true
+    if (
+      expectedRunId !== undefined &&
+      (cancelledRun || cancelledApprovals > 0)
+    ) {
+      stoppedJobs += backgroundJobs.stopSessionJobs(sessionId, expectedRunId)
+    }
     if (!dbStopped.liveOtherRuns) {
       return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
     }
   }
   return false
+}
+
+export function scheduleRuntimeWakeTimer(input: {
+  db: VelaDatabase
+  timers: TimerScheduler
+  outbox: OutboxDispatcher
+  registeredChannels: readonly string[]
+  ignoredChannels: ReadonlySet<string>
+  hasChannels: boolean
+  onFire: () => boolean
+  onSync: () => void
+  onFlushError: (error: unknown) => void
+}): ReturnType<typeof setTimeout> | undefined {
+  const delayMs = computeNextWakeDelayMs(
+    input.db,
+    input.outbox.nextPendingWakeAt(input.registeredChannels) ?? undefined,
+    input.ignoredChannels,
+  )
+  if (delayMs === undefined) return undefined
+  const timer = setTimeout(() => {
+    if (!input.onFire()) return
+    const now = Date.now()
+    input.timers.tick(now, (t) =>
+      isTimerInChannels(input.db, t, input.ignoredChannels),
+    )
+    if (input.hasChannels) {
+      void input.outbox
+        .flushOnce(now)
+        .catch(input.onFlushError)
+        .finally(input.onSync)
+    } else {
+      input.onSync()
+    }
+  }, delayMs)
+  timer.unref?.()
+  return timer
 }

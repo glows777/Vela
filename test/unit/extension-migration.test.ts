@@ -1,16 +1,6 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
-import type { createVela } from '@glows777/vela'
-import type { LoadedChannelExtension } from '../../packages/vela/src/legacy-channels/index.ts'
 import { stampRelease, unreleasedEntries } from '../../scripts/changelog.ts'
-
-type Extensions = ReturnType<ReturnType<typeof createVela>['extensions']>
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never
-
-const publishedMigrationMatchesExtensions: Same<
-  Extensions,
-  LoadedChannelExtension[]
-> = true
 
 function migrationImports(bullet: string): { name: string; from: string }[] {
   return [
@@ -30,7 +20,7 @@ function removedAliasBullet(changelog: string): string {
   return bullet
 }
 
-test('removed umbrella LoadedExtension migration matches extensions()', async () => {
+test('CHANGELOG release stamping preserves breaking migration bullets', async () => {
   const changelog = await Bun.file(
     join(import.meta.dir, '../../CHANGELOG.md'),
   ).text()
@@ -44,7 +34,5 @@ test('removed umbrella LoadedExtension migration matches extensions()', async ()
         from: '@glows777/vela-channels',
       },
     ])
-    expect(bullet).toContain('returns `LoadedChannelExtension[]`')
   }
-  expect(publishedMigrationMatchesExtensions).toBe(true)
 })

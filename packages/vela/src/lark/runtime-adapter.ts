@@ -177,6 +177,7 @@ export class LarkChannelAdapter implements ChannelAdapter {
     this.unsubConnection?.()
     this.unsubConnection = this.connection.subscribe((state) => {
       this.connectionState = { ...state }
+      this.ctx?.reportStatus?.({ ...state })
     })
 
     const { active, report, transport } = this.connection.begin({

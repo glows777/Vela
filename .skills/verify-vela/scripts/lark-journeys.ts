@@ -1,20 +1,15 @@
-// Offline drive of the Lark channel journeys: topic handoff, untagged topic replies, the group
-// workspace, passive top-level chatter (skip and a text answer), the topic overview and routines
-// across a restart.
-// The extension, gateway, files and timers are real; only the model (a router) and the Lark
-// transport are fake. Run it from a verify-vela run (up to about 2 minutes: the last step waits
-// past a real due time):  $H exec $RUN lark bun $REPO/.skills/verify-vela/scripts/lark-journeys.ts
-// It prints one line per check, marks failed checks FAIL and exits 1 if any failed; adapt the
-// router and steps to the change being verified.
-import { existsSync, readFileSync } from 'node:fs'
+// Offline drive of the Lark channel journeys: topic handoff, untagged topic replies, group
+// workspace, passive chatter (skip and reply), topic overview, and timers across a restart.
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 import {
   createFauxModel,
   type FauxRequest,
   type FauxResponse,
 } from '@glows777/vela/testing'
-import { lark } from '../../../packages/vela/src/lark/index.ts'
+import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
+import { silentLogger } from '../../../packages/vela/src/shared/logger.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'
 
@@ -23,7 +18,6 @@ prepareWorkspace()
 type Fake = ReturnType<typeof fakeLark>
 const zone = 'Asia/Shanghai'
 const failed: string[] = []
-/** Print one check; a false `ok` marks it FAIL and makes the script exit 1. */
 function check(label: string, value: unknown, ok = true) {
   const shown = typeof value === 'string' ? value : JSON.stringify(value)
   console.log(`${ok ? '' : 'FAIL '}${label}: ${shown}`)
@@ -37,7 +31,6 @@ async function until(what: string, ok: () => boolean, ms = 5000) {
     await sleep(10)
   }
 }
-/** Deployment-local YYYY-MM-DDTHH:mm, the format channel_routines expects for a one-off. */
 function local(ms: number): string {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-CA', {
@@ -55,77 +48,83 @@ function local(ms: number): string {
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`
 }
 
-// The one-off routine's due time, set before step 5 on a minute boundary at least 30 s ahead,
-// so it is still in the future when created and Vela is stopped before it fires.
 let dueMs = 0
 
-// Answer by what each request is, so concurrent channel and topic sessions never race a queue.
 function router(req: FauxRequest): FauxResponse {
-  const last = req.toolResults.at(-1)
+  const last =
+    req.prompt.at(-1)?.role === 'tool' ? req.toolResults.at(-1) : undefined
+  if (last?.toolName === 'skip_reply') return { text: '' }
   if (last)
     return { text: `after ${last.toolName}: ${last.output.slice(0, 80)}` }
   const text = req.lastUserText
   const call = (name: string, input: unknown): FauxResponse => ({
     toolCalls: [{ name, input }],
   })
-  if (/investigate/i.test(text) && req.tools.includes('channel_start_topic'))
-    return call('channel_start_topic', {
+  if (/list topics/i.test(text)) return call('session_list', {})
+  if (/remind/i.test(text))
+    return call('timers', {
+      action: 'create',
+      message: 'Check the PR',
+      schedule: { at: local(dueMs) },
+    })
+  if (/lunch/i.test(text) && req.tools.includes('skip_reply'))
+    return call('skip_reply', {})
+  if (/investigate/i.test(text) && req.tools.includes('session_start'))
+    return call('session_start', {
       title: 'Investigate the flaky test',
       brief: 'Investigate the flaky test and write down the likely cause.',
     })
   if (text.includes('Investigate the flaky test'))
     return call('write', { path: 'notes.md', content: 'cause: timing' })
-  if (/remind/i.test(text))
-    return call('channel_routines', {
-      action: 'create',
-      message: 'Check the PR',
-      schedule: { at: local(dueMs) },
-    })
-  if (text.includes('Scheduled wake-up'))
+  if (text.includes('[Scheduled routine]'))
     return { text: 'Reminder: check the PR' }
-  if (/list topics/i.test(text)) return call('channel_list_topics', {})
-  if (/lunch/i.test(text) && req.tools.includes('channel_skip_reply'))
-    return call('channel_skip_reply', {})
   return { text: `ok: ${text.slice(-40)}` }
 }
 
 const model = createFauxModel({
   responses: Array.from({ length: 200 }, () => router),
 })
+const agentDir = join(process.cwd(), '.vela-data-lark')
 const start = async (fake: Fake) => {
-  const vela = createVela({
-    dataDir: '.vela-data',
-    model,
-    extensionConfig: { lark: { timezone: zone } },
-    extensions: [
-      lark({
-        owners: ['ou_alice'],
-        chats: ['oc_group'],
-        transport: fake.transport,
-      }),
-    ],
+  const runtime = createRuntime({
+    agentDir,
+    defaultModel: model,
+    mcp: false,
   })
-  await vela.startChannels()
-  return vela
+  const host = new DaemonLarkHost(runtime, {
+    agentDir,
+    hostEnv: {},
+    logger: silentLogger,
+    transport: fake.transport,
+  })
+  await runtime.ready()
+  await host.sync(
+    {
+      lark: {
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: [{ id: 'oc_group', readUntagged: true }],
+        timezone: zone,
+      },
+    },
+    true,
+  )
+  return { runtime, host }
 }
 const sent = (fake: Fake, part: string) =>
-  fake.sent.find((message) => message.text.includes(part))?.text
-/** The `<emoji>` / `<emoji>(removed)` marks of one message's reactions so far. */
+  fake.sent.find((message) => message.text.includes(part))?.text ??
+  fake.topics.find((topic) => topic.title.includes(part))?.title
+
+let fake = fakeLark()
+let { runtime, host } = await start(fake)
 const marks = (messageId: string) =>
   fake.reactions
     .filter((reaction) => reaction.messageId === messageId)
     .map(
       (reaction) => `${reaction.emoji}${reaction.removed ? '(removed)' : ''}`,
     )
-/**
- * Wait for the outcome mark, which a run adds after the answer it marks is sent: the send alone is
- * not the finish, so reading reactions right after it races the transport on a slow machine.
- */
 const untilDone = (what: string, messageId: string) =>
   until(what, () => marks(messageId).includes('DONE'))
-
-let fake = fakeLark()
-let vela = await start(fake)
 
 // 1. Top-level @ hands the task to a topic
 const root = larkEvent({
@@ -137,14 +136,14 @@ fake.deliver(root)
 await until('topic result', () => !!sent(fake, 'after write'))
 await untilDone('topic DONE', rootId)
 const opened = fake.topics.map((t) => t.title)
-check('topics opened', opened, opened.length === 1)
+check('topics opened', opened, opened.includes('Investigate the flaky test'))
 check(
   'topic opener is the title only',
   opened[0],
   opened[0] === 'Investigate the flaky test',
 )
 const topicBrief = model.calls.find((entry) =>
-  entry.system.includes('This topic contains a conversation about one task.'),
+  entry.system.includes('This session works on one task inside a project.'),
 )?.lastUserText
 check(
   'topic session brief',
@@ -153,10 +152,10 @@ check(
 )
 const reactions = marks(rootId)
 check('reactions', reactions, reactions.at(-1) === 'DONE')
-check('cards, patches', [fake.cards.length, fake.patches.length])
 check('topic reply', sent(fake, 'after write'))
 const workspaceFile = join(
-  '.vela-data/channels/lark-oc_group/workspace/notes.md',
+  agentDir,
+  'channels/lark/oc_group/workspace/notes.md',
 )
 check(
   'file in group workspace',
@@ -165,7 +164,8 @@ check(
 )
 
 // 2. Another member replies in the topic without @
-let before = fake.sent.length
+const beforeTopics = fake.topics.length
+const beforeSent = fake.sent.length
 fake.deliver(
   larkEvent(
     {
@@ -176,35 +176,41 @@ fake.deliver(
     'ou_bob',
   ),
 )
-await until('untagged topic reply', () => fake.sent.length > before)
-check('untagged topic reply', fake.sent.at(-1)?.text)
+await until(
+  'untagged topic reply',
+  () => fake.topics.length > beforeTopics || fake.sent.length > beforeSent,
+)
+check(
+  'untagged topic reply',
+  fake.sent.length > beforeSent
+    ? fake.sent.at(-1)?.text
+    : fake.topics.at(-1)?.title,
+)
 
 // 3. Untagged top-level chatter stays silent, and a later text answer is marked
-before = fake.sent.length
+let sentBefore = fake.sent.length
 const chatter = larkEvent(
   { mentions: [], content: JSON.stringify({ text: 'lunch at 12?' }) },
   'ou_bob',
 )
 fake.deliver(chatter)
 await until('chatter settled', () =>
-  marks(chatter.message.message_id).some((mark) => mark === 'OnIt(removed)'),
+  model.calls.some((c) =>
+    c.toolResults.some((r) => r.toolName === 'skip_reply'),
+  ),
 )
-const chatterMessages = fake.sent.length - before
+await sleep(100)
+const chatterMessages = fake.sent.length - sentBefore
 check('messages sent for chatter', chatterMessages, chatterMessages === 0)
 const chatterMarks = marks(chatter.message.message_id)
-check(
-  'chatter reactions',
-  chatterMarks,
-  chatterMarks.every((mark) => mark.endsWith('(removed)')) &&
-    !chatterMarks.includes('DONE'),
-)
-before = fake.sent.length
+check('chatter reactions', chatterMarks, !chatterMarks.includes('DONE'))
+sentBefore = fake.sent.length
 const question = larkEvent(
   { mentions: [], content: JSON.stringify({ text: 'how is the build?' }) },
   'ou_bob',
 )
 fake.deliver(question)
-await until('passive answer', () => fake.sent.length > before)
+await until('passive answer', () => fake.sent.length > sentBefore)
 await untilDone('passive DONE', question.message.message_id)
 const passive = marks(question.message.message_id)
 check('passive answer', fake.sent.at(-1)?.text)
@@ -219,10 +225,10 @@ check(
 fake.deliver(
   larkEvent({ content: JSON.stringify({ text: '@_user_1 list topics' }) }),
 )
-await until('topic list', () => !!sent(fake, 'after channel_list_topics'))
-check('topic list', sent(fake, 'after channel_list_topics'))
+await until('topic list', () => !!sent(fake, 'after session_list'))
+check('topic list', sent(fake, 'after session_list'))
 
-// 5. A routine in the topic, then !routines without @ (no model call)
+// 5. A routine in the topic, then !timers without @ (no model call)
 dueMs = Math.ceil((Date.now() + 30_000) / 60_000) * 60_000
 fake.deliver(
   larkEvent({
@@ -230,44 +236,49 @@ fake.deliver(
     content: JSON.stringify({ text: '@_user_1 remind me in a minute' }),
   }),
 )
-await until('routine created', () => !!sent(fake, 'after channel_routines'))
-const created = sent(fake, 'after channel_routines') ?? ''
+await until('routine created', () => !!sent(fake, 'after timers'))
+const created = sent(fake, 'after timers') ?? ''
 check('routine created', created, !/error/i.test(created))
 const calls = model.calls.length
 fake.deliver(
   larkEvent({
     ...topic,
     mentions: [],
-    content: JSON.stringify({ text: '!routines' }),
+    content: JSON.stringify({ text: '!timers' }),
   }),
 )
-await until('!routines', () => !!sent(fake, 'Routines ('))
-check('!routines', sent(fake, 'Routines ('))
+await until('!timers', () => !!sent(fake, 'Check the PR'))
+check('!timers', sent(fake, 'Check the PR'))
 const routineCalls = model.calls.length - calls
-check('model calls for !routines', routineCalls, routineCalls === 0)
+check('model calls for !timers', routineCalls, routineCalls === 0)
 
 // 6. Stop before the due time, start again after it: one late delivery
-await vela.dispose()
+await host.stop()
+await runtime.dispose()
 console.log('stopped; waiting past the due time')
-await sleep(dueMs - Date.now() + 5_000)
+await sleep(Math.max(0, dueMs - Date.now()) + 5_000)
 fake = fakeLark()
-vela = await start(fake)
+;({ runtime, host } = await start(fake))
 await until(
   'late routine',
   () => !!sent(fake, 'Reminder: check the PR'),
   10_000,
 )
 await sleep(300)
-const late = fake.sent
-  .filter((m) => m.text.includes('Reminder'))
-  .map((m) => m.text)
+const late = [
+  ...fake.sent.map((m) => m.text),
+  ...fake.topics.map((t) => t.title),
+].filter((text) => text.includes('Reminder'))
 check('late deliveries', late, late.length === 1)
-const lateNote = model.calls.some((c) => c.lastUserText.includes('late by'))
-check('late note in model input', lateNote, lateNote)
-const left = JSON.parse(
-  readFileSync('.vela-data/channels/routines.json', 'utf8'),
-).routines.length
-check('one-offs left in routines.json', left, left === 0)
-await vela.dispose()
+const lateNote = model.calls.some((c) =>
+  c.lastUserText.includes('[Scheduled routine]'),
+)
+check('routine catch-up in model input', lateNote, lateNote)
+const remaining = (await runtime.timers.list({ enabledOnly: true })).filter(
+  (t) => t.kind === 'routine',
+)
+check('one-offs left after firing', remaining.length, remaining.length === 0)
+await host.stop()
+await runtime.dispose()
 console.log(failed.length ? `FAILED: ${failed.join(', ')}` : 'DONE')
 process.exit(failed.length ? 1 : 0)

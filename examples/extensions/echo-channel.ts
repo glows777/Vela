@@ -1,38 +1,61 @@
 /**
- * registerChannel (Vela-specific): bring outside messages into Vela, one session per
- * conversation, and send the replies back.
+ * Runtime ChannelAdapter example: bring outside messages into Vela through `createRuntime()` +
+ * `registerChannel()`, routing each external conversation to a session and delivering replies back.
  * This example sends and receives in memory instead of over a real IM connection;
  * `receive()` simulates an incoming message.
  */
 import type {
-  IncomingMessage,
-  OutgoingMessage,
-  VelaExtension,
+  ChannelAdapter,
+  ChannelAdapterContext,
+  ChannelOutboundMessage,
 } from '@glows777/vela'
 
-export function echoChannel() {
-  let handler: ((msg: IncomingMessage) => void) | undefined
-  const sent: OutgoingMessage[] = []
+export function echoChannel(): {
+  adapter: ChannelAdapter
+  sent: ChannelOutboundMessage[]
+  receive: (
+    externalChatId: string,
+    senderId: string,
+    text: string,
+  ) => Promise<void>
+} {
+  let ctx: ChannelAdapterContext | undefined
+  let seq = 0
+  const sent: ChannelOutboundMessage[] = []
 
-  const extension: VelaExtension = (vela) => {
-    vela.registerChannel({
-      name: 'echo',
-      description: 'In-memory demo channel',
-      start: () => {},
-      stop: () => {},
-      send: async (message) => {
-        sent.push(message)
-      },
-      onMessage: (h) => {
-        handler = h
-      },
-    })
+  const adapter: ChannelAdapter = {
+    name: 'echo',
+    description: 'In-memory demo channel',
+    async start(nextCtx) {
+      ctx = nextCtx
+    },
+    async stop() {
+      ctx = undefined
+    },
+    async deliver(message) {
+      sent.push(message)
+      return { externalMessageId: `echo-out-${++seq}` }
+    },
   }
 
   return {
-    extension,
+    adapter,
     sent,
-    receive: (senderId: string, text: string) =>
-      handler?.({ channelId: 'demo', senderId, senderName: senderId, text }),
+    receive: async (externalChatId, senderId, text) => {
+      if (!ctx) throw new Error('echo channel is not started')
+      const id = `echo-in-${++seq}`
+      await ctx.ingest({
+        channel: 'echo',
+        dedupeKey: `echo:${id}`,
+        externalChatId,
+        kind: 'group',
+        messageId: id,
+        senderId,
+        senderName: senderId,
+        text,
+        mentioned: true,
+        timestamp: new Date().toISOString(),
+      })
+    },
   }
 }

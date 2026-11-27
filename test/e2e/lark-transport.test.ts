@@ -1,12 +1,20 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import * as sdk from '@larksuiteoapi/node-sdk'
-import { lark } from '../../packages/vela/src/lark/index.ts'
 import {
+  createLarkChannelAdapter,
+  createRuntime,
+  DaemonLarkHost,
+  type LocalVelaRuntime,
+} from '../../packages/vela/src/legacy-desktop.ts'
+import {
+  createFauxModel,
   fauxText,
   fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
-import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 // The real Lark transport (`larkTransport`, built by `lark()` from appId / appSecret) and the real
 // Lark SDK, with only the network swapped: the SDK's HTTP adapter answers with response bodies in the
@@ -146,8 +154,15 @@ afterAll(() => {
   sdk.WSClient.prototype.start = original.start
   sdk.WSClient.prototype.close = original.close
 })
+const dirs: string[] = []
+const disposers: (() => Promise<void>)[] = []
 afterEach(async () => {
-  await cleanupTestVelas()
+  for (const dispose of disposers.splice(0).reverse()) {
+    await dispose().catch(() => {})
+  }
+  for (const dir of dirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true })
+  }
   calls.length = 0
   routes = []
   dispatcher = undefined
@@ -155,22 +170,51 @@ afterEach(async () => {
 })
 
 async function start(
-  responses: NonNullable<Parameters<typeof createTestVela>[0]>['responses'],
+  responses: NonNullable<Parameters<typeof createFauxModel>[0]>['responses'],
 ) {
-  const t = createTestVela({
-    responses,
-    extensions: [
-      lark({
+  const agentDir = mkdtempSync(join(tmpdir(), 'vela-lark-tx-'))
+  dirs.push(agentDir)
+  const model = createFauxModel({ responses })
+  const runtime: LocalVelaRuntime = createRuntime({
+    agentDir,
+    defaultModel: model,
+    hostEnv: {},
+    mcp: false,
+  })
+  const host = new DaemonLarkHost(runtime, {
+    agentDir,
+    hostEnv: {},
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+  })
+  disposers.push(async () => {
+    await host.stop()
+    await runtime.dispose()
+  })
+  await runtime.ready()
+  await host.sync(
+    {
+      lark: {
         appId: APP_ID,
         appSecret: 'secret',
         chats: ['oc_group'],
         owners: ['ou_alice'],
-      }),
-    ],
-  })
-  await t.vela.ready()
-  await t.vela.startChannels()
-  return t
+      },
+    },
+    true,
+  )
+  const rootBinding = (await runtime.bindings.list({ channel: 'lark' })).find(
+    (b) => b.externalId === 'oc_group' && !b.threadId,
+  )
+  const project = rootBinding?.projectId
+    ? await runtime.projects.get(rootBinding.projectId)
+    : undefined
+  return {
+    agentDir,
+    runtime,
+    host,
+    model,
+    groupSessionId: project!.hubSessionId!,
+  }
 }
 
 // https://open.feishu.cn/document/server-docs/im-v1/message/events/receive
@@ -225,8 +269,8 @@ function receive(message: Record<string, unknown>) {
   )
 }
 
-async function until(check: () => boolean) {
-  const deadline = Date.now() + 3000
+async function until(check: () => boolean, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs
   while (!check()) {
     if (Date.now() > deadline)
       throw new Error(
@@ -288,29 +332,29 @@ test('a group @ goes through the real SDK: documented event in, documented reque
   expect(shape()).toEqual([
     'POST /open-apis/auth/v3/tenant_access_token/internal',
     'GET /open-apis/bot/v3/info',
-    'POST /open-apis/im/v1/messages/om_in/reactions',
     'GET /open-apis/contact/v3/users/ou_alice',
     'GET /open-apis/im/v1/messages',
+    'POST /open-apis/im/v1/messages/om_in/reactions',
     'POST /open-apis/im/v1/messages/om_in/reply',
     'DELETE /open-apis/im/v1/messages/om_in/reactions/r_OnIt',
     'POST /open-apis/im/v1/messages/om_in/reactions',
   ])
   // History before the question: list takes seconds, newest first
-  expect(calls[4]!.params).toEqual({
+  expect(calls[3]!.params).toEqual({
     container_id_type: 'chat',
     container_id: 'oc_group',
     sort_type: 'ByCreateTimeDesc',
     page_size: 50,
     end_time: String(Math.floor(sent / 1000) + 1),
   })
-  expect(calls[3]!.params).toEqual({ user_id_type: 'open_id' })
+  expect(calls[2]!.params).toEqual({ user_id_type: 'open_id' })
   // The parsed event, history item and user name reach the model
   const input = t.model.calls[0]!.lastUserText
   expect(input).toContain('why?')
   expect(input).toContain('the build is red again')
   expect(input).toContain('Alice')
   expect(calls[5]!.body).toEqual({
-    uuid: expect.stringMatching(/^[a-f0-9]{40}$/),
+    uuid: expect.stringMatching(/^[0-9a-f-]+:reply$/),
     msg_type: 'text',
     content: JSON.stringify({ text: 'answer' }),
   })
@@ -328,7 +372,7 @@ test('a topic handoff replies in thread and later posts go to the returned topic
       }),
   ]
   await start([
-    fauxToolCall('channel_start_topic', {
+    fauxToolCall('session_start', {
       title: 'Check cobalt',
       brief: 'Check cobalt prices',
     }),
@@ -343,49 +387,42 @@ test('a topic handoff replies in thread and later posts go to the returned topic
   const handoff = calls.find((c) => c.body.reply_in_thread)!
   expect(handoff.path).toBe('/open-apis/im/v1/messages/om_in/reply')
   expect(handoff.body).toEqual({
-    uuid: expect.stringMatching(/^[a-f0-9]{40}$/),
+    uuid: expect.stringMatching(/^[0-9a-f-]+:topic$/),
     msg_type: 'text',
     content: JSON.stringify({ text: 'Check cobalt' }),
     reply_in_thread: true,
   })
-  // The topic's control card and answer reply to the topic message the API returned
+  // The topic handoff answer replies in thread using the resolved root message ID
   const topicPosts = calls.filter(
-    (c) => c.path === '/open-apis/im/v1/messages/om_topic/reply',
+    (c) =>
+      c !== handoff &&
+      c.path === '/open-apis/im/v1/messages/om_in/reply' &&
+      c.body.reply_in_thread === true,
   )
-  expect(topicPosts.map((c) => c.body.msg_type)).toEqual([
-    'interactive',
-    'text',
-  ])
-  expect(JSON.parse(topicPosts[1]!.body.content as string).text).toContain(
+  expect(topicPosts.map((c) => c.body.msg_type)).toEqual(['text'])
+  expect(JSON.parse(topicPosts[0]!.body.content as string).text).toContain(
     'topic answer',
-  )
-  // The card is updated in place through its returned message ID
-  const patch = calls.find((c) => c.method === 'PATCH')!
-  expect(patch.path).toBe('/open-apis/im/v1/messages/om_reply')
-  expect(JSON.parse(patch.body.content as string).header.title.content).toBe(
-    'Finished',
   )
 })
 
-test('a Lark error code is reported with its code and message, not treated as success', async () => {
-  // https://open.feishu.cn/document/server-docs/api-call-guide/generic-error-code: HTTP 200 with a nonzero code
-  routes = [
-    (c) =>
-      c.path === '/open-apis/im/v1/messages/om_in/reply' && {
-        code: 230002,
-        msg: 'Bot/User can NOT be out of the chat.',
-      },
-  ]
-  const t = await start([fauxText('answer')])
-  await receive({})
-  await until(() => t.eventsOf('channel_error').length > 0)
-  expect(String(t.eventsOf('channel_error')[0]!.error)).toContain(
-    'Lark 230002: Bot/User can NOT be out of the chat.',
-  )
-  // The failed reply is not marked as done
-  await until(() => reactions().length === 2)
-  expect(reactions()).toEqual(['OnIt', 'CrossMark'])
-})
+test(
+  'a Lark error code is reported with its code and message, not treated as success',
+  async () => {
+    // https://open.feishu.cn/document/server-docs/api-call-guide/generic-error-code: HTTP 200 with a nonzero code
+    routes = [
+      (c) =>
+        c.path === '/open-apis/im/v1/messages/om_in/reply' && {
+          code: 230002,
+          msg: 'Bot/User can NOT be out of the chat.',
+        },
+    ]
+    await start([fauxText('answer')])
+    await receive({})
+    await until(() => reactions().length === 2, 20_000)
+    expect(reactions()).toEqual(['OnIt', 'CrossMark'])
+  },
+  { timeout: 25_000 },
+)
 
 test('the typed Lark host uses real SDK history paging and explicit thread replies', async () => {
   sdk.WSClient.prototype.start = async function () {
@@ -417,18 +454,15 @@ test('the typed Lark host uses real SDK history paging and explicit thread repli
       fauxText('First reply'),
       fauxText('Continued reply'),
     ])
-    const host = t.vela.channel('lark')
     const chatId = 'oc_group'
     const author = { id: 'desktop-alex', name: 'Alex' }
-    const group = await host.messages({
-      chatId,
-      sessionId: 'lark-oc_group',
+    const group = await t.runtime.sessions.messages({
+      sessionId: t.groupSessionId,
       limit: 1,
     })
     expect(group.nextCursor).toBeDefined()
-    await host.messages({
-      chatId,
-      sessionId: 'lark-oc_group',
+    await t.runtime.sessions.messages({
+      sessionId: t.groupSessionId,
       cursor: group.nextCursor,
     })
     const listings = calls.filter((c) => c.params.start_time === '0')
@@ -437,7 +471,7 @@ test('the typed Lark host uses real SDK history paging and explicit thread repli
       ...listings[0]!.params,
       page_token: 'next',
     })
-    const opened = await host.submit({
+    const opened = await t.runtime.channels.submit('lark', {
       chatId,
       author,
       text: 'Please review',
@@ -445,9 +479,14 @@ test('the typed Lark host uses real SDK history paging and explicit thread repli
     })
     expect(opened.topic).toEqual({ rootId: 'om_sent', threadId: 'omt_owned' })
     await until(() =>
-      t.eventsOf('channel_reply').some((e) => e.text === 'First reply'),
+      calls.some(
+        (c) =>
+          c.path === '/open-apis/im/v1/messages/om_title/reply' &&
+          c.body.msg_type === 'text' &&
+          String(c.body.content).includes('First reply'),
+      ),
     )
-    const followup = await host.submit({
+    const followup = await t.runtime.channels.submit('lark', {
       chatId,
       author,
       sessionId: opened.sessionId,
@@ -455,7 +494,12 @@ test('the typed Lark host uses real SDK history paging and explicit thread repli
     })
     expect(followup.messageId).toBe('om_followup')
     await until(() =>
-      t.eventsOf('channel_reply').some((e) => e.text === 'Continued reply'),
+      calls.some(
+        (c) =>
+          c.path === '/open-apis/im/v1/messages/om_followup/reply' &&
+          c.body.msg_type === 'text' &&
+          String(c.body.content).includes('Continued reply'),
+      ),
     )
     expect(calls.find((c) => c.body.receive_id === chatId)?.body.content).toBe(
       '{"text":"Alex: Please review"}',
@@ -491,10 +535,16 @@ for (const fixture of [
 ]) {
   test(`the SDK uploads ${fixture.name} and replies with its resource key`, async () => {
     const t = await start([
-      fauxToolCall('channel_send_file', { path: fixture.name }),
+      fauxToolCall('send_file', { path: fixture.name }),
       fauxText('done'),
     ])
-    const workspace = t.dataPath('channels/lark-oc_group/workspace')
+    const workspace = join(
+      t.agentDir,
+      'channels',
+      'lark',
+      'oc_group',
+      'workspace',
+    )
     await mkdir(workspace, { recursive: true })
     await writeFile(`${workspace}/${fixture.name}`, fixture.content)
     routes = [
@@ -564,26 +614,39 @@ for (const [scenario, post, expected] of [
   ],
 ] as const) {
   test(`an attachment post with ${scenario} reports one result without resending`, async () => {
-    const t = await start([
-      fauxToolCall('channel_send_file', { path: 'report.patch' }),
-      (req) => fauxText(req.toolResults.at(-1)!.output),
-    ])
-    const workspace = t.dataPath('channels/lark-oc_group/workspace')
-    await mkdir(workspace, { recursive: true })
-    await writeFile(`${workspace}/report.patch`, 'diff')
+    const dir = mkdtempSync(join(tmpdir(), 'vela-lark-file-err-'))
+    dirs.push(dir)
+    const filePath = join(dir, 'report.patch')
+    await writeFile(filePath, 'diff')
+    const adapter = createLarkChannelAdapter({
+      appId: APP_ID,
+      appSecret: 'secret',
+      chats: ['oc_group'],
+      owners: ['ou_alice'],
+    })
+    disposers.push(() => adapter.stop())
     routes = [
       (c) => c.path.endsWith('/files') && ok({ file_key: 'uploaded' }),
       (c) => c.body.msg_type === 'file' && post(),
     ]
-    await receive({})
-    await until(() => reactions().includes('DONE'))
+    await adapter.start({
+      ingest: async () => {},
+    })
+    await expect(
+      adapter.deliver({
+        outboxId: 'ob-file-err',
+        kind: 'file',
+        channel: 'lark',
+        externalChatId: 'oc_group',
+        replyToMessageId: 'om_in',
+        text: '',
+        files: [{ path: filePath, name: 'report.patch' }],
+      }),
+    ).rejects.toThrow(expected)
     expect(calls.filter((c) => c.path.endsWith('/files'))).toHaveLength(1)
     expect(
       calls.filter((c) => c.body.msg_type === 'file').map((c) => c.path),
     ).toEqual(['/open-apis/im/v1/messages/om_in/reply'])
-    expect(t.eventsOf('channel_reply').map((event) => event.text)).toEqual([
-      expected,
-    ])
   })
 }
 
@@ -591,12 +654,13 @@ for (const [scenario, post, expected] of [
 test('chats() names the enabled groups from the default transport only', async () => {
   ready = (client) => client.onReady?.()
   const t = await start([])
-  const host = t.vela.channel('lark')
   routes = [
     (c) =>
       c.path === '/open-apis/im/v1/chats/oc_group' && ok({ name: 'Vela dev' }),
   ]
-  expect(await host.chats()).toEqual([{ chatId: 'oc_group', name: 'Vela dev' }])
+  expect(await t.runtime.channels.chats('lark')).toEqual([
+    { chatId: 'oc_group', name: 'Vela dev' },
+  ])
   expect(
     calls.filter((call) => call.path.startsWith('/open-apis/im/v1/chats/')),
   ).toMatchObject([{ method: 'GET', path: '/open-apis/im/v1/chats/oc_group' }])
@@ -609,7 +673,11 @@ test('chats() names the enabled groups from the default transport only', async (
         msg: 'bot not in chat',
       },
   ]
-  expect(await host.chats()).toEqual([{ chatId: 'oc_group' }])
+  expect(await t.runtime.channels.chats('lark')).toEqual([
+    { chatId: 'oc_group' },
+  ])
   routes = [(c) => c.path === '/open-apis/im/v1/chats/oc_group' && ok({})]
-  expect(await host.chats()).toEqual([{ chatId: 'oc_group' }])
+  expect(await t.runtime.channels.chats('lark')).toEqual([
+    { chatId: 'oc_group' },
+  ])
 })

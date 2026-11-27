@@ -29,7 +29,7 @@ test('umbrella replay retains its channel assembly and optional RAG fixture', as
       files: { 'guide.md': 'Use blue-green deployments for the service.' },
     })
     expect(errors).toEqual([undefined])
-    expect(typeof t.vela.startChannels).toBe('function')
+    expect(typeof t.vela.session).toBe('function')
     expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
       toolName: 'read',
       isError: false,

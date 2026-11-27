@@ -6,7 +6,6 @@ import type { InputSource } from '../extensions/events.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
 import type { TokenStatus, UsageTotals } from '../usage/tracker.ts'
 import type { SessionContext } from './entries.ts'
-import type { SessionScope } from './scope.ts'
 
 /** How queued steer messages are taken: one at a time (default, like pi) or all at once. */
 export type QueueMode = 'one-at-a-time' | 'all'
@@ -64,17 +63,6 @@ export interface SendMessageOptions {
   deliverAs?: 'steer' | 'nextTurn'
 }
 
-/** @internal Transitional host callback for `legacy-channels` until S4b deletes it. */
-export interface SessionHost {
-  deliver(text: string): void | Promise<void>
-  background?(
-    event:
-      | { type: 'started'; token: string; id: string; commandHead: string }
-      | { type: 'result'; token: string; text: string }
-      | { type: 'stopped'; token?: string },
-  ): void | Promise<void>
-}
-
 /** Options for `vela.session(id, options)`; `channel` also binds an already-open session. */
 export interface SessionOptions {
   /** Provider channel and tool eligibility, bound together with channel routing before hooks. */
@@ -96,12 +84,6 @@ export interface SessionOptions {
   autoCompaction?: boolean
   /** Opt into background command deadlines for an unattended run. Defaults to false. */
   unattended?: boolean
-}
-
-/** @internal Session options including the transitional `legacy-channels` host hook and storage scope. */
-export interface InternalSessionOptions extends SessionOptions {
-  host?: SessionHost
-  scope?: SessionScope
 }
 
 export type SessionPersistence =

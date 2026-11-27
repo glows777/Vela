@@ -71,13 +71,18 @@ function readRawUserSections(agentDir: string): {
  * `directModel` is a model handed to the host (`VELA_MODEL=faux:<scenario>`), and
  * `hasAvailableModel` says some provider already has a credential; either one means no setup screen.
  */
-function withoutLocalOnlyOAuth(
-  providers: Record<string, ProviderDefinition>,
+/** Filters `localOnly` OAuth tokens (e.g. terminal-only ChatGPT OAuth) out of Desktop views and execution. */
+export function withoutLocalOnlyOAuth(
+  providers:
+    | Record<string, ProviderDefinition>
+    | (() => Record<string, ProviderDefinition>),
   credentials: CredentialStore,
 ): CredentialStore {
+  const resolveProviders =
+    typeof providers === 'function' ? providers : () => providers
   const isBlocked = (provider: string) =>
     credentials.get(provider)?.type === 'oauth' &&
-    Boolean(providers[provider]?.oauth?.localOnly)
+    Boolean(resolveProviders()[provider]?.oauth?.localOnly)
   return {
     get: (provider) =>
       isBlocked(provider) ? undefined : credentials.get(provider),

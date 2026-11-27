@@ -4,19 +4,15 @@ import type { SessionDefaultState } from './defaults.ts'
 import type { SessionDeps } from './deps.ts'
 import type { SessionContext } from './entries.ts'
 import type { SessionStore } from './index.ts'
-import type { InternalSessionOptions } from './options.ts'
-import {
-  needsRestoredWorkspace,
-  restoredLocation,
-  switchWorkspace,
-} from './relocation.ts'
+import type { SessionOptions } from './options.ts'
+import { restoredLocation, switchWorkspace } from './relocation.ts'
 import * as routing from './routing.ts'
 
 export interface SessionLocationHost<Session> {
   session: Session
   deps: SessionDeps<Session>
   store: SessionStore
-  options: InternalSessionOptions
+  options: SessionOptions
   defaults: SessionDefaultState
   getStarted: () => Promise<void> | undefined
   resetForSwitch: (target: Readonly<ExecutionLocation>) => void
@@ -70,6 +66,6 @@ export async function restoreSessionHistory<Session extends LocationSession>(
     modelRef: host.modelRef,
     thinkingLevel: host.thinkingLevel,
   })
-  if (needsRestoredWorkspace(host.options, target)) await host.prepare(signal)
+  await host.prepare(signal)
   return true
 }

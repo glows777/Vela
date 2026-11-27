@@ -276,15 +276,16 @@ export class OutboxDispatcher {
     private readonly onTopicBound?: (sessionId: string) => void,
   ) {}
 
-  recoverStaleSending(): number {
+  recoverStaleSending(excludeChannels?: ReadonlySet<string>): number {
     const now = new Date().toISOString()
     return this.db.transaction(() => {
-      const sendingRows = this.db.all<{ id: string }>(
-        `SELECT id FROM outbox WHERE status = 'sending'`,
+      const sendingRows = this.db.all<{ id: string; channel: string }>(
+        `SELECT id, channel FROM outbox WHERE status = 'sending'`,
       )
       const liveTokens = new Set(LIVE_OUTBOX_LEASES.values())
       let recovered = 0
       for (const row of sendingRows) {
+        if (excludeChannels?.has(row.channel)) continue
         const leaseRow = this.db.get<{ value_json: string }>(
           'SELECT value_json FROM kv_meta WHERE key = ?',
           leaseKey(row.id),
