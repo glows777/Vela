@@ -171,6 +171,7 @@ export async function confirmRuntimeLarkGroup(params: {
   runtime: VelaRuntime
   chatId: string
   hasPendingOutboxDeliveries?: (chatId?: string) => boolean
+  beforeWrite?: () => void | Promise<void>
 }): Promise<void> {
   if (!params.chatId.trim()) {
     throw new Error('No pending group approval.')
@@ -179,6 +180,7 @@ export async function confirmRuntimeLarkGroup(params: {
     message: LARK_BUSY_MESSAGE,
     hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
   })
+  await params.beforeWrite?.()
   await saveLarkSection({
     agentDir: params.agentDir,
     addChat: params.chatId.trim(),
@@ -220,6 +222,16 @@ export function createRuntimeSettingsApi(params: {
         owner: object
       }
     | undefined
+  let larkWriteQueue: Promise<void> = Promise.resolve()
+
+  const serializeLarkWrite = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = larkWriteQueue.then(fn, fn)
+    larkWriteQueue = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
 
   const currentCredentialKey = async (): Promise<string> => {
     const statuses = await params.runtime.channels.list().catch(() => [])
@@ -283,26 +295,51 @@ export function createRuntimeSettingsApi(params: {
       throw new Error('Settings cannot be modified on an ephemeral runtime')
     }
     const normalized = chatId.trim()
+    const initialApproval = pendingApproval
     if (
       !normalized ||
-      !pendingApproval ||
-      pendingApproval.owner !== owner ||
-      pendingApproval.chatId !== normalized
+      !initialApproval ||
+      initialApproval.owner !== owner ||
+      initialApproval.chatId !== normalized
     ) {
       throw new Error('No pending group approval.')
     }
-    const expectedKey = pendingApproval.credentialKey
-    const actualKey = await currentCredentialKey()
-    if (actualKey !== expectedKey) {
-      pendingApproval = undefined
-      throw new Error(
-        'Lark settings changed after discovery. Discover the group again before enabling it.',
-      )
-    }
-    pendingApproval = undefined
-    await confirmRuntimeLarkGroup({
-      ...params,
-      chatId: normalized,
+    await serializeLarkWrite(async () => {
+      if (
+        pendingApproval !== initialApproval ||
+        initialApproval.owner !== owner ||
+        initialApproval.chatId !== normalized
+      ) {
+        throw new Error('No pending group approval.')
+      }
+      const keyBeforeIdle = await currentCredentialKey()
+      if (keyBeforeIdle !== initialApproval.credentialKey) {
+        if (pendingApproval === initialApproval) {
+          pendingApproval = undefined
+        }
+        throw new Error(
+          'Lark settings changed after discovery. Discover the group again before enabling it.',
+        )
+      }
+      await confirmRuntimeLarkGroup({
+        ...params,
+        chatId: normalized,
+        beforeWrite: async () => {
+          if (pendingApproval !== initialApproval) {
+            throw new Error('No pending group approval.')
+          }
+          const actualKey = await currentCredentialKey()
+          if (actualKey !== initialApproval.credentialKey) {
+            if (pendingApproval === initialApproval) {
+              pendingApproval = undefined
+            }
+            throw new Error(
+              'Lark settings changed after discovery. Discover the group again before enabling it.',
+            )
+          }
+          pendingApproval = undefined
+        },
+      })
     })
   }
 
@@ -311,9 +348,11 @@ export function createRuntimeSettingsApi(params: {
       pendingApproval = undefined
     }
     const current = activeDiscovery
-    if (!current || current.owner !== owner) return
-    current.controller.abort(new DOMException('Cancelled', 'AbortError'))
-    await current.done
+    if (current && current.owner === owner) {
+      current.controller.abort(new DOMException('Cancelled', 'AbortError'))
+      await current.done
+    }
+    await larkWriteQueue.catch(() => {})
   }
 
   const clearOwner = (owner: object): void => {
@@ -334,7 +373,14 @@ export function createRuntimeSettingsApi(params: {
       } else if (!('enabled' in input) && !('removeChat' in input)) {
         pendingApproval = undefined
       }
-      return saveRuntimeLarkSetup({ ...params, input })
+      return saveRuntimeLarkSetup({
+        ...params,
+        input,
+        serializeWrite: serializeLarkWrite,
+        onBeforeCredentialWrite: () => {
+          pendingApproval = undefined
+        },
+      })
     },
     discoverLarkGroup: (opts) =>
       discoverForOwner(DEFAULT_SETTINGS_OWNER, opts?.signal),

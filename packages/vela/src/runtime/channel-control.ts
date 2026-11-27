@@ -544,28 +544,25 @@ function resolveSessionChannelBinding(
     const binding = bindings.get(row.id)
     if (binding) return binding
   }
-  if (session.projectId && session.kind === 'hub') {
-    const rootRows = db.all<{ id: string }>(
-      `SELECT id FROM channel_bindings
-       WHERE project_id = ? AND thread_id IS NULL
-       ORDER BY enabled DESC, created_at ASC, rowid ASC`,
-      session.projectId,
-    )
-    for (const row of rootRows) {
-      const binding = bindings.get(row.id)
-      if (binding) return binding
-    }
-  }
   if (session.projectId) {
-    const projectRows = db.all<{ id: string }>(
-      `SELECT id FROM channel_bindings
-       WHERE project_id = ? AND thread_id IS NULL
-       ORDER BY enabled DESC, created_at ASC, rowid ASC`,
+    const project = db.get<{ hub_session_id: string | null }>(
+      'SELECT hub_session_id FROM projects WHERE id = ?',
       session.projectId,
     )
-    for (const row of projectRows) {
-      const binding = bindings.get(row.id)
-      if (binding) return binding
+    const isProjectHub = project?.hub_session_id
+      ? project.hub_session_id === session.id
+      : session.kind === 'hub'
+    if (isProjectHub) {
+      const rootRows = db.all<{ id: string }>(
+        `SELECT id FROM channel_bindings
+         WHERE project_id = ? AND thread_id IS NULL
+         ORDER BY enabled DESC, created_at ASC, rowid ASC`,
+        session.projectId,
+      )
+      for (const row of rootRows) {
+        const binding = bindings.get(row.id)
+        if (binding) return binding
+      }
     }
   }
   return undefined
@@ -588,33 +585,36 @@ export async function listRuntimeOrChannelMessages(
       )
     }
     const adapter = channels.get(binding.channel)
-    if (!adapter?.listMessages) {
+    if (!adapter) {
       throw new Error(
         `Channel "${binding.channel}" is unavailable for session ${session.id}`,
       )
     }
-    if (
-      input.cursor &&
-      (input.cursor.startsWith(DB_CURSOR_PREFIX) || /^\d+$/.test(input.cursor))
-    ) {
-      throw new Error(
-        'Pagination cursor is no longer valid because the message source changed to channel; restart pagination from the beginning',
-      )
-    }
-    const rawCursor = decodeChannelCursor(binding, input.cursor)
-    const page = await adapter.listMessages({
-      sessionId: session.id,
-      externalChatId: binding.externalId,
-      threadId: binding.threadId,
-      kind: binding.kind,
-      cursor: rawCursor,
-      limit: input.limit,
-    })
-    return {
-      ...page,
-      ...(page.nextCursor
-        ? { nextCursor: encodeChannelCursor(binding, page.nextCursor) }
-        : {}),
+    if (adapter.listMessages) {
+      if (
+        input.cursor &&
+        (input.cursor.startsWith(DB_CURSOR_PREFIX) ||
+          /^\d+$/.test(input.cursor))
+      ) {
+        throw new Error(
+          'Pagination cursor is no longer valid because the message source changed to channel; restart pagination from the beginning',
+        )
+      }
+      const rawCursor = decodeChannelCursor(binding, input.cursor)
+      const page = await adapter.listMessages({
+        sessionId: session.id,
+        externalChatId: binding.externalId,
+        threadId: binding.threadId,
+        kind: binding.kind,
+        cursor: rawCursor,
+        limit: input.limit,
+      })
+      return {
+        ...page,
+        ...(page.nextCursor
+          ? { nextCursor: encodeChannelCursor(binding, page.nextCursor) }
+          : {}),
+      }
     }
   }
   if (input.cursor?.startsWith(CHANNEL_CURSOR_PREFIX)) {
@@ -719,6 +719,9 @@ export function getChannelToolsForSessionInDb(
   }
   if (!hasExplicitTarget) {
     binding ??= resolveSessionChannelBinding(db, bindings, session)
+    if (binding && !isBindingActive(db, bindings, binding)) {
+      binding = undefined
+    }
   }
   if (!binding) return undefined
   const adapter = channels.get(binding.channel)

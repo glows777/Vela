@@ -553,11 +553,15 @@ export async function saveRuntimeLarkSetup(params: {
   getLarkConfigError?: () => string | undefined
   verifyCredentials?: (appId: string, appSecret: string) => Promise<void>
   hasPendingOutboxDeliveries?: (chatId?: string) => boolean
+  serializeWrite?: <T>(fn: () => Promise<T>) => Promise<T>
+  onBeforeCredentialWrite?: () => void
 }): Promise<RuntimeSettingsState> {
   if (params.ephemeral) {
     throw new Error('Settings cannot be modified on an ephemeral runtime')
   }
   const { agentDir, hostEnv, runtime, input } = params
+  const runSerialized =
+    params.serializeWrite ?? ((fn: () => Promise<RuntimeSettingsState>) => fn())
   const stateParams = {
     agentDir,
     hostEnv,
@@ -573,36 +577,40 @@ export async function saveRuntimeLarkSetup(params: {
     getLarkConfigError: params.getLarkConfigError,
   }
   if ('enabled' in input && typeof input.enabled === 'boolean') {
-    if (!input.enabled) {
-      await assertLarkScopeIdle(runtime, {
-        message:
-          'A Lark session is still running or queued. Wait for it to finish before changing Lark settings.',
-        hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
-      })
-    }
-    await runtime.channels.setEnabled('lark', input.enabled)
-    if (input.enabled) {
-      await runtime.reloadConfig()
-    }
-    return getRuntimeSettingsState(stateParams)
+    return runSerialized(async () => {
+      if (!input.enabled) {
+        await assertLarkScopeIdle(runtime, {
+          message:
+            'A Lark session is still running or queued. Wait for it to finish before changing Lark settings.',
+          hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
+        })
+      }
+      await runtime.channels.setEnabled('lark', input.enabled)
+      if (input.enabled) {
+        await runtime.reloadConfig()
+      }
+      return getRuntimeSettingsState(stateParams)
+    })
   }
   if ('removeChat' in input && typeof input.removeChat === 'string') {
     const chatId = input.removeChat.trim()
-    if (chatId) {
-      await assertLarkScopeIdle(runtime, {
-        chatId,
-        message:
-          'This Lark group still has a reply running or waiting to send. Wait for it to finish before removing it.',
-        hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
+    return runSerialized(async () => {
+      if (chatId) {
+        await assertLarkScopeIdle(runtime, {
+          chatId,
+          message:
+            'This Lark group still has a reply running or waiting to send. Wait for it to finish before removing it.',
+          hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
+        })
+      }
+      await saveLarkSection({
+        agentDir,
+        removeChat: input.removeChat,
+        env: hostEnv,
       })
-    }
-    await saveLarkSection({
-      agentDir,
-      removeChat: input.removeChat,
-      env: hostEnv,
+      await runtime.reloadConfig()
+      return getRuntimeSettingsState(stateParams)
     })
-    await runtime.reloadConfig()
-    return getRuntimeSettingsState(stateParams)
   }
   if (
     !('appId' in input) ||
@@ -635,22 +643,31 @@ export async function saveRuntimeLarkSetup(params: {
       'Could not verify Lark credentials. Check the app ID and secret and try again.',
     )
   }
-  const current = readLarkSectionSafe(agentDir, hostEnv)
-  if (
-    current.appId !== before.appId ||
-    current.appSecret !== before.appSecret
-  ) {
-    throw new Error(
-      'Lark credentials changed during verification. Check the current settings and try again.',
-    )
-  }
-  await saveLarkSection({
-    agentDir,
-    ...(appId === current.appId ? {} : { appId }),
-    appSecret: input.appSecret,
+  return runSerialized(async () => {
+    const current = readLarkSectionSafe(agentDir, hostEnv)
+    if (
+      current.appId !== before.appId ||
+      current.appSecret !== before.appSecret
+    ) {
+      throw new Error(
+        'Lark credentials changed during verification. Check the current settings and try again.',
+      )
+    }
+    await assertLarkScopeIdle(runtime, {
+      message:
+        'A Lark session is still running or queued. Wait for it to finish before changing Lark settings.',
+      hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
+    })
+    params.onBeforeCredentialWrite?.()
+    await saveLarkSection({
+      agentDir,
+      ...(appId === current.appId ? {} : { appId }),
+      appSecret: input.appSecret,
+      env: hostEnv,
+    })
+    await runtime.reloadConfig()
+    return getRuntimeSettingsState(stateParams)
   })
-  await runtime.reloadConfig()
-  return getRuntimeSettingsState(stateParams)
 }
 
 export async function assertLarkScopeIdle(
@@ -675,16 +692,35 @@ export async function assertLarkScopeIdle(
       .map((b) => b.projectId)
       .filter((id): id is string => typeof id === 'string' && id.length > 0),
   )
-  const sessions = await runtime.sessions.list({ includeArchived: false })
+  const [sessions, allSessions, approvals] = await Promise.all([
+    runtime.sessions.list({ includeArchived: false }),
+    runtime.sessions.list({ includeArchived: true }),
+    runtime.approvals.list().catch(() => []),
+  ])
+  const isInLarkScope = (s: { id: string; projectId?: string | null }) =>
+    larkSessionIds.has(s.id) ||
+    Boolean(s.projectId && larkProjectIds.has(s.projectId))
+
   for (const s of sessions) {
-    if (
-      !larkSessionIds.has(s.id) &&
-      (!s.projectId || !larkProjectIds.has(s.projectId))
-    ) {
-      continue
-    }
+    if (!isInLarkScope(s)) continue
     const st = await runtime.sessions.status(s.id)
-    if (st.activeRunId || st.runningJobs > 0 || s.state === 'running') {
+    if (
+      st.activeRunId ||
+      st.runningJobs > 0 ||
+      s.state === 'running' ||
+      s.state === 'waiting_human'
+    ) {
+      throw new Error(options.message)
+    }
+  }
+  const sessionsById = new Map(allSessions.map((s) => [s.id, s]))
+  for (const approval of approvals) {
+    if (approval.status !== 'pending') continue
+    const session = sessionsById.get(approval.sessionId)
+    if (
+      larkSessionIds.has(approval.sessionId) ||
+      (session && isInLarkScope(session))
+    ) {
       throw new Error(options.message)
     }
   }

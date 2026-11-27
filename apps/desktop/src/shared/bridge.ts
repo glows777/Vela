@@ -13,6 +13,8 @@ export type Session = {
   topic?: { rootId: string; threadId: string }
   /** True when this Local session is a legacy pre-cutover triage hub. */
   isHub?: boolean
+  /** Execution environment and working directory when present on the session. */
+  location?: { environment: string; cwd: string }
   task: string
   state: 'running' | 'queued' | 'waiting' | 'done' | 'stopped'
   requester: { id: string; name: string }
@@ -26,6 +28,7 @@ export type LocalProject = {
   id: string
   channel: 'local'
   cwd: string
+  location?: { environment: string; cwd: string }
   name: string
 }
 

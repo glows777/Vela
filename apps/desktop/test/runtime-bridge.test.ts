@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   connectRuntime,
+  createRuntime,
   type DaemonServerHandle,
   startDaemonServer,
   type VelaRuntime,
@@ -608,4 +609,94 @@ test('submitDesktopMessage forwards images when steering an active Local run', a
   releaseTurn()
   await runtime.waitForIdle(sess.sessionId)
   expect(seenImagesCount).toBeGreaterThan(0)
+})
+
+test('stopDesktopTarget rejects Lark DM/cross-project target and submitDesktopMessage redirects hub input + preserves non-local location', async () => {
+  const rt = createRuntime({
+    ephemeral: true,
+    defaultModel: createFauxModel(),
+  })
+  cleanups.push(() => rt.dispose())
+  await rt.ready()
+
+  // Projectless Lark DM must not be stoppable through channel: 'local'.
+  const dm = await rt.sessions.create({
+    projectId: null,
+    kind: 'chat',
+    name: 'Lark DM',
+  })
+  await rt.bindings.upsert({
+    channel: 'lark',
+    kind: 'direct',
+    externalId: 'dm_1',
+    sessionId: dm.id,
+    enabled: true,
+  })
+  await expect(
+    stopDesktopTarget(rt, {
+      method: 'stop',
+      channel: 'local',
+      target: { sessionId: dm.id },
+      runId: 'run-any',
+    }),
+  ).resolves.toBe(false)
+
+  // Local project with hub session + non-local defaultLocation.
+  const proj = await rt.projects.create({
+    name: 'Remote Project',
+    defaultLocation: { environment: 'build', cwd: '/worktree' },
+  })
+  const hub = await rt.sessions.create({
+    projectId: proj.id,
+    kind: 'hub',
+    name: 'Old Hub',
+  })
+  await rt.projects.update(proj.id, { hubSessionId: hub.id })
+  const desktopHub = toDesktopSession(hub, {
+    channel: 'local',
+    chatId: proj.id,
+    chatKind: 'direct',
+    projectId: proj.id,
+  })
+  expect(desktopHub.isHub).toBe(true)
+  expect(desktopHub.location).toEqual({
+    environment: 'build',
+    cwd: '/worktree',
+  })
+
+  // Cross-project chatId check rejects wrong project even for Local sessions.
+  const otherProj = await rt.projects.create({ name: 'Other', cwd: '/tmp' })
+  await expect(
+    stopDesktopTarget(rt, {
+      method: 'stop',
+      channel: 'local',
+      target: { sessionId: hub.id, chatId: otherProj.id },
+      runId: 'run-any',
+    }),
+  ).resolves.toBe(false)
+
+  // Explicit Local hub submission redirects into a new work session instead of prompting the hub.
+  const receipt = await submitDesktopMessage(
+    rt,
+    false,
+    new DesktopClientIdTracker(),
+    {
+      method: 'submit',
+      channel: 'local',
+      message: {
+        projectId: proj.id,
+        sessionId: hub.id,
+        text: 'work prompt',
+      },
+    },
+  )
+  expect(receipt.outcome).toBe('posted')
+  expect(receipt.sessionId).toBeDefined()
+  expect(receipt.sessionId).not.toBe(hub.id)
+  const createdWork = await rt.sessions.get(receipt.sessionId!)
+  expect(createdWork?.kind).toBe('work')
+  expect(createdWork?.location).toEqual({
+    environment: 'build',
+    cwd: '/worktree',
+  })
 })

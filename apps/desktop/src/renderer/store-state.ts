@@ -1,6 +1,7 @@
 import type {
   Connection,
   Event,
+  LarkSubmit,
   Message,
   Project,
   Session,
@@ -72,7 +73,7 @@ export const topicTitle = (text: string) =>
     .find((line) => line.trim() !== '')
     ?.trim() ?? text.trim()
 
-export const larkNotice = (result: SubmitReceipt, place: string) => {
+const larkNotice = (result: SubmitReceipt, place: string) => {
   const reason = result.error
     ? ` ${result.error.trim().replace(/\.$/, '')}.`
     : ''
@@ -82,10 +83,162 @@ export const larkNotice = (result: SubmitReceipt, place: string) => {
   return `It may have been posted.${reason} Vela did not send it again; check the ${place} before sending.`
 }
 
-const byTime = (messages: Message[]) =>
+export const byTime = (messages: Message[]) =>
   messages.toSorted((one, other) =>
     one.createdAt.localeCompare(other.createdAt),
   )
+
+function isUncertainSubmitError(cause: unknown): boolean {
+  const msg = cause instanceof Error ? cause.message : String(cause ?? '')
+  return /Background service disconnected|Daemon (?:client|runtime client)|Disconnected from Vela daemon|ECONNRESET|EPIPE|ECONNREFUSED|ENOENT|socket|IPC|closed|disposed/i.test(
+    msg,
+  )
+}
+
+const larkPlaceOf = (
+  projects: readonly Project[],
+  sessionId: string | undefined,
+) =>
+  sessionId !== undefined &&
+  projects.some(
+    (project) => project.channel === 'lark' && project.sessionId === sessionId,
+  )
+    ? 'group'
+    : 'topic'
+
+export async function submitLarkFlow(params: {
+  input: LarkSubmit
+  projects: readonly Project[]
+  sessions: Record<string, Session>
+  submit: Window['vela']['submit']
+  fetchLarkSessions: (chatId: string) => Promise<Session[]>
+  loadGroupPage: (
+    project: Extract<Project, { channel: 'lark' }>,
+  ) => Promise<string | undefined>
+  loadTopicMessages: (sessionId: string) => Promise<string | undefined>
+  mergeSessions: (sessions: Session[]) => void
+  onAccepted?: (notice: string) => void
+  report: (notice: string) => void
+  formatError: (cause: unknown) => string
+}): Promise<boolean> {
+  const { input } = params
+  try {
+    const result = await params.submit('lark', input)
+    if (result.outcome === 'not-sent') {
+      params.report(result.error ?? 'Lark did not accept the message.')
+      return false
+    }
+    const project = params.projects.find(
+      (item): item is Extract<Project, { channel: 'lark' }> =>
+        item.channel === 'lark' && item.id === input.chatId,
+    )
+    let refreshError: string | undefined
+    if (project) {
+      refreshError = await params.loadGroupPage(project)
+      if ('sessionId' in input && params.sessions[input.sessionId]?.topic) {
+        refreshError =
+          (await params.loadTopicMessages(input.sessionId)) ?? refreshError
+      }
+      try {
+        params.mergeSessions(await params.fetchLarkSessions(input.chatId))
+      } catch (cause) {
+        refreshError ??= params.formatError(cause)
+      }
+    }
+    const notice = result.error
+      ? larkNotice(
+          result,
+          'newTopic' in input
+            ? 'group'
+            : larkPlaceOf(params.projects, input.sessionId),
+        )
+      : (refreshError ?? '')
+    if (params.onAccepted) params.onAccepted(notice)
+    else params.report(notice)
+    return true
+  } catch (cause) {
+    params.report(params.formatError(cause))
+    return false
+  }
+}
+
+export function reloadAfterChannelReset(params: {
+  snapshot: Snapshot
+  visibleLocal?: { place: string; sessionId: string }
+  visibleGroup?: Extract<Project, { channel: 'lark' }>
+  visibleTopic?: {
+    projectId: string
+    session: Session
+    report: (notice: string) => void
+  }
+  loadLocal: (place: string, sessionId: string) => Promise<unknown>
+  loadGroupPage: (
+    project: Extract<Project, { channel: 'lark' }>,
+  ) => Promise<string | undefined>
+  loadTopicMessages: (sessionId: string) => Promise<string | undefined>
+  pageError: (view?: string) => (notice: string) => void
+  isCurrentGroup: (id: string) => boolean
+  isCurrentTopic: () => boolean
+}): void {
+  const { visibleLocal, visibleGroup, visibleTopic, snapshot } = params
+  if (visibleLocal && snapshot.sessions[visibleLocal.sessionId]) {
+    void params.loadLocal(visibleLocal.place, visibleLocal.sessionId)
+  }
+  if (visibleGroup) {
+    const refreshedGroup = snapshot.projects.find(
+      (item): item is Extract<Project, { channel: 'lark' }> =>
+        item.channel === 'lark' && item.id === visibleGroup.id,
+    )
+    if (refreshedGroup) {
+      const report = params.pageError(`project:${refreshedGroup.id}`)
+      void params.loadGroupPage(refreshedGroup).then((error) => {
+        if (error && params.isCurrentGroup(refreshedGroup.id)) report(error)
+      })
+    }
+  }
+  if (visibleTopic && snapshot.sessions[visibleTopic.session.sessionId]) {
+    void params
+      .loadTopicMessages(visibleTopic.session.sessionId)
+      .then((error) => {
+        if (error && params.isCurrentTopic()) visibleTopic.report(error)
+      })
+  }
+}
+
+export async function readDesktopFrame(
+  api: Pick<
+    Window['vela'],
+    'channels' | 'projects' | 'sessions' | 'connection'
+  >,
+  formatError: (cause: unknown) => string,
+) {
+  const channels = await api.channels()
+  const names = channels.map((channel) => channel.name)
+  const projects = await api.projects()
+  const sessions = [
+    ...(names.includes('local') ? await api.sessions('local') : []),
+    ...(names.includes('lark') ? await api.sessions('lark') : []),
+  ]
+  const connectionChannels =
+    projects.some((p) => p.channel === 'lark') && !names.includes('lark')
+      ? [...names, 'lark']
+      : names
+  const connections = Object.fromEntries(
+    await Promise.all(
+      connectionChannels.map(async (name) => {
+        try {
+          return [name, await api.connection(name)] as const
+        } catch (cause) {
+          return [
+            name,
+            { connected: false, error: formatError(cause) },
+          ] as const
+        }
+      }),
+    ),
+  )
+  return { projects, sessions, connections }
+}
 
 export function mergeSessionMessages(
   existingList: Message[],
@@ -201,5 +354,60 @@ export function applyLocalEventState(params: {
     const session = snapshot.sessions[sessionId]
     if (!session) return
     attempts.set(sessionId, { message: value.data.message })
+  }
+}
+
+export type LocalSendOutcome = 'accepted' | 'rejected' | 'unknown'
+
+export async function submitLocalFlow(params: {
+  projectId: string | null
+  sessionId: string
+  text: string
+  getSnapshot: () => Snapshot
+  publish: (change: Partial<Snapshot>) => void
+  mergeMessages: (sessionId: string, incoming: Message[]) => void
+  onUnknown: (sessionId: string) => void
+  submit: Window['vela']['submit']
+  report: (notice: string) => void
+  formatError: (cause: unknown) => string
+}): Promise<LocalSendOutcome> {
+  const { projectId, sessionId, text } = params
+  const clientMessageId = crypto.randomUUID()
+  params.mergeMessages(sessionId, [
+    {
+      id: `pending:${clientMessageId}`,
+      sessionId,
+      role: 'user',
+      text,
+      createdAt: new Date().toISOString(),
+      clientMessageId,
+    },
+  ])
+  try {
+    await params.submit('local', {
+      projectId,
+      sessionId,
+      text,
+      clientMessageId,
+    })
+    params.report('')
+    return 'accepted'
+  } catch (cause) {
+    if (isUncertainSubmitError(cause)) {
+      params.onUnknown(sessionId)
+      params.report(params.formatError(cause))
+      return 'unknown'
+    }
+    const current = params.getSnapshot()
+    params.publish({
+      messages: {
+        ...current.messages,
+        [sessionId]: (current.messages[sessionId] ?? []).filter(
+          (message) => message.clientMessageId !== clientMessageId,
+        ),
+      },
+    })
+    params.report(params.formatError(cause))
+    return 'rejected'
   }
 }

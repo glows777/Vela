@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from 'react'
 import type {
-  Connection,
   DesktopPreferences,
   Event,
   LarkSubmit,
@@ -19,11 +18,16 @@ import {
 } from './store-history.ts'
 import {
   applyLocalEventState,
+  byTime,
   initialSnapshot,
-  larkNotice,
+  type LocalSendOutcome,
   mergeSessionMessages,
+  readDesktopFrame,
+  reloadAfterChannelReset,
   type Snapshot,
   sessionMap,
+  submitLarkFlow,
+  submitLocalFlow,
   topicTitle,
   withoutKey,
 } from './store-state.ts'
@@ -95,6 +99,15 @@ function mergeMessages(sessionId: string, incoming: Message[]) {
   })
 }
 
+function replaceMessages(sessionId: string, incoming: Message[]) {
+  publish({
+    messages: {
+      ...snapshot.messages,
+      [sessionId]: byTime(incoming),
+    },
+  })
+}
+
 function mergeSessions(sessions: Session[]) {
   const merged = { ...snapshot.sessions }
   for (const session of sessions) merged[session.sessionId] = session
@@ -115,6 +128,20 @@ const clearLocalSessionState = (sessionId: string) => {
   loading.delete(sessionId)
 }
 
+const invalidateAllLocalHistory = () => {
+  const ids = new Set<string>([
+    ...Object.keys(snapshot.messages),
+    ...complete,
+    ...loading.keys(),
+    ...(visibleLocalSession ? [visibleLocalSession.sessionId] : []),
+  ])
+  for (const sessionId of ids) {
+    bumpHistoryGeneration(sessionId)
+  }
+  complete.clear()
+  loading.clear()
+}
+
 /** One forward page walk for Local/Quick Chat history. */
 async function readLocalHistory(
   place: string,
@@ -128,7 +155,8 @@ async function readLocalHistory(
     if ((historyGeneration.get(sessionId) ?? 0) !== generation) {
       return false
     }
-    mergeMessages(sessionId, incoming)
+    if (firstOnly) mergeMessages(sessionId, incoming)
+    else replaceMessages(sessionId, incoming)
     return true
   } catch (cause) {
     report(errorMessage(cause))
@@ -201,6 +229,7 @@ function loadLarkTopicMessages(sessionId: string): Promise<string | undefined> {
   })
 }
 
+let visibleLocalSession: { place: string; sessionId: string } | undefined
 let visibleLarkGroup: Extract<Project, { channel: 'lark' }> | undefined
 let visibleLarkTopic:
   | { projectId: string; session: Session; report: (notice: string) => void }
@@ -223,8 +252,12 @@ export function loadSession(
 ) {
   const session = snapshot.sessions[sessionId]
   if (session?.channel !== 'lark') {
+    const localTarget = { place, sessionId }
+    visibleLocalSession = localTarget
     void loadLocalMessages(place, sessionId)
-    return
+    return () => {
+      if (visibleLocalSession === localTarget) visibleLocalSession = undefined
+    }
   }
   const projectId = sessionProjectId(session) ?? place.replace(/^project:/, '')
   const topic = { projectId, session, report }
@@ -290,40 +323,13 @@ export function loadEarlierLark(project: Project) {
   })
 }
 
-const connectionFor = async (channel: string): Promise<Connection> => {
-  try {
-    return await vela.connection(channel)
-  } catch (cause) {
-    return { connected: false, error: errorMessage(cause) }
-  }
-}
-
-async function readFrame() {
-  const channels = await vela.channels()
-  const names = channels.map((channel) => channel.name)
-  const projects = await vela.projects()
-  const sessions = [
-    ...(names.includes('local') ? await vela.sessions('local') : []),
-    ...(names.includes('lark') ? await vela.sessions('lark') : []),
-  ]
-  const connectionChannels =
-    projects.some((p) => p.channel === 'lark') && !names.includes('lark')
-      ? [...names, 'lark']
-      : names
-  const connections = Object.fromEntries(
-    await Promise.all(
-      connectionChannels.map(
-        async (name) => [name, await connectionFor(name)] as const,
-      ),
-    ),
-  )
-  return { projects, sessions, connections }
-}
-
 async function refresh() {
   const report = pageError()
   try {
-    const { projects, sessions, connections } = await readFrame()
+    const { projects, sessions, connections } = await readDesktopFrame(
+      vela,
+      errorMessage,
+    )
     publish({
       projects,
       sessions: sessionMap(sessions),
@@ -337,7 +343,10 @@ async function refresh() {
 async function reload() {
   const report = pageError()
   try {
-    const [settings, frame] = await Promise.all([vela.settings(), readFrame()])
+    const [settings, frame] = await Promise.all([
+      vela.settings(),
+      readDesktopFrame(vela, errorMessage),
+    ])
     publish({
       ready: true,
       settings,
@@ -462,53 +471,25 @@ export async function deleteSession(
 }
 
 /** A Local submission: optimistic bubble is replaced by the recorded copy. */
-async function sendLocal(
+function sendLocal(
   projectId: string | null,
   sessionId: string,
   text: string,
   report = pageError(),
-): Promise<boolean> {
-  const clientMessageId = crypto.randomUUID()
-  mergeMessages(sessionId, [
-    {
-      id: `pending:${clientMessageId}`,
-      sessionId,
-      role: 'user',
-      text,
-      createdAt: new Date().toISOString(),
-      clientMessageId,
-    },
-  ])
-  try {
-    await vela.submit('local', {
-      projectId,
-      sessionId,
-      text,
-      clientMessageId,
-    })
-    report('')
-    return true
-  } catch (cause) {
-    publish({
-      messages: {
-        ...snapshot.messages,
-        [sessionId]: (snapshot.messages[sessionId] ?? []).filter(
-          (message) => message.clientMessageId !== clientMessageId,
-        ),
-      },
-    })
-    report(errorMessage(cause))
-    return false
-  }
+): Promise<LocalSendOutcome> {
+  return submitLocalFlow({
+    projectId,
+    sessionId,
+    text,
+    getSnapshot: () => snapshot,
+    publish,
+    mergeMessages,
+    onUnknown: (sid) => complete.delete(sid),
+    submit: vela.submit,
+    report,
+    formatError: errorMessage,
+  })
 }
-
-const placeOf = (sessionId: string | undefined) =>
-  sessionId !== undefined &&
-  snapshot.projects.some(
-    (project) => project.channel === 'lark' && project.sessionId === sessionId,
-  )
-    ? 'group'
-    : 'topic'
 
 async function submitLark(
   input: LarkSubmit,
@@ -520,42 +501,19 @@ async function submitLark(
     report?: (notice: string) => void
   } = {},
 ): Promise<boolean> {
-  try {
-    const result = await vela.submit('lark', input)
-    if (result.outcome === 'not-sent') {
-      report(result.error ?? 'Lark did not accept the message.')
-      return false
-    }
-    const project = snapshot.projects.find(
-      (item): item is Extract<Project, { channel: 'lark' }> =>
-        item.channel === 'lark' && item.id === input.chatId,
-    )
-    let refreshError: string | undefined
-    if (project) {
-      refreshError = await loadLarkGroupPage(project)
-      if ('sessionId' in input && snapshot.sessions[input.sessionId]?.topic) {
-        refreshError =
-          (await loadLarkTopicMessages(input.sessionId)) ?? refreshError
-      }
-      try {
-        mergeSessions(await vela.sessions('lark', input.chatId))
-      } catch (cause) {
-        refreshError ??= errorMessage(cause)
-      }
-    }
-    const notice = result.error
-      ? larkNotice(
-          result,
-          'newTopic' in input ? 'group' : placeOf(input.sessionId),
-        )
-      : (refreshError ?? '')
-    if (onAccepted) onAccepted(notice)
-    else report(notice)
-    return true
-  } catch (cause) {
-    report(errorMessage(cause))
-    return false
-  }
+  return submitLarkFlow({
+    input,
+    projects: snapshot.projects,
+    sessions: snapshot.sessions,
+    submit: vela.submit,
+    fetchLarkSessions: (chatId) => vela.sessions('lark', chatId),
+    loadGroupPage: loadLarkGroupPage,
+    loadTopicMessages: loadLarkTopicMessages,
+    mergeSessions,
+    onAccepted,
+    report,
+    formatError: errorMessage,
+  })
 }
 
 /** A message in a Lark group chat. */
@@ -595,18 +553,15 @@ export async function startSession(
       reportHome(errorMessage(cause))
       return false
     }
-    const accepted = await sendLocal(
+    const outcome = await sendLocal(
       targetProjectId,
       session.sessionId,
       body,
       reportHome,
     )
-    if (!accepted) {
-      await vela.deleteSession({ sessionId: session.sessionId }).catch(() => {})
-      clearLocalSessionState(session.sessionId)
-      publish({
-        sessions: withoutKey(snapshot.sessions, session.sessionId),
-        messages: withoutKey(snapshot.messages, session.sessionId),
+    if (outcome === 'rejected') {
+      await deleteSession(session.sessionId, (err) => {
+        if (err) reportHome(err)
       })
       return false
     }
@@ -651,7 +606,13 @@ export async function sendInSession(
       { report },
     )
   }
-  return sendLocal(session.projectId, session.sessionId, body, report)
+  const outcome = await sendLocal(
+    session.projectId,
+    session.sessionId,
+    body,
+    report,
+  )
+  return outcome !== 'rejected'
 }
 
 /** Starts a new Local session in an existing project when there is no active session yet. */
@@ -664,10 +625,15 @@ export async function sendInNewLocalSession(
   const body = text.trim()
   if (!body) return false
   const created = await createSession(projectId, body.slice(0, 60))
-  const accepted = await sendLocal(projectId, created.sessionId, body, report)
-  if (accepted) onCreated(created.sessionId)
-  else void deleteSession(created.sessionId).catch(() => {})
-  return accepted
+  const outcome = await sendLocal(projectId, created.sessionId, body, report)
+  if (outcome === 'rejected') {
+    void deleteSession(created.sessionId, (err) => {
+      if (err) report(err)
+    })
+    return false
+  }
+  onCreated(created.sessionId)
+  return true
 }
 
 /** Opens the enabled group in Lark; a topic has no documented deep link. */
@@ -695,13 +661,33 @@ function apply(value: Extract<Event, { type: 'local' }>['value']) {
   })
 }
 
-/** Re-reads Lark history or frame state after a channel event arrives. */
+/** Re-reads Local/Lark history or frame state after a channel event arrives. */
 function applyChannel(
   channel: string,
   value: Extract<Event, { type: 'channel' }>['value'],
 ) {
   const reset = value.type === 'channel_status' && value.reset === true
-  if (reset) void refresh()
+  if (reset) {
+    invalidateAllLocalHistory()
+    const visibleLocal = visibleLocalSession
+    const visibleGroup = visibleLarkGroup
+    const visibleTopic = visibleLarkTopic
+    void refresh().then(() =>
+      reloadAfterChannelReset({
+        snapshot,
+        visibleLocal,
+        visibleGroup,
+        visibleTopic,
+        loadLocal: loadLocalMessages,
+        loadGroupPage: loadLarkGroupPage,
+        loadTopicMessages: loadLarkTopicMessages,
+        pageError,
+        isCurrentGroup: (id) => visibleLarkGroup?.id === id,
+        isCurrentTopic: () => visibleLarkTopic === visibleTopic,
+      }),
+    )
+    return
+  }
   if (channel !== 'lark') return
 
   const chatId =
@@ -710,7 +696,7 @@ function applyChannel(
     value.type === 'channel_history_changed' ? value.sessionId : undefined
 
   const group = visibleLarkGroup
-  if (group && (reset || chatId === group.id)) {
+  if (group && chatId === group.id) {
     const report = pageError(`project:${group.id}`)
     void loadLarkGroupPage(group).then((error) => {
       if (error && visibleLarkGroup === group) report(error)
@@ -720,9 +706,8 @@ function applyChannel(
   const topic = visibleLarkTopic
   if (
     topic &&
-    (reset ||
-      (chatId === topic.projectId &&
-        targetSessionId === topic.session.sessionId))
+    chatId === topic.projectId &&
+    targetSessionId === topic.session.sessionId
   ) {
     void loadLarkTopicMessages(topic.session.sessionId).then((error) => {
       if (error && visibleLarkTopic === topic) topic.report(error)

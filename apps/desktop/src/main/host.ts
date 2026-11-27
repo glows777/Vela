@@ -488,16 +488,16 @@ export async function startHost(): Promise<DesktopHostController> {
       const localProjects: LocalProject[] = []
       for (const p of allProjects) {
         if (ctx.larkProjectIds.has(p.id)) continue
-        const localCwd =
-          p.cwd ??
-          (p.defaultLocation?.environment === 'local'
-            ? p.defaultLocation.cwd
-            : undefined)
-        if (!localCwd) continue
+        const effectiveLocation =
+          p.defaultLocation ??
+          (p.cwd ? { environment: 'local', cwd: p.cwd } : undefined)
+        const effectiveCwd = effectiveLocation?.cwd
+        if (!effectiveCwd) continue
         localProjects.push({
           id: p.id,
           channel: 'local' as const,
-          cwd: localCwd,
+          cwd: effectiveCwd,
+          ...(effectiveLocation ? { location: effectiveLocation } : {}),
           name: p.name,
         })
       }

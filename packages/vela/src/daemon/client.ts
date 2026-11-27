@@ -457,20 +457,21 @@ function createSocketRuntimeClient(
             try {
               writeMsg({ type: 'discovery_cancel', setupId })
             } catch {}
-            if (settled) return
-            settled = true
-            resolve(undefined)
           }
           signal.addEventListener('abort', abortListener, { once: true })
           rpcPromise.then(
             (res) => {
               if (settled) return
               settled = true
-              resolve(res)
+              resolve(signal.aborted ? undefined : res)
             },
             (err) => {
               if (settled) return
               settled = true
+              if (signal.aborted) {
+                resolve(undefined)
+                return
+              }
               reject(err)
             },
           )

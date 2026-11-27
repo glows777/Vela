@@ -145,26 +145,123 @@ function isIdentChar(ch: string): boolean {
   return /[A-Za-z0-9_$]/.test(ch)
 }
 
+const REGEX_BEFORE_KEYWORDS = new Set([
+  'return',
+  'case',
+  'throw',
+  'delete',
+  'void',
+  'typeof',
+  'yield',
+  'await',
+  'in',
+  'instanceof',
+  'new',
+  'else',
+  'do',
+  'of',
+  'export',
+  'default',
+  'extends',
+  'satisfies',
+  'as',
+])
+
+const REGEX_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'with'])
+
 function skipBalancedTemplateExpr(src: string, start: number): number {
   let i = start
   let depth = 1
+  let canStartRegex = true
+  let lastWord = ''
+  const parenStartsRegex: boolean[] = []
   while (i < src.length && depth > 0) {
     const ch = src[i]!
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+      i += 1
+      continue
+    }
     if (ch === "'" || ch === '"') {
       i = skipQuoted(src, i, ch)
+      canStartRegex = false
+      lastWord = ''
     } else if (ch === '`') {
       i = skipTemplate(src, i)
+      canStartRegex = false
+      lastWord = ''
     } else if (ch === '/' && src[i + 1] === '/') {
       const nl = src.indexOf('\n', i + 2)
       i = nl === -1 ? src.length : nl + 1
     } else if (ch === '/' && src[i + 1] === '*') {
       const end = src.indexOf('*/', i + 2)
       i = end === -1 ? src.length : end + 2
+    } else if (ch === '/' && canStartRegex) {
+      i = skipRegexLiteral(src, i)
+      canStartRegex = false
+      lastWord = ''
+    } else if (isIdentChar(ch) && !/[0-9]/.test(ch)) {
+      let j = i + 1
+      while (j < src.length && isIdentChar(src[j]!)) j += 1
+      lastWord = src.slice(i, j)
+      canStartRegex = REGEX_BEFORE_KEYWORDS.has(lastWord)
+      i = j
     } else {
-      if (ch === '{') depth += 1
-      else if (ch === '}') depth -= 1
+      if (ch === '(') {
+        parenStartsRegex.push(REGEX_PAREN_KEYWORDS.has(lastWord))
+        canStartRegex = true
+      } else if (ch === ')') {
+        canStartRegex = parenStartsRegex.pop() ?? false
+      } else if (ch === '{') {
+        depth += 1
+        canStartRegex = true
+      } else if (ch === '}') {
+        depth -= 1
+        canStartRegex = true
+      } else if (
+        ch === '[' ||
+        ch === ',' ||
+        ch === ';' ||
+        ch === ':' ||
+        ch === '?' ||
+        ch === '='
+      ) {
+        canStartRegex = true
+      } else {
+        canStartRegex = !/[0-9\])]/.test(ch)
+      }
+      lastWord = ''
       i += 1
     }
+  }
+  return i
+}
+
+function skipRegexLiteral(src: string, start: number): number {
+  let i = start + 1
+  let inCharClass = false
+  while (i < src.length) {
+    const ch = src[i]!
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    if (ch === '[' && !inCharClass) {
+      inCharClass = true
+      i += 1
+      continue
+    }
+    if (ch === ']' && inCharClass) {
+      inCharClass = false
+      i += 1
+      continue
+    }
+    if (ch === '/' && !inCharClass) {
+      i += 1
+      while (i < src.length && /[a-zA-Z]/.test(src[i]!)) i += 1
+      break
+    }
+    if (ch === '\n' || ch === '\r') break
+    i += 1
   }
   return i
 }
@@ -201,7 +298,7 @@ function skipTemplate(src: string, start: number): number {
   return i
 }
 
-/** Rewrites bare `import.meta.{url,dir,path}` tokens in source code for one module path without touching string literals or comments. */
+/** Rewrites bare `import.meta.{url,dir,path}` tokens in source code for one module path without touching strings, regexes, or comments. */
 function rewriteImportMetaForFile(source: string, filePath: string): string {
   const metaReplacements: Record<string, string> = {
     url: JSON.stringify(pathToFileURL(filePath).href),
@@ -211,12 +308,22 @@ function rewriteImportMetaForFile(source: string, filePath: string): string {
   const rewriteSlice = (start: number, end: number): string => {
     let out = ''
     let i = start
+    let canStartRegex = true
+    let lastWord = ''
+    const parenStartsRegex: boolean[] = []
     while (i < end) {
       const ch = source[i]!
+      if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+        out += ch
+        i += 1
+        continue
+      }
       if (ch === "'" || ch === '"') {
         const next = skipQuoted(source, i, ch)
         out += source.slice(i, next)
         i = next
+        canStartRegex = false
+        lastWord = ''
         continue
       }
       if (ch === '`') {
@@ -240,6 +347,8 @@ function rewriteImportMetaForFile(source: string, filePath: string): string {
           if (tc === '`') break
         }
         i = j
+        canStartRegex = false
+        lastWord = ''
         continue
       }
       if (ch === '/' && source[i + 1] === '/') {
@@ -256,9 +365,17 @@ function rewriteImportMetaForFile(source: string, filePath: string): string {
         i = next
         continue
       }
+      if (ch === '/' && canStartRegex) {
+        const next = Math.min(skipRegexLiteral(source, i), end)
+        out += source.slice(i, next)
+        i = next
+        canStartRegex = false
+        lastWord = ''
+        continue
+      }
       if (
         source.startsWith('import.meta.', i) &&
-        (i === 0 || !isIdentChar(source[i - 1]!))
+        (i === 0 || (!isIdentChar(source[i - 1]!) && source[i - 1] !== '.'))
       ) {
         const afterDot = i + 'import.meta.'.length
         let propEnd = afterDot
@@ -267,9 +384,52 @@ function rewriteImportMetaForFile(source: string, filePath: string): string {
         if (prop in metaReplacements) {
           out += metaReplacements[prop]!
           i = propEnd
+          canStartRegex = false
+          lastWord = ''
           continue
         }
       }
+      if (isIdentChar(ch) && !/[0-9]/.test(ch)) {
+        let j = i + 1
+        while (j < end && isIdentChar(source[j]!)) j += 1
+        lastWord = source.slice(i, j)
+        out += lastWord
+        i = j
+        canStartRegex = REGEX_BEFORE_KEYWORDS.has(lastWord)
+        continue
+      }
+      if (ch === '(') {
+        parenStartsRegex.push(REGEX_PAREN_KEYWORDS.has(lastWord))
+        canStartRegex = true
+      } else if (ch === ')') {
+        canStartRegex = parenStartsRegex.pop() ?? false
+      } else if (
+        ch === '[' ||
+        ch === '{' ||
+        ch === '}' ||
+        ch === ',' ||
+        ch === ';' ||
+        ch === ':' ||
+        ch === '?' ||
+        ch === '='
+      ) {
+        canStartRegex = true
+      } else if (ch === '+' && source[i + 1] === '+') {
+        out += '++'
+        i += 2
+        canStartRegex = false
+        lastWord = ''
+        continue
+      } else if (ch === '-' && source[i + 1] === '-') {
+        out += '--'
+        i += 2
+        canStartRegex = false
+        lastWord = ''
+        continue
+      } else {
+        canStartRegex = !/[0-9\])]/.test(ch)
+      }
+      lastWord = ''
       out += ch
       i += 1
     }

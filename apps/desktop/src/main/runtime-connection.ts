@@ -92,6 +92,7 @@ export async function createManagedDaemonClient(
   const daemonEntry = resolveDaemonEntry()
   let disconnected = false
   let disposed = false
+  let stoppingForQuit = false
   let reconnecting: Promise<VelaRuntime> | undefined
   let unsubBinder: (() => void) | undefined
   let bindSubscriptions: ((rt: VelaRuntime) => () => void) | undefined
@@ -105,7 +106,7 @@ export async function createManagedDaemonClient(
         env: buildDaemonEnv(),
       },
       onDisconnect: () => {
-        if (disposed || disconnected) return
+        if (disposed || disconnected || stoppingForQuit) return
         disconnected = true
         publish({
           type: 'channel',
@@ -136,7 +137,7 @@ export async function createManagedDaemonClient(
   }
 
   const reconnect = (): Promise<VelaRuntime> => {
-    if (disposed) {
+    if (disposed || stoppingForQuit) {
       return Promise.reject(new Error('Desktop host is disposed'))
     }
     if (!disconnected) return Promise.resolve(current)
@@ -144,11 +145,16 @@ export async function createManagedDaemonClient(
       const delays = [0, 300, 800, 1500]
       let lastError: unknown
       for (const delay of delays) {
-        if (disposed) throw new Error('Desktop host is disposed')
+        if (disposed || stoppingForQuit) {
+          throw new Error('Desktop host is disposed')
+        }
         if (delay > 0) await new Promise((r) => setTimeout(r, delay))
+        if (disposed || stoppingForQuit) {
+          throw new Error('Desktop host is disposed')
+        }
         try {
           const next = await connectOnce()
-          if (disposed) {
+          if (disposed || stoppingForQuit) {
             await next.dispose().catch(() => {})
             throw new Error('Desktop host is disposed')
           }
@@ -254,18 +260,24 @@ export async function createManagedDaemonClient(
       if (choice.response !== 0) return false
     }
 
+    stoppingForQuit = true
+    await reconnecting?.catch(() => {})
     try {
       await stopDaemon({
         agentDir: resolvedAgentDir,
         hostEnv: process.env,
       })
     } catch (error) {
+      stoppingForQuit = false
       await showBox({
         type: 'error',
         buttons: ['OK'],
         message: 'Could not stop the background service.',
         detail: error instanceof Error ? error.message : String(error),
       })
+      if (disconnected && !disposed) {
+        void reconnect().catch(() => {})
+      }
       return false
     }
     await dispose()

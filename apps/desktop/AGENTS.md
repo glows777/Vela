@@ -13,7 +13,7 @@ Vela desktop brings Local projects, Local sessions, Lark projects, and Lark sess
 
 Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The daemon bridge, shared contract, preload bridge, and real-window assertions are connected. Home, the Local and Lark project pages, the session side panel, the New project dialog, the Routines page, first-run setup and Settings › General/Models/Lark are product screens. New project → Lark uses the shared daemon settings/discovery API and writer.
 
-The daemon owns `vela.db`, webhooks, and the optional Lark connection on the shared `VELA_DIR`, honoring the `vela.db` channel toggle ("Run Lark in this app") across CLI and Desktop clients.
+The daemon owns `vela.db`, webhooks, and the optional Lark connection on the shared `VELA_DIR`, honoring the `vela.db` channel toggle ("Enable Lark connection on this computer") across CLI and Desktop clients.
 
 Keep `sandbox`, `contextIsolation`, and disabled `nodeIntegration`. Deny new windows, page navigation, and permission requests. Keep the strict CSP in both HTML entries. These limits contain renderer content as product functionality grows.
 

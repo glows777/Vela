@@ -60,6 +60,21 @@ export function ProjectPage({
 
   if (project.channel === 'local') {
     const sessions = localSessions
+    const projectLoc = project.location ?? {
+      environment: 'local',
+      cwd: project.cwd,
+    }
+    const activeLoc = active?.location ?? projectLoc
+    const formatLoc = (loc: { environment: string; cwd: string }) =>
+      loc.environment === 'local' ? (
+        <>
+          Runs in <code>{loc.cwd}</code> on this computer.
+        </>
+      ) : (
+        <>
+          Runs in <code>{loc.cwd}</code> ({loc.environment}).
+        </>
+      )
     return (
       <div className={styles.page}>
         {active ? (
@@ -70,11 +85,19 @@ export function ProjectPage({
             session={active}
             project={project}
             hint={
-              <>
-                Runs in <code>{project.cwd}</code> on this computer.
-              </>
+              active.isHub ? (
+                <>
+                  Legacy project hub history. Sending starts a new work session
+                  in <code>{projectLoc.cwd}</code>.
+                </>
+              ) : (
+                formatLoc(activeLoc)
+              )
             }
             emptyCopy="Ask Vela about this folder. Replies appear right here."
+            onSessionCreated={(sessionId) =>
+              onPanel({ open: panel.open, sessionId })
+            }
             onDeleted={() => onPanel({ open: panel.open })}
           />
         ) : (
@@ -85,7 +108,7 @@ export function ProjectPage({
               centered
             >
               <p className={styles.empty}>
-                Start a session in <code>{project.cwd}</code>.
+                Start a session in <code>{projectLoc.cwd}</code>.
               </p>
             </Conversation>
             <div className={styles.composerDock}>
@@ -93,11 +116,7 @@ export function ProjectPage({
                 key={project.id}
                 label="Message Vela in this project"
                 draftKey={`project:${project.id}`}
-                hint={
-                  <>
-                    Runs in <code>{project.cwd}</code> on this computer.
-                  </>
-                }
+                hint={formatLoc(projectLoc)}
                 onSend={(text) =>
                   sendInNewLocalSession(project.id, text, (sessionId) =>
                     onPanel({ open: panel.open, sessionId }),

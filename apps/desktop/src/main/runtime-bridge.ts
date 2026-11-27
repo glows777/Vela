@@ -140,6 +140,7 @@ export function toDesktopSession(
     ...(ownership.channel === 'local' && session.kind === 'hub'
       ? { isHub: true }
       : {}),
+    ...(session.location ? { location: session.location } : {}),
     task: session.name?.trim() || fallbackTask || '',
     state: mapSessionState(session, status, lastRunStatus),
     requester:
@@ -202,13 +203,27 @@ function resolveLocalTargetSession(
   target: { sessionId?: string; chatId?: string; rootId?: string },
   projects: readonly ProjectRecord[],
   sessions: readonly SessionRecord[],
+  bindings: readonly ChannelBinding[],
   larkProjectIds: ReadonlySet<string>,
 ): SessionRecord | undefined {
+  const projectsById = new Map(projects.map((p) => [p.id, p]))
   if (target.sessionId) {
     const direct = sessions.find((s) => s.id === target.sessionId)
     if (!direct) return undefined
-    if (direct.projectId && larkProjectIds.has(direct.projectId))
-      return undefined
+    const ownership = resolveSessionOwnership(
+      direct,
+      bindings,
+      larkProjectIds,
+      projectsById,
+    )
+    if (ownership?.channel !== 'local') return undefined
+    if (target.chatId !== undefined) {
+      if (target.chatId === 'quick') {
+        if (direct.projectId !== null) return undefined
+      } else if (direct.projectId !== target.chatId) {
+        return undefined
+      }
+    }
     return direct
   }
   const project = target.chatId
@@ -368,8 +383,17 @@ export async function submitDesktopMessage(
         msg.sessionId,
         msg.projectId !== undefined ? msg.projectId : undefined,
       )
-      session = checked.session
-      resolvedProjectId = session.projectId ?? null
+      if (checked.session.kind === 'hub') {
+        resolvedProjectId = checked.session.projectId ?? null
+        session = await runtime.sessions.create({
+          projectId: resolvedProjectId,
+          kind: 'work',
+          name: text.slice(0, 60),
+        })
+      } else {
+        session = checked.session
+        resolvedProjectId = session.projectId ?? null
+      }
     } else if (resolvedProjectId) {
       const bindings = await runtime.bindings.list({ channel: 'lark' })
       const project = await runtime.projects.get(resolvedProjectId)
@@ -491,6 +515,7 @@ export async function stopDesktopTarget(
       request.target,
       await runtime.projects.list({ includeArchived: true }),
       await runtime.sessions.list({ includeArchived: true }),
+      bindings,
       getLarkProjectIds(bindings),
     )
     if (!target) return false

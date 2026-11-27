@@ -14,6 +14,7 @@ import {
   loadSession,
   openLarkChat,
   renameSession,
+  sendInNewLocalSession,
   sendInSession,
   stop,
 } from '../store.ts'
@@ -31,6 +32,7 @@ export function SessionView({
   hint,
   emptyCopy,
   onBack,
+  onSessionCreated,
   onDeleted,
 }: {
   snapshot: Snapshot
@@ -40,6 +42,7 @@ export function SessionView({
   hint?: ReactNode
   emptyCopy?: string
   onBack?: () => void
+  onSessionCreated?: (sessionId: string) => void
   onDeleted?: () => void
 }) {
   const [notice, setNotice] = useState('')
@@ -197,12 +200,26 @@ export function SessionView({
       <div className={styles.composerDock}>
         <Composer
           key={session.sessionId}
-          label={lark ? 'Message Vela in this topic' : 'Message Vela'}
+          label={
+            lark
+              ? 'Message Vela in this topic'
+              : session.isHub
+                ? 'Message Vela in a new session'
+                : 'Message Vela'
+          }
           draftKey={`session:${session.sessionId}`}
           running={running}
           hint={lark ? larkTopicComposer : hint}
           onSend={(text) => {
             setNotice('')
+            if (session.isHub && !lark) {
+              return sendInNewLocalSession(
+                session.projectId,
+                text,
+                (sessionId) => onSessionCreated?.(sessionId),
+                setNotice,
+              )
+            }
             return sendInSession(project, session, text, setNotice)
           }}
         />
