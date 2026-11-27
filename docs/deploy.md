@@ -2,7 +2,7 @@
 
 `vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, serving CLI clients and SDK `connectRuntime()` callers over `<VELA_DIR>/vela.sock`.
 
-> **Channel gateway transition note (S4a -> S4b):** `vela serve` is retired, and `vela daemon run` does not yet start `lark` or `local` channel listeners (channel migration lands in S4b). If your deployment serves **Lark or Local HTTP/SSE channels**, run a small Node.js host script calling `createVela()` + `startChannels()` (see [Serving channels during the transition](#serving-channels-during-the-transition) below) instead of pointing systemd at `vela daemon run`.
+> **Channel gateway transition note (S4a -> S4b):** `vela serve` is retired, and `vela daemon run` does not yet start `lark`, `local`, or `webhooks` listeners (channel and webhook migration lands in S4b). If your deployment serves **Lark, Local HTTP/SSE channels, or GitHub/generic webhooks**, run a small Node.js host script calling `createVela()` + `startChannels()` from a local package directory (see [Serving channels during the transition](#serving-channels-during-the-transition) below) instead of pointing systemd at `vela daemon run`.
 
 The daemon has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
 
@@ -57,7 +57,7 @@ Write `/etc/systemd/system/vela.service`:
 
 ```ini
 [Unit]
-Description=Vela agent serving chat channels
+Description=Vela daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -102,8 +102,18 @@ The journal holds the daemon's startup lines and operational logs ([CLI daemon](
 
 ## 6. Upgrade
 
+For `vela daemon`:
+
 ```sh
-sudo npm install -g @glows777/vela
+sudo npm install -g @glows777/vela@latest
+sudo systemctl restart vela
+systemctl status --no-pager vela
+```
+
+If you are running the transitional SDK gateway under `/home/vela/gateway` (below), upgrade its local `@glows777/vela` dependency instead (and upgrade the global CLI separately with `sudo npm install -g @glows777/vela@latest` if installed):
+
+```sh
+sudo -u vela npm --prefix /home/vela/gateway install @glows777/vela@latest
 sudo systemctl restart vela
 systemctl status --no-pager vela
 ```
@@ -112,16 +122,40 @@ The running process keeps the old code until the restart. A run in progress is s
 
 ## Serving channels during the transition
 
-Until S4b wires `lark` and `local` directly onto `vela daemon`, deploy a lightweight host script (`gateway.mjs`) alongside your workspace and run `ExecStart=/usr/bin/node /home/vela/gateway.mjs` under the same `vela` systemd user:
+Until S4b wires channels and webhooks directly onto `vela daemon`, **Lark, Local HTTP/SSE channels, and GitHub/generic webhooks** all run on the legacy SDK host (`createVela()` + `startChannels()`).
+
+Node.js ESM does **not** resolve bare package imports (`import ... from '@glows777/vela'`) from a global `npm install -g` installation. Create a dedicated directory with a local `@glows777/vela` install under the `vela` user:
+
+```sh
+sudo -u vela mkdir -p /home/vela/gateway
+sudo -u vela sh -c 'cd /home/vela/gateway && npm init -y && npm install @glows777/vela'
+```
+
+Write `/home/vela/gateway/gateway.mjs`:
 
 ```js
-import { createVela, lark, local, loadConfig } from '@glows777/vela'
+import { createVela, lark, larkConfig, local, loadConfig } from '@glows777/vela'
 
-const config = loadConfig({ cwd: process.cwd(), agentDir: process.env.VELA_DIR, env: process.env })
+const config = loadConfig({
+  cwd: process.cwd(),
+  agentDir: process.env.VELA_DIR,
+  env: process.env,
+  extensionConfigs: [larkConfig],
+})
+const larkCfg = config.extensionConfig.lark
+const localCfg = config.settings.local
 const extensions = [
-  ...(config.settings.lark ? [lark(config.settings.lark)] : []),
-  ...(config.settings.local?.enabled && config.settings.local.token
-    ? [local(config.settings.local)]
+  ...(larkCfg?.appId && larkCfg?.appSecret ? [lark()] : []),
+  ...(localCfg?.enabled && typeof localCfg.token === 'string' && localCfg.token
+    ? [
+        local({
+          token: localCfg.token,
+          ...(typeof localCfg.port === 'number' ? { port: localCfg.port } : {}),
+          ...(typeof localCfg.timezone === 'string'
+            ? { timezone: localCfg.timezone }
+            : {}),
+        }),
+      ]
     : []),
 ]
 const vela = createVela({
@@ -135,12 +169,34 @@ const vela = createVela({
   limits: config.settings.limits,
   extensions,
   extensionConfig: config.extensionConfig,
+  eventDefaultTarget: config.settings.eventDefaultTarget,
 })
+let shuttingDown = false
 for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => void vela.dispose().finally(() => process.exit(0)))
+  process.on(sig, () => {
+    if (shuttingDown) process.exit(130)
+    shuttingDown = true
+    const timer = setTimeout(() => process.exit(143), 30_000)
+    timer.unref()
+    void vela.dispose({ graceful: true }).finally(() => {
+      clearTimeout(timer)
+      process.exit(0)
+    })
+  })
 }
+await vela.ready()
 await vela.startChannels()
 ```
+
+`loadConfig()` already maps top-level `webhooks` from `config.json` into `config.extensionConfig.channel.eventReceiver`, so forwarding `extensionConfig: config.extensionConfig` enables both GitHub and generic webhooks on this host as well.
+
+In `/etc/systemd/system/vela.service`, keep `WorkingDirectory=/home/vela/workspace`, `Environment=VELA_DIR=/home/vela/.vela`, and `EnvironmentFile=/etc/vela/vela.env`, and set:
+
+```ini
+ExecStart=/usr/bin/node /home/vela/gateway/gateway.mjs
+```
+
+When upgrading later, follow the `/home/vela/gateway` commands in [Upgrade](#6-upgrade).
 
 ## 7. Data and backups
 

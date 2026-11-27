@@ -99,7 +99,8 @@ test.skipIf(!hasScript)(
     expect(f.state().hooks['acme/two']).toHaveLength(1)
     expect(readdirSync(f.agentDir)).toEqual(['config.json'])
     expect(result.output).not.toContain('Choose a provider')
-    expect(result.output).toContain('vela daemon stop && vela daemon start')
+    expect(result.output).toContain('startChannels()')
+    expect(result.output).not.toContain('vela daemon stop && vela daemon start')
   },
   20_000,
 )

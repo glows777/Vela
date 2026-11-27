@@ -9,6 +9,7 @@
  */
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { $ } from 'bun'
@@ -502,6 +503,202 @@ async function cli(app: string, runtime: string, version: string) {
   }
 }
 
+async function reserveFreePort(): Promise<number> {
+  return await new Promise<number>((resolvePort, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      server.close((error) => {
+        if (error) reject(error)
+        else resolvePort(port)
+      })
+    })
+  })
+}
+
+async function nodeGatewaySmoke(app: string) {
+  const localPort = await reserveFreePort()
+  let webhookPort = await reserveFreePort()
+  while (webhookPort === localPort) webhookPort = await reserveFreePort()
+
+  const gatewayDir = join(app, 'gateway-agent')
+  await mkdir(gatewayDir, { recursive: true })
+  const token = 'smoke-local-token'
+  const webhookSecret = 'smoke-webhook-secret'
+  await writeFile(
+    join(gatewayDir, 'config.json'),
+    JSON.stringify({
+      local: { enabled: true, token: '$VELA_LOCAL_TOKEN', port: localPort },
+      webhooks: {
+        port: webhookPort,
+        generic: { secret: '$VELA_WEBHOOK_SECRET', source: 'smoke' },
+      },
+    }),
+  )
+  await writeFile(
+    join(app, 'gateway.mjs'),
+    [
+      "import { createVela, lark, larkConfig, local, loadConfig } from '@glows777/vela'",
+      '',
+      'const config = loadConfig({',
+      '  cwd: process.cwd(),',
+      '  agentDir: process.env.VELA_DIR,',
+      '  env: process.env,',
+      '  extensionConfigs: [larkConfig],',
+      '})',
+      'const larkCfg = config.extensionConfig.lark',
+      'const localCfg = config.settings.local',
+      'const extensions = [',
+      '  ...(larkCfg?.appId && larkCfg?.appSecret ? [lark()] : []),',
+      "  ...(localCfg?.enabled && typeof localCfg.token === 'string' && localCfg.token",
+      '    ? [',
+      '        local({',
+      '          token: localCfg.token,',
+      "          ...(typeof localCfg.port === 'number' ? { port: localCfg.port } : {}),",
+      "          ...(typeof localCfg.timezone === 'string'",
+      '            ? { timezone: localCfg.timezone }',
+      '            : {}),',
+      '        }),',
+      '      ]',
+      '    : []),',
+      ']',
+      'const vela = createVela({',
+      '  cwd: config.cwd,',
+      '  agentDir: config.agentDir,',
+      '  dataDir: config.dataDir,',
+      '  model: config.settings.model,',
+      '  thinkingLevel: config.settings.thinkingLevel,',
+      '  providers: config.providers,',
+      '  credentials: config.credentials,',
+      '  limits: config.settings.limits,',
+      '  extensions,',
+      '  extensionConfig: config.extensionConfig,',
+      '  eventDefaultTarget: config.settings.eventDefaultTarget,',
+      '})',
+      'let shuttingDown = false',
+      "for (const sig of ['SIGINT', 'SIGTERM']) {",
+      '  process.on(sig, () => {',
+      '    if (shuttingDown) process.exit(130)',
+      '    shuttingDown = true',
+      '    const timer = setTimeout(() => process.exit(143), 30_000)',
+      '    timer.unref()',
+      '    void vela.dispose({ graceful: true }).finally(() => {',
+      '      clearTimeout(timer)',
+      '      process.exit(0)',
+      '    })',
+      '  })',
+      '}',
+      'await vela.ready()',
+      'await vela.startChannels()',
+      '',
+    ].join('\n'),
+  )
+
+  const proc = Bun.spawn(['node', 'gateway.mjs'], {
+    cwd: app,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: join(app, 'home'),
+      VELA_DIR: gatewayDir,
+      VELA_LOCAL_TOKEN: token,
+      VELA_WEBHOOK_SECRET: webhookSecret,
+    },
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  let stdout = ''
+  let stderr = ''
+  const readingStdout = (async () => {
+    for await (const chunk of proc.stdout)
+      stdout += new TextDecoder().decode(chunk)
+  })()
+  const readingStderr = (async () => {
+    for await (const chunk of proc.stderr)
+      stderr += new TextDecoder().decode(chunk)
+  })()
+  try {
+    const deadline = Date.now() + 20_000
+    let localReady = false
+    while (Date.now() < deadline) {
+      if (proc.exitCode !== null)
+        throw new Error(
+          `packaged gateway.mjs exited early (${proc.exitCode}): ${stderr || stdout}`,
+        )
+      try {
+        const res = await fetch(`http://127.0.0.1:${localPort}/v1/info`, {
+          headers: { authorization: `Bearer ${token}` },
+        })
+        if (res.status === 200) {
+          const info = (await res.json()) as { channel?: string }
+          if (info.channel !== 'local')
+            throw new Error(
+              `unexpected gateway /v1/info payload: ${JSON.stringify(info)}`,
+            )
+          localReady = true
+          break
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.startsWith('unexpected gateway')
+        )
+          throw error
+      }
+      await new Promise((done) => setTimeout(done, 50))
+    }
+    if (!localReady)
+      throw new Error(
+        `packaged gateway.mjs local listener did not become ready: ${stderr || stdout}`,
+      )
+
+    let webhookStatus = 0
+    while (Date.now() < deadline) {
+      if (proc.exitCode !== null)
+        throw new Error(
+          `packaged gateway.mjs exited before webhook check (${proc.exitCode}): ${stderr || stdout}`,
+        )
+      try {
+        const res = await fetch(
+          `http://127.0.0.1:${webhookPort}/events/generic`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-vela-delivery': 'smoke-1',
+              'x-vela-signature-256': 'sha256=deadbeef',
+            },
+            body: JSON.stringify({ key: 'smoke:test', summary: 'hi' }),
+          },
+        )
+        webhookStatus = res.status
+        break
+      } catch {
+        await new Promise((done) => setTimeout(done, 50))
+      }
+    }
+    if (webhookStatus !== 403)
+      throw new Error(
+        `packaged gateway.mjs webhook listener expected 403 on bad signature, got ${webhookStatus}: ${stderr || stdout}`,
+      )
+
+    proc.kill('SIGTERM')
+    const code = await proc.exited
+    await Promise.all([readingStdout, readingStderr])
+    if (code !== 0)
+      throw new Error(
+        `packaged gateway.mjs SIGTERM exit failed (${code}): ${stderr || stdout}`,
+      )
+    console.log('packaged gateway.mjs local+webhook lifecycle ok')
+  } finally {
+    if (proc.exitCode === null) proc.kill('SIGKILL')
+    await proc.exited
+    await Promise.all([readingStdout, readingStderr])
+  }
+}
+
 try {
   for (const pkg of packed)
     for (const runtime of ['node', 'bun']) {
@@ -585,6 +782,8 @@ try {
       }
       await $`${runtime} smoke.ts`.cwd(app)
       await cli(app, runtime, pkg.version)
+      if (pkg.name === '@glows777/vela' && runtime === 'node')
+        await nodeGatewaySmoke(app)
       console.log(`PASS ${pkg.name} on ${runtime}`)
     }
   console.log('packed @glows777/vela consumer checks passed on Node and Bun')
