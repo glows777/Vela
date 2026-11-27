@@ -1,16 +1,9 @@
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
-  assertNoLegacyConfigFiles,
-  interpolateConfigLayer,
-  parseConfig,
+  loadOwnerRuntimeConfig,
+  statSignature,
   toExtensionConfigView,
   type VelaSettings,
 } from './config/index.ts'
@@ -41,8 +34,6 @@ import {
 import type {
   CreateRuntimeOptions,
   LocalVelaRuntime,
-  RuntimePromptInput,
-  RuntimeRecoverySummary,
   VelaRuntime,
 } from './runtime-sdk-types.ts'
 import { silentLogger, type VelaLogger } from './shared/logger.ts'
@@ -51,10 +42,16 @@ import type { ModelInput } from './shared/provider-types.ts'
 export type {
   CreateRuntimeOptions,
   LocalVelaRuntime,
+  RuntimeLarkDiscoveryGroup,
+  RuntimeLarkSetupInput,
+  RuntimeModelSetupInput,
   RuntimePromptInput,
   RuntimeRecoverySummary,
+  RuntimeSettingsLarkState,
+  RuntimeSettingsProvider,
+  RuntimeSettingsState,
   VelaRuntime,
-}
+} from './runtime-sdk-types.ts'
 
 function createLazyRuntimeMcpAdapter(
   hostEnv: Record<string, string | undefined> | undefined,
@@ -78,80 +75,6 @@ function createLazyRuntimeMcpAdapter(
       const adapter = await adapterPromise
       await adapter.dispose?.()
     },
-  }
-}
-
-function loadOwnerRuntimeConfig(
-  agentDir: string,
-  hostEnv: Record<string, string | undefined>,
-): { settings: VelaSettings; larkError?: string } {
-  assertNoLegacyConfigFiles(agentDir)
-  const file = join(agentDir, 'config.json')
-  if (!existsSync(file)) return { settings: {} }
-  const text = readFileSync(file, 'utf8')
-  let invalidWebhooks: unknown
-  let hasInvalidWebhooks = false
-  let larkError: string | undefined
-  let parseText = text
-  try {
-    const raw = JSON.parse(text) as unknown
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      const stripped: Record<string, unknown> = {
-        ...(raw as Record<string, unknown>),
-      }
-      let changed = false
-      if (Object.hasOwn(raw, 'webhooks')) {
-        const value = stripped.webhooks
-        if (
-          value !== undefined &&
-          (!value || typeof value !== 'object' || Array.isArray(value))
-        ) {
-          hasInvalidWebhooks = true
-          invalidWebhooks = value
-          delete stripped.webhooks
-          changed = true
-        }
-      }
-      if (Object.hasOwn(raw, 'lark')) {
-        const larkValue = stripped.lark
-        if (
-          larkValue !== undefined &&
-          (!larkValue ||
-            typeof larkValue !== 'object' ||
-            Array.isArray(larkValue))
-        ) {
-          larkError = `${file}: lark must be an object`
-          delete stripped.lark
-          changed = true
-        }
-      }
-      if (changed) parseText = JSON.stringify(stripped)
-    }
-  } catch {
-    /* Let parseConfig raise its normal malformed JSON error */
-  }
-  const interpolated = interpolateConfigLayer(
-    parseConfig(parseText, file),
-    hostEnv,
-  )
-  return {
-    settings: hasInvalidWebhooks
-      ? {
-          ...interpolated,
-          webhooks: invalidWebhooks as Record<string, unknown>,
-        }
-      : interpolated,
-    ...(larkError ? { larkError } : {}),
-  }
-}
-
-function statSignature(file: string): string {
-  try {
-    const st = statSync(file)
-    return `${st.ino}:${st.mtimeMs}:${st.size}`
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
-    throw error
   }
 }
 
@@ -517,8 +440,27 @@ export function createRuntime(
     }
 
     let disposing: Promise<void> | undefined
+    let settingsApiPromise: Promise<VelaRuntime['settings']> | undefined
+    const getSettingsApi = (): Promise<VelaRuntime['settings']> => {
+      settingsApiPromise ??= import('./daemon/settings-service.ts').then(
+        (svc) =>
+          svc.createRuntimeSettingsApi({
+            agentDir,
+            hostEnv,
+            runtime: runtimeHandle,
+            directModel: Boolean(options.defaultModel),
+            isLarkLoaded: options.isLarkLoaded,
+            getLarkConfigError: options.getLarkConfigError,
+            pauseLark: options.onPauseLarkForDiscovery,
+            resumeLark: options.onResumeLarkFromDiscovery,
+            createDiscoveryTransport: options.onCreateLarkDiscoveryTransport,
+            verifyCredentials: options.onVerifyLarkCredentials,
+          }),
+      )
+      return settingsApiPromise
+    }
 
-    return {
+    const runtimeHandle: LocalVelaRuntime = {
       agentDir: engine.agentDir,
       ready: () => velaDriver.control.ready(),
       extensionErrors: async () => velaDriver.control.extensionErrors(),
@@ -669,6 +611,20 @@ export function createRuntime(
         chats: (channel) => engine.listChannelChats(channel),
         submit: (channel, input) =>
           engine.submitChannelHostMessage(channel, input),
+        subscribe: (listener) => engine.subscribeChannelEvents(listener),
+      },
+      settings: {
+        get: () => getSettingsApi().then((s) => s.get()),
+        saveModel: (input) => getSettingsApi().then((s) => s.saveModel(input)),
+        saveLark: (input) => getSettingsApi().then((s) => s.saveLark(input)),
+        discoverLarkGroup: (opts) =>
+          getSettingsApi().then((s) => s.discoverLarkGroup(opts)),
+        confirmLarkGroup: (chatId) =>
+          getSettingsApi().then((s) => s.confirmLarkGroup(chatId)),
+        cancelLarkSetup: () =>
+          settingsApiPromise
+            ? settingsApiPromise.then((s) => s.cancelLarkSetup())
+            : Promise.resolve(),
       },
       blobs: {
         get: async (id) => engine.blobs.get(id),
@@ -741,6 +697,11 @@ export function createRuntime(
       },
       dispose() {
         disposing ??= (async () => {
+          if (settingsApiPromise) {
+            await settingsApiPromise
+              .then((s) => s.cancelLarkSetup())
+              .catch(() => {})
+          }
           try {
             await reloadQueue.catch(() => {})
             await engine.dispose()
@@ -757,6 +718,7 @@ export function createRuntime(
         return disposing
       },
     }
+    return runtimeHandle
   } catch (error) {
     if (ownsDb && db.open) db.close()
     if (transientAgentDir) {

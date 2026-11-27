@@ -5,6 +5,7 @@ import type {
   RoutineSchedule,
   Weekday,
 } from '../../shared/bridge.ts'
+import { projectName } from '../format.ts'
 import { errorMessage } from '../store.ts'
 import { Button } from '../ui/button.tsx'
 import { Dialog, DialogClose, DialogContent } from '../ui/dialog.tsx'
@@ -79,7 +80,7 @@ export function RoutineDialog({
     setError('')
   }, [open, editing])
 
-  // Where a new routine answers: each project's chat, then the topics it already has.
+  // Where a new routine answers: each project's default target plus active sessions/topics.
   useEffect(() => {
     if (!open || editing) return
     let live = true
@@ -87,29 +88,46 @@ export function RoutineDialog({
       try {
         const found = await Promise.all(
           targets.map(async (project) => {
+            const name = projectName(project)
             const sessions = await vela.sessions(project.channel, project.id)
-            const chat: Place = {
+            const basePlace: Place = {
               key: `${project.id}:`,
-              label: `${project.name} · the project chat`,
+              label:
+                project.channel === 'lark'
+                  ? `${name} · Group chat`
+                  : `${name} · Project default`,
               project,
               target: { chatId: project.id },
             }
-            const topics = sessions.flatMap((session): Place[] =>
-              session.topic
-                ? [
-                    {
-                      key: `${project.id}:${session.topic.rootId}`,
-                      label: `${project.name} · topic “${session.task}”`,
-                      project,
-                      target: {
-                        chatId: project.id,
-                        rootId: session.topic.rootId,
+            const children = sessions.flatMap((session): Place[] => {
+              if (project.channel === 'lark') {
+                return session.topic
+                  ? [
+                      {
+                        key: `${project.id}:${session.topic.rootId}`,
+                        label: `${name} · topic “${session.task}”`,
+                        project,
+                        target: {
+                          chatId: project.id,
+                          rootId: session.topic.rootId,
+                        },
                       },
-                    },
-                  ]
-                : [],
-            )
-            return [chat, ...topics]
+                    ]
+                  : []
+              }
+              return [
+                {
+                  key: `${project.id}:${session.sessionId}`,
+                  label: `${name} · session “${session.task || 'New session'}”`,
+                  project,
+                  target: {
+                    chatId: project.id,
+                    rootId: session.sessionId,
+                  },
+                },
+              ]
+            })
+            return [basePlace, ...children]
           }),
         )
         if (!live) return

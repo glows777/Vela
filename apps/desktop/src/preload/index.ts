@@ -7,56 +7,51 @@ import {
   type Request,
 } from '../shared/bridge.ts'
 
-/**
- * Electron wraps a handler's failure as `Error invoking remote method 'vela:request':
- * Error: <message>`. The page shows the host's own words, so the wrapper goes here.
- */
-const unwrap = (cause: unknown) =>
-  (cause instanceof Error ? cause.message : String(cause)).replace(
-    /^Error invoking remote method '[^']*': (?:\w*Error: )?/,
-    '',
-  )
-const invoke = async (request: Request) => {
-  try {
-    return await ipcRenderer.invoke(REQUEST, request)
-  } catch (cause) {
-    throw new Error(unwrap(cause))
-  }
-}
-const bridge: DesktopBridge = {
-  channels: () => invoke({ method: 'channels' }),
-  settings: () => invoke({ method: 'settings' }),
-  saveLark: (input) => invoke({ method: 'saveLark', input }),
-  saveModel: (input) => invoke({ method: 'saveModel', input }),
-  sessions: (channel, chatId) =>
-    invoke({ method: 'sessions', channel, chatId }),
-  connection: (channel) => invoke({ method: 'connection', channel }),
-  submit: (channel, message) => invoke({ method: 'submit', channel, message }),
+const ask = <T>(request: Request) =>
+  ipcRenderer.invoke(REQUEST, request) as Promise<T>
+
+const api: DesktopBridge = {
+  channels: () => ask({ method: 'channels' }),
+  settings: () => ask({ method: 'settings' }),
+  saveModel: (input) => ask({ method: 'saveModel', input }),
+  saveLark: (input) => ask({ method: 'saveLark', input }),
+  savePreferences: (input) => ask({ method: 'savePreferences', input }),
+  sessions: (channel, chatId) => ask({ method: 'sessions', channel, chatId }),
+  createSession: (input) => ask({ method: 'createSession', input }),
+  renameSession: (input) => ask({ method: 'renameSession', input }),
+  deleteSession: (input) => ask({ method: 'deleteSession', input }),
+  connection: (channel) => ask({ method: 'connection', channel }),
+  submit: (channel, message) => ask({ method: 'submit', channel, message }),
   stop: (channel, target, runId) =>
-    invoke({ method: 'stop', channel, target, runId }),
-  discoverLarkGroup: () => invoke({ method: 'discoverLarkGroup' }),
-  confirmLarkGroup: () => invoke({ method: 'confirmLarkGroup' }),
-  cancelLarkSetup: () => invoke({ method: 'cancelLarkSetup' }),
-  projects: () => invoke({ method: 'projects' }),
-  openProject: (input) => invoke({ method: 'openProject', input }),
-  chooseFolder: () => invoke({ method: 'chooseFolder' }),
-  messages: (input) => invoke({ method: 'messages', input }),
-  larkMessages: (input) => invoke({ method: 'larkMessages', input }),
-  openMessageLink: (url) => invoke({ method: 'openMessageLink', url }),
-  copyMessageCode: (text) => invoke({ method: 'copyMessageCode', text }),
-  openLarkChat: (chatId) => invoke({ method: 'openLarkChat', chatId }),
+    ask({ method: 'stop', channel, target, runId }),
+  discoverLarkGroup: () => ask({ method: 'discoverLarkGroup' }),
+  confirmLarkGroup: () => ask({ method: 'confirmLarkGroup' }),
+  cancelLarkSetup: () => ask({ method: 'cancelLarkSetup' }),
+  projects: () => ask({ method: 'projects' }),
+  openProject: (input) => ask({ method: 'openProject', input }),
+  removeProject: (input) => ask({ method: 'removeProject', input }),
+  chooseFolder: () => ask({ method: 'chooseFolder' }),
+  messages: (input) => ask({ method: 'messages', input }),
+  openLarkChat: (chatId) => ask({ method: 'openLarkChat', chatId }),
+  openMessageLink: (url) => ask({ method: 'openMessageLink', url }),
+  copyMessageCode: (text) => ask({ method: 'copyMessageCode', text }),
   listRoutines: (channel, chatId) =>
-    invoke({ method: 'listRoutines', channel, chatId }),
+    ask({ method: 'listRoutines', channel, chatId }),
   createRoutine: (channel, target, input) =>
-    invoke({ method: 'createRoutine', channel, target, input }),
+    ask({ method: 'createRoutine', channel, target, input }),
   editRoutine: (channel, chatId, id, input) =>
-    invoke({ method: 'editRoutine', channel, chatId, id, input }),
+    ask({ method: 'editRoutine', channel, chatId, id, input }),
   cancelRoutine: (channel, chatId, id) =>
-    invoke({ method: 'cancelRoutine', channel, chatId, id }),
+    ask({ method: 'cancelRoutine', channel, chatId, id }),
   onEvent: (listener) => {
-    const receive = (_: unknown, event: Event) => listener(event)
-    ipcRenderer.on(EVENT, receive)
-    return () => ipcRenderer.removeListener(EVENT, receive)
+    const wrapped = (_event: Electron.IpcRendererEvent, value: Event) => {
+      listener(value)
+    }
+    ipcRenderer.on(EVENT, wrapped)
+    return () => {
+      ipcRenderer.off(EVENT, wrapped)
+    }
   },
 }
-contextBridge.exposeInMainWorld('vela', bridge)
+
+contextBridge.exposeInMainWorld('vela', api)

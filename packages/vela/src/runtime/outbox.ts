@@ -274,6 +274,12 @@ export class OutboxDispatcher {
     ) => ChannelAdapter | undefined,
     private readonly onScheduleChanged?: () => void,
     private readonly onTopicBound?: (sessionId: string) => void,
+    private readonly onDelivered?: (info: {
+      channel: string
+      externalChatId: string
+      sessionId: string
+      threadId?: string | null
+    }) => void,
   ) {}
 
   recoverStaleSending(excludeChannels?: ReadonlySet<string>): number {
@@ -578,6 +584,12 @@ export class OutboxDispatcher {
             if (row.kind === 'topic_start') {
               this.onTopicBound?.(row.sessionId)
             }
+            this.onDelivered?.({
+              channel: row.channel,
+              externalChatId: row.externalChatId,
+              sessionId: row.sessionId,
+              threadId: topicThreadId ?? row.threadId,
+            })
           }
         } catch (error) {
           const attempt = row.attempt + 1

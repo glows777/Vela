@@ -184,3 +184,19 @@ export type StreamDeltaEvent =
       bashId?: string
       delta: string
     }
+
+/** In-memory channel lifecycle & external history notifications (never persisted to SQLite `events`). */
+export type ChannelRuntimeEvent =
+  | {
+      type: 'channel_status'
+      channel: string
+      connected: boolean
+      error?: string
+      reset?: boolean
+    }
+  | {
+      type: 'channel_history_changed'
+      channel: string
+      chatId: string
+      sessionId?: string
+    }

@@ -206,6 +206,7 @@ export function fakeLark(dir: string): FakeTransport {
       return
     }
     const lines = source.split('\n').filter((line) => line.trim() !== '')
+    if (lines.length < handled) handled = 0
     if (handled >= lines.length) return
     while (handled < lines.length) {
       const line = lines[handled++]!

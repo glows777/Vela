@@ -1,47 +1,46 @@
 import { Buffer } from 'node:buffer'
 import { realpathSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename } from 'node:path'
 import type {
   ChannelBinding,
-  LocalVelaRuntime,
   ProjectRecord,
-  RuntimeEvent,
   SessionRecord,
   SessionStatusInfo,
-} from '@glows777/vela/legacy-desktop'
+  VelaRuntime,
+} from '@glows777/vela'
 import type {
-  Event,
   LarkSubmit,
-  Message,
-  Project,
+  LocalProject,
+  LocalSubmit,
   Request,
   Session,
 } from '../shared/bridge.ts'
+import { mapLocalRuntimeEvent } from './runtime-events.ts'
 import {
   DesktopClientIdTracker,
   extractMessageText,
-  fetchLocalDesktopMessages,
-  formatFailedTaskReply,
+  fetchDesktopMessages,
   toDesktopMessage,
 } from './runtime-history.ts'
-
-type LocalProject = Extract<Project, { channel: 'local' }>
 
 export {
   DesktopClientIdTracker,
   extractMessageText,
-  fetchLocalDesktopMessages,
+  fetchDesktopMessages,
+  mapLocalRuntimeEvent,
   toDesktopMessage,
 }
 
 export type SessionOwnership = {
   channel: 'local' | 'lark'
-  chatId: string
-  chatKind: 'group' | 'direct'
+  chatId: string | null
+  chatKind: 'group' | 'direct' | 'quick'
+  projectId: string | null
   topic?: { rootId: string; threadId: string }
 }
 
-/** Resolve which desktop channel (`local` vs `lark`) and chat owns a Runtime session. */
+/** Resolve which desktop channel (`local` vs `lark`) and scope owns a Runtime session. */
 export function resolveSessionOwnership(
   session: SessionRecord,
   bindings: readonly ChannelBinding[],
@@ -69,6 +68,7 @@ export function resolveSessionOwnership(
       channel: 'lark',
       chatId: direct.externalId,
       chatKind: direct.kind,
+      projectId: direct.projectId ?? session.projectId ?? null,
       ...(direct.threadId
         ? { topic: { rootId, threadId: direct.threadId } }
         : {}),
@@ -90,16 +90,22 @@ export function resolveSessionOwnership(
       channel: 'lark',
       chatId: root.externalId,
       chatKind: root.kind,
+      projectId: session.projectId,
     }
   }
-  const chatId = session.projectId ?? session.id
+  if (!session.projectId) {
+    return {
+      channel: 'local',
+      chatId: null,
+      chatKind: 'quick',
+      projectId: null,
+    }
+  }
   return {
     channel: 'local',
-    chatId,
-    chatKind: 'group',
-    ...(session.kind === 'topic' || session.kind === 'work'
-      ? { topic: { rootId: session.id, threadId: session.id } }
-      : {}),
+    chatId: session.projectId,
+    chatKind: 'direct',
+    projectId: session.projectId,
   }
 }
 
@@ -113,6 +119,7 @@ function mapSessionState(
   if (session.state === 'stopped' || lastRunStatus === 'stopped') {
     return 'stopped'
   }
+  if (session.state === 'idle' && !lastRunStatus) return 'done'
   return 'done'
 }
 
@@ -128,6 +135,7 @@ export function toDesktopSession(
     sessionId: session.id,
     chatId: ownership.chatId,
     chatKind: ownership.chatKind,
+    projectId: ownership.projectId,
     ...(ownership.topic ? { topic: ownership.topic } : {}),
     task: session.name?.trim() || fallbackTask || '',
     state: mapSessionState(session, status, lastRunStatus),
@@ -141,221 +149,9 @@ export function toDesktopSession(
   }
 }
 
-export function mapLocalRuntimeEvent(
-  event: RuntimeEvent,
-  chatId: string,
-  desktopSession: Session,
-  desktopMessage?: Message,
-): Event[] {
-  const base = {
-    version: 1 as const,
-    id: `evt-${event.seq}`,
-    time: event.timestamp,
-    projectId: chatId,
-    sessionId: event.sessionId,
-    ...('runId' in event && event.runId ? { runId: event.runId } : {}),
-  }
-  switch (event.type) {
-    case 'run_started':
-      return [
-        {
-          type: 'session',
-          channel: 'local',
-          value: {
-            session: desktopSession,
-            run: { type: 'started', runId: event.runId },
-          },
-        },
-        {
-          type: 'local',
-          channel: 'local',
-          value: { ...base, type: 'session', data: desktopSession },
-        },
-        {
-          type: 'local',
-          channel: 'local',
-          value: { ...base, type: 'run_started', data: {} },
-        },
-      ]
-    case 'message_committed': {
-      const events: Event[] = []
-      if (desktopMessage) {
-        events.push({
-          type: 'local',
-          channel: 'local',
-          value: { ...base, type: 'message', data: desktopMessage },
-        })
-      }
-      if (desktopSession.topic && desktopSession.task) {
-        events.push({
-          type: 'local',
-          channel: 'local',
-          value: { ...base, type: 'session', data: desktopSession },
-        })
-      }
-      return events
-    }
-    case 'tool_started':
-      return [
-        {
-          type: 'local',
-          channel: 'local',
-          value: {
-            ...base,
-            type: 'progress',
-            data: { stage: 'tool', tool: event.toolName, state: 'started' },
-          },
-        },
-      ]
-    case 'tool_finished':
-      return [
-        {
-          type: 'local',
-          channel: 'local',
-          value: {
-            ...base,
-            type: 'progress',
-            data: {
-              stage: 'tool',
-              tool: event.toolName,
-              state: event.isError ? 'failed' : 'finished',
-            },
-          },
-        },
-      ]
-    case 'auto_retry_start':
-      return [
-        {
-          type: 'local',
-          channel: 'local',
-          value: {
-            ...base,
-            type: 'progress',
-            data: { stage: 'retry', state: 'started' },
-          },
-        },
-      ]
-    case 'auto_retry_end':
-      return [
-        {
-          type: 'local',
-          channel: 'local',
-          value: {
-            ...base,
-            type: 'progress',
-            data: {
-              stage: 'retry',
-              state: event.success ? 'finished' : 'failed',
-            },
-          },
-        },
-      ]
-    case 'compaction_started':
-      return [
-        {
-          type: 'local',
-          channel: 'local',
-          value: {
-            ...base,
-            type: 'progress',
-            data: { stage: 'compaction', state: 'started' },
-          },
-        },
-      ]
-    case 'compaction_finished':
-      return [
-        {
-          type: 'local',
-          channel: 'local',
-          value: {
-            ...base,
-            type: 'progress',
-            data: { stage: 'compaction', state: 'finished' },
-          },
-        },
-      ]
-    case 'compaction_failed':
-      return [
-        {
-          type: 'local',
-          channel: 'local',
-          value: {
-            ...base,
-            type: 'progress',
-            data: { stage: 'compaction', state: 'failed' },
-          },
-        },
-      ]
-    case 'run_finished': {
-      const outcome =
-        event.status === 'failed' || event.status === 'interrupted'
-          ? 'failed'
-          : event.status === 'stopped'
-            ? 'stopped'
-            : event.silent
-              ? 'silent'
-              : 'done'
-      const events: Event[] = []
-      if (outcome === 'failed' && event.error) {
-        events.push(
-          {
-            type: 'local',
-            channel: 'local',
-            value: {
-              ...base,
-              type: 'error',
-              data: {
-                code: event.errorKind ?? 'failed',
-                message: event.error,
-              },
-            },
-          },
-          {
-            type: 'local',
-            channel: 'local',
-            value: {
-              ...base,
-              id: `evt-${event.seq}-failed-msg`,
-              type: 'message',
-              data: {
-                id: `failed-${event.runId}`,
-                sessionId: event.sessionId,
-                role: 'assistant',
-                text: formatFailedTaskReply(event.error, event.errorHint),
-                createdAt: event.timestamp,
-              },
-            },
-          },
-        )
-      }
-      events.push(
-        {
-          type: 'session',
-          channel: 'local',
-          value: {
-            session: desktopSession,
-            run: { type: 'finished', runId: event.runId, outcome },
-          },
-        },
-        {
-          type: 'local',
-          channel: 'local',
-          value: { ...base, type: 'session', data: desktopSession },
-        },
-        {
-          type: 'local',
-          channel: 'local',
-          value: { ...base, type: 'run_finished', data: { outcome } },
-        },
-      )
-      return events
-    }
-    default:
-      return []
-  }
-}
-
-function getLarkProjectIds(bindings: readonly ChannelBinding[]): Set<string> {
+export function getLarkProjectIds(
+  bindings: readonly ChannelBinding[],
+): Set<string> {
   return new Set(
     bindings
       .filter((b) => b.channel === 'lark')
@@ -364,38 +160,60 @@ function getLarkProjectIds(bindings: readonly ChannelBinding[]): Set<string> {
   )
 }
 
-async function requireLocalProjectSession(
-  runtime: LocalVelaRuntime,
-  projectId: string,
+async function requireLocalSession(
+  runtime: VelaRuntime,
   sessionId: string,
-): Promise<{ project: ProjectRecord; session: SessionRecord }> {
+  expectedProjectId?: string | null,
+): Promise<{ project?: ProjectRecord; session: SessionRecord }> {
+  const session = await runtime.sessions.get(sessionId)
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found`)
+  }
   const bindings = await runtime.bindings.list({ channel: 'lark' })
   const larkProjectIds = getLarkProjectIds(bindings)
-  const project = await runtime.projects.get(projectId)
-  if (!project || project.archived || larkProjectIds.has(project.id)) {
-    throw new Error(`Unknown project ${projectId}`)
+  const isLarkSession =
+    bindings.some((b) => b.sessionId === session.id) ||
+    (session.projectId ? larkProjectIds.has(session.projectId) : false)
+  if (isLarkSession) {
+    throw new Error(`Session ${sessionId} does not belong to Local`)
   }
-  const session = await runtime.sessions.get(sessionId)
   if (
-    !session ||
-    (session.projectId !== project.id && session.id !== project.hubSessionId)
+    expectedProjectId !== undefined &&
+    session.projectId !== expectedProjectId
   ) {
     throw new Error(
-      `Session ${sessionId} does not belong to project ${projectId}`,
+      `Session ${sessionId} does not belong to project ${expectedProjectId ?? 'quick'}`,
     )
   }
-  return { project, session }
+  if (session.projectId) {
+    const project = await runtime.projects.get(session.projectId)
+    if (!project || project.archived) {
+      throw new Error(`Unknown project ${session.projectId}`)
+    }
+    return { project, session }
+  }
+  return { session }
 }
 
 function resolveLocalTargetSession(
-  target: { chatId: string; rootId?: string },
+  target: { sessionId?: string; chatId?: string; rootId?: string },
   projects: readonly ProjectRecord[],
   sessions: readonly SessionRecord[],
   larkProjectIds: ReadonlySet<string>,
 ): SessionRecord | undefined {
-  const project = projects.find(
-    (p) => p.id === target.chatId && !p.archived && !larkProjectIds.has(p.id),
-  )
+  if (target.sessionId) {
+    const direct = sessions.find((s) => s.id === target.sessionId)
+    if (!direct) return undefined
+    if (direct.projectId && larkProjectIds.has(direct.projectId))
+      return undefined
+    return direct
+  }
+  const project = target.chatId
+    ? projects.find(
+        (p) =>
+          p.id === target.chatId && !p.archived && !larkProjectIds.has(p.id),
+      )
+    : undefined
   if (!project) return undefined
   if (target.rootId) {
     return sessions.find(
@@ -404,8 +222,10 @@ function resolveLocalTargetSession(
         (s.projectId === project.id || s.id === project.hubSessionId),
     )
   }
-  if (!project.hubSessionId) return undefined
-  return sessions.find((s) => s.id === project.hubSessionId)
+  if (project.hubSessionId) {
+    return sessions.find((s) => s.id === project.hubSessionId)
+  }
+  return sessions.find((s) => s.projectId === project.id && !s.archived)
 }
 
 const larkAuthor = { id: 'vela-app', name: 'Vela app' }
@@ -420,112 +240,211 @@ function validateLocalText(raw: string): string {
 }
 
 const openProjectLocksByRuntime = new WeakMap<
-  LocalVelaRuntime,
+  VelaRuntime,
   Map<string, Promise<LocalProject>>
 >()
 
+export async function createDesktopSession(
+  runtime: VelaRuntime,
+  input: { projectId?: string | null; name?: string },
+): Promise<Session> {
+  const projectId = input.projectId ?? null
+  const name = input.name?.trim() || undefined
+  if (projectId) {
+    const bindings = await runtime.bindings.list({ channel: 'lark' })
+    const larkProjectIds = getLarkProjectIds(bindings)
+    const project = await runtime.projects.get(projectId)
+    if (!project || project.archived || larkProjectIds.has(project.id)) {
+      throw new Error(`Unknown project ${projectId}`)
+    }
+    const created = await runtime.sessions.create({
+      projectId: project.id,
+      kind: 'work',
+      ...(name ? { name } : {}),
+    })
+    return toDesktopSession(created, {
+      channel: 'local',
+      chatId: project.id,
+      chatKind: 'direct',
+      projectId: project.id,
+    })
+  }
+
+  const created = await runtime.sessions.create({
+    projectId: null,
+    kind: 'work',
+    location: {
+      environment: 'local',
+      cwd: process.env.VELA_DESKTOP_HOME || homedir(),
+    },
+    ...(name ? { name } : {}),
+  })
+  return toDesktopSession(created, {
+    channel: 'local',
+    chatId: null,
+    chatKind: 'quick',
+    projectId: null,
+  })
+}
+
+export async function renameDesktopSession(
+  runtime: VelaRuntime,
+  input: { sessionId: string; name: string },
+): Promise<Session | undefined> {
+  const { session } = await requireLocalSession(runtime, input.sessionId)
+  const renamed = await runtime.sessions.rename(
+    session.id,
+    input.name.trim() || null,
+  )
+  const ownership: SessionOwnership = session.projectId
+    ? {
+        channel: 'local',
+        chatId: session.projectId,
+        chatKind: 'direct',
+        projectId: session.projectId,
+      }
+    : {
+        channel: 'local',
+        chatId: null,
+        chatKind: 'quick',
+        projectId: null,
+      }
+  const status = await runtime.sessions
+    .status(renamed.id)
+    .catch(() => undefined)
+  return toDesktopSession(renamed, ownership, status)
+}
+
+export async function deleteDesktopSession(
+  runtime: VelaRuntime,
+  input: { sessionId: string },
+): Promise<boolean> {
+  const { session } = await requireLocalSession(runtime, input.sessionId)
+  const status = await runtime.sessions
+    .status(session.id)
+    .catch(() => undefined)
+  if (status?.activeRunId) {
+    await runtime.stop(session.id, 'Session deleted', {
+      expectedRunId: status.activeRunId,
+    })
+  }
+  return runtime.sessions.delete(session.id)
+}
+
+export async function removeDesktopProject(
+  runtime: VelaRuntime,
+  input: { projectId: string },
+): Promise<boolean> {
+  const bindings = await runtime.bindings.list({ channel: 'lark' })
+  const larkProjectIds = getLarkProjectIds(bindings)
+  const project = await runtime.projects.get(input.projectId)
+  if (!project || project.archived || larkProjectIds.has(project.id)) {
+    throw new Error(`Unknown project ${input.projectId}`)
+  }
+  const sessions = await runtime.sessions.list({
+    projectId: project.id,
+    includeArchived: false,
+  })
+  for (const s of sessions) {
+    const status = await runtime.sessions.status(s.id).catch(() => undefined)
+    if (status?.activeRunId) {
+      await runtime.stop(s.id, 'Project removed', {
+        expectedRunId: status.activeRunId,
+      })
+    }
+  }
+  return runtime.projects.remove(project.id, { deleteSessions: true })
+}
+
 export async function submitDesktopMessage(
-  runtime: LocalVelaRuntime,
+  runtime: VelaRuntime,
   loadLark: boolean,
   clientIdTracker: DesktopClientIdTracker,
   request: Extract<Request, { method: 'submit' }>,
 ) {
-  if (request.channel === 'local' && 'projectId' in request.message) {
-    const { projectId, sessionId, clientMessageId } = request.message
-    const { session } = await requireLocalProjectSession(
-      runtime,
-      projectId,
-      sessionId,
-    )
-    const text = validateLocalText(request.message.text)
+  if (
+    request.channel === 'local' &&
+    'text' in request.message &&
+    !('chatId' in request.message)
+  ) {
+    const msg = request.message as LocalSubmit
+    const text = validateLocalText(msg.text)
+    let session: SessionRecord
+    let resolvedProjectId: string | null = msg.projectId ?? null
+    if (msg.sessionId) {
+      const checked = await requireLocalSession(
+        runtime,
+        msg.sessionId,
+        msg.projectId !== undefined ? msg.projectId : undefined,
+      )
+      session = checked.session
+      resolvedProjectId = session.projectId ?? null
+    } else if (resolvedProjectId) {
+      const bindings = await runtime.bindings.list({ channel: 'lark' })
+      const project = await runtime.projects.get(resolvedProjectId)
+      if (
+        !project ||
+        project.archived ||
+        getLarkProjectIds(bindings).has(project.id)
+      ) {
+        throw new Error(`Unknown project ${resolvedProjectId}`)
+      }
+      const existingSessions = await runtime.sessions.list({
+        projectId: project.id,
+        includeArchived: false,
+      })
+      session =
+        existingSessions[0] ??
+        (await runtime.sessions.create({
+          projectId: project.id,
+          kind: 'work',
+        }))
+    } else {
+      session = await runtime.sessions.create({
+        projectId: null,
+        kind: 'work',
+        location: {
+          environment: 'local',
+          cwd: process.env.VELA_DESKTOP_HOME || homedir(),
+        },
+      })
+    }
+
     if (session.kind !== 'hub') {
       const status = await runtime.sessions
-        .status(sessionId)
+        .status(session.id)
         .catch(() => undefined)
       if (status?.activeRunId) {
-        const cancelSteerTrack = clientMessageId
-          ? clientIdTracker.trackSteer(sessionId, text, clientMessageId)
+        const cancelSteerTrack = msg.clientMessageId
+          ? clientIdTracker.trackSteer(session.id, text, msg.clientMessageId)
           : undefined
         try {
-          await runtime.steer(sessionId, text)
+          await runtime.steer(session.id, text)
         } catch (error) {
           cancelSteerTrack?.()
           throw error
         }
         return {
           outcome: 'posted' as const,
-          sessionId,
-          messageId: clientMessageId ?? sessionId,
+          sessionId: session.id,
+          messageId: msg.clientMessageId ?? session.id,
         }
       }
     }
-    const res = await runtime.prompt(sessionId, {
-      text,
-      dedupeKey: clientMessageId,
-      source: 'user',
-      metadata: { projectId },
-    })
-    if (clientMessageId && res.inserted) {
-      clientIdTracker.trackPrompt(res.eventId, clientMessageId)
-    }
-    return {
-      outcome: 'posted' as const,
-      sessionId,
-      messageId: res.eventId,
-    }
-  }
-  if (request.channel === 'local' && 'channelId' in request.message) {
-    const msg = request.message
-    const text = validateLocalText(msg.text)
-    const bindings = await runtime.bindings.list({ channel: 'lark' })
-    const larkProjectIds = getLarkProjectIds(bindings)
-    const project = await runtime.projects.get(msg.channelId)
-    if (!project || project.archived || larkProjectIds.has(project.id)) {
-      throw new Error(`Unknown project ${msg.channelId}`)
-    }
-    const sessionId = msg.topic?.threadId ?? project.hubSessionId
-    if (!sessionId) {
-      throw new Error(`Project ${msg.channelId} has no hub session`)
-    }
-    const targetSession = await runtime.sessions.get(sessionId)
-    if (
-      !targetSession ||
-      (targetSession.projectId !== project.id &&
-        targetSession.id !== project.hubSessionId)
-    ) {
-      throw new Error(
-        `Session ${sessionId} does not belong to project ${project.id}`,
-      )
-    }
-    if (targetSession.kind !== 'hub') {
-      const status = await runtime.sessions
-        .status(sessionId)
-        .catch(() => undefined)
-      if (status?.activeRunId) {
-        const steerImages = msg.images?.map((img) => ({
-          data: img.data,
-          mimeType: img.mimeType,
-        }))
-        await runtime.steer(sessionId, text, steerImages)
-        return {
-          outcome: 'posted' as const,
-          sessionId,
-          messageId: sessionId,
-        }
-      }
-    }
+
     const attachments = msg.images?.length
       ? await Promise.all(
           msg.images.map(async (img, i) => {
             const ext = img.mimeType.split('/')[1] || 'png'
             const blob = await runtime.blobs.storeInbound({
-              sessionId,
-              projectId: project.id,
+              sessionId: session.id,
+              ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
               filename: `image-${i + 1}.${ext}`,
               mimeType: img.mimeType,
               bytes: Buffer.from(img.data, 'base64'),
             })
             return {
+              kind: 'image' as const,
               blobId: blob.id,
               name: blob.filename,
               mimeType: img.mimeType,
@@ -534,18 +453,24 @@ export async function submitDesktopMessage(
           }),
         )
       : undefined
-    const res = await runtime.prompt(sessionId, {
+
+    const res = await runtime.prompt(session.id, {
       text,
       attachments,
+      dedupeKey: msg.clientMessageId,
       source: 'user',
-      metadata: { projectId: project.id },
+      metadata: resolvedProjectId ? { projectId: resolvedProjectId } : {},
     })
+    if (msg.clientMessageId && res.inserted) {
+      clientIdTracker.trackPrompt(res.eventId, msg.clientMessageId)
+    }
     return {
       outcome: 'posted' as const,
-      sessionId,
+      sessionId: session.id,
       messageId: res.eventId,
     }
   }
+
   if (request.channel === 'lark' && 'chatId' in request.message) {
     if (!loadLark) throw new Error('Lark is not available in this app')
     const input: LarkSubmit = request.message
@@ -558,11 +483,12 @@ export async function submitDesktopMessage(
         : { sessionId: input.sessionId }),
     })
   }
+
   throw new Error('Invalid channel message')
 }
 
 export async function stopDesktopTarget(
-  runtime: LocalVelaRuntime,
+  runtime: VelaRuntime,
   request: Extract<Request, { method: 'stop' }>,
 ): Promise<boolean> {
   if (request.channel === 'local') {
@@ -585,6 +511,7 @@ export async function stopDesktopTarget(
     })
   }
   if (request.channel === 'lark') {
+    if (!request.target.chatId) return false
     const bindings = await runtime.bindings.list({ channel: 'lark' })
     const rootBinding = bindings.find(
       (b) => b.externalId === request.target.chatId && !b.threadId && b.enabled,
@@ -624,12 +551,11 @@ export async function stopDesktopTarget(
 }
 
 export async function openLocalDesktopProject(
-  runtime: LocalVelaRuntime,
-  input: Extract<Request, { method: 'openProject' }>['input'],
-  _larkProjectIds?: ReadonlySet<string>,
+  runtime: VelaRuntime,
+  input: { cwd: string; name?: string },
 ): Promise<LocalProject> {
-  const rawCwd = input.cwd.trim()
-  if (!rawCwd) throw new Error('Project must be an existing directory')
+  const rawCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
+  if (!rawCwd) throw new Error('Folder path is required')
   let canonicalCwd: string
   try {
     canonicalCwd = realpathSync(rawCwd)
@@ -645,26 +571,22 @@ export async function openLocalDesktopProject(
     locks = new Map()
     openProjectLocksByRuntime.set(runtime, locks)
   }
-  const existingLock = locks.get(canonicalCwd)
-  if (existingLock) return existingLock
+  const inflight = locks.get(canonicalCwd)
+  if (inflight) return inflight
 
   const opening = (async (): Promise<LocalProject> => {
     const bindings = await runtime.bindings.list({ channel: 'lark' })
     const larkProjectIds = getLarkProjectIds(bindings)
     const allProjects = await runtime.projects.list({ includeArchived: false })
     const existing = allProjects.find(
-      (p) =>
-        p.cwd === canonicalCwd &&
-        !larkProjectIds.has(p.id) &&
-        Boolean(p.hubSessionId),
+      (p) => p.cwd === canonicalCwd && !larkProjectIds.has(p.id),
     )
-    if (existing?.hubSessionId) {
+    if (existing) {
       return {
         id: existing.id,
         channel: 'local' as const,
         cwd: existing.cwd ?? canonicalCwd,
         name: existing.name,
-        sessionId: existing.hubSessionId,
       }
     }
     const trimmedName = input.name?.trim()
@@ -672,14 +594,13 @@ export async function openLocalDesktopProject(
     const created = await runtime.projects.create({
       name,
       cwd: canonicalCwd,
-      hubSessionId: true,
+      hubSessionId: false,
     })
     return {
       id: created.id,
       channel: 'local' as const,
       cwd: created.cwd ?? canonicalCwd,
       name: created.name,
-      sessionId: created.hubSessionId!,
     }
   })()
 
@@ -690,64 +611,5 @@ export async function openLocalDesktopProject(
     if (locks.get(canonicalCwd) === opening) {
       locks.delete(canonicalCwd)
     }
-  }
-}
-
-export async function fetchLarkDesktopMessages(
-  runtime: LocalVelaRuntime,
-  input: Extract<Request, { method: 'larkMessages' }>['input'],
-): Promise<{ messages: Message[]; nextCursor?: string }> {
-  const bindings = await runtime.bindings.list({ channel: 'lark' })
-  const rootBinding = bindings.find(
-    (b) => b.externalId === input.chatId && !b.threadId && b.enabled,
-  )
-  if (!rootBinding) {
-    throw new Error(`Unknown or disabled Lark chat ${input.chatId}`)
-  }
-  const sessionMatchesBinding = bindings.some(
-    (b) =>
-      b.externalId === input.chatId &&
-      b.enabled &&
-      b.sessionId === input.sessionId,
-  )
-  let sessionMatchesHub = false
-  if (!sessionMatchesBinding && rootBinding.projectId) {
-    const project = await runtime.projects.get(rootBinding.projectId)
-    if (project?.hubSessionId === input.sessionId) {
-      sessionMatchesHub = true
-    }
-  }
-  if (!sessionMatchesBinding && !sessionMatchesHub) {
-    throw new Error(
-      `Session ${input.sessionId} does not belong to Lark chat ${input.chatId}`,
-    )
-  }
-
-  const page = await runtime.sessions.messages({
-    sessionId: input.sessionId,
-    cursor: input.cursor,
-    limit: input.limit,
-  })
-  return {
-    messages: page.messages
-      .map((row) => {
-        if (
-          row.role === 'user' &&
-          !row.senderId &&
-          row.senderName === larkAuthor.name
-        ) {
-          return {
-            id: row.id,
-            sessionId: row.sessionId,
-            role: 'assistant' as const,
-            text: `${row.senderName}: ${row.text}`,
-            createdAt: row.createdAt,
-            senderName: 'Vela',
-          }
-        }
-        return toDesktopMessage(row)
-      })
-      .filter((m): m is Message => Boolean(m)),
-    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
   }
 }

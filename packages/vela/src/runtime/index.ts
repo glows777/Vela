@@ -44,8 +44,13 @@ export {
   EnvironmentRegistry,
   type EnvironmentRegistryOptions,
 } from './environments.ts'
-export type { RuntimeEventListener, StreamDeltaListener } from './event-bus.ts'
 export type {
+  ChannelRuntimeEventListener,
+  RuntimeEventListener,
+  StreamDeltaListener,
+} from './event-bus.ts'
+export type {
+  ChannelRuntimeEvent,
   RunEndStatus,
   RuntimeEvent,
   RuntimeEventPayload,

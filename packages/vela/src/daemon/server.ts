@@ -10,14 +10,10 @@ import { createServer, type Socket } from 'node:net'
 import { dirname } from 'node:path'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import type { LarkTransport } from '../lark/transport.ts'
-import type {
-  AuthEvent,
-  AuthInteraction,
-  AuthPrompt,
-  LoginOptions,
-} from '../providers/auth/types.ts'
 import { createRuntime, type LocalVelaRuntime } from '../runtime-sdk.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
+import type { ModelInput } from '../shared/provider-types.ts'
+import { createAuthLoginHandler, type PendingLoginClient } from './auth-rpc.ts'
 import { DaemonLarkHost } from './lark-host.ts'
 import {
   acquireOwnerLock,
@@ -60,7 +56,14 @@ export interface StartDaemonServerOptions {
   registerSignalHandlers?: boolean
   enableWebhooks?: boolean
   enableLark?: boolean
+  defaultModel?: ModelInput
   larkTransport?: LarkTransport
+  onCreateLarkTransport?: (info: {
+    appId?: string
+    appSecret?: string
+  }) => LarkTransport | undefined
+  onCreateLarkDiscoveryTransport?: () => Promise<LarkTransport | undefined>
+  onVerifyLarkCredentials?: (appId: string, appSecret: string) => Promise<void>
   onClosed?: (reason: string) => void
 }
 
@@ -74,26 +77,17 @@ export interface DaemonServerHandle {
   close(reason?: string): Promise<void>
 }
 
-interface PendingLoginClient {
-  controller: AbortController
-  prompts: Map<
-    number,
-    {
-      resolve: (value: string) => void
-      reject: (err: Error) => void
-      cleanup?: () => void
-    }
-  >
-}
-
 interface ConnectedClient {
   socket: Socket
   subEvents: boolean
   subDeltas: boolean
+  subChannels: boolean
   activeLogins: Map<number, PendingLoginClient>
   activeLogouts: Map<number, AbortController>
+  activeDiscoveries: Map<number, AbortController>
   preCancelledLogins: Set<number>
   preCancelledLogouts: Set<number>
+  preCancelledDiscoveries: Set<number>
 }
 
 const safeWrite = safeWriteWire
@@ -143,6 +137,7 @@ export async function startDaemonServer(
     runtime = createRuntime({
       agentDir: paths.agentDir,
       hostEnv,
+      ...(options.defaultModel ? { defaultModel: options.defaultModel } : {}),
       logger,
       onConfigReloaded: webhooksHost
         ? (cfg) => webhooksHost!.sync(cfg, true)
@@ -157,6 +152,15 @@ export async function startDaemonServer(
               name === 'lark' ? larkHost?.onEnabledChanged(enabled) : undefined
           : undefined,
       getKnownChannelInfo: () => larkHost?.knownChannelInfo() ?? {},
+      isLarkLoaded: () =>
+        Boolean(larkHost?.isConfigured() && !larkHost.configError()),
+      getLarkConfigError: () => larkHost?.configError(),
+      onPauseLarkForDiscovery: () =>
+        larkHost?.pauseForDiscovery() ?? Promise.resolve(),
+      onResumeLarkFromDiscovery: () =>
+        larkHost?.resumeFromDiscovery() ?? Promise.resolve(),
+      onCreateLarkDiscoveryTransport: options.onCreateLarkDiscoveryTransport,
+      onVerifyLarkCredentials: options.onVerifyLarkCredentials,
     })
     if (options.enableLark !== false) {
       larkHost = new DaemonLarkHost(runtime, {
@@ -164,6 +168,7 @@ export async function startDaemonServer(
         hostEnv,
         logger,
         transport: options.larkTransport,
+        createTransport: options.onCreateLarkTransport,
       })
     }
   } catch (error) {
@@ -216,6 +221,7 @@ export async function startDaemonServer(
       configWatcher?.stop()
       unsubEvents()
       unsubDeltas()
+      unsubChannels()
       for (const client of clients) {
         for (const active of client.activeLogins.values()) {
           active.controller.abort(
@@ -223,6 +229,9 @@ export async function startDaemonServer(
           )
         }
         for (const ctrl of client.activeLogouts.values()) {
+          ctrl.abort(new DOMException('Daemon closing', 'AbortError'))
+        }
+        for (const ctrl of client.activeDiscoveries.values()) {
           ctrl.abort(new DOMException('Daemon closing', 'AbortError'))
         }
         client.socket.end()
@@ -276,6 +285,11 @@ export async function startDaemonServer(
   const unsubDeltas = runtime.events.subscribeDeltas((delta) => {
     for (const c of clients) {
       if (c.subDeltas) safeWrite(c.socket, { type: 'delta', delta })
+    }
+  })
+  const unsubChannels = runtime.channels.subscribe((event) => {
+    for (const c of clients) {
+      if (c.subChannels) safeWrite(c.socket, { type: 'channel_event', event })
     }
   })
 
@@ -390,6 +404,42 @@ export async function startDaemonServer(
       const { channel, input } = parseChannelSubmitParams(p)
       return runtime.channels.submit(channel, input)
     },
+    'channels.subscribe': (_p, c) => {
+      c.subChannels = true
+      return true
+    },
+    'channels.unsubscribe': (_p, c) => {
+      c.subChannels = false
+      return true
+    },
+    'settings.get': () => runtime.settings.get(),
+    'settings.saveModel': (p) => runtime.settings.saveModel(p.input),
+    'settings.saveLark': (p) => runtime.settings.saveLark(p.input),
+    'settings.discoverLarkGroup': async (
+      p: { setupId?: number } | undefined,
+      client: ConnectedClient,
+    ) => {
+      const setupId = p?.setupId
+      const controller = new AbortController()
+      if (typeof setupId === 'number') {
+        if (client.preCancelledDiscoveries.delete(setupId)) {
+          controller.abort(new DOMException('Cancelled', 'AbortError'))
+        }
+        client.activeDiscoveries.set(setupId, controller)
+      }
+      try {
+        return await runtime.settings.discoverLarkGroup({
+          signal: controller.signal,
+        })
+      } finally {
+        if (typeof setupId === 'number') {
+          client.activeDiscoveries.delete(setupId)
+        }
+      }
+    },
+    'settings.confirmLarkGroup': (p) =>
+      runtime.settings.confirmLarkGroup(p.chatId),
+    'settings.cancelLarkSetup': () => runtime.settings.cancelLarkSetup(),
     'blobs.get': (p) => runtime.blobs.get(p.id),
     'blobs.list': (p) => runtime.blobs.list(p.sessionId, p.direction),
     'blobs.read': (p) => runtime.blobs.read(p.id),
@@ -441,116 +491,7 @@ export async function startDaemonServer(
       }
     },
     'runtime.recover': () => runtime.recover(),
-    'auth.login': async (
-      p: {
-        loginId: number
-        provider: string
-        method: 'oauth' | 'api_key'
-        options?: Omit<LoginOptions, 'getDeviceId'> & { deviceId?: string }
-      },
-      client: ConnectedClient,
-    ) => {
-      const controller = new AbortController()
-      if (client.preCancelledLogins.delete(p.loginId)) {
-        controller.abort(new DOMException('Cancelled', 'AbortError'))
-      }
-      const prompts = new Map<
-        number,
-        {
-          resolve: (value: string) => void
-          reject: (err: Error) => void
-          cleanup?: () => void
-        }
-      >()
-      client.activeLogins.set(p.loginId, { controller, prompts })
-      const interaction: AuthInteraction = {
-        signal: controller.signal,
-        notify: (event: AuthEvent) => {
-          safeWrite(client.socket, {
-            type: 'auth_event',
-            loginId: p.loginId,
-            event,
-          })
-        },
-        prompt: (prompt: AuthPrompt) => {
-          const promptId = nextPromptId++
-          return new Promise<string>((resolve, reject) => {
-            const { signal: promptSignal, ...wirePrompt } = prompt
-            let settled = false
-            const cleanup = () => {
-              controller.signal.removeEventListener('abort', onLoginAbort)
-              promptSignal?.removeEventListener('abort', onPromptAbort)
-            }
-            const settle = (err: Error | undefined, value?: string) => {
-              if (settled) return
-              settled = true
-              prompts.delete(promptId)
-              cleanup()
-              if (err !== undefined) reject(err)
-              else resolve(value ?? '')
-            }
-            const onLoginAbort = () => {
-              settle(new DOMException('Login cancelled', 'AbortError'))
-            }
-            const onPromptAbort = () => {
-              safeWrite(client.socket, {
-                type: 'auth_prompt_cancel',
-                loginId: p.loginId,
-                promptId,
-              })
-              settle(new DOMException('Prompt cancelled', 'AbortError'))
-            }
-            if (controller.signal.aborted) {
-              onLoginAbort()
-              return
-            }
-            if (promptSignal?.aborted) {
-              onPromptAbort()
-              return
-            }
-            prompts.set(promptId, {
-              resolve: (value) => settle(undefined, value),
-              reject: (err) => settle(err),
-              cleanup,
-            })
-            controller.signal.addEventListener('abort', onLoginAbort, {
-              once: true,
-            })
-            promptSignal?.addEventListener('abort', onPromptAbort, {
-              once: true,
-            })
-            safeWrite(client.socket, {
-              type: 'auth_prompt',
-              loginId: p.loginId,
-              promptId,
-              prompt: wirePrompt,
-            })
-          })
-        },
-      }
-      const { deviceId, ...restOptions } = p.options ?? {}
-      const resolvedLoginOptions: LoginOptions = {
-        ...restOptions,
-        ...(typeof deviceId === 'string' && deviceId.length > 0
-          ? { getDeviceId: () => deviceId }
-          : {}),
-      }
-      try {
-        await runtime.login(
-          p.provider,
-          p.method,
-          interaction,
-          resolvedLoginOptions,
-        )
-        return { ok: true }
-      } finally {
-        for (const pending of [...prompts.values()]) {
-          pending.reject(new DOMException('Login finished', 'AbortError'))
-        }
-        prompts.clear()
-        client.activeLogins.delete(p.loginId)
-      }
-    },
+    'auth.login': createAuthLoginHandler(runtime, () => nextPromptId++),
   }
 
   const server = createServer((socket) => {
@@ -558,10 +499,13 @@ export async function startDaemonServer(
       socket,
       subEvents: false,
       subDeltas: false,
+      subChannels: false,
       activeLogins: new Map(),
       activeLogouts: new Map(),
+      activeDiscoveries: new Map(),
       preCancelledLogins: new Set(),
       preCancelledLogouts: new Set(),
+      preCancelledDiscoveries: new Set(),
     }
     clients.add(client)
 
@@ -590,6 +534,15 @@ export async function startDaemonServer(
             ctrl.abort(new DOMException('Logout cancelled', 'AbortError'))
           } else {
             client.preCancelledLogouts.add(msg.logoutId)
+          }
+          return
+        }
+        if (msg.type === 'discovery_cancel') {
+          const ctrl = client.activeDiscoveries.get(msg.setupId)
+          if (ctrl) {
+            ctrl.abort(new DOMException('Cancelled', 'AbortError'))
+          } else {
+            client.preCancelledDiscoveries.add(msg.setupId)
           }
           return
         }
@@ -660,6 +613,10 @@ export async function startDaemonServer(
         ctrl.abort(new DOMException('Client disconnected', 'AbortError'))
       }
       client.activeLogouts.clear()
+      for (const ctrl of client.activeDiscoveries.values()) {
+        ctrl.abort(new DOMException('Client disconnected', 'AbortError'))
+      }
+      client.activeDiscoveries.clear()
     })
   })
 
@@ -675,6 +632,7 @@ export async function startDaemonServer(
   } catch (error) {
     unsubEvents()
     unsubDeltas()
+    unsubChannels()
     await webhooksHost?.stop().catch(() => {})
     await runtime.dispose().catch(() => {})
     releaseOwner()
@@ -721,6 +679,7 @@ export async function startDaemonServer(
     clearTimeout(larkInitTimer)
     unsubEvents()
     unsubDeltas()
+    unsubChannels()
     await larkHost?.stop().catch(() => {})
     await webhooksHost?.stop().catch(() => {})
     await runtime.dispose().catch(() => {})

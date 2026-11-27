@@ -2,6 +2,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -157,6 +158,9 @@ function buildExtensionWithBun(
           {
             name: 'vela-extension-host',
             setup(build) {
+              build.onResolve({ filter: /^file:\/\// }, (args) => ({
+                path: fileURLToPath(args.path),
+              }))
               build.onResolve({ filter: /.*/ }, (args) => {
                 if (!hostSpecifiers.has(args.path)) return undefined
                 if (hostLoaders[args.path] || diskAliases.has(args.path)) {
@@ -284,6 +288,24 @@ function getJiti(aliasZod: boolean): Promise<JitiInstance> {
   return pending
 }
 
+function needsHostBundlerUnderBun(sourcePath: string): boolean {
+  let source = ''
+  try {
+    source = readFileSync(sourcePath, 'utf8')
+  } catch {
+    return false
+  }
+  const importsVela = /['"]@glows777\/vela(?:\/extension-api)?['"]/.test(source)
+  if (importsVela && !hasLocalPackage(sourcePath, '@glows777/vela')) {
+    return true
+  }
+  const importsBareZod = /['"]zod['"]/.test(source)
+  if (importsBareZod && !hasLocalPackage(sourcePath, 'zod')) {
+    return true
+  }
+  return false
+}
+
 /**
  * Loads an extension file whose default export is `(vela) => {}`. The returned
  * function is named after the extension, which sets its tool prefix and config section.
@@ -297,20 +319,28 @@ export async function importExtension(
   let factory: unknown
   const bun = (globalThis as { Bun?: BunLike }).Bun
   if (bun) {
-    try {
-      const mod = (await import(pathToFileURL(path).href)) as {
-        default?: unknown
-      }
-      factory = mod.default
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND/.test(message))
-        throw error
+    if (needsHostBundlerUnderBun(path)) {
       const builtUrl = await buildExtensionWithBun(bun, path)
-      const mod = (await import(builtUrl)) as {
-        default?: unknown
-      }
+      const mod = (await import(builtUrl)) as { default?: unknown }
       factory = mod.default
+    } else {
+      try {
+        const mod = (await import(pathToFileURL(path).href)) as {
+          default?: unknown
+        }
+        factory = mod.default
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (
+          !/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND/.test(message)
+        )
+          throw error
+        const builtUrl = await buildExtensionWithBun(bun, path)
+        const mod = (await import(builtUrl)) as {
+          default?: unknown
+        }
+        factory = mod.default
+      }
     }
   } else {
     const jiti = await getJiti(!hasLocalPackage(path, 'zod'))

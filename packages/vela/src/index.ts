@@ -1,7 +1,15 @@
 export {
   type ConnectRuntimeOptions,
   connectRuntime,
+  DaemonAlreadyRunningError,
+  type DaemonCommandOverride,
+  type DaemonServerHandle,
   type DaemonStatus,
+  getDaemonStatus,
+  type StartDaemonServerOptions,
+  startDaemon,
+  startDaemonServer,
+  stopDaemon,
 } from './daemon/index.ts'
 export { agentErrorHint, createLocalExecutionEnv } from './driver/index.ts'
 export type {
@@ -25,6 +33,8 @@ export type {
   ChannelInboundAttachment,
   ChannelInboundMessage,
   ChannelOutboundMessage,
+  ChannelRuntimeEvent,
+  ChannelRuntimeEventListener,
   ChannelStatusInfo,
   ChannelToolContext,
   ChannelToolSpec,
@@ -67,8 +77,14 @@ export {
   type CreateRuntimeOptions,
   createRuntime,
   type LocalVelaRuntime,
+  type RuntimeLarkDiscoveryGroup,
+  type RuntimeLarkSetupInput,
+  type RuntimeModelSetupInput,
   type RuntimePromptInput,
   type RuntimeRecoverySummary,
+  type RuntimeSettingsLarkState,
+  type RuntimeSettingsProvider,
+  type RuntimeSettingsState,
   type VelaRuntime,
 } from './runtime-sdk.ts'
 export type { RoutineSchedule } from './shared/routine-time.ts'

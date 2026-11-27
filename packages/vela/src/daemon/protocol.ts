@@ -6,13 +6,14 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import type { AuthEvent, AuthPrompt } from '../providers/auth/types.ts'
 import type {
+  ChannelRuntimeEvent,
   ChannelStatusInfo,
   RuntimeEvent,
   RuntimeWebhookStatus,
   StreamDeltaEvent,
 } from '../runtime/index.ts'
 
-export const DAEMON_PROTOCOL_VERSION = 3
+export const DAEMON_PROTOCOL_VERSION = 4
 const MAX_WIRE_FRAME_BYTES = 128 * 1024 * 1024
 
 export interface DaemonHello {
@@ -59,6 +60,7 @@ type DaemonResponse =
 type DaemonPushMessage =
   | { type: 'event'; event: RuntimeEvent }
   | { type: 'delta'; delta: StreamDeltaEvent }
+  | { type: 'channel_event'; event: ChannelRuntimeEvent }
   | { type: 'auth_event'; loginId: number; event: AuthEvent }
   | {
       type: 'auth_prompt'
@@ -82,6 +84,7 @@ type DaemonClientControlMessage =
     }
   | { type: 'auth_cancel'; loginId: number }
   | { type: 'logout_cancel'; logoutId: number }
+  | { type: 'discovery_cancel'; setupId: number }
 
 export type DaemonWireMessage =
   | DaemonRequest

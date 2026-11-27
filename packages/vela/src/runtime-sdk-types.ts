@@ -44,6 +44,7 @@ import type {
   ChannelChatInfo,
   ChannelHostSubmitInput,
   ChannelHostSubmitResult,
+  ChannelRuntimeEventListener,
   ChannelStatusInfo,
   CreateProjectInput,
   CreateSessionInput,
@@ -69,7 +70,21 @@ import type { VelaLogger } from './shared/logger.ts'
 import type { OAuthRegistration } from './shared/oauth-registration.ts'
 import type { ModelInput } from './shared/provider-types.ts'
 import type { RoutineSchedule } from './shared/routine-time.ts'
+import type {
+  RuntimeLarkDiscoveryGroup,
+  RuntimeLarkSetupInput,
+  RuntimeModelSetupInput,
+  RuntimeSettingsState,
+} from './shared/settings-types.ts'
 
+export type {
+  RuntimeLarkDiscoveryGroup,
+  RuntimeLarkSetupInput,
+  RuntimeModelSetupInput,
+  RuntimeSettingsLarkState,
+  RuntimeSettingsProvider,
+  RuntimeSettingsState,
+} from './shared/settings-types.ts'
 export type { RuntimeEvent, RuntimeSessionInspection }
 
 export interface RuntimePromptInput {
@@ -328,6 +343,17 @@ export interface VelaRuntime {
       channel: string,
       input: ChannelHostSubmitInput,
     ): Promise<ChannelHostSubmitResult>
+    subscribe(listener: ChannelRuntimeEventListener): () => void
+  }
+  readonly settings: {
+    get(): Promise<RuntimeSettingsState>
+    saveModel(input: RuntimeModelSetupInput): Promise<RuntimeSettingsState>
+    saveLark(input: RuntimeLarkSetupInput): Promise<RuntimeSettingsState>
+    discoverLarkGroup(options?: {
+      signal?: AbortSignal
+    }): Promise<RuntimeLarkDiscoveryGroup | undefined>
+    confirmLarkGroup(chatId: string): Promise<void>
+    cancelLarkSetup(): Promise<void>
   }
   readonly blobs: {
     get(id: string): Promise<BlobRecord | undefined>
@@ -474,5 +500,19 @@ export interface CreateRuntimeOptions {
     names?: readonly string[]
     errors?: ReadonlyMap<string, string>
   }
+  /** @internal Daemon hook reporting whether Lark adapter is configured without startup errors. */
+  isLarkLoaded?: () => boolean
+  /** @internal Daemon hook returning current Lark configuration/sync error if any. */
+  getLarkConfigError?: () => string | undefined
+  /** @internal Daemon hook pausing Lark adapter during new-group mention discovery. */
+  onPauseLarkForDiscovery?: () => Promise<void>
+  /** @internal Daemon hook resuming Lark adapter after new-group mention discovery. */
+  onResumeLarkFromDiscovery?: () => Promise<void>
+  /** @internal Test hook supplying a fake LarkTransport for group discovery. */
+  onCreateLarkDiscoveryTransport?: () => Promise<
+    import('./lark/transport.ts').LarkTransport | undefined
+  >
+  /** @internal Test hook overriding Lark credential verification. */
+  onVerifyLarkCredentials?: (appId: string, appSecret: string) => Promise<void>
   logger?: VelaLogger
 }

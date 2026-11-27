@@ -2,6 +2,7 @@ import {
   Clock,
   Folder,
   House,
+  MessageCircle,
   MessageSquare,
   Plus,
   SlidersHorizontal,
@@ -67,6 +68,7 @@ export function Sidebar({
   connections,
   current,
   onHome,
+  onQuick,
   onRoutines,
   onProject,
   onSettings,
@@ -78,6 +80,7 @@ export function Sidebar({
   connections: Record<string, Connection>
   current: string
   onHome: () => void
+  onQuick: () => void
   onRoutines: () => void
   onProject: (projectId: string) => void
   onSettings: () => void
@@ -87,9 +90,7 @@ export function Sidebar({
 }) {
   return (
     <aside className={styles.sidebar} aria-label="Sidebar">
-      <div className={styles.windowDrag}>
-        <span className={styles.mode}>Local</span>
-      </div>
+      <div className={styles.windowDrag} />
       <div className={styles.inner}>
         <div className={styles.brand}>
           <Wordmark heading />
@@ -113,6 +114,12 @@ export function Sidebar({
             label="Home"
             current={current === 'home'}
             onClick={onHome}
+          />
+          <Row
+            icon={<MessageCircle size={15} />}
+            label="Quick chat"
+            current={current === 'quick'}
+            onClick={onQuick}
           />
           <Row
             icon={<Clock size={15} />}

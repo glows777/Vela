@@ -1,17 +1,14 @@
-import type {
-  LocalVelaRuntime,
-  SessionRecord,
-  TimerRecord,
-} from '@glows777/vela/legacy-desktop'
+import type { SessionRecord, TimerRecord, VelaRuntime } from '@glows777/vela'
+import type { Request, Routine } from '../shared/bridge.ts'
 import {
   localRoutineInstant,
   nextOccurrence,
   routineLocalTime,
   routineTimezone,
-} from '@glows777/vela/legacy-desktop'
-import type { Request, Routine } from '../shared/bridge.ts'
+} from './routine-time.ts'
 
 const localCreator = { id: 'local-user', name: 'You' }
+const larkCreator = { id: 'vela-app', name: 'Vela app' }
 
 function formatRoutineScheduleText(timer: TimerRecord): string {
   if ('at' in timer.schedule) {
@@ -25,7 +22,22 @@ function formatRoutineScheduleText(timer: TimerRecord): string {
     : `Daily at ${timer.schedule.time}`
 }
 
+function formatRoutineTarget(
+  channel: string,
+  timer: TimerRecord,
+  session?: SessionRecord,
+): string {
+  if (channel === 'lark' || timer.channel === 'lark') {
+    if (!session || session.kind === 'hub') return 'Group channel'
+    return `Topic: ${session.name?.trim() || 'Untitled'}`
+  }
+  if (!session) return 'Project default'
+  if (session.kind === 'hub') return 'Project default'
+  return `Session: ${session.name?.trim() || 'Untitled'}`
+}
+
 function toDesktopRoutine(
+  channel: string,
   timer: TimerRecord,
   sessionsById: ReadonlyMap<string, SessionRecord>,
 ): Routine {
@@ -33,10 +45,7 @@ function toDesktopRoutine(
   const session = timer.sessionId
     ? sessionsById.get(timer.sessionId)
     : undefined
-  const target =
-    !session || session.kind === 'hub'
-      ? 'Group channel'
-      : `Topic: ${session.name?.trim() || 'Untitled'}`
+  const target = formatRoutineTarget(channel, timer, session)
   let nextRun: string | null = null
   if (timer.nextFireAt) {
     const ms = Date.parse(timer.nextFireAt)
@@ -50,8 +59,8 @@ function toDesktopRoutine(
     message: timer.message,
     schedule: timer.schedule,
     creator: {
-      id: timer.creatorId ?? 'local-user',
-      name: timer.creatorName ?? 'You',
+      id: timer.creatorId ?? localCreator.id,
+      name: timer.creatorName ?? localCreator.name,
     },
     timezone: zone,
     scheduleText: formatRoutineScheduleText(timer),
@@ -61,10 +70,14 @@ function toDesktopRoutine(
 }
 
 async function resolveRoutineScope(
-  runtime: LocalVelaRuntime,
+  runtime: VelaRuntime,
   channel: string,
   chatId: string,
-): Promise<{ projectId: string; hubSessionId: string | null }> {
+): Promise<{
+  projectId: string
+  hubSessionId: string | null
+  rootBindingId?: string
+}> {
   const bindings = await runtime.bindings.list({ channel: 'lark' })
   if (channel === 'local') {
     const project = await runtime.projects.get(chatId)
@@ -91,7 +104,8 @@ async function resolveRoutineScope(
   }
   return {
     projectId: root.projectId,
-    hubSessionId: project.hubSessionId ?? null,
+    hubSessionId: root.sessionId ?? project.hubSessionId ?? null,
+    rootBindingId: root.id,
   }
 }
 
@@ -130,7 +144,7 @@ function resolveDesktopRoutineTimezone(
 
 /** Handles desktop Routine CRUD RPCs via `runtime.timers`. */
 export async function handleDesktopRoutineRequest(
-  runtime: LocalVelaRuntime,
+  runtime: VelaRuntime,
   larkSettings: Record<string, unknown>,
   request: Extract<
     Request,
@@ -161,29 +175,47 @@ export async function handleDesktopRoutineRequest(
       const byId = new Map(sessionList.map((s) => [s.id, s]))
       return {
         timezone,
-        routines: timers.map((t) => toDesktopRoutine(t, byId)),
+        routines: timers.map((t) => toDesktopRoutine(request.channel, t, byId)),
       }
     }
     case 'createRoutine': {
-      if (request.channel !== 'local') {
-        throw new Error(
-          'Routines can only be created for Local projects from the desktop app',
-        )
+      if (request.channel !== 'local' && request.channel !== 'lark') {
+        throw new Error(`Unsupported routine channel ${request.channel}`)
       }
       const { projectId, hubSessionId } = await resolveRoutineScope(
         runtime,
         request.channel,
         request.target.chatId,
       )
-      let sessionId = hubSessionId
-      if (request.target.rootId) {
+      let sessionId: string | null = hubSessionId
+      let targetThreadId: string | undefined
+      if (request.channel === 'lark') {
+        if (request.target.rootId) {
+          const bindings = await runtime.bindings.list({ channel: 'lark' })
+          const topicBinding = bindings.find(
+            (b) =>
+              b.externalId === request.target.chatId &&
+              b.enabled &&
+              b.threadId &&
+              (b.threadId === request.target.rootId ||
+                b.config?.rootId === request.target.rootId ||
+                b.sessionId === request.target.rootId),
+          )
+          if (!topicBinding?.sessionId) {
+            throw new Error('Unknown or disabled channel target')
+          }
+          sessionId = topicBinding.sessionId
+          targetThreadId = topicBinding.threadId ?? undefined
+        }
+        if (!sessionId) throw new Error('Unknown or disabled channel target')
+      } else if (request.target.rootId) {
         const targetSession = await runtime.sessions.get(request.target.rootId)
         if (!targetSession || targetSession.projectId !== projectId) {
-          throw new Error('Unknown or disabled channel target')
+          throw new Error('Unknown or disabled session target')
         }
         sessionId = targetSession.id
       }
-      if (!sessionId) throw new Error('Unknown or disabled channel target')
+
       const project = await runtime.projects.get(projectId)
       const zone = resolveDesktopRoutineTimezone(
         project?.config,
@@ -194,18 +226,33 @@ export async function handleDesktopRoutineRequest(
         request.input.schedule,
         zone,
       )
+      const isLark = request.channel === 'lark'
+      const creator = isLark ? larkCreator : localCreator
       const timer = await runtime.timers.createRoutine({
         projectId,
         sessionId,
-        channel: null,
-        creatorId: localCreator.id,
-        creatorName: localCreator.name,
+        channel: isLark ? 'lark' : null,
+        ...(isLark
+          ? {
+              target: {
+                channel: 'lark',
+                externalChatId: request.target.chatId,
+                ...(targetThreadId ? { threadId: targetThreadId } : {}),
+              },
+            }
+          : {}),
+        creatorId: creator.id,
+        creatorName: creator.name,
         message: request.input.message,
         schedule,
         timezone: zone,
       })
       const sessionList = await runtime.sessions.list({ projectId })
-      return toDesktopRoutine(timer, new Map(sessionList.map((s) => [s.id, s])))
+      return toDesktopRoutine(
+        request.channel,
+        timer,
+        new Map(sessionList.map((s) => [s.id, s])),
+      )
     }
     case 'editRoutine': {
       const { projectId } = await resolveRoutineScope(
@@ -231,6 +278,7 @@ export async function handleDesktopRoutineRequest(
       if (!updated) return undefined
       const sessionList = await runtime.sessions.list({ projectId })
       return toDesktopRoutine(
+        request.channel,
         updated,
         new Map(sessionList.map((s) => [s.id, s])),
       )

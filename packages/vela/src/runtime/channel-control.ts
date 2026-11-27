@@ -10,6 +10,7 @@ import type {
   ChannelAdapter,
   ChannelAdapterContext,
   ChannelBinding,
+  ChannelConnectionState,
   ChannelHostSubmitInput,
   ChannelHostSubmitResult,
   ChannelStatusInfo,
@@ -197,11 +198,12 @@ export function createChannelAdapterContext(params: {
     text: string,
     images?: Array<{ data: string; mimeType: string }>,
   ) => Promise<boolean>
+  reportStatus?: (status: ChannelConnectionState) => void
 }): ChannelAdapterContext {
-  const ingestWithReceipt = (
+  const ingestWithReceipt = async (
     message: Parameters<typeof ingestChannelMessageInRuntime>[0]['msg'],
-  ) =>
-    ingestChannelMessageInRuntime({
+  ) => {
+    const receipt = await ingestChannelMessageInRuntime({
       db: params.db,
       blobs: params.blobs,
       projects: params.projects,
@@ -214,6 +216,18 @@ export function createChannelAdapterContext(params: {
       executeShortcut: params.executeShortcut,
       scheduleSession: params.scheduleSession,
     })
+    if (receipt.admitted) {
+      params.eventBus.emitChannelEvent({
+        type: 'channel_history_changed',
+        channel: message.channel,
+        chatId: message.externalChatId,
+        ...(message.threadId && receipt.sessionId
+          ? { sessionId: receipt.sessionId }
+          : {}),
+      })
+    }
+    return receipt
+  }
   return {
     ingest: async (message) => {
       await ingestWithReceipt(message)
@@ -247,6 +261,7 @@ export function createChannelAdapterContext(params: {
       ),
     getHostPostAuthor: (externalMessageId) =>
       getHostPostAuthorInDb(params.db, params.adapter.name, externalMessageId),
+    ...(params.reportStatus ? { reportStatus: params.reportStatus } : {}),
   }
 }
 
@@ -307,21 +322,118 @@ export async function steerSessionInRuntime(params: {
   return true
 }
 
+export interface ChannelStatusTracker {
+  begin(channel: string): (status: ChannelConnectionState) => void
+  markInitialIfUnset(channel: string, status: ChannelConnectionState): void
+  markStopped(channel: string): void
+}
+
+export function createChannelStatusTracker(
+  eventBus: import('./event-bus.ts').RuntimeEventBus,
+): ChannelStatusTracker {
+  const states = new Map<
+    string,
+    {
+      currentlyConnected: boolean
+      everConnected: boolean
+      sawFailureOrDisconnect: boolean
+      emittedInitialStatus: boolean
+    }
+  >()
+  const entryOf = (channel: string) => {
+    let entry = states.get(channel)
+    if (!entry) {
+      entry = {
+        currentlyConnected: false,
+        everConnected: false,
+        sawFailureOrDisconnect: false,
+        emittedInitialStatus: false,
+      }
+      states.set(channel, entry)
+    }
+    return entry
+  }
+  const report = (channel: string, state: ChannelConnectionState) => {
+    const entry = entryOf(channel)
+    entry.emittedInitialStatus = true
+    const shouldReset =
+      state.connected &&
+      !entry.currentlyConnected &&
+      (entry.everConnected || entry.sawFailureOrDisconnect)
+    if (state.connected) {
+      entry.everConnected = true
+    } else if (entry.everConnected || state.error) {
+      entry.sawFailureOrDisconnect = true
+    }
+    entry.currentlyConnected = state.connected
+    eventBus.emitChannelEvent({
+      type: 'channel_status',
+      channel,
+      connected: state.connected,
+      ...(state.error ? { error: state.error } : {}),
+      ...(shouldReset ? { reset: true } : {}),
+    })
+  }
+  return {
+    begin: (channel) => {
+      entryOf(channel).emittedInitialStatus = false
+      return (state) => report(channel, state)
+    },
+    markInitialIfUnset: (channel, status) => {
+      if (!entryOf(channel).emittedInitialStatus) {
+        report(channel, status)
+      }
+    },
+    markStopped: (channel) => {
+      const entry = entryOf(channel)
+      if (entry.everConnected) {
+        entry.sawFailureOrDisconnect = true
+      }
+      entry.currentlyConnected = false
+      eventBus.emitChannelEvent({
+        type: 'channel_status',
+        channel,
+        connected: false,
+      })
+    },
+  }
+}
+
 export async function registerChannelInRuntime(
   channels: Map<string, ChannelAdapter>,
   params: Parameters<typeof createChannelAdapterContext>[0],
+  statusTracker?: ChannelStatusTracker,
 ): Promise<void> {
   const { adapter } = params
   const existing = channels.get(adapter.name)
-  if (existing) await existing.stop()
+  if (existing) {
+    await existing.stop()
+    statusTracker?.markStopped(adapter.name)
+  }
+  const reportStatus = statusTracker?.begin(adapter.name)
   channels.set(adapter.name, adapter)
   try {
-    await adapter.start(createChannelAdapterContext(params))
+    await adapter.start(
+      createChannelAdapterContext({
+        ...params,
+        ...(reportStatus ? { reportStatus } : {}),
+      }),
+    )
+    if (statusTracker && channels.get(adapter.name) === adapter) {
+      statusTracker.markInitialIfUnset(
+        adapter.name,
+        adapter.status?.() ?? { connected: false },
+      )
+    }
   } catch (error) {
     if (channels.get(adapter.name) === adapter) {
       channels.delete(adapter.name)
     }
     await adapter.stop().catch(() => {})
+    statusTracker?.markInitialIfUnset(adapter.name, {
+      connected: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
     throw error
   }
   for (const sid of listSessionsWithPendingWake(params.db)) {

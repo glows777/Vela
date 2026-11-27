@@ -1,6 +1,7 @@
 import { Clock, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { Project, Routine } from '../../shared/bridge.ts'
+import { projectName, projectTag } from '../format.ts'
 import { errorMessage, type Snapshot } from '../store.ts'
 import { Button } from '../ui/button.tsx'
 import { ConfirmDialog } from '../ui/confirm-dialog.tsx'
@@ -11,51 +12,27 @@ import styles from './routines-page.module.css'
 /** One project's routines, or why the page cannot show them. */
 type Group = {
   project: Project
-  /**
-   * False for a project chat that has no recorded message. The host knows a chat only
-   * after it admitted a message, so such a project has nothing for routines to point
-   * at and asking it would report the host's `Unknown or disabled channel target`.
-   */
-  hasTarget: boolean
   timezone?: string
   routines?: Routine[]
-  /** The read failed, so there is nothing to list for this project. */
   error?: string
-  /** A cancel failed; the rows it did not change stay on screen. */
   actionError?: string
 }
 
-/**
- * Reads one project's routines. A recorded message in the project chat is what tells
- * the page the host knows that chat: `sessions()` also lists the project chat of a
- * project nobody has written to yet.
- */
 async function loadGroup(project: Project): Promise<Group> {
   try {
-    const chat = await vela.messages({
-      projectId: project.id,
-      sessionId: project.sessionId,
-      limit: 1,
-    })
-    if (chat.messages.length === 0) return { project, hasTarget: false }
     const { timezone, routines } = await vela.listRoutines(
       project.channel,
       project.id,
     )
-    return { project, hasTarget: true, timezone, routines }
+    return { project, timezone, routines }
   } catch (cause) {
-    return { project, hasTarget: true, error: errorMessage(cause) }
+    return { project, error: errorMessage(cause) }
   }
 }
 
 /** Every routine Vela will send, grouped by the project it answers in. */
 export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
-  // Routines are Local-only in this issue: the host has no identity to set a Lark one.
-  // The list keeps its identity between renders, or the load effect below loops.
-  const projects = useMemo(
-    () => snapshot.projects.filter((project) => project.channel === 'local'),
-    [snapshot.projects],
-  )
+  const projects = useMemo(() => snapshot.projects, [snapshot.projects])
   const [groups, setGroups] = useState<Group[]>([])
   const [loaded, setLoaded] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -82,7 +59,6 @@ export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
     }
   }, [projects])
 
-  /** Re-reads the projects a create, edit or cancel touched; the rest keep their state. */
   const refresh = async (projectIds: string[]) => {
     const next = await Promise.all(
       projects
@@ -127,12 +103,8 @@ export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
     await refresh([group.project.id])
   }
 
-  /** Projects a new routine can point at: those whose chat the host already knows. */
   const targets = useMemo(
-    () =>
-      groups
-        .filter((group) => group.hasTarget && !group.error)
-        .map((group) => group.project),
+    () => groups.filter((group) => !group.error).map((group) => group.project),
     [groups],
   )
 
@@ -161,11 +133,11 @@ export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
           <section
             key={group.project.id}
             className={styles.group}
-            aria-label={group.project.name}
+            aria-label={projectName(group.project)}
           >
             <h2 className={styles.groupHead}>
-              <span>{group.project.name}</span>
-              <span className={styles.tag}>Local</span>
+              <span>{projectName(group.project)}</span>
+              <span className={styles.tag}>{projectTag(group.project)}</span>
               {group.timezone ? (
                 <span className={styles.zone}>times in {group.timezone}</span>
               ) : null}
@@ -178,11 +150,6 @@ export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
             {group.error ? (
               <p className={styles.error} role="alert">
                 {group.error}
-              </p>
-            ) : !group.hasTarget ? (
-              <p className={styles.note}>
-                No routines yet. Routines can point here after the first message
-                in this project's chat.
               </p>
             ) : group.routines?.length ? (
               <ul className={styles.list}>

@@ -55,10 +55,17 @@ export function stripTransientDaemonEnv(
   return out
 }
 
+export interface DaemonCommandOverride {
+  command: string
+  args?: string[]
+  env?: Record<string, string | undefined>
+}
+
 interface DaemonLifecycleOptions {
   agentDir?: string
   socketPath?: string
   hostEnv?: Record<string, string | undefined>
+  daemonCommand?: DaemonCommandOverride
   appVersion?: string
   protocolVersion?: number
   timeoutMs?: number
@@ -448,8 +455,20 @@ export async function ensureDaemonRunning(
     removeStaleSocketFile(paths.socketPath)
     mkdirSync(paths.agentDir, { recursive: true })
     const logFd = openSync(paths.logPath, 'a', 0o600)
-    const { command, args } = resolveDaemonSpawnCommand(paths.agentDir)
-    const childEnv: NodeJS.ProcessEnv = { ...hostEnv }
+    const { command, args } = options.daemonCommand
+      ? {
+          command: options.daemonCommand.command,
+          args: [
+            ...(options.daemonCommand.args ?? []),
+            '--agent-dir',
+            paths.agentDir,
+          ],
+        }
+      : resolveDaemonSpawnCommand(paths.agentDir)
+    const childEnv: NodeJS.ProcessEnv = {
+      ...hostEnv,
+      ...(options.daemonCommand?.env ?? {}),
+    }
     if (options.socketPath) {
       childEnv.VELA_DAEMON_SOCKET = options.socketPath
     }

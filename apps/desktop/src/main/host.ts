@@ -1,198 +1,154 @@
-import { mkdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
-  connectLarkSetup,
-  createRuntime,
-  DaemonLarkHost,
-  discoverLarkGroup,
-  type LocalVelaRuntime,
-  parseLarkChats,
-} from '@glows777/vela/legacy-desktop'
-import { BrowserWindow, clipboard, dialog, shell } from 'electron'
+  connectRuntime,
+  type ProjectRecord,
+  type RuntimeSettingsState,
+  stopDaemon,
+  type VelaRuntime,
+} from '@glows777/vela'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import {
   EVENT,
   type Event,
+  type LocalProject,
   type Message,
   type Project,
+  REQUEST,
   type Request,
-  type Session,
+  type SettingsState,
 } from '../shared/bridge.ts'
-import { wrapLarkAdapter } from './lark-adapter-bridge.ts'
-import { larkStartupDiagnostic } from './lark-settings.ts'
-import { saveModel } from './model-setup.ts'
+import { loadPreferences, savePreferences } from './preferences.ts'
 import {
+  createDesktopSession,
   DesktopClientIdTracker,
+  deleteDesktopSession,
   extractMessageText,
-  fetchLarkDesktopMessages,
-  fetchLocalDesktopMessages,
+  fetchDesktopMessages,
+  getLarkProjectIds,
   mapLocalRuntimeEvent,
   openLocalDesktopProject,
+  removeDesktopProject,
+  renameDesktopSession,
   resolveSessionOwnership,
   stopDesktopTarget,
   submitDesktopMessage,
   toDesktopMessage,
   toDesktopSession,
 } from './runtime-bridge.ts'
+import { fetchLastRunStatus } from './runtime-history.ts'
 import { handleDesktopRoutineRequest } from './runtime-routines.ts'
-import {
-  loadDesktopConfig,
-  readSettings,
-  withoutLocalOnlyOAuth,
-} from './settings.ts'
 
 const larkChatLink = (chatId: string) =>
   `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(chatId)}`
 
-/** Owns the Runtime SDK in main. The renderer gets only the fixed preload contract. */
-export async function openHost(
-  config: ReturnType<typeof loadDesktopConfig>,
-  loadLark: boolean,
-  larkStartupError?: string,
-) {
-  const cwd = config.cwd
-  const larkSettings = config.extensionConfig.lark ?? {}
-  if (config.dataDir) {
-    mkdirSync(config.dataDir, { recursive: true })
-  }
-  if (loadLark && larkSettings.chats !== undefined) {
-    parseLarkChats(larkSettings.chats)
-  }
-
-  const fauxModel = process.env.VELA_MODEL?.startsWith('faux:')
-    ? await (await import('@glows777/vela/testing')).loadFauxScenario(
-        process.env.VELA_MODEL.slice(5),
-      )
-    : undefined
-  const fixtureDir = process.env.VELA_DESKTOP_LARK_DIR
-  const transport =
-    loadLark && process.env.VELA_DESKTOP_LARK === 'fake'
-      ? fixtureDir
-        ? (await import('./testing/lark.ts')).fakeLark(fixtureDir)
-        : (await import('./settings-transport.ts')).settingsTransport(
-            larkSettings.appId,
-            larkSettings.appSecret,
-          )
-      : undefined
-
-  let larkHost: DaemonLarkHost | undefined
-  let disposed = false
-  const publish = (event: Event) => {
-    if (disposed) return
-    for (const window of BrowserWindow.getAllWindows())
-      if (!window.isDestroyed()) window.webContents.send(EVENT, event)
-  }
-
-  const configPath = join(config.agentDir, 'config.json')
-  let cachedProviderSig = ''
-  let cachedProviders = config.providers
-  const getDesktopProviders = () => {
-    try {
-      const st = statSync(configPath)
-      const sig = `${st.ino}:${st.mtimeMs}:${st.size}`
-      if (sig !== cachedProviderSig) {
-        cachedProviders = loadDesktopConfig(cwd, config.agentDir).providers
-        cachedProviderSig = sig
-      }
-    } catch {
-      cachedProviders = config.providers
-    }
-    return cachedProviders
-  }
-
-  const desktopCredentials = withoutLocalOnlyOAuth(
-    getDesktopProviders,
-    config.credentials,
+function resolveDaemonEntry(): string {
+  const mainDir = dirname(fileURLToPath(import.meta.url))
+  const unpackedDir = mainDir.replace(
+    /app\.asar(?=[\\/]|$)/,
+    'app.asar.unpacked',
   )
+  const unpackedCandidate = join(unpackedDir, 'daemon.mjs')
+  if (existsSync(unpackedCandidate)) return unpackedCandidate
+  return join(mainDir, 'daemon.mjs')
+}
 
-  const runtime = createRuntime({
-    agentDir: config.agentDir,
+function buildDaemonEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    ELECTRON_RUN_AS_NODE: '1',
+  }
+  const modelEnv = process.env.VELA_MODEL?.trim()
+  if (modelEnv === 'mock' || modelEnv?.startsWith('faux:')) {
+    env.VELA_MODEL = modelEnv
+  }
+  if (process.env.VELA_DESKTOP_LARK) {
+    env.VELA_DESKTOP_LARK = process.env.VELA_DESKTOP_LARK
+  }
+  if (process.env.VELA_DESKTOP_LARK_DIR) {
+    env.VELA_DESKTOP_LARK_DIR = process.env.VELA_DESKTOP_LARK_DIR
+  }
+  if (process.env.VELA_DESKTOP_VERIFY_DISCOVERY_TIMEOUT) {
+    env.VELA_DESKTOP_VERIFY_DISCOVERY_TIMEOUT =
+      process.env.VELA_DESKTOP_VERIFY_DISCOVERY_TIMEOUT
+  }
+  if (process.env.VELA_DIR) {
+    env.VELA_DIR = process.env.VELA_DIR
+  }
+  return env
+}
+
+function resolveAgentDir(): string {
+  const envDir = process.env.VELA_DIR?.trim()
+  return envDir ? resolve(envDir) : join(homedir(), '.vela')
+}
+
+function safeUserDataDir(agentDir: string): string {
+  try {
+    return app.getPath('userData')
+  } catch {
+    return agentDir
+  }
+}
+
+export interface DesktopHostController {
+  dispose(): Promise<void>
+  beforeQuit(): Promise<boolean>
+}
+
+export async function startHost(): Promise<DesktopHostController> {
+  const agentDir = resolveAgentDir()
+  const userDataDir = safeUserDataDir(agentDir)
+  const daemonEntry = resolveDaemonEntry()
+  const runtime: VelaRuntime = await connectRuntime({
+    agentDir,
     hostEnv: process.env,
-    ...(fauxModel ? { defaultModel: fauxModel } : {}),
-    credentials: desktopCredentials,
-    allowLocalOnlyOAuth: false,
-    ...(loadLark ? {} : { ignoredChannels: ['lark'] }),
-    logger: {
-      debug() {},
-      info() {},
-      warn: (...args) => console.warn('[desktop-runtime]', ...args),
-      error: (...args) => console.error('[desktop-runtime]', ...args),
+    daemonCommand: {
+      command: process.execPath,
+      args: [daemonEntry],
+      env: buildDaemonEnv(),
     },
-    getKnownChannelInfo: () =>
-      larkHost?.knownChannelInfo() ?? { names: [], errors: new Map() },
   })
 
   const off: (() => void)[] = []
   const clientIdTracker = new DesktopClientIdTracker()
-  const lastRunStatusBySession = new Map<string, string | null>()
+  const lastRunStatusBySession = new Map<string, string>()
   const retryTimersBySession = new Map<string, ReturnType<typeof setTimeout>>()
+  let pendingLarkDiscovery: { chatId: string; name?: string } | undefined
+  let disposed = false
 
-  const clearRetryTimer = (sessionId: string) => {
-    const existing = retryTimersBySession.get(sessionId)
-    if (existing) {
-      clearTimeout(existing)
-      retryTimersBySession.delete(sessionId)
+  const publish = (event: Event) => {
+    if (disposed) return
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send(EVENT, event)
     }
   }
 
-  const resolveLastRunStatus = async (
-    sessionId: string,
-  ): Promise<string | null> => {
-    if (lastRunStatusBySession.has(sessionId)) {
-      return lastRunStatusBySession.get(sessionId) ?? null
-    }
-    let lastStatus: string | null = null
-    let afterSeq: number | undefined
-    while (true) {
-      const page = await runtime.events
-        .list({
-          sessionId,
-          ...(afterSeq !== undefined ? { afterSeq } : {}),
-          limit: 200,
-        })
-        .catch(() => [])
-      for (const evt of page) {
-        if (evt.type === 'run_started') lastStatus = 'running'
-        else if (evt.type === 'run_finished') lastStatus = evt.status
-      }
-      if (page.length < 200) break
-      afterSeq = page.at(-1)?.seq
-      if (afterSeq === undefined) break
-    }
-    lastRunStatusBySession.set(sessionId, lastStatus)
-    return lastStatus
-  }
+  const withPreferences = (state: RuntimeSettingsState): SettingsState => ({
+    ...state,
+    stopDaemonOnQuit: loadPreferences(userDataDir).stopDaemonOnQuit,
+  })
 
   const getLarkContext = async () => {
     const [bindings, allProjects] = await Promise.all([
       runtime.bindings.list({ channel: 'lark' }),
       runtime.projects.list({ includeArchived: true }),
     ])
-    const larkProjectIds = new Set(
-      bindings
-        .map((b) => b.projectId)
-        .filter((id): id is string => Boolean(id)),
+    const projectsById = new Map<string, ProjectRecord>(
+      allProjects.map((p) => [p.id, p]),
     )
-    const projectsById = new Map(allProjects.map((p) => [p.id, p]))
-    return { bindings, larkProjectIds, projectsById }
+    const larkProjectIds = getLarkProjectIds(bindings)
+    return { bindings, projectsById, larkProjectIds }
   }
 
   const buildDesktopSession = async (
     sessionId: string,
-    bindings?: Awaited<ReturnType<LocalVelaRuntime['bindings']['list']>>,
-    larkProjectIds?: ReadonlySet<string>,
-    projectsById?: ReadonlyMap<
-      string,
-      Awaited<ReturnType<LocalVelaRuntime['projects']['list']>>[number]
-    >,
-  ): Promise<
-    { session: Session; chatId: string; channel: 'local' | 'lark' } | undefined
-  > => {
+    context?: Awaited<ReturnType<typeof getLarkContext>>,
+  ) => {
     const record = await runtime.sessions.get(sessionId)
-    if (!record) return undefined
-    const ctx =
-      bindings && larkProjectIds && projectsById
-        ? { bindings, larkProjectIds, projectsById }
-        : await getLarkContext()
+    if (!record || record.archived) return undefined
+    const ctx = context ?? (await getLarkContext())
     const ownership = resolveSessionOwnership(
       record,
       ctx.bindings,
@@ -213,7 +169,7 @@ export async function openHost(
     const lastRunStatus =
       status?.activeRunId || record.state === 'running'
         ? 'running'
-        : await resolveLastRunStatus(record.id)
+        : await fetchLastRunStatus(runtime, lastRunStatusBySession, record.id)
     return {
       session: toDesktopSession(
         record,
@@ -224,58 +180,17 @@ export async function openHost(
       ),
       chatId: ownership.chatId,
       channel: ownership.channel,
-    }
-  }
-
-  const directModel = Boolean(fauxModel)
-  const settings = async () => {
-    try {
-      const available = await runtime.models({
-        channel: 'local',
-        env: process.env,
-      })
-      return readSettings({
-        agentDir: config.agentDir,
-        cwd,
-        directModel,
-        larkLoaded: loadLark,
-        larkStartupError,
-        hasAvailableModel: available.length > 0,
-      })
-    } catch {
-      throw new Error(
-        'Could not read desktop settings. Check the data directory, config.json and auth.json, then try again.',
-      )
+      isUnusedLarkHub:
+        ownership.channel === 'lark' &&
+        !ownership.topic &&
+        !status?.activeRunId &&
+        record.state === 'idle' &&
+        !lastRunStatus,
     }
   }
 
   try {
     await runtime.ready()
-
-    if (loadLark) {
-      const bridgedRuntime: LocalVelaRuntime = {
-        ...runtime,
-        registerChannel: (adapter) =>
-          runtime.registerChannel(wrapLarkAdapter(adapter, runtime, publish)),
-      }
-      larkHost = new DaemonLarkHost(bridgedRuntime, {
-        agentDir: config.agentDir,
-        hostEnv: process.env,
-        logger: console,
-        ...(transport ? { transport } : {}),
-      })
-      await larkHost.sync(runtime.getLarkConfig(), true)
-      const configError = larkHost.configError()
-      if (configError) {
-        throw new Error(configError)
-      }
-    }
-
-    await runtime.recover()
-
-    const enabledChatIds = new Set(
-      (await runtime.channels.chats('lark')).map((c) => c.chatId),
-    )
 
     let eventChain = Promise.resolve()
     off.push(
@@ -295,49 +210,49 @@ export async function openHost(
               let mappedMsg: Message | undefined
               let extraClientIds: string[] = []
               if (event.type === 'message_committed') {
-                const rawMsg = event.message as {
-                  role?: string
-                  content?: unknown
-                }
-                const text = extractMessageText(rawMsg.content)
-                let primaryClientId: string | undefined
-                if (rawMsg.role === 'user') {
-                  const matchedIds = clientIdTracker.consumeForUserMessage(
-                    event.sessionId,
-                    event.runId,
-                    text,
-                    event.messageId,
-                  )
-                  primaryClientId = matchedIds[0]
-                  extraClientIds = matchedIds.slice(1)
-                }
+                const msgText = extractMessageText(event.message.content)
+                const msgRole =
+                  event.message.role === 'user' ||
+                  event.message.role === 'assistant' ||
+                  event.message.role === 'system'
+                    ? event.message.role
+                    : 'assistant'
+                const isUser = msgRole === 'user'
+                const consumed = isUser
+                  ? clientIdTracker.consumeForUserMessage(
+                      event.sessionId,
+                      event.runId,
+                      msgText,
+                      event.messageId,
+                    )
+                  : []
+                const [firstId, ...restIds] = consumed
+                extraClientIds = restIds
                 mappedMsg = toDesktopMessage(
                   {
                     id: event.messageId,
                     sessionId: event.sessionId,
                     runId: event.runId,
-                    kind: event.customType ? 'custom_message' : 'message',
-                    role: rawMsg.role as Message['role'] | 'tool' | null,
-                    text,
-                    content: rawMsg.content,
+                    kind: 'message',
+                    role: msgRole,
+                    text: msgText,
+                    content: event.message.content,
                     display: event.display,
                     createdAt: event.timestamp,
                   },
-                  primaryClientId,
+                  firstId,
                 )
               }
               if (
                 event.type === 'run_started' ||
-                event.type === 'run_finished' ||
                 event.type === 'tool_started' ||
-                event.type === 'tool_finished' ||
-                event.type === 'auto_retry_start' ||
-                event.type === 'auto_retry_end' ||
-                event.type === 'compaction_started' ||
-                event.type === 'compaction_finished' ||
-                event.type === 'compaction_failed'
+                event.type === 'auto_retry_end'
               ) {
-                clearRetryTimer(event.sessionId)
+                const pendingTimer = retryTimersBySession.get(event.sessionId)
+                if (pendingTimer) {
+                  clearTimeout(pendingTimer)
+                  retryTimersBySession.delete(event.sessionId)
+                }
               }
               for (const desktopEvent of mapLocalRuntimeEvent(
                 event,
@@ -356,7 +271,7 @@ export async function openHost(
                       version: 1,
                       id: `evt-${event.seq}-batch-${idx + 1}`,
                       time: event.timestamp,
-                      projectId: info.chatId,
+                      ...(info.chatId ? { projectId: info.chatId } : {}),
                       sessionId: event.sessionId,
                       ...(event.type === 'message_committed' && event.runId
                         ? { runId: event.runId }
@@ -384,7 +299,7 @@ export async function openHost(
                       version: 1,
                       id: `evt-${event.seq}-retry-end`,
                       time: new Date().toISOString(),
-                      projectId: info.chatId,
+                      ...(info.chatId ? { projectId: info.chatId } : {}),
                       sessionId: event.sessionId,
                       ...(event.runId ? { runId: event.runId } : {}),
                       type: 'progress',
@@ -398,7 +313,6 @@ export async function openHost(
               return
             }
 
-            // Lark session lifecycle & status events
             if (event.type === 'run_started') {
               publish({
                 type: 'session',
@@ -429,7 +343,7 @@ export async function openHost(
                 type: 'status',
                 channel: 'lark',
                 value: {
-                  chatId: info.chatId,
+                  chatId: info.chatId ?? '',
                   rootId: info.session.topic?.rootId ?? info.session.sessionId,
                   sessionId: info.session.sessionId,
                   text: '',
@@ -440,7 +354,7 @@ export async function openHost(
                 type: 'status',
                 channel: 'lark',
                 value: {
-                  chatId: info.chatId,
+                  chatId: info.chatId ?? '',
                   rootId: info.session.topic?.rootId ?? info.session.sessionId,
                   sessionId: info.session.sessionId,
                   text: event.toolName,
@@ -454,7 +368,7 @@ export async function openHost(
                 type: 'status',
                 channel: 'lark',
                 value: {
-                  chatId: info.chatId,
+                  chatId: info.chatId ?? '',
                   rootId: info.session.topic?.rootId ?? info.session.sessionId,
                   sessionId: info.session.sessionId,
                   text: '',
@@ -465,110 +379,172 @@ export async function openHost(
                 type: 'status',
                 channel: 'lark',
                 value: {
-                  chatId: info.chatId,
+                  chatId: info.chatId ?? '',
                   rootId: info.session.topic?.rootId ?? info.session.sessionId,
                   sessionId: info.session.sessionId,
-                  text: 'Retrying',
+                  text: 'Retrying after a transient error',
                 },
               })
             }
           })
-          .catch((error) =>
-            console.error('[desktop-host] event bridge error:', error),
-          )
+          .catch(() => {})
       }),
     )
 
-    const sessions = async (channel: string, chatId?: string) => {
-      const { bindings, larkProjectIds, projectsById } = await getLarkContext()
-      const all = await runtime.sessions.list({ includeArchived: false })
-      const out: Session[] = []
-      for (const record of all) {
-        const ownership = resolveSessionOwnership(
-          record,
-          bindings,
-          larkProjectIds,
-          projectsById,
-        )
-        if (!ownership || ownership.channel !== channel) continue
-        if (chatId && ownership.chatId !== chatId) continue
-        const status = await runtime.sessions
-          .status(record.id)
-          .catch(() => undefined)
-        const lastRunStatus =
-          status?.activeRunId || record.state === 'running'
-            ? 'running'
-            : await resolveLastRunStatus(record.id)
-        if (
-          ownership.channel === 'lark' &&
-          !ownership.topic &&
-          !status?.activeRunId &&
-          record.state === 'idle' &&
-          lastRunStatus === null
-        ) {
-          continue
+    off.push(
+      runtime.channels.subscribe((event) => {
+        if (event.type === 'channel_status') {
+          publish({
+            type: 'connection',
+            channel: event.channel,
+            value: {
+              connected: event.connected,
+              ...(event.error ? { error: event.error } : {}),
+            },
+          })
+          publish({
+            type: 'channel',
+            channel: event.channel,
+            value: {
+              type: 'channel_status',
+              connected: event.connected,
+              ...(event.error ? { error: event.error } : {}),
+              ...(event.reset ? { reset: true } : {}),
+            },
+          })
+          return
         }
-        out.push(
-          toDesktopSession(record, ownership, status, undefined, lastRunStatus),
-        )
+        if (event.type === 'channel_history_changed') {
+          publish({
+            type: 'channel',
+            channel: event.channel,
+            value: {
+              type: 'channel_history_changed',
+              ...(event.chatId ? { chatId: event.chatId } : {}),
+              ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+            },
+          })
+        }
+      }),
+    )
+
+    const isLarkEnabled = async (): Promise<boolean> => {
+      try {
+        const state = await runtime.settings.get()
+        return state.lark.enabled
+      } catch {
+        const statuses = await runtime.channels.list().catch(() => [])
+        const lark = statuses.find((s) => s.name === 'lark')
+        return lark ? lark.enabled : true
       }
-      return out
     }
 
-    const projects = async (): Promise<Project[]> => {
-      const { bindings, larkProjectIds } = await getLarkContext()
+    const sessionsFor = async (channel: string, chatId?: string) => {
+      const ctx = await getLarkContext()
+      if (channel === 'lark') {
+        const enabled = await isLarkEnabled()
+        if (!enabled) return []
+        const all = await runtime.sessions.list({ includeArchived: false })
+        const built = await Promise.all(
+          all.map((record) => buildDesktopSession(record.id, ctx)),
+        )
+        return built
+          .filter(
+            (
+              entry,
+            ): entry is NonNullable<
+              Awaited<ReturnType<typeof buildDesktopSession>>
+            > =>
+              Boolean(
+                entry &&
+                  entry.channel === 'lark' &&
+                  !entry.isUnusedLarkHub &&
+                  (!chatId || entry.chatId === chatId),
+              ),
+          )
+          .map((entry) => entry.session)
+      }
+      if (channel === 'local') {
+        const all = await runtime.sessions.list({ includeArchived: false })
+        const built = await Promise.all(
+          all.map((record) => buildDesktopSession(record.id, ctx)),
+        )
+        return built
+          .filter(
+            (
+              entry,
+            ): entry is NonNullable<
+              Awaited<ReturnType<typeof buildDesktopSession>>
+            > =>
+              Boolean(
+                entry &&
+                  entry.channel === 'local' &&
+                  (!chatId
+                    ? true
+                    : chatId === 'quick'
+                      ? entry.session.chatKind === 'quick'
+                      : entry.chatId === chatId),
+              ),
+          )
+          .map((entry) => entry.session)
+      }
+      throw new Error(`Unknown channel: ${channel}`)
+    }
+
+    const listProjects = async (): Promise<Project[]> => {
+      const ctx = await getLarkContext()
       const allProjects = await runtime.projects.list({
         includeArchived: false,
       })
-      const localProjects: Project[] = allProjects
-        .filter(
-          (p) =>
-            !larkProjectIds.has(p.id) &&
-            p.cwd !== null &&
-            p.hubSessionId !== null,
-        )
+      const localProjects: LocalProject[] = allProjects
+        .filter((p) => !ctx.larkProjectIds.has(p.id))
         .map((p) => ({
           id: p.id,
           channel: 'local' as const,
-          cwd: p.cwd!,
+          cwd: p.cwd ?? agentDir,
           name: p.name,
-          sessionId: p.hubSessionId!,
         }))
-      if (!loadLark) return localProjects
 
-      const adapterChats = await runtime.channels.chats('lark').catch(() => [])
-      const projectsById = new Map(allProjects.map((p) => [p.id, p]))
-      const rootBindingsByChat = new Map(
-        bindings
-          .filter((b) => b.kind === 'group' && !b.threadId)
-          .map((b) => [b.externalId, b]),
-      )
+      const larkEnabled = await isLarkEnabled()
       const larkProjects: Project[] = []
-      const seenChatIds = new Set<string>()
-      for (const chat of adapterChats) {
-        const root = rootBindingsByChat.get(chat.chatId)
-        const project = root?.projectId
-          ? projectsById.get(root.projectId)
-          : undefined
-        if (!project?.hubSessionId) continue
-        seenChatIds.add(chat.chatId)
-        larkProjects.push({
-          id: chat.chatId,
-          channel: 'lark',
-          ...(chat.name ? { name: chat.name } : {}),
-          sessionId: project.hubSessionId,
-        })
-      }
-      for (const [chatId, root] of rootBindingsByChat) {
-        if (seenChatIds.has(chatId) || !root.enabled || !root.projectId)
-          continue
-        const project = projectsById.get(root.projectId)
-        if (!project?.hubSessionId) continue
-        larkProjects.push({
-          id: chatId,
-          channel: 'lark',
-          sessionId: project.hubSessionId,
-        })
+      if (larkEnabled) {
+        const adapterChats = await runtime.channels
+          .chats('lark')
+          .catch(() => [])
+        const seenChatIds = new Set<string>()
+        for (const root of ctx.bindings) {
+          if (root.threadId || !root.enabled || !root.projectId) continue
+          const project = ctx.projectsById.get(root.projectId)
+          if (!project || project.archived) continue
+          const sessionId = root.sessionId ?? project.hubSessionId
+          if (!sessionId) continue
+          seenChatIds.add(root.externalId)
+          const chatMeta = adapterChats.find(
+            (c) => c.chatId === root.externalId,
+          )
+          larkProjects.push({
+            id: root.externalId,
+            channel: 'lark',
+            ...(chatMeta?.name ? { name: chatMeta.name } : {}),
+            sessionId,
+          })
+        }
+        for (const chat of adapterChats) {
+          if (seenChatIds.has(chat.chatId)) continue
+          const root = ctx.bindings.find(
+            (b) => b.externalId === chat.chatId && !b.threadId && b.enabled,
+          )
+          if (!root?.projectId) continue
+          const project = ctx.projectsById.get(root.projectId)
+          const sessionId = root.sessionId ?? project?.hubSessionId
+          if (!project || project.archived || !sessionId) continue
+          larkProjects.push({
+            id: chat.chatId,
+            channel: 'lark',
+            ...(chat.name ? { name: chat.name } : {}),
+            sessionId,
+          })
+        }
       }
       return [...localProjects, ...larkProjects]
     }
@@ -576,57 +552,107 @@ export async function openHost(
     const connectionState = async (channel: string) => {
       if (channel === 'local') return { connected: true }
       if (channel === 'lark') {
-        if (!loadLark) return { connected: false }
-        const statuses = await runtime.channels.list()
+        const statuses = await runtime.channels.list().catch(() => [])
         const larkStatus = statuses.find((s) => s.name === 'lark')
+        const state = await runtime.settings.get().catch(() => undefined)
+        const enabled = state
+          ? state.lark.enabled
+          : larkStatus?.enabled !== false
+        if (!enabled) return { connected: false }
+        const error = state?.lark.startupError ?? larkStatus?.error
         return {
           connected: larkStatus?.connected ?? false,
-          ...(larkStatus?.error ? { error: larkStatus.error } : {}),
+          ...(error ? { error } : {}),
         }
       }
       throw new Error(`Unknown channel: ${channel}`)
     }
 
-    const handle = async (
-      request: Exclude<Request, { method: 'saveLark' }>,
-    ) => {
+    const handle = async (request: Request) => {
       switch (request.method) {
-        case 'channels':
+        case 'channels': {
+          const state = await runtime.settings.get().catch(() => undefined)
+          const larkAvailable = state
+            ? state.lark.enabled && !state.lark.startupError
+            : await isLarkEnabled()
           return [
-            { name: 'local', description: 'Local desktop projects' },
-            ...(loadLark
+            { name: 'local', description: 'Work on this computer' },
+            ...(larkAvailable
               ? [{ name: 'lark', description: 'Feishu / Lark' }]
               : []),
           ]
-        case 'settings':
-          return settings()
-        case 'saveModel': {
-          await saveModel({
-            agentDir: config.agentDir,
-            input: request.input,
-            env: process.env,
-          })
-          await runtime.reloadConfig()
-          return settings()
         }
+        case 'settings':
+          return withPreferences(await runtime.settings.get())
+        case 'saveModel':
+          return withPreferences(
+            await runtime.settings.saveModel(request.input),
+          )
+        case 'saveLark':
+          return withPreferences(await runtime.settings.saveLark(request.input))
+        case 'savePreferences': {
+          savePreferences(request.input, userDataDir)
+          return withPreferences(await runtime.settings.get())
+        }
+        case 'discoverLarkGroup': {
+          const found = await runtime.settings.discoverLarkGroup()
+          pendingLarkDiscovery = found
+          return found
+        }
+        case 'confirmLarkGroup': {
+          if (!pendingLarkDiscovery?.chatId) {
+            throw new Error('No pending group approval.')
+          }
+          const chatId = pendingLarkDiscovery.chatId
+          pendingLarkDiscovery = undefined
+          await runtime.settings.confirmLarkGroup(chatId)
+          return
+        }
+        case 'cancelLarkSetup':
+          pendingLarkDiscovery = undefined
+          return runtime.settings.cancelLarkSetup()
         case 'sessions':
-          return sessions(request.channel, request.chatId)
+          return sessionsFor(request.channel, request.chatId)
+        case 'createSession':
+          return createDesktopSession(runtime, request.input)
+        case 'renameSession':
+          return renameDesktopSession(runtime, request.input)
+        case 'deleteSession': {
+          const deleted = await deleteDesktopSession(runtime, request.input)
+          if (deleted) {
+            publish({
+              type: 'channel',
+              channel: 'local',
+              value: { type: 'channel_status', connected: true, reset: true },
+            })
+          }
+          return deleted
+        }
         case 'connection':
           return connectionState(request.channel)
         case 'submit':
           return submitDesktopMessage(
             runtime,
-            loadLark,
+            await isLarkEnabled(),
             clientIdTracker,
             request,
           )
         case 'stop':
           return stopDesktopTarget(runtime, request)
         case 'projects':
-          return projects()
-        case 'openProject': {
-          const { larkProjectIds } = await getLarkContext()
-          return openLocalDesktopProject(runtime, request.input, larkProjectIds)
+          return listProjects()
+        case 'openProject':
+          return openLocalDesktopProject(runtime, request.input)
+        case 'removeProject': {
+          const removed = await removeDesktopProject(runtime, request.input)
+          if (removed) {
+            publish({
+              type: 'channel',
+              channel: 'local',
+              value: { type: 'channel_status', connected: true, reset: true },
+            })
+          }
+          return removed
         }
         case 'chooseFolder': {
           const owner =
@@ -639,34 +665,32 @@ export async function openHost(
           return result.canceled ? undefined : result.filePaths[0]
         }
         case 'messages':
-          return fetchLocalDesktopMessages(
-            runtime,
-            request.input,
-            clientIdTracker,
-          )
-        case 'larkMessages':
-          if (!loadLark) throw new Error('Lark is not available in this app')
-          return fetchLarkDesktopMessages(runtime, request.input)
+          return fetchDesktopMessages(runtime, request.input, clientIdTracker)
         case 'openMessageLink': {
           const url =
             typeof request.url === 'string' && URL.canParse(request.url)
               ? new URL(request.url)
               : undefined
-          if (url?.protocol !== 'https:' && url?.protocol !== 'http:')
+          if (url?.protocol !== 'https:' && url?.protocol !== 'http:') {
             throw new Error('Only HTTP and HTTPS links can be opened')
+          }
           await shell.openExternal(url.href)
           return
         }
         case 'copyMessageCode':
-          if (typeof request.text !== 'string')
+          if (typeof request.text !== 'string') {
             throw new Error('Code to copy must be text')
+          }
           clipboard.writeText(request.text)
           return
         case 'openLarkChat': {
-          if (!loadLark) throw new Error('Lark is not available in this app')
-          const chats = await runtime.channels.chats('lark')
-          if (!chats.some((chat) => chat.chatId === request.chatId))
+          if (!(await isLarkEnabled())) {
+            throw new Error('Lark is not available in this app')
+          }
+          const chats = await runtime.channels.chats('lark').catch(() => [])
+          if (!chats.some((chat) => chat.chatId === request.chatId)) {
             throw new Error('Open a Lark group that is enabled in this app')
+          }
           await shell.openExternal(larkChatLink(request.chatId))
           return
         }
@@ -674,115 +698,80 @@ export async function openHost(
         case 'createRoutine':
         case 'editRoutine':
         case 'cancelRoutine':
-          return handleDesktopRoutineRequest(runtime, larkSettings, request)
+          return handleDesktopRoutineRequest(runtime, {}, request)
         default:
           throw new Error('Unknown desktop request')
       }
     }
 
-    return {
-      settings,
-      handle,
-      groupSetup() {
-        const { appId, appSecret } = larkSettings
-        if (
-          !loadLark ||
-          larkSettings.runInApp === false ||
-          typeof appId !== 'string' ||
-          !appId ||
-          typeof appSecret !== 'string' ||
-          !appSecret
-        )
-          throw new Error(
-            'Configure Lark to run in this app before adding a group.',
-          )
-        return {
-          agentDir: config.agentDir,
-          async discover(signal: AbortSignal) {
-            if (transport) {
-              const discoveryTransport = fixtureDir
-                ? (await import('./testing/lark.ts')).fakeLark(
-                    join(fixtureDir, 'discovery'),
-                  )
-                : transport
-              try {
-                return await discoverLarkGroup(
-                  discoveryTransport,
-                  signal,
-                  enabledChatIds,
-                )
-              } finally {
-                discoveryTransport.stop()
-              }
-            }
-            try {
-              const connection = await connectLarkSetup(
-                appId,
-                appSecret,
-                signal,
-              )
-              try {
-                return await connection.waitForMention(enabledChatIds)
-              } finally {
-                connection.stop()
-              }
-            } catch (error) {
-              throw new Error(
-                (error instanceof Error
-                  ? error.message
-                  : String(error)
-                ).replaceAll(appSecret, '[redacted]'),
-              )
-            }
-          },
-        }
-      },
-      async checkIdle() {
-        const all = await runtime.sessions.list({ includeArchived: false })
-        for (const s of all) {
-          const st = await runtime.sessions.status(s.id)
-          if (st.activeRunId || st.runningJobs > 0 || s.state === 'running') {
-            throw new Error(
-              'A session is still running or queued. Wait for it to finish before changing Lark settings.',
-            )
+    ipcMain.handle(REQUEST, (_event, request: Request) => handle(request))
+
+    const dispose = async () => {
+      if (disposed) return
+      disposed = true
+      ipcMain.removeHandler(REQUEST)
+      for (const timer of retryTimersBySession.values()) {
+        clearTimeout(timer)
+      }
+      retryTimersBySession.clear()
+      for (const unregister of off.splice(0)) {
+        unregister()
+      }
+      await eventChain.catch(() => {})
+      await runtime.dispose()
+    }
+
+    const beforeQuit = async (): Promise<boolean> => {
+      const prefs = loadPreferences(userDataDir)
+      if (!prefs.stopDaemonOnQuit) {
+        await dispose()
+        return true
+      }
+      let hasActiveWork = false
+      try {
+        const activeSessions = await runtime.sessions.list({
+          includeArchived: false,
+        })
+        for (const s of activeSessions) {
+          const st = await runtime.sessions.status(s.id).catch(() => undefined)
+          if (st?.activeRunId || st?.runningJobs || s.state === 'running') {
+            hasActiveWork = true
+            break
           }
         }
-      },
-      dispose: async () => {
-        disposed = true
-        clientIdTracker.clear()
-        for (const timer of retryTimersBySession.values()) clearTimeout(timer)
-        retryTimersBySession.clear()
-        for (const stop of off) stop()
-        await larkHost?.stop().catch(() => {})
-        await runtime.dispose()
-      },
+      } catch {
+        hasActiveWork = false
+      }
+      if (hasActiveWork) {
+        const owner =
+          BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+        const messageBoxOptions: Electron.MessageBoxOptions = {
+          type: 'question',
+          buttons: ['Stop and quit', 'Cancel'],
+          defaultId: 0,
+          cancelId: 1,
+          message: 'A session or routine is still running.',
+          detail: 'Stopping the background service will interrupt active work.',
+        }
+        const choice = owner
+          ? await dialog.showMessageBox(owner, messageBoxOptions)
+          : await dialog.showMessageBox(messageBoxOptions)
+        if (choice.response !== 0) {
+          return false
+        }
+      }
+      await dispose()
+      await stopDaemon({ agentDir, hostEnv: process.env }).catch(() => {})
+      return true
     }
+
+    return { dispose, beforeQuit }
   } catch (error) {
-    disposed = true
-    clientIdTracker.clear()
-    for (const timer of retryTimersBySession.values()) clearTimeout(timer)
-    retryTimersBySession.clear()
-    for (const stop of off) stop()
-    await larkHost?.stop().catch(() => {})
+    ipcMain.removeHandler(REQUEST)
+    for (const unregister of off.splice(0)) {
+      unregister()
+    }
     await runtime.dispose().catch(() => {})
     throw error
   }
-}
-
-/** Invalid Lark configuration must leave Settings and Local available across launches. */
-export function openAvailableHost(
-  config: ReturnType<typeof loadDesktopConfig>,
-) {
-  const loadLark =
-    config.extensionConfig.lark?.runInApp !== false &&
-    config.extensions.some(
-      (extension) => extension.name === 'lark' && 'builtin' in extension,
-    )
-  const opening = openHost(config, loadLark)
-  return loadLark
-    ? opening.catch((cause) =>
-        openHost(config, false, larkStartupDiagnostic(cause)),
-      )
-    : opening
 }

@@ -2,7 +2,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, nativeTheme, session } from 'electron'
 import tokens from '../../design/tokens.json'
-import { startHost } from './restart-host.ts'
+import { type DesktopHostController, startHost } from './host.ts'
 
 const mainDir = path.dirname(fileURLToPath(import.meta.url))
 const canvas = tokens.tokens['vela-white']
@@ -58,12 +58,12 @@ const createWindow = (hostError = false) => {
   }
 }
 
-let dispose: (() => Promise<void>) | undefined
+let hostController: DesktopHostController | undefined
 let closing = false
 void app.whenReady().then(async () => {
   let hostError = false
   try {
-    dispose = await startHost()
+    hostController = await startHost()
   } catch (error) {
     hostError = true
     console.error('Vela startup failed:', error)
@@ -86,12 +86,21 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   if (process.env.VELA_DESKTOP_TRACE === '1')
     console.log('Desktop shutdown: before-quit')
-  if (closing || !dispose) return
+  if (closing || !hostController) return
   event.preventDefault()
   closing = true
-  void dispose().finally(() => {
-    if (process.env.VELA_DESKTOP_TRACE === '1')
-      console.log('Desktop shutdown: disposal settled')
-    app.quit()
-  })
+  void hostController
+    .beforeQuit()
+    .then((allowQuit) => {
+      if (process.env.VELA_DESKTOP_TRACE === '1')
+        console.log('Desktop shutdown: disposal settled')
+      if (allowQuit) {
+        app.quit()
+      } else {
+        closing = false
+      }
+    })
+    .catch(() => {
+      closing = false
+    })
 })
