@@ -242,11 +242,27 @@ export class DaemonLarkHost {
           ? (() => {
               const {
                 disabledBySync: _disabled,
-                synced: _synced,
+                synced: rawPrevSynced,
                 ...rest
               } = existing.config
+              const cleanedRest: Record<string, unknown> = { ...rest }
+              if (syncedChanged) {
+                const prevSynced =
+                  rawPrevSynced &&
+                  typeof rawPrevSynced === 'object' &&
+                  !Array.isArray(rawPrevSynced)
+                    ? (rawPrevSynced as Record<string, unknown>)
+                    : undefined
+                if (prevSynced) {
+                  for (const key of Object.keys(prevSynced)) {
+                    delete cleanedRest[key]
+                  }
+                } else {
+                  delete cleanedRest.readUntagged
+                }
+              }
               return {
-                ...rest,
+                ...cleanedRest,
                 ...(syncedChanged ? desiredSemanticConfig : {}),
                 managed: true,
                 synced: desiredSemanticConfig,

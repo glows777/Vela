@@ -32,6 +32,59 @@ import {
 } from './messages.ts'
 import type { OutboxTarget } from './worker.ts'
 
+function inferInlineImageMime(
+  bytes: Uint8Array,
+  name: string,
+  declared?: string | null,
+): string | undefined {
+  if (declared?.startsWith('image/')) return declared
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return 'image/png'
+  }
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return 'image/jpeg'
+  }
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38
+  ) {
+    return 'image/gif'
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp'
+  }
+  const ext = name.toLowerCase().split('.').pop()
+  if (ext === 'png') return 'image/png'
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
+  if (ext === 'gif') return 'image/gif'
+  if (ext === 'webp') return 'image/webp'
+  return undefined
+}
+
 async function steerInboxEventInRuntime(params: {
   db: VelaDatabase
   blobs: import('./blobs.ts').BlobStore
@@ -55,54 +108,51 @@ async function steerInboxEventInRuntime(params: {
 
   let steerText = text
   const images: Array<{ data: string; mimeType: string }> = []
+  let payload: {
+    text?: unknown
+    attachments?: Array<{
+      blobId?: unknown
+      name?: unknown
+      mimeType?: unknown
+      inlineOnly?: unknown
+    }>
+  }
   try {
-    const payload = JSON.parse(pendingRow.payload_json) as {
-      text?: unknown
-      attachments?: Array<{
-        blobId?: unknown
-        name?: unknown
-        mimeType?: unknown
-        inlineOnly?: unknown
-      }>
-    }
-    if (typeof payload.text === 'string' && payload.text.trim()) {
-      steerText = payload.text
-    }
-    if (Array.isArray(payload.attachments)) {
-      const fileNotes: string[] = []
-      for (const att of payload.attachments) {
-        if (typeof att?.blobId !== 'string' || typeof att?.name !== 'string') {
-          continue
-        }
-        const metaMime =
-          typeof att.mimeType === 'string'
-            ? att.mimeType
-            : blobs.get(att.blobId)?.mimeType
-        if (metaMime?.startsWith('image/') || att.inlineOnly === true) {
-          const bytes = await blobs
-            .readOwnedBytes(att.blobId, sessionId)
-            .catch(() => undefined)
-          if (bytes && metaMime?.startsWith('image/')) {
-            images.push({
-              data: Buffer.from(bytes).toString('base64'),
-              mimeType: metaMime,
-            })
-          }
-        }
-        if (!att.inlineOnly) {
-          fileNotes.push(`[file: ${att.name}]`)
-        }
+    payload = JSON.parse(pendingRow.payload_json) as typeof payload
+  } catch {
+    return false
+  }
+  if (typeof payload.text === 'string' && payload.text.trim()) {
+    steerText = payload.text
+  }
+  if (Array.isArray(payload.attachments) && payload.attachments.length > 0) {
+    for (const att of payload.attachments) {
+      if (att?.inlineOnly !== true) {
+        // Non-inline attachments (files or trigger images requiring workspace staging) must stay queued for full turn preparation.
+        return false
       }
-      if (
-        fileNotes.length > 0 &&
-        !fileNotes.every((n) => steerText.includes(n))
-      ) {
-        steerText = steerText
-          ? `${steerText}\n${fileNotes.join('\n')}`
-          : fileNotes.join('\n')
+      if (typeof att.blobId !== 'string' || typeof att.name !== 'string') {
+        return false
       }
+      const metaMime =
+        typeof att.mimeType === 'string'
+          ? att.mimeType
+          : blobs.get(att.blobId)?.mimeType
+      const bytes = await blobs
+        .readOwnedBytes(att.blobId, sessionId)
+        .catch(() => undefined)
+      const mime = bytes
+        ? inferInlineImageMime(bytes, att.name, metaMime)
+        : undefined
+      if (!bytes || !mime) {
+        return false
+      }
+      images.push({
+        data: Buffer.from(bytes).toString('base64'),
+        mimeType: mime,
+      })
     }
-  } catch {}
+  }
 
   const stillPending = db.get<{ status: string }>(
     `SELECT status FROM inbox_events WHERE id = ? AND session_id = ?`,

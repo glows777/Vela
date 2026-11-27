@@ -1006,3 +1006,245 @@ test('R2 #8,#18,#19 & zero legacy-channels import in Runtime eval path', async (
   ).trim()
   expect(importProbe).toBe('0')
 })
+
+test('PR #601 Codex P2-1 & P2-2: busy steer preserves image/file attachments and config reload clears removed managed keys', async () => {
+  const dir = makeTempDir('vela-codex-p2-')
+  const pngBytes = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+    0x49, 0x48, 0x44, 0x52,
+  ])
+
+  // P2-1a: Trigger image (omitted mimeType) steers with inferred image/png AND file attachment stays queued for staged next turn
+  const topicHold = join(dir, 'topic-att-hold')
+  let topicStarted = false
+  let steeredImgPrompt = ''
+  let queuedFilePrompt = ''
+  const fake = createControlledTransport()
+  fake.resources.set('img_busy_1', [pngBytes])
+  fake.resources.set('file_busy_1', [Buffer.from('staged-file-body\n')])
+
+  const model = createFauxModel({
+    responses: [
+      () => {
+        topicStarted = true
+        return fauxToolCall('bash', {
+          command: `while [ ! -f ${JSON.stringify(topicHold)} ]; do sleep 0.02; done; echo ok`,
+        })
+      },
+      (req) => {
+        steeredImgPrompt = JSON.stringify(req.prompt)
+        return fauxText('Initial topic reply with steered image')
+      },
+      (req) => {
+        queuedFilePrompt = JSON.stringify(req.prompt)
+        return fauxText('Follow-up saw staged file path')
+      },
+    ],
+  })
+  const rt = createRuntime({
+    agentDir: join(dir, 'rt-att'),
+    defaultModel: model,
+    logger: silentLogger,
+  })
+  cleanups.push(() => rt.dispose())
+
+  const proj = await rt.projects.create({
+    name: 'oc_chat_a',
+    cwd: dir,
+    hubSessionId: true,
+  })
+  await rt.bindings.upsert({
+    channel: 'lark',
+    externalId: 'oc_chat_a',
+    threadId: null,
+    kind: 'group',
+    projectId: proj.id,
+    enabled: true,
+  })
+  await rt.registerChannel(
+    createLarkChannelAdapter({
+      appId: 'ou_bot',
+      owners: ['ou_alice'],
+      chats: ['oc_chat_a'],
+      transport: fake.transport,
+      logger: silentLogger,
+    }),
+  )
+
+  fake.deliver(
+    larkEvent({
+      message_id: 'om_att_hold',
+      thread_id: 'omt_att',
+      root_id: 'om_att_root',
+      content: JSON.stringify({ text: '@_user_1 wait for attachment' }),
+    }),
+  )
+  await waitFor(() => topicStarted, 'topic attachment hold started')
+  fake.deliver(
+    larkEvent({
+      message_id: 'om_att_img',
+      thread_id: 'omt_att',
+      root_id: 'om_att_root',
+      message_type: 'image',
+      content: JSON.stringify({ image_key: 'img_busy_1' }),
+      mentions: undefined,
+    }),
+  )
+  fake.deliver(
+    larkEvent({
+      message_id: 'om_att_file',
+      thread_id: 'omt_att',
+      root_id: 'om_att_root',
+      message_type: 'file',
+      content: JSON.stringify({
+        file_key: 'file_busy_1',
+        file_name: 'report.txt',
+      }),
+      mentions: undefined,
+    }),
+  )
+  await waitFor(
+    () => fake.resources.has('img_busy_1') && steeredImgPrompt === '',
+    'ready',
+  )
+  await Bun.sleep(80)
+  writeFileSync(topicHold, 'go')
+  await rt.waitForIdle()
+  expect(steeredImgPrompt).toContain('"mediaType":"image/png"')
+  expect(steeredImgPrompt).toContain(pngBytes.toString('base64'))
+  expect(queuedFilePrompt).toContain('[file: report.txt]')
+  expect(queuedFilePrompt).toContain('report.txt')
+  expect(queuedFilePrompt).toMatch(/saved at .*report\.txt/)
+  expect(fake.replies.map((r) => r.text).join('\n')).toContain(
+    'Follow-up saw staged file path',
+  )
+
+  // P2-1b: inlineOnly image without mimeType still infers image/png and steers cleanly
+  const inlineHold = join(dir, 'inline-hold')
+  let inlineStarted = false
+  let steeredInlinePrompt = ''
+  const inlineModel = createFauxModel({
+    responses: [
+      () => {
+        inlineStarted = true
+        return fauxToolCall('bash', {
+          command: `while [ ! -f ${JSON.stringify(inlineHold)} ]; do sleep 0.02; done; echo ok`,
+        })
+      },
+      (req) => {
+        steeredInlinePrompt = JSON.stringify(req.prompt)
+        return fauxText('Steered inline png ok')
+      },
+    ],
+  })
+  const inlineRt = createRuntime({
+    agentDir: join(dir, 'rt-inline'),
+    defaultModel: inlineModel,
+    logger: silentLogger,
+  })
+  cleanups.push(() => inlineRt.dispose())
+  const inlineProj = await inlineRt.projects.create({
+    name: 'inline',
+    cwd: dir,
+    hubSessionId: true,
+  })
+  const inlineSessId = inlineProj.hubSessionId!
+  let inlineCtx!: Parameters<
+    Parameters<typeof inlineRt.registerChannel>[0]['start']
+  >[0]
+  await inlineRt.registerChannel({
+    name: 'mock-inline',
+    async start(ctx) {
+      inlineCtx = ctx
+    },
+    async stop() {},
+    async deliver() {
+      return { externalMessageId: 'd-inline-1' }
+    },
+    async fetchAttachment() {
+      return pngBytes
+    },
+  })
+  inlineRt.bindings.upsert({
+    channel: 'mock-inline',
+    externalId: 'chat_inline',
+    threadId: null,
+    kind: 'group',
+    projectId: inlineProj.id,
+    enabled: true,
+  })
+  await inlineCtx.ingestWithReceipt!({
+    channel: 'mock-inline',
+    dedupeKey: 'hold-inline',
+    externalChatId: 'chat_inline',
+    kind: 'group',
+    senderId: 'u1',
+    senderName: 'Alice',
+    text: 'hold',
+    timestamp: new Date().toISOString(),
+  })
+  await waitFor(() => inlineStarted, 'inline hold started')
+  const receipt = await inlineCtx.ingestWithReceipt!({
+    channel: 'mock-inline',
+    dedupeKey: 'steer-inline-img',
+    externalChatId: 'chat_inline',
+    kind: 'group',
+    senderId: 'u1',
+    senderName: 'Alice',
+    text: 'look at this inline img',
+    attachments: [{ ref: 'inline_clip_1', name: 'clip.bin', inlineOnly: true }],
+    timestamp: new Date().toISOString(),
+  })
+  expect(
+    await inlineCtx.steerInboxEvent!(
+      inlineSessId,
+      receipt.inboxEventId!,
+      'look at this inline img',
+    ),
+  ).toBe(true)
+  writeFileSync(inlineHold, 'go')
+  await inlineRt.waitForIdle()
+  expect(steeredInlinePrompt).toContain(pngBytes.toString('base64'))
+
+  // P2-2: Removing `readUntagged: false` from lark chat config removes stale false on reload
+  const daemonDir = join(dir, 'daemon-p2')
+  mkdirSync(daemonDir, { recursive: true })
+  const cfgPath = join(daemonDir, 'config.json')
+  writeFileSync(
+    cfgPath,
+    JSON.stringify({
+      lark: {
+        owners: ['ou_alice'],
+        chats: [{ id: 'oc_chat_p2', readUntagged: false }],
+      },
+    }),
+  )
+  const daemonFake = createControlledTransport()
+  const handle = await startDaemonServer({
+    agentDir: daemonDir,
+    registerSignalHandlers: false,
+    larkTransport: daemonFake.transport,
+    logger: silentLogger,
+  })
+  cleanups.push(() => handle.close('test'))
+
+  const initial = (
+    await handle.runtime.bindings.list({ channel: 'lark' })
+  ).find((b) => b.externalId === 'oc_chat_p2')
+  expect(initial?.config?.readUntagged).toBe(false)
+
+  writeFileSync(
+    cfgPath,
+    JSON.stringify({
+      lark: {
+        owners: ['ou_alice'],
+        chats: [{ id: 'oc_chat_p2' }],
+      },
+    }),
+  )
+  await handle.runtime.reloadConfig()
+  const reloaded = (
+    await handle.runtime.bindings.list({ channel: 'lark' })
+  ).find((b) => b.externalId === 'oc_chat_p2')
+  expect(reloaded?.config?.readUntagged).toBeUndefined()
+})
