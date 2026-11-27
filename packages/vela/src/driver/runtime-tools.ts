@@ -10,7 +10,11 @@ import {
   startProjectSession,
 } from '../runtime/control-ops.ts'
 import type { RuntimeEventBus } from '../runtime/event-bus.ts'
-import type { BlobStore } from '../runtime/index.ts'
+import type {
+  BlobStore,
+  ChannelBinding,
+  ChannelToolSpec,
+} from '../runtime/index.ts'
 import type { MemoryStore } from '../runtime/memory/index.ts'
 import type { SubscriptionManager } from '../runtime/subscriptions.ts'
 import type { TimerScheduler } from '../runtime/timers.ts'
@@ -531,4 +535,37 @@ export function createRuntimeSessionToolRegistry(options: {
     registry.register(...options.extraTools)
   }
   return registry
+}
+
+/** Converts Runtime-supplied `ChannelToolSpec` items into session-scoped `ToolDefinition` instances. */
+export function adaptChannelTools(
+  resolved:
+    | { binding: ChannelBinding; tools: readonly ChannelToolSpec[] }
+    | undefined,
+  sessionId: string,
+  projectId: string | null,
+): ToolDefinition[] {
+  if (!resolved) return []
+  const { binding, tools } = resolved
+  return tools.map((spec) => ({
+    name: spec.name,
+    description: spec.description,
+    inputSchema: spec.inputSchema,
+    channel: binding.channel,
+    executionMode: spec.readOnly ? 'parallel' : 'sequential',
+    ...(spec.readOnly ? { annotations: { readOnlyHint: true } } : {}),
+    ...(spec.maxResultChars !== undefined
+      ? { maxResultChars: spec.maxResultChars }
+      : {}),
+    execute: async (input, ctx) =>
+      await spec.execute(input, {
+        sessionId,
+        projectId,
+        channel: binding.channel,
+        externalChatId: binding.externalId,
+        threadId: binding.threadId,
+        kind: binding.kind,
+        signal: ctx?.signal,
+      }),
+  }))
 }

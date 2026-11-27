@@ -51,6 +51,23 @@ function resolveChannelTargetInDb(params: {
         : undefined
     return session ? { binding: exact, session } : undefined
   }
+  if (msg.kind === 'direct' && !msg.threadId) {
+    if (!allowCreateTopic) return undefined
+    const dmSession = sessions.create({
+      kind: 'chat',
+      name: msg.senderName.trim() || msg.externalChatId,
+    })
+    const dmBinding = bindings.upsert({
+      channel: msg.channel,
+      externalId: msg.externalChatId,
+      threadId: null,
+      kind: 'direct',
+      projectId: null,
+      sessionId: dmSession.id,
+      enabled: true,
+    })
+    return { binding: dmBinding, session: dmSession }
+  }
   if (!msg.threadId || !allowCreateTopic) return undefined
   const root = bindings.findByExternal(msg.channel, msg.externalChatId)
   if (!root?.enabled || !root.projectId) return undefined
@@ -71,7 +88,7 @@ function resolveChannelTargetInDb(params: {
   return { binding: topicBinding, session: topicSession }
 }
 
-function getOrCreateHubSession(
+export function getOrCreateHubSession(
   db: VelaDatabase,
   projects: ProjectStore,
   sessions: SessionStoreControl,
@@ -237,6 +254,7 @@ export async function ingestChannelMessageInRuntime(params: {
       sessions,
       bindings,
       msg,
+      allowCreateTopic: msg.requireExistingSession !== true,
     })
     if (!resolved) return
     const { binding, session } = resolved
@@ -245,6 +263,7 @@ export async function ingestChannelMessageInRuntime(params: {
       blobId: string
       name: string
       mimeType?: string
+      inlineOnly?: boolean
     }> = []
     let inserted = false
     try {
@@ -262,6 +281,7 @@ export async function ingestChannelMessageInRuntime(params: {
             blobId: blob.id,
             name: att.name,
             ...(att.mimeType ? { mimeType: att.mimeType } : {}),
+            ...(att.inlineOnly ? { inlineOnly: true } : {}),
           })
         }
       }
@@ -297,6 +317,8 @@ export async function ingestChannelMessageInRuntime(params: {
             senderId: msg.senderId,
             senderName: msg.senderName,
             text: msg.text,
+            ...(msg.preformatted ? { preformatted: true } : {}),
+            ...(msg.rawText !== undefined ? { rawText: msg.rawText } : {}),
             ...(msg.mentioned !== undefined
               ? { mentioned: msg.mentioned }
               : {}),

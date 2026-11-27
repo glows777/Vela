@@ -9,6 +9,8 @@ export interface RuntimeMessageRecord {
   role: 'user' | 'assistant' | 'tool' | 'system' | null
   text: string
   content: unknown
+  senderName?: string
+  senderId?: string
   customType?: string
   display?: boolean
   stopReason?: string

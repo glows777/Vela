@@ -3,7 +3,12 @@ import { dirname, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 import type { AuthEvent, AuthPrompt } from '../providers/auth/types.ts'
-import type { RuntimeEvent, StreamDeltaEvent } from '../runtime/events.ts'
+import type {
+  ChannelStatusInfo,
+  RuntimeEvent,
+  RuntimeWebhookStatus,
+  StreamDeltaEvent,
+} from '../runtime/index.ts'
 
 export const DAEMON_PROTOCOL_VERSION = 1
 const MAX_WIRE_FRAME_BYTES = 128 * 1024 * 1024
@@ -27,6 +32,8 @@ export interface DaemonStatus {
   appVersion?: string
   startedAt?: string
   uptimeMs?: number
+  channels?: ChannelStatusInfo[]
+  webhooks?: RuntimeWebhookStatus
 }
 
 export interface SerializedError {

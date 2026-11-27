@@ -3,6 +3,12 @@ import type { VelaDatabase } from '../db/index.ts'
 import type { ExecutionLocation } from '../shared/execution.ts'
 import { hasLiveSessionJobs } from './background-jobs.ts'
 import type { ChannelBinding, ChannelBindingKind } from './channels.ts'
+import type {
+  ProjectRecord,
+  SessionKind,
+  SessionRecord,
+  SessionState,
+} from './domain-types.ts'
 import { assertSafePathSegment, isOwnerLive } from './driver.ts'
 import {
   cleanupProjectTimerTargetsInTx,
@@ -10,25 +16,7 @@ import {
   unlinkOrphanedBlobPaths,
 } from './session-cleanup.ts'
 
-export type SessionKind = 'chat' | 'hub' | 'topic' | 'work'
-export type SessionState = 'idle' | 'running' | 'waiting_human' | 'stopped'
-
-export interface ProjectRecord {
-  id: string
-  name: string
-  cwd: string | null
-  dataDir: string | null
-  hubSessionId: string | null
-  defaultDriver: string
-  defaultLocation: ExecutionLocation | null
-  defaultModel: string | null
-  defaultThinkingLevel: string | null
-  defaultTools: string[] | null
-  config: Record<string, unknown> | null
-  archived: boolean
-  createdAt: string
-  updatedAt: string
-}
+export type { ProjectRecord, SessionKind, SessionRecord, SessionState }
 
 export interface CreateProjectInput {
   id?: string
@@ -57,27 +45,6 @@ export interface UpdateProjectInput {
   defaultTools?: string[] | null
   config?: Record<string, unknown> | null
   archived?: boolean
-}
-
-export interface SessionRecord {
-  id: string
-  projectId: string | null
-  kind: SessionKind
-  driver: string
-  externalSessionId: string | null
-  name: string | null
-  archived: boolean
-  model: string | null
-  thinkingLevel: string | null
-  location: ExecutionLocation | null
-  leafMessageId: string | null
-  discoveredTools: string[]
-  parentSessionId: string | null
-  state: SessionState
-  waitingReason: string | null
-  followupStreak: number
-  createdAt: string
-  updatedAt: string
 }
 
 export interface CreateSessionInput {
@@ -460,9 +427,21 @@ export class SessionStoreControl {
         input.projectId,
       ) as ProjectRow | undefined
       if (!project) throw new Error(`Project ${input.projectId} not found`)
+      const projectConfig = parseJson<Record<string, unknown>>(
+        project.config_json,
+      )
+      const topicModel =
+        input.kind === 'topic' && typeof projectConfig?.topicModel === 'string'
+          ? projectConfig.topicModel
+          : undefined
+      const topicThinking =
+        input.kind === 'topic' &&
+        typeof projectConfig?.topicThinkingLevel === 'string'
+          ? projectConfig.topicThinkingLevel
+          : undefined
       driver = input.driver ?? project.default_driver
-      inheritedModel ??= project.default_model
-      inheritedThinking ??= project.default_thinking_level
+      inheritedModel ??= topicModel ?? project.default_model
+      inheritedThinking ??= topicThinking ?? project.default_thinking_level
       inheritedLocation ??=
         parseJson<ExecutionLocation>(project.default_location_json) ??
         (project.cwd ? { environment: 'local', cwd: project.cwd } : null)

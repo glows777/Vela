@@ -1,4 +1,7 @@
 import type { VelaDatabase } from '../db/index.ts'
+import type { VelaLogger } from '../shared/logger.ts'
+import { prepareTurnAnnouncement } from './channel-control.ts'
+import type { ChannelAdapter } from './channels.ts'
 import {
   type AgentDriver,
   type DriverTurnResult,
@@ -26,6 +29,8 @@ export async function executeRuntimeClaimedTurn(params: {
   isDisposed: () => boolean
   wakeSession: (sessionId: string) => void
   flushOutbox: () => void
+  getChannelAdapter?: (name: string) => ChannelAdapter | undefined
+  logger?: VelaLogger
 }): Promise<{ lostOwnership: boolean; status?: DriverTurnResult['status'] }> {
   const { db, eventBus, driver, claimed, abortController } = params
   let stopPollTimer: ReturnType<typeof setInterval> | undefined
@@ -55,22 +60,52 @@ export async function executeRuntimeClaimedTurn(params: {
     }, 50)
     stopPollTimer.unref?.()
 
-    const outboxTarget = resolveOutboxTargetInDb(
+    const initialTarget = resolveOutboxTargetInDb(
       db,
       claimed.session,
       claimed.inputs,
       claimed.runId,
     )
+    const announced = params.getChannelAdapter
+      ? await prepareTurnAnnouncement({
+          db,
+          runId: claimed.runId,
+          trigger: claimed.trigger,
+          inputs: claimed.inputs,
+          outboxTarget: initialTarget,
+          getChannelAdapter: params.getChannelAdapter,
+          logger: params.logger ?? {
+            debug() {},
+            info() {},
+            warn() {},
+            error() {},
+          },
+        })
+      : { skipTurn: false, outboxTarget: initialTarget, inputs: claimed.inputs }
+    if (announced.skipTurn) {
+      finalizeTurnInDb({
+        db,
+        eventBus,
+        claimed,
+        result: { status: 'completed', silent: true },
+      })
+      return { lostOwnership: false, status: 'completed' }
+    }
+    const outboxTarget = announced.outboxTarget
+    const effectiveClaimed: ClaimedTurn =
+      announced.inputs === claimed.inputs
+        ? claimed
+        : { ...claimed, inputs: announced.inputs }
 
     result = await driver.runTurn({
-      sessionId: claimed.session.id,
-      projectId: claimed.session.projectId,
-      runId: claimed.runId,
-      ownerToken: claimed.ownerToken,
-      trigger: claimed.trigger,
-      inputs: claimed.inputs,
-      recoverPending: claimed.recoverPending,
-      allowWaitingHuman: claimed.allowWaitingHuman,
+      sessionId: effectiveClaimed.session.id,
+      projectId: effectiveClaimed.session.projectId,
+      runId: effectiveClaimed.runId,
+      ownerToken: effectiveClaimed.ownerToken,
+      trigger: effectiveClaimed.trigger,
+      inputs: effectiveClaimed.inputs,
+      recoverPending: effectiveClaimed.recoverPending,
+      allowWaitingHuman: effectiveClaimed.allowWaitingHuman,
       abortSignal: abortController.signal,
       onDelta: (delta) => eventBus.emitDelta(delta),
       onEvent: (payload) => {
@@ -97,7 +132,7 @@ export async function executeRuntimeClaimedTurn(params: {
         commitCompletedTurnInTx({
           db,
           eventBus,
-          claimed,
+          claimed: effectiveClaimed,
           outcome,
           outboxTarget,
         }),
@@ -107,7 +142,7 @@ export async function executeRuntimeClaimedTurn(params: {
       finalizeTurnInDb({
         db,
         eventBus,
-        claimed,
+        claimed: effectiveClaimed,
         result,
         outboxTarget,
       })

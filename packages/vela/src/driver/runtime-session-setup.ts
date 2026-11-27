@@ -48,7 +48,10 @@ import {
   resolveRuntimeMemoryStores,
   type TrustedRuntimeResources,
 } from './runtime-resources.ts'
-import { createRuntimeSessionToolRegistry } from './runtime-tools.ts'
+import {
+  adaptChannelTools,
+  createRuntimeSessionToolRegistry,
+} from './runtime-tools.ts'
 import { applyRuntimeProjectToolSelection } from './runtime-turn.ts'
 import type {
   ActiveRunMeta,
@@ -552,6 +555,16 @@ export async function prepareSessionSetup(params: {
     refreshRuntimeSections()
   }
 
+  const channelTools = adaptChannelTools(
+    state.options.getChannelTools?.(sessionId, runId),
+    sessionId,
+    projectId,
+  )
+  const extraTools =
+    channelTools.length > 0
+      ? [...(state.options.tools ?? []), ...channelTools]
+      : state.options.tools
+
   const registry = createRuntimeSessionToolRegistry({
     spillDir,
     cwd: location.cwd,
@@ -579,7 +592,7 @@ export async function prepareSessionSetup(params: {
           },
         }
       : {}),
-    extraTools: state.options.tools,
+    extraTools,
     parentRegistry: cachedRunner.registry,
   })
 
@@ -608,7 +621,13 @@ export async function prepareSessionSetup(params: {
     hasChannelBinding,
     networkMode,
   })
-  applyRuntimeProjectToolSelection(state.db, registry, projectId, baseModifiers)
+  applyRuntimeProjectToolSelection(
+    state.db,
+    registry,
+    projectId,
+    baseModifiers,
+    { hasChannelBinding, sessionKind },
+  )
 
   const ownerTools = state.reloadable.defaultTools
     ? [...state.reloadable.defaultTools]
@@ -686,6 +705,7 @@ export async function prepareSessionSetup(params: {
         projectId,
         hasChannelBinding,
         activeTools: currentNames,
+        githubRepositories: state.reloadable.githubRepositories,
       }),
       ...(memoryActive ? { memory: MEMORY_RULES } : {}),
     }

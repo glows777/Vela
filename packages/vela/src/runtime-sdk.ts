@@ -34,7 +34,7 @@ import {
 import { loadModels } from './providers/models-config.ts'
 import {
   EnvironmentRegistry,
-  listRuntimeSessionMessages,
+  extractGithubRepositories,
   SqliteOAuthRegistrationStore,
   VelaRuntimeEngine,
 } from './runtime/index.ts'
@@ -342,6 +342,11 @@ export function createRuntime(
       extensionConfig: initial.extensionConfig,
       extensions: initial.ownerConfig.extensions,
       enabledModels: initial.ownerConfig.enabledModels,
+      githubRepositories: extractGithubRepositories(
+        initial.ownerConfig.webhooks,
+      ),
+      getChannelTools: (sid, runId) =>
+        engine.getChannelToolsForSession(sid, runId),
       hostEnv,
       contextFiles: options.contextFiles,
       skills: options.skills,
@@ -357,6 +362,13 @@ export function createRuntime(
     })
     engine.registerDriver(velaDriver)
 
+    let currentWebhookConfig: {
+      webhooks?: Record<string, unknown>
+      eventDefaultTarget?: { channel: string; chatId: string }
+    } = {
+      webhooks: initial.ownerConfig.webhooks,
+      eventDefaultTarget: initial.ownerConfig.eventDefaultTarget,
+    }
     let reloadQueue: Promise<void> = Promise.resolve()
     const reloadConfigInternal = (force: boolean): Promise<void> => {
       if (isEphemeral) return Promise.resolve()
@@ -371,6 +383,10 @@ export function createRuntime(
           return
         }
         const updated = computeConfigState()
+        currentWebhookConfig = {
+          webhooks: updated.ownerConfig.webhooks,
+          eventDefaultTarget: updated.ownerConfig.eventDefaultTarget,
+        }
         await velaDriver.control.reloadConfig({
           defaultModel: options.defaultModel ?? updated.ownerConfig.model,
           defaultThinkingLevel:
@@ -382,9 +398,13 @@ export function createRuntime(
           extensionConfig: updated.extensionConfig,
           extensions: updated.ownerConfig.extensions,
           enabledModels: updated.ownerConfig.enabledModels,
+          githubRepositories: extractGithubRepositories(
+            updated.ownerConfig.webhooks,
+          ),
           dreamEnabled: updated.dreamEnabled,
           offline: options.offline,
         })
+        await options.onConfigReloaded?.(currentWebhookConfig)
         lastConfigSig = nextConfigSig
         lastAuthSig = nextAuthSig
       })
@@ -451,7 +471,7 @@ export function createRuntime(
           return engine.restartSession(id)
         },
         status: async (id) => engine.sessions.status(id),
-        messages: async (input) => listRuntimeSessionMessages(db, input),
+        messages: (input) => engine.listSessionMessages(input),
         configure: async (sessionId, override) => {
           await maybeRefreshConfig()
           await velaDriver.control.configure(sessionId, override)
@@ -530,6 +550,29 @@ export function createRuntime(
           engine.bindings.setEnabled(id, enabled),
         remove: async (id) => engine.bindings.remove(id),
       },
+      channels: {
+        list: async () => {
+          const info = options.getKnownChannelInfo?.()
+          return engine.listChannelStatuses(info?.names, info?.errors)
+        },
+        setEnabled: async (name, enabled) => {
+          engine.setChannelEnabled(name, enabled)
+          await options.onChannelEnabledChange?.(name, enabled)
+          const info = options.getKnownChannelInfo?.()
+          return (
+            engine
+              .listChannelStatuses([name, ...(info?.names ?? [])], info?.errors)
+              .find((row) => row.name === name) ?? {
+              name,
+              enabled,
+              connected: false,
+            }
+          )
+        },
+        chats: (channel) => engine.listChannelChats(channel),
+        submit: (channel, input) =>
+          engine.submitChannelHostMessage(channel, input),
+      },
       blobs: {
         get: async (id) => engine.blobs.get(id),
         list: async (sessionId, direction) =>
@@ -581,6 +624,9 @@ export function createRuntime(
       registerChannel: (adapter) => engine.registerChannel(adapter),
       unregisterChannel: (name) => engine.unregisterChannel(name),
       registerDriver: (driver) => engine.registerDriver(driver),
+      ingestWebhookEvent: async (event, defaultTarget) =>
+        engine.ingestWebhookEvent(event, defaultTarget),
+      getWebhookConfig: () => ({ ...currentWebhookConfig }),
       dispose() {
         disposing ??= (async () => {
           try {

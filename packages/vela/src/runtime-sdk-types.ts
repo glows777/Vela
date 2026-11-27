@@ -41,6 +41,10 @@ import type {
   BlobRecord,
   ChannelAdapter,
   ChannelBinding,
+  ChannelChatInfo,
+  ChannelHostSubmitInput,
+  ChannelHostSubmitResult,
+  ChannelStatusInfo,
   CreateProjectInput,
   CreateSessionInput,
   EnvironmentRegistry,
@@ -48,6 +52,7 @@ import type {
   RuntimeEvent,
   RuntimeEventListener,
   RuntimeMessagePage,
+  RuntimeWebhookEvent,
   SessionRecord,
   SessionStatusInfo,
   StreamDeltaEvent,
@@ -304,6 +309,15 @@ export interface VelaRuntime {
     ): Promise<ChannelBinding | undefined>
     remove(id: string): Promise<boolean>
   }
+  readonly channels: {
+    list(): Promise<ChannelStatusInfo[]>
+    setEnabled(name: string, enabled: boolean): Promise<ChannelStatusInfo>
+    chats(channel: string): Promise<ChannelChatInfo[]>
+    submit(
+      channel: string,
+      input: ChannelHostSubmitInput,
+    ): Promise<ChannelHostSubmitResult>
+  }
   readonly blobs: {
     get(id: string): Promise<BlobRecord | undefined>
     list(sessionId: string, direction?: BlobDirection): Promise<BlobRecord[]>
@@ -355,6 +369,18 @@ export interface LocalVelaRuntime extends VelaRuntime {
   registerChannel(adapter: ChannelAdapter): Promise<void>
   unregisterChannel(name: string): Promise<void>
   registerDriver(driver: AgentDriver): void
+  ingestWebhookEvent(
+    event: RuntimeWebhookEvent,
+    defaultTarget?: { channel: string; chatId: string },
+  ): Promise<{
+    matchedSessionIds: string[]
+    defaultTargetSessionId?: string
+    enqueuedCount: number
+  }>
+  getWebhookConfig(): {
+    webhooks?: Record<string, unknown>
+    eventDefaultTarget?: { channel: string; chatId: string }
+  }
 }
 
 export interface CreateRuntimeOptions {
@@ -394,5 +420,20 @@ export interface CreateRuntimeOptions {
     | Promise<{ requireApproval?: boolean; summary?: string } | undefined>
     | { requireApproval?: boolean; summary?: string }
     | undefined
+  /** @internal Daemon hook invoked after `config.json` reloads. */
+  onConfigReloaded?: (config: {
+    webhooks?: Record<string, unknown>
+    eventDefaultTarget?: { channel: string; chatId: string }
+  }) => Promise<void> | void
+  /** @internal Daemon hook invoked when `channels.setEnabled()` toggles a channel. */
+  onChannelEnabledChange?: (
+    name: string,
+    enabled: boolean,
+  ) => Promise<void> | void
+  /** @internal Daemon hook returning known configured channel names/errors. */
+  getKnownChannelInfo?: () => {
+    names?: readonly string[]
+    errors?: ReadonlyMap<string, string>
+  }
   logger?: VelaLogger
 }

@@ -110,6 +110,11 @@ async function formatInboxItemText(
       return { text: `${sender}: ${String(p.text ?? '')}` }
     }
     const rawBody = String(p.text ?? '')
+    if (p.preformatted === true) {
+      const human =
+        typeof p.rawText === 'string' && p.rawText ? p.rawText : rawBody
+      return { text: rawBody, humanText: human }
+    }
     const body = await expandHumanText(
       rawBody,
       options.skills,
@@ -118,6 +123,9 @@ async function formatInboxItemText(
       options.resolveEnv,
       options.signal,
     )
+    if (rawBody.startsWith('/')) {
+      return { text: body, humanText: rawBody }
+    }
     return { text: `${sender}: ${body}`, humanText: `${sender}: ${rawBody}` }
   }
   if (item.source === 'user') {
@@ -660,6 +668,7 @@ export function applyRuntimeProjectToolSelection(
   registry: ToolRegistry,
   projectId: string | null,
   baseModifiers: readonly string[],
+  options: { hasChannelBinding?: boolean; sessionKind?: string } = {},
 ): void {
   if (projectId) {
     const proj = db.get<{ default_tools_json: string | null }>(
@@ -683,7 +692,25 @@ export function applyRuntimeProjectToolSelection(
         registry.setDefaultToolModifiers([...baseModifiers, ...list])
       } else {
         registry.setDefaultToolModifiers(baseModifiers)
-        registry.setSelection(list)
+        const selection = options.hasChannelBinding
+          ? [
+              ...new Set([
+                ...list,
+                'session_list',
+                'session_read',
+                'session_message',
+                'skip_reply',
+                ...(options.sessionKind === 'hub'
+                  ? ['session_start', 'session_forward']
+                  : []),
+                ...(options.sessionKind === 'topic' ||
+                options.sessionKind === 'work'
+                  ? ['wait_for_input']
+                  : []),
+              ]),
+            ]
+          : list
+        registry.setSelection(selection)
       }
       return
     }

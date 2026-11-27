@@ -377,6 +377,13 @@ function createSocketRuntimeClient(
       setEnabled: (id, enabled) => rpc('bindings.setEnabled', { id, enabled }),
       remove: (id) => rpc('bindings.remove', { id }),
     },
+    channels: {
+      list: () => rpc('channels.list'),
+      setEnabled: (name, enabled) =>
+        rpc('channels.setEnabled', { name, enabled }),
+      chats: (channel) => rpc('channels.chats', { channel }),
+      submit: (channel, input) => rpc('channels.submit', { channel, input }),
+    },
     blobs: {
       get: (id) => rpc('blobs.get', { id }),
       list: (sessionId, direction) =>

@@ -1,3 +1,8 @@
+import type { ToolInputSchema } from '../shared/tool-schema.ts'
+import type { ProjectRecord, SessionRecord } from './domain-types.ts'
+import type { RuntimeEventListener, StreamDeltaListener } from './event-bus.ts'
+import type { RuntimeMessagePage } from './messages.ts'
+
 /**
  * v0.9 Runtime-level channel adapter contracts, completely decoupled from `ExtensionAPI`.
  *
@@ -26,6 +31,8 @@ export interface ChannelInboundAttachment {
   mimeType?: string
   /** Opaque channel-specific handle used to fetch bytes lazily. */
   ref: string
+  /** Keep image inline-only without materializing an attachment file inside the workspace. */
+  inlineOnly?: boolean
 }
 
 /** Normalized inbound event pushed by a `ChannelAdapter` into `Runtime` `inbox_events`. */
@@ -42,6 +49,12 @@ export interface ChannelInboundMessage {
   mentioned?: boolean
   passive?: boolean
   wake?: boolean
+  /** Do not auto-create a topic or DM session if no active binding exists yet. */
+  requireExistingSession?: boolean
+  /** Adapter already formatted attribution/context; driver should not prepend `${senderName}: `. */
+  preformatted?: boolean
+  /** Original raw text preserved for memory/dream provenance when `preformatted` is true. */
+  rawText?: string
   attachments?: ChannelInboundAttachment[]
   timestamp: string
   raw?: unknown
@@ -57,6 +70,10 @@ export interface ChannelOutboundMessage {
   replyToMessageId?: string
   title?: string
   forwardMessageId?: string
+  recipientId?: string
+  mentionRecipient?: boolean
+  isRoutine?: boolean
+  isHandoff?: boolean
   text: string
   files?: { path: string; name?: string; mimeType?: string }[]
 }
@@ -67,9 +84,86 @@ export interface ChannelDeliveryResult {
   rootId?: string
 }
 
+export interface ChannelConnectionState {
+  connected: boolean
+  error?: string
+}
+
+export interface ChannelStatusInfo {
+  name: string
+  enabled: boolean
+  connected: boolean
+  error?: string
+}
+
+export interface ChannelChatInfo {
+  chatId: string
+  name?: string
+}
+
+export interface ChannelHostSubmitInput {
+  chatId: string
+  text: string
+  author: { id: string; name: string }
+  sessionId?: string
+  newTopic?: { title: string }
+}
+
+export interface ChannelHostSubmitResult {
+  outcome: 'posted' | 'not-sent' | 'uncertain'
+  sessionId?: string
+  messageId?: string
+  topic?: { rootId: string; threadId: string }
+  error?: string
+}
+
+export interface ChannelAnnouncementInput {
+  externalChatId: string
+  threadId?: string
+  text: string
+}
+
+export interface ChannelAnnouncementResult {
+  externalMessageId?: string
+}
+
+export interface ChannelToolContext {
+  sessionId: string
+  projectId: string | null
+  channel: string
+  externalChatId: string
+  threadId?: string | null
+  kind: ChannelBindingKind
+  signal?: AbortSignal
+}
+
+export interface ChannelToolSpec {
+  readonly name: string
+  readonly description: string
+  readonly inputSchema: ToolInputSchema
+  readonly maxResultChars?: number
+  readonly readOnly?: boolean
+  execute(
+    // biome-ignore lint/suspicious/noExplicitAny: heterogeneous channel tool inputs
+    input: any,
+    context: ChannelToolContext,
+  ): Promise<unknown> | unknown
+}
+
 export interface ChannelAdapterContext {
   /** Submit a normalized inbound event into the durable `inbox_events` queue. */
   ingest(message: ChannelInboundMessage): Promise<void>
+  subscribeEvents?(listener: RuntimeEventListener): () => void
+  subscribeDeltas?(listener: StreamDeltaListener): () => void
+  stopSession?(sessionId: string, reason?: string): Promise<boolean>
+  steerSession?(sessionId: string, text: string): Promise<void>
+  listBindings?(filter?: {
+    channel?: string
+    projectId?: string
+    enabledOnly?: boolean
+  }): ChannelBinding[]
+  getSession?(id: string): SessionRecord | undefined
+  getProject?(id: string): ProjectRecord | undefined
 }
 
 /** First-class external messaging adapter hosted by `Runtime`. */
@@ -80,4 +174,21 @@ export interface ChannelAdapter {
   stop(): Promise<void>
   deliver(message: ChannelOutboundMessage): Promise<ChannelDeliveryResult>
   fetchAttachment?(ref: string, signal?: AbortSignal): Promise<Uint8Array>
+  status?(): ChannelConnectionState
+  listMessages?(input: {
+    sessionId: string
+    externalChatId: string
+    threadId?: string | null
+    kind: ChannelBindingKind
+    cursor?: string
+    limit?: number
+  }): Promise<RuntimeMessagePage>
+  listChats?(): Promise<ChannelChatInfo[]>
+  submitFromHost?(
+    input: ChannelHostSubmitInput,
+  ): Promise<ChannelHostSubmitResult>
+  announce?(
+    input: ChannelAnnouncementInput,
+  ): Promise<ChannelAnnouncementResult | undefined>
+  getTools?(binding: ChannelBinding): readonly ChannelToolSpec[]
 }

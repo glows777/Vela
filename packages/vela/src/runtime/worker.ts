@@ -25,8 +25,9 @@ import { enqueueOutboxInTx } from './outbox.ts'
 import { recordChildStatusNoteForHubInTx } from './recovery.ts'
 
 export {
+  canWakeSessionInDb,
   recoverRuntimeState,
-  stopExternalSessionRuns,
+  stopSessionInRuntime,
   stopSessionRunsInDb,
 } from './recovery.ts'
 
@@ -45,6 +46,10 @@ export interface OutboxTarget {
   externalChatId: string
   threadId?: string
   replyToMessageId?: string
+  recipientId?: string
+  mentionRecipient?: boolean
+  isRoutine?: boolean
+  isHandoff?: boolean
 }
 
 function triggerFromInbox(inputs: readonly InboxEventRecord[]): RunTrigger {
@@ -366,6 +371,10 @@ export function commitCompletedTurnInTx(params: {
       externalChatId: outboxTarget.externalChatId,
       threadId: outboxTarget.threadId,
       replyToMessageId: outboxTarget.replyToMessageId,
+      recipientId: outboxTarget.recipientId,
+      mentionRecipient: outboxTarget.mentionRecipient,
+      isRoutine: outboxTarget.isRoutine,
+      isHandoff: outboxTarget.isHandoff,
       kind: 'reply',
       text: outcome.replyText,
     })
@@ -532,6 +541,10 @@ export function finalizeTurnInDb(params: {
         externalChatId: outboxTarget.externalChatId,
         threadId: outboxTarget.threadId,
         replyToMessageId: outboxTarget.replyToMessageId,
+        recipientId: outboxTarget.recipientId,
+        mentionRecipient: outboxTarget.mentionRecipient,
+        isRoutine: outboxTarget.isRoutine,
+        isHandoff: outboxTarget.isHandoff,
         kind: 'reply',
         text: result.replyText,
       })
@@ -556,6 +569,7 @@ function outboxTargetFromInputs(
       const isRouteSource =
         item.source === 'channel' ||
         item.source === 'timer' ||
+        item.source === 'webhook' ||
         (item.source === 'approval' && item.payload.waitForInput === true)
       if (!isRouteSource || item.passive) {
         continue
@@ -572,6 +586,14 @@ function outboxTargetFromInputs(
             : typeof payload.messageId === 'string'
               ? payload.messageId
               : undefined
+        const recipientId =
+          typeof payload.senderId === 'string' && payload.senderId
+            ? payload.senderId
+            : typeof payload.creatorId === 'string' && payload.creatorId
+              ? payload.creatorId
+              : undefined
+        const isRoutine = item.source === 'timer' && payload.kind === 'routine'
+        const isHandoff = item.source === 'handoff'
         return {
           channel: payload.channel,
           externalChatId: payload.externalChatId,
@@ -579,6 +601,9 @@ function outboxTargetFromInputs(
             ? { threadId: payload.threadId }
             : {}),
           ...(replyToMessageId ? { replyToMessageId } : {}),
+          ...(recipientId ? { recipientId } : {}),
+          ...(isRoutine ? { isRoutine: true } : {}),
+          ...(isHandoff ? { isHandoff: true } : {}),
         }
       }
     }

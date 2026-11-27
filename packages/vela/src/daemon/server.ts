@@ -40,6 +40,7 @@ import {
   getAppVersion,
   serializeError,
 } from './protocol.ts'
+import { DaemonWebhooksHost } from './webhooks-host.ts'
 
 const MAX_CLIENT_BUFFER_BYTES = 64 * 1024 * 1024
 const ACTIVE_OWNER_IDS = new Set<string>()
@@ -136,6 +137,7 @@ export interface StartDaemonServerOptions {
   appVersion?: string
   protocolVersion?: number
   registerSignalHandlers?: boolean
+  enableWebhooks?: boolean
   onClosed?: (reason: string) => void
 }
 
@@ -225,6 +227,7 @@ export async function startDaemonServer(
   )
 
   let runtime: LocalVelaRuntime
+  let webhooksHost: DaemonWebhooksHost | undefined
   try {
     if (process.platform !== 'win32') {
       mkdirSync(dirname(paths.socketPath), { recursive: true })
@@ -234,13 +237,28 @@ export async function startDaemonServer(
       removeStaleSocketFile(paths.socketPath)
     }
 
+    if (options.enableWebhooks !== false) {
+      webhooksHost = new DaemonWebhooksHost(
+        (event, defaultTarget) =>
+          runtime.ingestWebhookEvent(event, defaultTarget),
+        logger,
+      )
+    }
+
     runtime = createRuntime({
       agentDir: paths.agentDir,
       hostEnv,
       logger,
+      onConfigReloaded: webhooksHost
+        ? (cfg) => webhooksHost!.sync(cfg, true)
+        : undefined,
     })
     await runtime.recover()
+    if (webhooksHost) {
+      await webhooksHost.sync(runtime.getWebhookConfig(), false)
+    }
   } catch (error) {
+    await webhooksHost?.stop().catch(() => {})
     releaseOwner()
     throw error
   }
@@ -278,7 +296,7 @@ export async function startDaemonServer(
   type Handler = (p: any, client: ConnectedClient) => Promise<unknown> | unknown
   const handlers: Record<string, Handler> = {
     'daemon.hello': () => hello,
-    'daemon.status': (): DaemonStatus => ({
+    'daemon.status': async (): Promise<DaemonStatus> => ({
       running: true,
       agentDir: paths.agentDir,
       socketPath: paths.socketPath,
@@ -287,6 +305,8 @@ export async function startDaemonServer(
       appVersion,
       startedAt,
       uptimeMs: Math.max(0, Date.now() - startedAtMs),
+      channels: await runtime.channels.list(),
+      ...(webhooksHost ? { webhooks: webhooksHost.status() } : {}),
     }),
     'daemon.stop': () => {
       setImmediate(() => {
@@ -367,6 +387,11 @@ export async function startDaemonServer(
     'bindings.upsert': (p) => runtime.bindings.upsert(p),
     'bindings.setEnabled': (p) => runtime.bindings.setEnabled(p.id, p.enabled),
     'bindings.remove': (p) => runtime.bindings.remove(p.id),
+    'channels.list': () => runtime.channels.list(),
+    'channels.setEnabled': (p) =>
+      runtime.channels.setEnabled(p.name, p.enabled),
+    'channels.chats': (p) => runtime.channels.chats(p.channel),
+    'channels.submit': (p) => runtime.channels.submit(p.channel, p.input),
     'blobs.get': (p) => runtime.blobs.get(p.id),
     'blobs.list': (p) => runtime.blobs.list(p.sessionId, p.direction),
     'blobs.read': (p) => runtime.blobs.read(p.id),
@@ -652,6 +677,7 @@ export async function startDaemonServer(
   } catch (error) {
     unsubEvents()
     unsubDeltas()
+    await webhooksHost?.stop().catch(() => {})
     await runtime.dispose().catch(() => {})
     releaseOwner()
     throw error
@@ -729,6 +755,7 @@ export async function startDaemonServer(
             )
           }),
         )
+        await webhooksHost?.stop().catch(() => {})
         await runtime.dispose()
       } finally {
         const pidInfo = readOwnerRecord(paths.pidPath)

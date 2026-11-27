@@ -90,6 +90,10 @@ export interface OutboxRecord {
     text: string
     title?: string
     forwardMessageId?: string
+    recipientId?: string
+    mentionRecipient?: boolean
+    isRoutine?: boolean
+    isHandoff?: boolean
     files?: { path: string; name?: string; mimeType?: string }[]
   }
   status: OutboxStatus
@@ -114,6 +118,10 @@ export interface EnqueueOutboxInput {
   text: string
   title?: string
   forwardMessageId?: string
+  recipientId?: string
+  mentionRecipient?: boolean
+  isRoutine?: boolean
+  isHandoff?: boolean
   files?: { path: string; name?: string; mimeType?: string }[]
 }
 
@@ -171,6 +179,10 @@ export function enqueueOutboxInTx(
     ...(input.forwardMessageId
       ? { forwardMessageId: input.forwardMessageId }
       : {}),
+    ...(input.recipientId ? { recipientId: input.recipientId } : {}),
+    ...(input.mentionRecipient ? { mentionRecipient: true } : {}),
+    ...(input.isRoutine ? { isRoutine: true } : {}),
+    ...(input.isHandoff ? { isHandoff: true } : {}),
     ...(input.files?.length ? { files: input.files } : {}),
   }
   db.run(
@@ -414,6 +426,12 @@ export class OutboxDispatcher {
         ...(row.payload.forwardMessageId
           ? { forwardMessageId: row.payload.forwardMessageId }
           : {}),
+        ...(row.payload.recipientId
+          ? { recipientId: row.payload.recipientId }
+          : {}),
+        ...(row.payload.mentionRecipient ? { mentionRecipient: true } : {}),
+        ...(row.payload.isRoutine ? { isRoutine: true } : {}),
+        ...(row.payload.isHandoff ? { isHandoff: true } : {}),
         text: row.payload.text,
         ...(row.payload.files ? { files: row.payload.files } : {}),
       }
