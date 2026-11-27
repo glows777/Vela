@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { VelaDatabase } from '../db/index.ts'
+import { isChannelEnabledInDb } from '../runtime/channel-ingress.ts'
 import {
   forwardToProjectSession,
   listProjectSessions,
@@ -51,8 +52,17 @@ export interface RuntimeToolDeps {
           externalChatId: string
           threadId?: string
         }
-        humanProvenance?: { inboxEventId: string; senderName?: string }
-        attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
+        humanProvenance?: {
+          inboxEventId: string
+          senderId?: string
+          senderName?: string
+        }
+        attachments?: Array<{
+          blobId: string
+          name: string
+          mimeType?: string
+          inlineOnly?: boolean
+        }>
         markSilent: () => void
       }
     | undefined
@@ -365,6 +375,12 @@ function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
           projectId: run.projectId,
           sessionId: run.sessionId,
           target: run.channelTarget,
+          ...(run.humanProvenance?.senderId
+            ? { creatorId: run.humanProvenance.senderId }
+            : {}),
+          ...(run.humanProvenance?.senderName
+            ? { creatorName: run.humanProvenance.senderName }
+            : {}),
           message: input.message,
           schedule,
           timezone: zone,
@@ -544,6 +560,7 @@ export function adaptChannelTools(
     | undefined,
   sessionId: string,
   projectId: string | null,
+  db?: VelaDatabase,
 ): ToolDefinition[] {
   if (!resolved) return []
   const { binding, tools } = resolved
@@ -557,8 +574,36 @@ export function adaptChannelTools(
     ...(spec.maxResultChars !== undefined
       ? { maxResultChars: spec.maxResultChars }
       : {}),
-    execute: async (input, ctx) =>
-      await spec.execute(input, {
+    execute: async (input, ctx) => {
+      if (db) {
+        if (!isChannelEnabledInDb(db, binding.channel)) {
+          throw new Error(`Channel "${binding.channel}" is disabled`)
+        }
+        const activeRow = db.get<{ enabled: number }>(
+          'SELECT enabled FROM channel_bindings WHERE id = ?',
+          binding.id,
+        )
+        if (!activeRow || activeRow.enabled === 0) {
+          throw new Error(
+            `Channel binding for "${binding.channel}" is disabled or removed`,
+          )
+        }
+        if (binding.threadId) {
+          const rootDisabled = db.get<{ id: string }>(
+            `SELECT id FROM channel_bindings
+             WHERE channel = ? AND external_id = ? AND thread_id IS NULL AND enabled = 0
+             LIMIT 1`,
+            binding.channel,
+            binding.externalId,
+          )
+          if (rootDisabled) {
+            throw new Error(
+              `Root group binding for "${binding.channel}" is disabled`,
+            )
+          }
+        }
+      }
+      return await spec.execute(input, {
         sessionId,
         projectId,
         channel: binding.channel,
@@ -566,6 +611,7 @@ export function adaptChannelTools(
         threadId: binding.threadId,
         kind: binding.kind,
         signal: ctx?.signal,
-      }),
+      })
+    },
   }))
 }

@@ -106,7 +106,8 @@ export class RuntimeWebhookReceiver {
   private readonly options: WebhookReceiverConfig
   private readonly listener = new HttpListener()
   private readonly seen = new Set<string>()
-  private readonly inFlight = new Set<string>()
+  private readonly inFlightDeliveries = new Map<string, Promise<boolean>>()
+  private readonly inFlightFingerprints = new Map<string, Promise<boolean>>()
   private readonly replayFingerprints = new Map<string, number>()
   private readonly logger: VelaLogger
 
@@ -259,8 +260,18 @@ export class RuntimeWebhookReceiver {
       }
 
       const cacheKey = JSON.stringify([adapter, id])
-      if (this.seen.has(cacheKey) || this.inFlight.has(cacheKey)) {
+      if (this.seen.has(cacheKey)) {
         respond(202, 'Duplicate delivery ignored')
+        return
+      }
+      const pendingDelivery = this.inFlightDeliveries.get(cacheKey)
+      if (pendingDelivery) {
+        const ok = await pendingDelivery
+        if (ok) {
+          respond(202, 'Duplicate delivery ignored')
+        } else {
+          respond(503, 'Webhook publication failed')
+        }
         return
       }
       const replayHash = signedPayloadUsed
@@ -277,28 +288,56 @@ export class RuntimeWebhookReceiver {
           respond(202, 'Duplicate replay ignored')
           return
         }
-      }
-      this.inFlight.add(cacheKey)
-      try {
-        let events: RuntimeWebhookEvent[]
-        try {
-          const input = JSON.parse(raw.toString('utf8'))
-          events = github
-            ? parseGithubWebhookEvents(
-                type as string,
-                input,
-                id,
-                github,
-                this.logger,
-              )
-            : [parseGenericWebhookEvent(input, id, generic!)]
-        } catch {
-          throw new HttpError(
-            400,
-            `Invalid ${github ? 'GitHub' : 'generic'} payload`,
-          )
+        const pendingReplay = this.inFlightFingerprints.get(replayHash)
+        if (pendingReplay) {
+          const ok = await pendingReplay
+          if (ok) {
+            respond(202, 'Duplicate replay ignored')
+          } else {
+            respond(503, 'Webhook publication failed')
+          }
+          return
         }
-        for (const event of events) await this.publish(event)
+      }
+
+      let events: RuntimeWebhookEvent[]
+      try {
+        const input = JSON.parse(raw.toString('utf8'))
+        events = github
+          ? parseGithubWebhookEvents(
+              type as string,
+              input,
+              id,
+              github,
+              this.logger,
+            )
+          : [parseGenericWebhookEvent(input, id, generic!)]
+      } catch {
+        throw new HttpError(
+          400,
+          `Invalid ${github ? 'GitHub' : 'generic'} payload`,
+        )
+      }
+
+      const work = (async (): Promise<boolean> => {
+        try {
+          for (const event of events) await this.publish(event)
+          return true
+        } catch (error) {
+          this.logger.error(
+            `[events] Webhook publication failed: ${errorMessage(error)}`,
+          )
+          return false
+        }
+      })()
+      this.inFlightDeliveries.set(cacheKey, work)
+      if (replayHash) this.inFlightFingerprints.set(replayHash, work)
+      try {
+        const published = await work
+        if (!published) {
+          respond(503, 'Webhook publication failed')
+          return
+        }
         this.seen.add(cacheKey)
         if (this.seen.size > MAX_SEEN) {
           this.seen.delete(this.seen.values().next().value!)
@@ -314,7 +353,8 @@ export class RuntimeWebhookReceiver {
         }
         respond(202, 'Accepted; execution is not guaranteed')
       } finally {
-        this.inFlight.delete(cacheKey)
+        this.inFlightDeliveries.delete(cacheKey)
+        if (replayHash) this.inFlightFingerprints.delete(replayHash)
       }
     } catch (error) {
       if (error instanceof HttpError) respond(error.status, error.message)

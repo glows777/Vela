@@ -13,7 +13,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs'
-import { createConnection, createServer, type Socket } from 'node:net'
+import { createServer, type Socket } from 'node:net'
 import { dirname } from 'node:path'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import type {
@@ -35,17 +35,19 @@ import {
   DAEMON_PROTOCOL_VERSION,
   type DaemonHello,
   type DaemonStatus,
-  type DaemonWireMessage,
-  encodeWireLine,
   getAppVersion,
   parseChannelChatsParams,
   parseChannelSetEnabledParams,
   parseChannelSubmitParams,
+  probeSocketAlive,
+  safeWriteWire,
   serializeError,
 } from './protocol.ts'
-import { DaemonWebhooksHost } from './webhooks-host.ts'
+import {
+  DaemonWebhooksHost,
+  startDaemonConfigWatcher,
+} from './webhooks-host.ts'
 
-const MAX_CLIENT_BUFFER_BYTES = 64 * 1024 * 1024
 const ACTIVE_OWNER_IDS = new Set<string>()
 
 function isPidAlive(pid: number): boolean {
@@ -176,36 +178,7 @@ interface ConnectedClient {
   preCancelledLogouts: Set<number>
 }
 
-async function probeSocketAlive(socketPath: string): Promise<boolean> {
-  if (process.platform !== 'win32' && !existsSync(socketPath)) return false
-  return new Promise<boolean>((resolve) => {
-    const probe = createConnection(socketPath)
-    let done = false
-    const finish = (alive: boolean) => {
-      if (done) return
-      done = true
-      clearTimeout(timer)
-      probe.destroy()
-      resolve(alive)
-    }
-    const timer = setTimeout(() => finish(false), 400)
-    probe.on('connect', () => finish(true))
-    probe.on('error', () => finish(false))
-  })
-}
-
-function safeWrite(socket: Socket, msg: DaemonWireMessage): void {
-  if (socket.destroyed || !socket.writable) return
-  if (socket.writableLength > MAX_CLIENT_BUFFER_BYTES) {
-    socket.destroy()
-    return
-  }
-  try {
-    socket.write(encodeWireLine(msg))
-  } catch {
-    socket.destroy()
-  }
-}
+const safeWrite = safeWriteWire
 
 /**
  * Starts the single-writer local daemon holding `createRuntime()` and listening
@@ -297,20 +270,24 @@ export async function startDaemonServer(
 
   // biome-ignore lint/suspicious/noExplicitAny: RPC params decoded dynamically from NDJSON
   type Handler = (p: any, client: ConnectedClient) => Promise<unknown> | unknown
+  let configWatcher: ReturnType<typeof startDaemonConfigWatcher> | undefined
   const handlers: Record<string, Handler> = {
     'daemon.hello': () => hello,
-    'daemon.status': async (): Promise<DaemonStatus> => ({
-      running: true,
-      agentDir: paths.agentDir,
-      socketPath: paths.socketPath,
-      pid: process.pid,
-      protocolVersion,
-      appVersion,
-      startedAt,
-      uptimeMs: Math.max(0, Date.now() - startedAtMs),
-      channels: await runtime.channels.list(),
-      ...(webhooksHost ? { webhooks: webhooksHost.status() } : {}),
-    }),
+    'daemon.status': async (): Promise<DaemonStatus> => {
+      await configWatcher?.checkNow()
+      return {
+        running: true,
+        agentDir: paths.agentDir,
+        socketPath: paths.socketPath,
+        pid: process.pid,
+        protocolVersion,
+        appVersion,
+        startedAt,
+        uptimeMs: Math.max(0, Date.now() - startedAtMs),
+        channels: await runtime.channels.list(),
+        ...(webhooksHost ? { webhooks: webhooksHost.status() } : {}),
+      }
+    },
     'daemon.stop': () => {
       setImmediate(() => {
         void close('rpc')
@@ -704,6 +681,10 @@ export async function startDaemonServer(
   })
   renameSync(tmpPidPath, paths.pidPath)
 
+  configWatcher = startDaemonConfigWatcher(paths.agentDir, () =>
+    runtime.reloadConfig(),
+  )
+
   const onSigHup = () => {
     void runtime.reloadConfig().catch((err) => {
       logger.warn(
@@ -730,6 +711,7 @@ export async function startDaemonServer(
         process.off('SIGINT', onSigInt)
         process.off('SIGTERM', onSigTerm)
       }
+      configWatcher?.stop()
       unsubEvents()
       unsubDeltas()
       for (const client of clients) {

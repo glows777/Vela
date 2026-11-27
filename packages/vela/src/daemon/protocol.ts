@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { createConnection, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
+import { z } from 'zod'
 import type { AuthEvent, AuthPrompt } from '../providers/auth/types.ts'
 import type {
   ChannelStatusInfo,
@@ -312,35 +314,75 @@ export function parseChannelChatsParams(p: unknown): { channel: string } {
   return { channel: obj.channel.trim() }
 }
 
+const channelSubmitSchema = z
+  .object({
+    channel: z.string().trim().min(1),
+    input: z
+      .object({
+        chatId: z.string().trim().min(1),
+        threadId: z.string().trim().min(1).optional(),
+        replyToMessageId: z.string().trim().min(1).optional(),
+        sessionId: z.string().trim().min(1).optional(),
+        newTopic: z
+          .object({
+            title: z.string().trim().min(1),
+          })
+          .strict()
+          .optional(),
+        text: z.string(),
+        author: z
+          .object({
+            id: z.string().min(1),
+            name: z.string().min(1),
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict()
+
 export function parseChannelSubmitParams(p: unknown): {
   channel: string
   input: import('../runtime/channels.ts').ChannelHostSubmitInput
 } {
-  const obj = p as Record<string, unknown> | null | undefined
-  const input = obj?.input as Record<string, unknown> | null | undefined
-  const author = input?.author as Record<string, unknown> | null | undefined
-  if (
-    !obj ||
-    typeof obj !== 'object' ||
-    typeof obj.channel !== 'string' ||
-    !obj.channel.trim() ||
-    !input ||
-    typeof input !== 'object' ||
-    typeof input.chatId !== 'string' ||
-    !input.chatId.trim() ||
-    typeof input.text !== 'string' ||
-    !author ||
-    typeof author !== 'object' ||
-    typeof author.id !== 'string' ||
-    typeof author.name !== 'string'
-  ) {
+  const parsed = channelSubmitSchema.safeParse(p)
+  if (!parsed.success) {
     throw new Error(
-      'Invalid channels.submit params: expected { channel, input: { chatId, text, author: { id, name } } }',
+      `Invalid channels.submit params: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
     )
   }
-  return {
-    channel: obj.channel.trim(),
-    input:
-      input as unknown as import('../runtime/channels.ts').ChannelHostSubmitInput,
+  return parsed.data
+}
+
+const MAX_CLIENT_BUFFER_BYTES = 64 * 1024 * 1024
+
+export async function probeSocketAlive(socketPath: string): Promise<boolean> {
+  if (process.platform !== 'win32' && !existsSync(socketPath)) return false
+  return new Promise<boolean>((resolve) => {
+    const probe = createConnection(socketPath)
+    let done = false
+    const finish = (alive: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      probe.destroy()
+      resolve(alive)
+    }
+    const timer = setTimeout(() => finish(false), 400)
+    probe.on('connect', () => finish(true))
+    probe.on('error', () => finish(false))
+  })
+}
+
+export function safeWriteWire(socket: Socket, msg: DaemonWireMessage): void {
+  if (socket.destroyed || !socket.writable) return
+  if (socket.writableLength > MAX_CLIENT_BUFFER_BYTES) {
+    socket.destroy()
+    return
+  }
+  try {
+    socket.write(encodeWireLine(msg))
+  } catch {
+    socket.destroy()
   }
 }

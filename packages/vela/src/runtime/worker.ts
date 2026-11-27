@@ -570,31 +570,20 @@ export function finalizeTurnInDb(params: {
   })
 }
 
-function inputFlagsFromInputs(inputs: readonly DriverInboxItem[]): {
-  isHandoff?: true
-  mentionRecipient?: true
-} {
-  const hasHandoff = inputs.some(
+function hasHandoffWake(inputs: readonly DriverInboxItem[]): boolean {
+  return inputs.some(
     (item) =>
       item.wake &&
       !item.passive &&
       item.source === 'handoff' &&
       item.payload.type !== 'handoff_note',
   )
-  const hasMention = inputs.some(
-    (item) =>
-      item.wake && !item.passive && item.payload.mentionRecipient === true,
-  )
-  return {
-    ...(hasHandoff ? { isHandoff: true } : {}),
-    ...(hasMention ? { mentionRecipient: true } : {}),
-  }
 }
 
 function outboxTargetFromInputs(
   inputs: readonly DriverInboxItem[],
 ): OutboxTarget | undefined {
-  const flags = inputFlagsFromInputs(inputs)
+  const isHandoff = hasHandoffWake(inputs)
   for (const requireWake of [true, false]) {
     for (let i = inputs.length - 1; i >= 0; i--) {
       const item = inputs[i]!
@@ -634,11 +623,11 @@ function outboxTargetFromInputs(
             : {}),
           ...(replyToMessageId ? { replyToMessageId } : {}),
           ...(recipientId ? { recipientId } : {}),
-          ...(flags.mentionRecipient || payload.mentionRecipient === true
+          ...(payload.mentionRecipient === true && recipientId
             ? { mentionRecipient: true }
             : {}),
           ...(isRoutine ? { isRoutine: true } : {}),
-          ...(flags.isHandoff ? { isHandoff: true } : {}),
+          ...(isHandoff ? { isHandoff: true } : {}),
         }
       }
     }
@@ -655,15 +644,9 @@ export function resolveOutboxTargetInDb(
   const directInput = outboxTargetFromInputs(inputs)
   if (directInput) return directInput
 
-  const flags = inputFlagsFromInputs(inputs)
+  const isHandoff = hasHandoffWake(inputs)
   const applyFlags = (target: OutboxTarget): OutboxTarget =>
-    flags.isHandoff || flags.mentionRecipient
-      ? {
-          ...target,
-          ...(flags.isHandoff ? { isHandoff: true } : {}),
-          ...(flags.mentionRecipient ? { mentionRecipient: true } : {}),
-        }
-      : target
+    isHandoff ? { ...target, isHandoff: true } : target
 
   if (runId) {
     const stored = db.get<{ value_json: string }>(
@@ -691,7 +674,7 @@ export function resolveOutboxTargetInDb(
   }>(
     `SELECT channel, external_id, thread_id FROM channel_bindings
      WHERE session_id = ? AND enabled = 1
-     ORDER BY created_at ASC LIMIT 1`,
+     ORDER BY created_at ASC, rowid ASC LIMIT 1`,
     session.id,
   )
   if (direct) {
@@ -705,7 +688,7 @@ export function resolveOutboxTargetInDb(
     const root = db.get<{ channel: string; external_id: string }>(
       `SELECT channel, external_id FROM channel_bindings
        WHERE project_id = ? AND thread_id IS NULL AND enabled = 1
-       ORDER BY created_at ASC LIMIT 1`,
+       ORDER BY created_at ASC, rowid ASC LIMIT 1`,
       session.projectId,
     )
     if (root) {

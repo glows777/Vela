@@ -312,8 +312,11 @@ export async function prepareSessionSetup(params: {
     saved?.location ??
       (override?.cwd ? { environment: 'local', cwd: override.cwd } : undefined),
   )
+  const resolvedChannelTools = state.options.getChannelTools?.(sessionId, runId)
   const boundChannel =
-    getActiveChannelForSession(state.db, sessionId, runId) ?? saved?.channel
+    resolvedChannelTools?.binding.channel ??
+    getActiveChannelForSession(state.db, sessionId, runId) ??
+    saved?.channel
   const hasChannelBinding = Boolean(boundChannel)
   const effectiveEnv = resolveEffectiveEnv(state.options.hostEnv, override)
   const effectiveOffline =
@@ -557,9 +560,10 @@ export async function prepareSessionSetup(params: {
   }
 
   const channelTools = adaptChannelTools(
-    state.options.getChannelTools?.(sessionId, runId),
+    resolvedChannelTools,
     sessionId,
     projectId,
+    state.db,
   )
   const extraTools =
     channelTools.length > 0

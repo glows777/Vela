@@ -167,6 +167,32 @@ function rowToOutbox(row: OutboxRow): OutboxRecord {
   }
 }
 
+function isOutboxBindingDisabledInDb(
+  db: VelaDatabase,
+  row: OutboxRow,
+): boolean {
+  const exactDisabled = db.get<{ id: string }>(
+    `SELECT id FROM channel_bindings
+     WHERE channel = ? AND external_id = ? AND thread_id IS ? AND enabled = 0
+     LIMIT 1`,
+    row.channel,
+    row.external_chat_id,
+    row.thread_id,
+  )
+  if (exactDisabled) return true
+  if (row.thread_id) {
+    const rootDisabled = db.get<{ id: string }>(
+      `SELECT id FROM channel_bindings
+       WHERE channel = ? AND external_id = ? AND thread_id IS NULL AND enabled = 0
+       LIMIT 1`,
+      row.channel,
+      row.external_chat_id,
+    )
+    if (rootDisabled) return true
+  }
+  return false
+}
+
 export function enqueueOutboxInTx(
   db: VelaDatabase,
   input: EnqueueOutboxInput,
@@ -385,6 +411,17 @@ export class OutboxDispatcher {
           if (blockedSessionChannels.has(fifoKey)) continue
           if (row.next_retry_at !== null && row.next_retry_at > stepNowIso) {
             blockedSessionChannels.add(fifoKey)
+            continue
+          }
+          if (isOutboxBindingDisabledInDb(this.db, row)) {
+            this.db.run(
+              `UPDATE outbox
+               SET status = 'failed', last_error = ?, next_retry_at = NULL, updated_at = ?
+               WHERE id = ? AND status = 'pending'`,
+              'Channel binding is disabled',
+              stepNowIso,
+              row.id,
+            )
             continue
           }
           const adapter = this.getAdapter(row.channel)

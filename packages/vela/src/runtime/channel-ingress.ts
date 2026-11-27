@@ -241,8 +241,12 @@ export async function ingestChannelMessageInRuntime(params: {
   }
 
   try {
+    const shortcutSource =
+      msg.preformatted === true && typeof msg.rawText === 'string'
+        ? msg.rawText
+        : msg.text
     const shortcut =
-      msg.passive === true ? undefined : parseControlShortcut(msg.text)
+      msg.passive === true ? undefined : parseControlShortcut(shortcutSource)
     if (shortcut) {
       const resolved = resolveChannelTargetInDb({
         db,

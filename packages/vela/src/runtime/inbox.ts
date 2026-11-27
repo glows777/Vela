@@ -127,16 +127,23 @@ export function enqueueInboxEvent(
 
 function inboxRouteInfo(row: InboxRow): {
   routeKey?: string
+  mentionSig?: string
   needsAnnouncement: boolean
 } {
-  if (row.passive === 1) return { needsAnnouncement: false }
   let payload: Record<string, unknown>
   try {
     payload = JSON.parse(row.payload_json) as Record<string, unknown>
   } catch {
     return { needsAnnouncement: false }
   }
+  const isRouteSource =
+    row.source === 'channel' ||
+    row.source === 'timer' ||
+    row.source === 'webhook' ||
+    row.source === 'handoff' ||
+    (row.source === 'approval' && payload.waitForInput === true)
   const routeKey =
+    isRouteSource &&
     typeof payload.channel === 'string' &&
     typeof payload.externalChatId === 'string'
       ? JSON.stringify([
@@ -145,34 +152,41 @@ function inboxRouteInfo(row: InboxRow): {
           typeof payload.threadId === 'string' ? payload.threadId : null,
         ])
       : undefined
+  const isPassive = row.passive === 1
   const isRoutine = row.source === 'timer' && payload.kind === 'routine'
   const isDefaultWebhook =
     row.source === 'webhook' && payload.isDefaultTarget === true
   const needsAnnouncement =
+    row.wake === 1 &&
+    !isPassive &&
     (isRoutine || isDefaultWebhook) &&
     Boolean(routeKey) &&
     typeof payload.threadId !== 'string' &&
     typeof payload.replyToMessageId !== 'string'
-  return { routeKey, needsAnnouncement }
+  const recipientId =
+    typeof payload.senderId === 'string' && payload.senderId
+      ? payload.senderId
+      : typeof payload.creatorId === 'string' && payload.creatorId
+        ? payload.creatorId
+        : null
+  const mentionSig =
+    row.wake === 1 && !isPassive && routeKey
+      ? JSON.stringify([payload.mentionRecipient === true, recipientId])
+      : undefined
+  return { routeKey, mentionSig, needsAnnouncement }
 }
 
 /**
  * Claims pending events for `sessionId` into `runId` iff at least one pending event
- * has `wake = 1`. Stops splitting before incompatible external routing targets or
- * multiple announcement-needing turns so one group never hijacks or drops another's batch.
+ * has `wake = 1`. Anchors on the oldest runnable wake event so non-waking inputs for
+ * another route cannot stall the worker, isolates announcement wakes individually,
+ * prevents passive inputs from crossing routes, and keeps recipient attribution uniform.
  */
 export function claimInboxBatchInTx(
   db: VelaDatabase,
   sessionId: string,
   runId: string,
 ): InboxEventRecord[] {
-  const hasWake = db.get<{ id: string }>(
-    `SELECT id FROM inbox_events
-     WHERE session_id = ? AND status = 'pending' AND wake = 1
-     LIMIT 1`,
-    sessionId,
-  )
-  if (!hasWake) return []
   const rows = db.all<Record<string, unknown>>(
     `SELECT * FROM inbox_events
      WHERE session_id = ? AND status = 'pending'
@@ -181,29 +195,37 @@ export function claimInboxBatchInTx(
   ) as unknown as InboxRow[]
   if (!rows.length) return []
 
-  const selected: InboxRow[] = []
-  let activeRouteKey: string | undefined
-  let hasAnnouncementItem = false
-  for (const row of rows) {
-    const info = inboxRouteInfo(row)
-    if (selected.length > 0) {
-      if (info.routeKey && activeRouteKey && info.routeKey !== activeRouteKey) {
-        break
+  const firstWakeIdx = rows.findIndex((row) => row.wake === 1)
+  if (firstWakeIdx === -1) return []
+
+  const anchor = rows[firstWakeIdx]!
+  const anchorInfo = inboxRouteInfo(anchor)
+
+  let selected: InboxRow[]
+  if (anchorInfo.needsAnnouncement) {
+    selected = [anchor]
+  } else {
+    selected = []
+    let activeRouteKey = anchorInfo.routeKey
+    let activeMentionSig = anchorInfo.mentionSig
+    for (const row of rows) {
+      const info = inboxRouteInfo(row)
+      if (info.needsAnnouncement) continue
+      if (info.routeKey) {
+        if (activeRouteKey && info.routeKey !== activeRouteKey) continue
+        activeRouteKey ??= info.routeKey
       }
-      if (info.needsAnnouncement && (hasAnnouncementItem || activeRouteKey)) {
-        break
+      if (info.mentionSig !== undefined) {
+        if (
+          activeMentionSig !== undefined &&
+          info.mentionSig !== activeMentionSig
+        ) {
+          continue
+        }
+        activeMentionSig ??= info.mentionSig
       }
-      if (
-        hasAnnouncementItem &&
-        info.routeKey &&
-        info.routeKey !== activeRouteKey
-      ) {
-        break
-      }
+      selected.push(row)
     }
-    selected.push(row)
-    if (info.routeKey && !activeRouteKey) activeRouteKey = info.routeKey
-    if (info.needsAnnouncement) hasAnnouncementItem = true
   }
   if (!selected.some((row) => row.wake === 1)) {
     return []

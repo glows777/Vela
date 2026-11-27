@@ -236,7 +236,11 @@ export interface ActiveRunMeta {
   replyToMessageId?: string
   handoffDepth?: number
   channelTarget?: { channel: string; externalChatId: string; threadId?: string }
-  humanProvenance?: { inboxEventId: string; senderName?: string }
+  humanProvenance?: {
+    inboxEventId: string
+    senderId?: string
+    senderName?: string
+  }
   attachments?: Array<{
     blobId: string
     name: string

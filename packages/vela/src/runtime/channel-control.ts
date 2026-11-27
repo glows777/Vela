@@ -77,6 +77,7 @@ export function createChannelAdapterContext(params: {
 export { isChannelEnabledInDb, setChannelEnabledInDb }
 
 const CHANNEL_CURSOR_PREFIX = 'ch:'
+const DB_CURSOR_PREFIX = 'db:'
 const WEBHOOK_DELIVERY_PREFIX = 'webhook_delivery:'
 const MAX_WEBHOOK_DELIVERIES = 2000
 
@@ -173,6 +174,15 @@ export async function listRuntimeOrChannelMessages(
   if (binding) {
     const adapter = channels.get(binding.channel)
     if (adapter?.listMessages) {
+      if (
+        input.cursor &&
+        (input.cursor.startsWith(DB_CURSOR_PREFIX) ||
+          /^\d+$/.test(input.cursor))
+      ) {
+        throw new Error(
+          'Pagination cursor is no longer valid because the message source changed to channel; restart pagination from the beginning',
+        )
+      }
       const rawCursor = decodeChannelCursor(binding, input.cursor)
       const page = await adapter.listMessages({
         sessionId: session.id,
@@ -195,7 +205,19 @@ export async function listRuntimeOrChannelMessages(
       'Pagination cursor is no longer valid because the channel source changed; restart pagination from the beginning',
     )
   }
-  return listRuntimeSessionMessages(db, input)
+  const dbCursor = input.cursor?.startsWith(DB_CURSOR_PREFIX)
+    ? input.cursor.slice(DB_CURSOR_PREFIX.length)
+    : input.cursor
+  const dbPage = listRuntimeSessionMessages(db, {
+    ...input,
+    ...(dbCursor !== undefined ? { cursor: dbCursor } : {}),
+  })
+  return {
+    ...dbPage,
+    ...(dbPage.nextCursor
+      ? { nextCursor: `${DB_CURSOR_PREFIX}${dbPage.nextCursor}` }
+      : {}),
+  }
 }
 
 export function listChannelStatusesInRuntime(
@@ -252,6 +274,7 @@ export function getChannelToolsForSessionInDb(
   const session = sessions.get(sessionId)
   if (!session) return undefined
   let binding: ChannelBinding | undefined
+  let hasExplicitTarget = false
   if (runId) {
     const stored = db.get<{ value_json: string }>(
       'SELECT value_json FROM kv_meta WHERE key = ?',
@@ -261,6 +284,7 @@ export function getChannelToolsForSessionInDb(
       try {
         const parsed = JSON.parse(stored.value_json) as Partial<OutboxTarget>
         if (parsed.channel && parsed.externalChatId) {
+          hasExplicitTarget = true
           binding =
             bindings.findByExternal(
               parsed.channel,
@@ -276,7 +300,9 @@ export function getChannelToolsForSessionInDb(
       }
     }
   }
-  binding ??= resolveSessionChannelBinding(db, bindings, session)
+  if (!hasExplicitTarget) {
+    binding ??= resolveSessionChannelBinding(db, bindings, session)
+  }
   if (!binding) return undefined
   const adapter = channels.get(binding.channel)
   if (!adapter?.getTools) return undefined
@@ -308,6 +334,38 @@ function recordWebhookDeliveryInTx(db: VelaDatabase, key: string): void {
   }
 }
 
+function isSessionDeliverableForWebhook(
+  db: VelaDatabase,
+  bindings: ChannelBindingStore,
+  sessions: SessionStoreControl,
+  sessionId: string,
+): boolean {
+  const directRows = db.all<{ id: string }>(
+    `SELECT id FROM channel_bindings WHERE session_id = ?`,
+    sessionId,
+  )
+  if (directRows.length > 0) {
+    return directRows.some((row) => {
+      const binding = bindings.get(row.id)
+      return Boolean(binding && isBindingActive(db, bindings, binding))
+    })
+  }
+  const session = sessions.get(sessionId)
+  if (session?.projectId && session.kind === 'hub') {
+    const rootRows = db.all<{ id: string }>(
+      `SELECT id FROM channel_bindings WHERE project_id = ? AND thread_id IS NULL`,
+      session.projectId,
+    )
+    if (rootRows.length > 0) {
+      return rootRows.some((row) => {
+        const binding = bindings.get(row.id)
+        return Boolean(binding && isBindingActive(db, bindings, binding))
+      })
+    }
+  }
+  return true
+}
+
 export function ingestWebhookEventInRuntime(params: {
   db: VelaDatabase
   projects: ProjectStore
@@ -336,13 +394,21 @@ export function ingestWebhookEventInRuntime(params: {
     event,
     defaultTarget,
   } = params
-  const deliveryRecordKey = `${WEBHOOK_DELIVERY_PREFIX}${event.source}:${event.deliveryId}:${event.key}`
+  const canonicalKey =
+    event.source === 'github' ? event.key.toLowerCase() : event.key
+  const deliveryRecordKey = `${WEBHOOK_DELIVERY_PREFIX}${event.source}:${event.deliveryId}:${canonicalKey}`
   const toSchedule = new Set<string>()
   const result = db.transaction(() => {
     const prior = db.get<{ key: string }>(
       'SELECT key FROM kv_meta WHERE key = ?',
       deliveryRecordKey,
     )
+    if (prior) {
+      return {
+        matchedSessionIds: [] as string[],
+        enqueuedCount: 0,
+      }
+    }
     const dispatched = subscriptions.dispatchEvent({
       source: event.source,
       eventKey: event.key,
@@ -350,13 +416,13 @@ export function ingestWebhookEventInRuntime(params: {
       summary: event.summary,
       details: event.details,
       final: event.final,
+      shouldDeliverSession: (sid) =>
+        isSessionDeliverableForWebhook(db, bindings, sessions, sid),
     })
     for (const sid of dispatched.matchedSessionIds) toSchedule.add(sid)
 
-    if (dispatched.matchedCount > 0 || prior) {
-      if (dispatched.matchedCount > 0) {
-        recordWebhookDeliveryInTx(db, deliveryRecordKey)
-      }
+    if (dispatched.matchedCount > 0) {
+      recordWebhookDeliveryInTx(db, deliveryRecordKey)
       return {
         matchedSessionIds: dispatched.matchedSessionIds,
         enqueuedCount: dispatched.enqueuedCount,
@@ -384,7 +450,7 @@ export function ingestWebhookEventInRuntime(params: {
         enqueuedCount: dispatched.enqueuedCount,
       }
     }
-    if (channels && !binding.threadId) {
+    if (channels && binding.kind === 'group' && !binding.threadId) {
       const adapter = channels.get(channel)
       if (!adapter?.announce) {
         logger?.warn(
@@ -527,6 +593,22 @@ export async function prepareTurnAnnouncement(params: {
   if (isChannelEnabled && !isChannelEnabled(outboxTarget.channel)) {
     logger.warn(
       `[${outboxTarget.channel}] Announcement skipped: channel is disabled`,
+    )
+    return { skipTurn: true, outboxTarget: undefined, inputs }
+  }
+  const rootBinding = db.get<{ kind: string; enabled: number }>(
+    `SELECT kind, enabled FROM channel_bindings
+     WHERE channel = ? AND external_id = ? AND thread_id IS NULL
+     ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+    outboxTarget.channel,
+    outboxTarget.externalChatId,
+  )
+  if (rootBinding?.kind === 'direct') {
+    return { skipTurn: false, outboxTarget, inputs }
+  }
+  if (rootBinding && rootBinding.enabled === 0) {
+    logger.warn(
+      `[${outboxTarget.channel}] Announcement skipped: binding is disabled`,
     )
     return { skipTurn: true, outboxTarget: undefined, inputs }
   }

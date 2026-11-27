@@ -144,6 +144,7 @@ export class HttpListener {
         }
       }),
     )
+    const stopDeadline = Date.now() + 2500
     server.closeIdleConnections?.()
     if (this.active.size > 0) {
       await Promise.race([
@@ -155,6 +156,13 @@ export class HttpListener {
       ])
     }
     server.closeAllConnections()
-    await Promise.all([closed, ...this.active])
+    const remainingMs = Math.max(50, stopDeadline - Date.now())
+    await Promise.race([
+      Promise.all([closed, ...this.active]),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, remainingMs)
+        timer.unref?.()
+      }),
+    ])
   }
 }

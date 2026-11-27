@@ -307,7 +307,7 @@ External top-level inputs never borrow a previous human reply ID. Lark establish
 
 For the operator setup command, see [GitHub webhook setup](channels.md#github-webhook-setup). `vela setup github owner/repo --url https://your-tunnel-host` writes user settings and configures matching repository hooks through GitHub CLI.
 
-`loadConfig()` reads `webhooks` from user-level `~/.vela/config.json` (project `webhooks` settings are stripped) and maps it into `extensionConfig.channel.eventReceiver`. It is absent by default. Before S4b, `vela daemon` does not yet start the webhook listener; serve it from an SDK channel host calling `startChannels()` with at least one enabled, connected channel (see [Serving channels during the transition](deploy.md#serving-channels-during-the-transition)). To configure it manually, add top-level `webhooks` to `~/.vela/config.json`, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and start your SDK host:
+`vela daemon` reads `webhooks` from user-level `~/.vela/config.json` (project `webhooks` settings are stripped) and hosts the HTTP listener automatically (for Runtime SQLite `subscriptions`). For transitional legacy Lark deployments running on the legacy SDK host before S4b-2, `loadConfig()` also maps `webhooks` into `extensionConfig.channel.eventReceiver`; do not start both listeners on the same port (see [Serving channels during the transition](deploy.md#serving-channels-during-the-transition)). It is absent by default. To configure it manually, add top-level `webhooks` to `~/.vela/config.json`, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and reload `vela daemon` (or start your legacy SDK host):
 
 ```json
 {

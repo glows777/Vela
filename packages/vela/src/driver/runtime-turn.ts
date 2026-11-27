@@ -15,7 +15,11 @@ import {
   expandPromptTemplate,
   type PromptTemplate,
 } from './prompt/templates.ts'
-import { preserveChannelControlTools } from './runtime-prompt.ts'
+import {
+  inferImageMimeFromBytes,
+  inferImageMimeFromName,
+  preserveChannelControlTools,
+} from './runtime-prompt.ts'
 import {
   formatRuntimeMemoryContent,
   lastActiveCustomMessageText,
@@ -155,7 +159,11 @@ interface ExtractedInputMeta {
   replyToMessageId?: string
   handoffDepth?: number
   channelTarget?: { channel: string; externalChatId: string; threadId?: string }
-  humanProvenance?: { inboxEventId: string; senderName?: string }
+  humanProvenance?: {
+    inboxEventId: string
+    senderId?: string
+    senderName?: string
+  }
   attachments?: Array<{
     blobId: string
     name: string
@@ -205,7 +213,9 @@ function extractInputMeta(
   const channelTarget = resolvePrimaryChannelRoute(inputs)
   let replyToMessageId: string | undefined
   let handoffDepth = 0
-  let humanProvenance: { inboxEventId: string; senderName?: string } | undefined
+  let humanProvenance:
+    | { inboxEventId: string; senderId?: string; senderName?: string }
+    | undefined
   const attachments: Array<{
     blobId: string
     name: string
@@ -235,6 +245,9 @@ function extractInputMeta(
     ) {
       humanProvenance = {
         inboxEventId: item.id,
+        ...(typeof p.senderId === 'string' && p.senderId
+          ? { senderId: p.senderId }
+          : {}),
         ...(typeof p.senderName === 'string' && p.senderName
           ? { senderName: p.senderName }
           : {}),
@@ -688,43 +701,6 @@ export function flushUnconsumedSteering(options: {
   if (insertedAny && options.wake && options.shouldWakeSession) {
     options.wakeSession?.(options.sessionId)
   }
-}
-
-function inferImageMimeFromName(name: string): string | undefined {
-  const ext = name.toLowerCase().split('.').pop()
-  if (ext === 'png') return 'image/png'
-  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
-  if (ext === 'gif') return 'image/gif'
-  if (ext === 'webp') return 'image/webp'
-  return undefined
-}
-
-function inferImageMimeFromBytes(b: Uint8Array): string | undefined {
-  if (
-    b.length >= 4 &&
-    b[0] === 0x89 &&
-    b[1] === 0x50 &&
-    b[2] === 0x4e &&
-    b[3] === 0x47
-  )
-    return 'image/png'
-  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff)
-    return 'image/jpeg'
-  if (b.length >= 3 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46)
-    return 'image/gif'
-  if (
-    b.length >= 12 &&
-    b[0] === 0x52 &&
-    b[1] === 0x49 &&
-    b[2] === 0x46 &&
-    b[3] === 0x46 &&
-    b[8] === 0x57 &&
-    b[9] === 0x45 &&
-    b[10] === 0x42 &&
-    b[11] === 0x50
-  )
-    return 'image/webp'
-  return undefined
 }
 
 /** Applies persisted per-project tool overrides onto `registry` on top of runtime base modifiers. */

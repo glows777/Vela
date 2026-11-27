@@ -115,9 +115,13 @@ export class SubscriptionManager {
   }
 
   findMatching(source: string, eventKey: string): SubscriptionRecord[] {
+    const matchClause =
+      source === 'github'
+        ? `(lower(event_key) = lower(?) OR event_key = '*')`
+        : `(event_key = ? OR event_key = '*')`
     const rows = this.db.all<Record<string, unknown>>(
       `SELECT * FROM subscriptions
-       WHERE source = ? AND (event_key = ? OR event_key = '*')
+       WHERE source = ? AND ${matchClause}
        ORDER BY created_at ASC`,
       source,
       eventKey,
@@ -133,6 +137,7 @@ export class SubscriptionManager {
     details?: string
     final?: boolean
     payload?: Record<string, unknown>
+    shouldDeliverSession?: (sessionId: string) => boolean
   }): {
     matchedSessionIds: string[]
     matchedCount: number
@@ -150,6 +155,12 @@ export class SubscriptionManager {
       for (const sub of subs) {
         if (seenSessions.has(sub.sessionId)) continue
         seenSessions.add(sub.sessionId)
+        if (
+          input.shouldDeliverSession &&
+          !input.shouldDeliverSession(sub.sessionId)
+        ) {
+          continue
+        }
         const { inserted } = enqueueInboxEvent(this.db, {
           sessionId: sub.sessionId,
           projectId: sub.projectId,

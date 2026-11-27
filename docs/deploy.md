@@ -2,7 +2,9 @@
 
 `vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, serving CLI clients and SDK `connectRuntime()` callers over `<VELA_DIR>/vela.sock`.
 
-> **Channel gateway transition note (S4b-1 -> S4b-2):** `vela serve` is retired, and `vela daemon run` now hosts `webhooks` (`POST /events/github` and `POST /events/generic`) directly and hot-reloads them on `config.json` changes or `SIGHUP`. **Lark and Local HTTP/SSE channels** remain on the transitional SDK host (`createVela()` + `startChannels()`) until S4b-2 completes. If you run both `vela daemon` and the transitional SDK host during this step, do **not** configure `webhooks` on both with the same port (omit `extensionConfig.channel.eventReceiver` on the SDK host or stop one of them).
+> **Channel gateway transition note (S4b-1 -> S4b-2):** `vela serve` is retired. `vela daemon run` now hosts `webhooks` (`POST /events/github` and `POST /events/generic`) directly with automatic `config.json` / `SIGHUP` reload and delivers to Runtime SQLite `subscriptions` + Runtime `ChannelAdapter`s. **Lark and Local HTTP/SSE channels** remain on the legacy SDK host (`createVela()` + `startChannels()`, which reads legacy channel subscriptions) until S4b-2 migrates them into `vela daemon`. During this step:
+> - **Using legacy Lark / Local channels:** keep `webhooks` hosted on your SDK gateway below (and stop or omit `webhooks` on `vela daemon` on that port, since daemon webhooks do not route to the SDK host's legacy subscriptions).
+> - **Using Runtime (`createRuntime()` / `connectRuntime()`) webhooks:** let `vela daemon` host `webhooks` and omit `eventReceiver` on any separate SDK host.
 
 The daemon has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
 
@@ -122,7 +124,7 @@ The running process keeps the old code until the restart. A run in progress is s
 
 ## Serving channels during the transition
 
-Until S4b-2 migrates **Lark and Local HTTP/SSE channels** onto `vela daemon`, run those channel adapters on the legacy SDK host (`createVela()` + `startChannels()`), while `vela daemon` hosts HTTP webhooks (`webhooks`) and CLI/SDK IPC.
+Until S4b-2 migrates **Lark and Local HTTP/SSE channels** onto `vela daemon`, run legacy Lark / Local adapters (and webhooks targeting legacy Lark subscriptions) on the legacy SDK host (`createVela()` + `startChannels()`). If `vela daemon` is running on the same host with `webhooks` configured, remove `webhooks` from `config.json` for that daemon or pass `extensionConfig: { ...config.extensionConfig, channel: undefined }` on one of the two processes so only the intended subscription store owns the port.
 
 Node.js ESM does **not** resolve bare package imports (`import ... from '@glows777/vela'`) from a global `npm install -g` installation. Create a dedicated directory with a local `@glows777/vela` install under the `vela` user:
 
