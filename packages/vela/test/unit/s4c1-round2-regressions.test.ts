@@ -354,9 +354,12 @@ test('unbound work session keeps DB transcript and enabled custom adapter withou
   expect(hubPage.messages.map((m) => m.text)).not.toContain('work msg')
 
   await rt.channels.setEnabled('team', false)
-  await expect(rt.sessions.messages({ sessionId: hub.id })).rejects.toThrow(
-    /disabled/i,
+  // S4b-1 contract: disabling channel hides channel tools and falls back to SQLite DB transcript
+  expect((await rt.sessions.inspect(hub.id)).allTools).not.toContain(
+    'team_ping',
   )
+  const hubFallback = await rt.sessions.messages({ sessionId: hub.id })
+  expect(hubFallback.messages.map((m) => m.text)).toContain('hub msg')
   const workPageAfterDisable = await rt.sessions.messages({
     sessionId: work.id,
   })

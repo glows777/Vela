@@ -578,19 +578,9 @@ export async function listRuntimeOrChannelMessages(
   const session = sessions.get(input.sessionId)
   if (!session) throw new Error(`Session ${input.sessionId} not found`)
   const binding = resolveSessionChannelBinding(db, bindings, session)
-  if (binding) {
-    if (!isBindingActive(db, bindings, binding)) {
-      throw new Error(
-        `Channel "${binding.channel}" is disabled for session ${session.id}`,
-      )
-    }
+  if (binding && isBindingActive(db, bindings, binding)) {
     const adapter = channels.get(binding.channel)
-    if (!adapter) {
-      throw new Error(
-        `Channel "${binding.channel}" is unavailable for session ${session.id}`,
-      )
-    }
-    if (adapter.listMessages) {
+    if (adapter?.listMessages) {
       if (
         input.cursor &&
         (input.cursor.startsWith(DB_CURSOR_PREFIX) ||

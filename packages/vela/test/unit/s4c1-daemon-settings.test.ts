@@ -543,6 +543,7 @@ test('removeChat rejects while pending outbox exists and disabled Lark rejects u
 
   const model = createFauxModel()
   model.push({ text: 'Done!' })
+  let topicReads = 0
   const server = await startDaemonServer({
     agentDir: dir,
     socketPath,
@@ -556,6 +557,7 @@ test('removeChat rejects while pending outbox exists and disabled Lark rejects u
         return { messageId: 'm2', createTime: '1' }
       },
       async listTopicMessages() {
+        topicReads += 1
         return {
           items: [
             {
@@ -595,10 +597,20 @@ test('removeChat rejects while pending outbox exists and disabled Lark rejects u
 
   resolveSendGate()
   await client.waitForIdle(submitted.sessionId)
+  const enabledReadsBefore = topicReads
+  await client.sessions.messages({ sessionId: submitted.sessionId! })
+  expect(topicReads).toBeGreaterThan(enabledReadsBefore)
+
   await client.settings.saveLark({ enabled: false })
+  const readsWhenDisabled = topicReads
   await expect(
-    client.sessions.messages({ sessionId: submitted.sessionId! }),
-  ).rejects.toThrow(/disabled/i)
+    client.sessions.messages({
+      sessionId: submitted.sessionId!,
+      cursor: 'ch:lark:b:c',
+    }),
+  ).rejects.toThrow(/channel source changed/)
+  await client.sessions.messages({ sessionId: submitted.sessionId! })
+  expect(topicReads).toBe(readsWhenDisabled)
 })
 
 test('ensureDaemonRunning rejects invalid daemonCommand and cold start respects legacy runInApp: false', async () => {
