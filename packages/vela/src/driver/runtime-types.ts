@@ -13,6 +13,8 @@ import type { ProviderConfig } from '../providers/models-config.ts'
 import type { RuntimeEventBus } from '../runtime/event-bus.ts'
 import type {
   BlobStore,
+  ChannelBinding,
+  ChannelToolSpec,
   EnvironmentRegistry,
   MemoryRegistry,
 } from '../runtime/index.ts'
@@ -165,6 +167,7 @@ export interface RuntimeReloadableConfig {
   extensionConfig?: Record<string, Record<string, unknown>>
   extensions?: readonly string[]
   enabledModels?: readonly string[]
+  githubRepositories?: readonly string[]
   dreamEnabled?: boolean
   offline?: boolean
 }
@@ -196,6 +199,13 @@ export interface VelaAgentDriverOptions {
   extensionConfig?: Record<string, Record<string, unknown>>
   extensions?: readonly string[]
   enabledModels?: readonly string[]
+  githubRepositories?: readonly string[]
+  getChannelTools?: (
+    sessionId: string,
+    runId?: string,
+  ) =>
+    | { binding: ChannelBinding; tools: readonly ChannelToolSpec[] }
+    | undefined
   hostEnv?: Record<string, string | undefined>
   docsPaths?: DocsPaths | false
   systemPrompt?: string
@@ -226,8 +236,17 @@ export interface ActiveRunMeta {
   replyToMessageId?: string
   handoffDepth?: number
   channelTarget?: { channel: string; externalChatId: string; threadId?: string }
-  humanProvenance?: { inboxEventId: string; senderName?: string }
-  attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
+  humanProvenance?: {
+    inboxEventId: string
+    senderId?: string
+    senderName?: string
+  }
+  attachments?: Array<{
+    blobId: string
+    name: string
+    mimeType?: string
+    inlineOnly?: boolean
+  }>
   markSilent: () => void
 }
 

@@ -41,6 +41,7 @@ import {
 } from './runtime-extensions.ts'
 import {
   buildRuntimePromptSections,
+  preserveChannelControlTools,
   runtimeToolModifiers,
 } from './runtime-prompt.ts'
 import {
@@ -48,7 +49,10 @@ import {
   resolveRuntimeMemoryStores,
   type TrustedRuntimeResources,
 } from './runtime-resources.ts'
-import { createRuntimeSessionToolRegistry } from './runtime-tools.ts'
+import {
+  adaptChannelTools,
+  createRuntimeSessionToolRegistry,
+} from './runtime-tools.ts'
 import { applyRuntimeProjectToolSelection } from './runtime-turn.ts'
 import type {
   ActiveRunMeta,
@@ -308,8 +312,11 @@ export async function prepareSessionSetup(params: {
     saved?.location ??
       (override?.cwd ? { environment: 'local', cwd: override.cwd } : undefined),
   )
+  const resolvedChannelTools = state.options.getChannelTools?.(sessionId, runId)
   const boundChannel =
-    getActiveChannelForSession(state.db, sessionId, runId) ?? saved?.channel
+    resolvedChannelTools?.binding.channel ??
+    getActiveChannelForSession(state.db, sessionId, runId) ??
+    saved?.channel
   const hasChannelBinding = Boolean(boundChannel)
   const effectiveEnv = resolveEffectiveEnv(state.options.hostEnv, override)
   const effectiveOffline =
@@ -552,6 +559,17 @@ export async function prepareSessionSetup(params: {
     refreshRuntimeSections()
   }
 
+  const channelTools = adaptChannelTools(
+    resolvedChannelTools,
+    sessionId,
+    projectId,
+    state.db,
+  )
+  const extraTools =
+    channelTools.length > 0
+      ? [...(state.options.tools ?? []), ...channelTools]
+      : state.options.tools
+
   const registry = createRuntimeSessionToolRegistry({
     spillDir,
     cwd: location.cwd,
@@ -579,7 +597,7 @@ export async function prepareSessionSetup(params: {
           },
         }
       : {}),
-    extraTools: state.options.tools,
+    extraTools,
     parentRegistry: cachedRunner.registry,
   })
 
@@ -608,7 +626,13 @@ export async function prepareSessionSetup(params: {
     hasChannelBinding,
     networkMode,
   })
-  applyRuntimeProjectToolSelection(state.db, registry, projectId, baseModifiers)
+  applyRuntimeProjectToolSelection(
+    state.db,
+    registry,
+    projectId,
+    baseModifiers,
+    { hasChannelBinding, sessionKind },
+  )
 
   const ownerTools = state.reloadable.defaultTools
     ? [...state.reloadable.defaultTools]
@@ -643,9 +667,20 @@ export async function prepareSessionSetup(params: {
       },
       mergedDefaultTools,
     )
-    if (loadout?.selection) registry.setSelection(loadout.selection)
-    else if (loadout?.modifiers)
+    if (loadout?.selection) {
+      const finalSelection =
+        override?.tools === undefined && !override?.noTools
+          ? preserveChannelControlTools(loadout.selection, {
+              hasChannelBinding,
+              sessionKind,
+              projectId,
+              excludeTools: override?.excludeTools,
+            })
+          : loadout.selection
+      registry.setSelection(finalSelection)
+    } else if (loadout?.modifiers) {
       registry.setDefaultToolModifiers([...baseModifiers, ...loadout.modifiers])
+    }
   }
 
   if (state.sessionActiveTools.has(sessionId)) {
@@ -686,6 +721,7 @@ export async function prepareSessionSetup(params: {
         projectId,
         hasChannelBinding,
         activeTools: currentNames,
+        githubRepositories: state.reloadable.githubRepositories,
       }),
       ...(memoryActive ? { memory: MEMORY_RULES } : {}),
     }

@@ -540,7 +540,7 @@ export function toExtensionConfigView(
   if (settings.web) view.web = { ...settings.web }
   if (settings.memory) view.memory = { ...settings.memory }
   if (settings.local) view.local = { ...settings.local }
-  if (settings.webhooks)
+  if (isPlainObject(settings.webhooks))
     view.channel = { ...(view.channel ?? {}), eventReceiver: settings.webhooks }
   return view
 }

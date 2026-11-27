@@ -6,7 +6,6 @@ import type { VelaDatabase } from '../db/index.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
 import {
   type ApprovalRecord,
-  cancelPendingApprovalsForSession,
   createApprovalRequest,
   listRuntimePendingApprovals,
   resolveRuntimeApproval,
@@ -14,8 +13,25 @@ import {
 } from './approvals.ts'
 import { BackgroundJobManager } from './background-jobs.ts'
 import { BlobStore } from './blobs.ts'
-import { ingestChannelMessageInRuntime } from './channel-ingress.ts'
-import type { ChannelAdapter } from './channels.ts'
+import {
+  createChannelAdapterContext,
+  getChannelToolsForSessionInDb,
+  ingestWebhookEventInRuntime,
+  isChannelEnabledInDb,
+  listChannelStatusesInRuntime,
+  listRuntimeOrChannelMessages,
+  setChannelEnabledInDb,
+  submitChannelHostMessageInRuntime,
+} from './channel-control.ts'
+import type {
+  ChannelAdapter,
+  ChannelBinding,
+  ChannelChatInfo,
+  ChannelHostSubmitInput,
+  ChannelHostSubmitResult,
+  ChannelStatusInfo,
+  ChannelToolSpec,
+} from './channels.ts'
 import {
   ChannelBindingStore,
   ProjectStore,
@@ -36,22 +52,17 @@ import {
   type StreamDeltaListener,
 } from './event-bus.ts'
 import type { RuntimeEvent, StreamDeltaEvent } from './events.ts'
-import {
-  enqueueInboxEvent,
-  hasSessionPendingWake,
-  type InboxEventRecord,
-  isTopicAwaitingBindingInDb,
-} from './inbox.ts'
+import { enqueueInboxEvent, type InboxEventRecord } from './inbox.ts'
 import { OutboxDispatcher } from './outbox.ts'
 import { type ControlShortcut, executeControlShortcut } from './shortcuts.ts'
 import { SubscriptionManager } from './subscriptions.ts'
 import { TimerScheduler } from './timers.ts'
 import { executeRuntimeClaimedTurn } from './turn-runner.ts'
 import {
+  canWakeSessionInDb,
   claimNextTurnInDb,
   recoverRuntimeState,
-  stopExternalSessionRuns,
-  stopSessionRunsInDb,
+  stopSessionInRuntime,
 } from './worker.ts'
 
 export interface VelaRuntimeEngineOptions {
@@ -120,7 +131,8 @@ export class VelaRuntimeEngine {
     this.eventBus = new RuntimeEventBus(this.db)
     this.outbox = new OutboxDispatcher(
       this.db,
-      (name) => this.channels.get(name),
+      (name) =>
+        this.isChannelEnabled(name) ? this.channels.get(name) : undefined,
       () => this.syncWakeTimer(),
       (sessionId) => this.scheduleSession(sessionId),
     )
@@ -155,23 +167,22 @@ export class VelaRuntimeEngine {
       await existing.stop()
     }
     this.channels.set(adapter.name, adapter)
-    await adapter.start({
-      ingest: (message) =>
-        ingestChannelMessageInRuntime({
-          db: this.db,
-          blobs: this.blobs,
-          projects: this.projects,
-          sessions: this.sessions,
-          bindings: this.bindings,
-          eventBus: this.eventBus,
-          inFlightDeliveries: this.inFlightDeliveries,
-          adapter,
-          msg: message,
-          executeShortcut: (shortcutInput) =>
-            this.executeShortcut(shortcutInput),
-          scheduleSession: (sid) => this.scheduleSession(sid),
-        }),
-    })
+    await adapter.start(
+      createChannelAdapterContext({
+        db: this.db,
+        blobs: this.blobs,
+        projects: this.projects,
+        sessions: this.sessions,
+        bindings: this.bindings,
+        eventBus: this.eventBus,
+        inFlightDeliveries: this.inFlightDeliveries,
+        adapter,
+        executeShortcut: (s) => this.executeShortcut(s),
+        scheduleSession: (sid) => this.scheduleSession(sid),
+        stopSession: (sid, r) => this.stopSession(sid, r),
+        steerSession: (sid, t) => this.steerSession(sid, t),
+      }),
+    )
     void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
   }
 
@@ -185,6 +196,92 @@ export class VelaRuntimeEngine {
 
   channelAdapter(name: string): ChannelAdapter | undefined {
     return this.channels.get(name)
+  }
+
+  listSessionMessages(input: {
+    sessionId: string
+    cursor?: string
+    limit?: number
+  }) {
+    return listRuntimeOrChannelMessages(
+      this.db,
+      this.sessions,
+      this.bindings,
+      this.channels,
+      input,
+    )
+  }
+
+  listChannelStatuses(
+    knownNames?: readonly string[],
+    lastErrors?: ReadonlyMap<string, string>,
+  ): ChannelStatusInfo[] {
+    return listChannelStatusesInRuntime(
+      this.db,
+      this.channels,
+      knownNames,
+      lastErrors,
+    )
+  }
+
+  isChannelEnabled = (name: string): boolean =>
+    isChannelEnabledInDb(this.db, name)
+  setChannelEnabled = (name: string, enabled: boolean): void => {
+    setChannelEnabledInDb(this.db, name, enabled)
+    if (enabled && !this.disposed) {
+      void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
+    }
+  }
+
+  listChannelChats(channel: string): Promise<ChannelChatInfo[]> {
+    if (!this.isChannelEnabled(channel)) return Promise.resolve([])
+    return this.channels.get(channel)?.listChats?.() ?? Promise.resolve([])
+  }
+
+  submitChannelHostMessage(
+    channel: string,
+    input: ChannelHostSubmitInput,
+  ): Promise<ChannelHostSubmitResult> {
+    return submitChannelHostMessageInRuntime(
+      this.db,
+      this.channels,
+      channel,
+      input,
+    )
+  }
+
+  getChannelToolsForSession(
+    sessionId: string,
+    runId?: string,
+  ):
+    | { binding: ChannelBinding; tools: readonly ChannelToolSpec[] }
+    | undefined {
+    return getChannelToolsForSessionInDb(
+      this.db,
+      this.sessions,
+      this.bindings,
+      this.channels,
+      sessionId,
+      runId,
+    )
+  }
+
+  ingestWebhookEvent(
+    event: import('./webhooks/github-events.ts').RuntimeWebhookEvent,
+    defaultTarget?: { channel: string; chatId: string },
+  ) {
+    return ingestWebhookEventInRuntime({
+      db: this.db,
+      projects: this.projects,
+      sessions: this.sessions,
+      bindings: this.bindings,
+      subscriptions: this.subscriptions,
+      channels: this.channels,
+      scheduleSession: (sid) => this.scheduleSession(sid),
+      logger: this.logger,
+      event,
+      defaultTarget,
+    })
   }
 
   /** Submits a user prompt (or queued steering/handoff/note) into `inbox_events` and wakes the worker. */
@@ -320,56 +417,18 @@ export class VelaRuntimeEngine {
   ): Promise<boolean> {
     this.enterStopFence(sessionId)
     try {
-      let cancelledRun = false
-      let cancelledApprovals = 0
-      let stoppedJobs = 0
-      for (let pass = 0; pass < 2; pass++) {
-        const active = this.activeWorkers.get(sessionId)
-        if (active) {
-          cancelledRun = true
-          active.controller.abort(new DOMException(reason, 'AbortError'))
-          const session = this.sessions.get(sessionId)
-          const driver = session ? this.drivers.get(session.driver) : undefined
-          await driver?.abort?.(sessionId)
-          await active.promise.catch(() => {})
-        }
-
-        const external = await stopExternalSessionRuns({
-          db: this.db,
-          activeOwners: this.activeOwners,
-          sessionId,
-          reason,
-          isStopped: () => this.disposed,
-        })
-        if (external.stillOwnedRemotely) {
-          return false
-        }
-        if (external.cancelled) {
-          cancelledRun = true
-        }
-
-        cancelledApprovals += cancelPendingApprovalsForSession(
-          this.db,
-          this.eventBus,
-          sessionId,
-          reason,
-        )
-        stoppedJobs += this.backgroundJobs.stopSessionJobs(sessionId)
-        const dbStopped = stopSessionRunsInDb(
-          this.db,
-          this.sessions.get(sessionId),
-          sessionId,
-          reason,
-          this.activeOwners,
-        )
-        if (dbStopped.cancelled) {
-          cancelledRun = true
-        }
-        if (!dbStopped.liveOtherRuns) {
-          return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
-        }
-      }
-      return false
+      return await stopSessionInRuntime({
+        db: this.db,
+        sessions: this.sessions,
+        drivers: this.drivers,
+        eventBus: this.eventBus,
+        backgroundJobs: this.backgroundJobs,
+        activeWorkers: this.activeWorkers,
+        activeOwners: this.activeOwners,
+        isDisposed: () => this.disposed,
+        sessionId,
+        reason,
+      })
     } finally {
       this.leaveStopFence(sessionId)
     }
@@ -519,30 +578,12 @@ export class VelaRuntimeEngine {
     sessionId: string,
     excludeInboxIds?: ReadonlySet<string>,
   ): boolean {
-    if (!this.db.open) return false
-    const session = this.sessions.get(sessionId)
-    if (!session) return false
-    if (
-      session.kind === 'topic' &&
-      isTopicAwaitingBindingInDb(this.db, sessionId)
-    ) {
-      return false
-    }
-    if (session.state === 'waiting_human') {
-      const pendingApproval = this.db.get<{ id: string }>(
-        `SELECT id FROM approvals WHERE session_id = ? AND status = 'pending' LIMIT 1`,
-        sessionId,
-      )
-      if (pendingApproval) return false
-      return Boolean(
-        this.db.get<{ id: string }>(
-          `SELECT id FROM inbox_events WHERE session_id = ? AND status = 'pending' AND source = 'approval' LIMIT 1`,
-          sessionId,
-        ),
-      )
-    }
-    if (session.state !== 'idle') return false
-    return hasSessionPendingWake(this.db, sessionId, excludeInboxIds)
+    return canWakeSessionInDb(
+      this.db,
+      this.sessions,
+      sessionId,
+      excludeInboxIds,
+    )
   }
 
   private syncWakeTimer(): void {
@@ -554,7 +595,9 @@ export class VelaRuntimeEngine {
     const timerDue = this.db.get<{ next_at: string | null }>(
       `SELECT min(next_fire_at) AS next_at FROM timers WHERE enabled = 1 AND next_fire_at IS NOT NULL`,
     )?.next_at
-    const registeredChannels = [...this.channels.keys()]
+    const registeredChannels = [...this.channels.keys()].filter((name) =>
+      this.isChannelEnabled(name),
+    )
     const outboxDue = this.outbox.nextPendingWakeAt(registeredChannels)
     let earliestMs = Number.POSITIVE_INFINITY
     for (const candidate of [timerDue, outboxDue]) {
@@ -724,6 +767,9 @@ export class VelaRuntimeEngine {
           flushOutbox: () => {
             if (this.channels.size > 0) void this.flushOutboxBestEffort()
           },
+          getChannelAdapter: (name) => this.channels.get(name),
+          isChannelEnabled: (name) => this.isChannelEnabled(name),
+          logger: this.logger,
         })
       } finally {
         unregisterLiveOwner(claimed.ownerToken)

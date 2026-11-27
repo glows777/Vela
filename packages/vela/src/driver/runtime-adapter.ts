@@ -117,6 +117,7 @@ export function createVelaAgentDriver(
       extensionConfig: options.extensionConfig,
       extensions: options.extensions,
       enabledModels: options.enabledModels,
+      githubRepositories: options.githubRepositories,
       dreamEnabled: options.dreamEnabled,
       offline: options.offline ?? false,
     },

@@ -87,9 +87,8 @@ test.concurrent('fresh model-free CLI saves privately, creates once and updates 
   expect(first.output + second.output).not.toContain(config.github.secret)
   expect(first.output).not.toContain('vela daemon stop && vela daemon start')
   for (const text of [
-    'startChannels()',
-    'SDK channel host',
     'vela daemon',
+    'SIGHUP',
     'channel',
     'Recent deliveries',
     'tunnel',

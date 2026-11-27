@@ -1,14 +1,18 @@
 import type { VelaDatabase } from '../db/index.ts'
+import { cancelPendingApprovalsForSession } from './approvals.ts'
 import type { BackgroundJobManager } from './background-jobs.ts'
-import type { SessionRecord } from './domain.ts'
+import type { SessionRecord, SessionStoreControl } from './domain.ts'
 import {
+  type AgentDriver,
   abortLiveProcessOwner,
   type DriverInboxItem,
   isOwnerLive,
 } from './driver.ts'
+import type { RuntimeEventBus } from './event-bus.ts'
 import type { RunEndStatus } from './events.ts'
 import {
   enqueueInboxEvent,
+  hasSessionPendingWake,
   isTopicAwaitingBindingInDb,
   listSessionsWithPendingWake,
   requeueProcessingForRunInTx,
@@ -264,7 +268,7 @@ export function recordChildStatusNoteForHubInTx(
   })
 }
 
-export async function stopExternalSessionRuns(params: {
+async function stopExternalSessionRuns(params: {
   db: VelaDatabase
   activeOwners: ReadonlySet<string>
   sessionId: string
@@ -406,4 +410,104 @@ export function stopSessionRunsInDb(
     }
     return { cancelled: updated.changes > 0, liveOtherRuns: false }
   })
+}
+
+export function canWakeSessionInDb(
+  db: VelaDatabase,
+  sessions: SessionStoreControl,
+  sessionId: string,
+  excludeInboxIds?: ReadonlySet<string>,
+): boolean {
+  if (!db.open) return false
+  const session = sessions.get(sessionId)
+  if (!session) return false
+  if (session.kind === 'topic' && isTopicAwaitingBindingInDb(db, sessionId)) {
+    return false
+  }
+  if (session.state === 'waiting_human') {
+    const pendingApproval = db.get<{ id: string }>(
+      `SELECT id FROM approvals WHERE session_id = ? AND status = 'pending' LIMIT 1`,
+      sessionId,
+    )
+    if (pendingApproval) return false
+    return Boolean(
+      db.get<{ id: string }>(
+        `SELECT id FROM inbox_events WHERE session_id = ? AND status = 'pending' AND source = 'approval' LIMIT 1`,
+        sessionId,
+      ),
+    )
+  }
+  if (session.state !== 'idle') return false
+  return hasSessionPendingWake(db, sessionId, excludeInboxIds)
+}
+
+export async function stopSessionInRuntime(params: {
+  db: VelaDatabase
+  sessions: SessionStoreControl
+  drivers: ReadonlyMap<string, AgentDriver>
+  eventBus: RuntimeEventBus
+  backgroundJobs: BackgroundJobManager
+  activeWorkers: ReadonlyMap<
+    string,
+    { controller: AbortController; promise: Promise<void> }
+  >
+  activeOwners: ReadonlySet<string>
+  isDisposed: () => boolean
+  sessionId: string
+  reason: string
+}): Promise<boolean> {
+  const {
+    db,
+    sessions,
+    drivers,
+    eventBus,
+    backgroundJobs,
+    activeWorkers,
+    activeOwners,
+    isDisposed,
+    sessionId,
+    reason,
+  } = params
+  let cancelledRun = false
+  let cancelledApprovals = 0
+  let stoppedJobs = 0
+  for (let pass = 0; pass < 2; pass++) {
+    const active = activeWorkers.get(sessionId)
+    if (active) {
+      cancelledRun = true
+      active.controller.abort(new DOMException(reason, 'AbortError'))
+      const session = sessions.get(sessionId)
+      const driver = session ? drivers.get(session.driver) : undefined
+      await driver?.abort?.(sessionId)
+      await active.promise.catch(() => {})
+    }
+    const external = await stopExternalSessionRuns({
+      db,
+      activeOwners,
+      sessionId,
+      reason,
+      isStopped: isDisposed,
+    })
+    if (external.stillOwnedRemotely) return false
+    if (external.cancelled) cancelledRun = true
+    cancelledApprovals += cancelPendingApprovalsForSession(
+      db,
+      eventBus,
+      sessionId,
+      reason,
+    )
+    stoppedJobs += backgroundJobs.stopSessionJobs(sessionId)
+    const dbStopped = stopSessionRunsInDb(
+      db,
+      sessions.get(sessionId),
+      sessionId,
+      reason,
+      activeOwners,
+    )
+    if (dbStopped.cancelled) cancelledRun = true
+    if (!dbStopped.liveOtherRuns) {
+      return cancelledRun || cancelledApprovals > 0 || stoppedJobs > 0
+    }
+  }
+  return false
 }

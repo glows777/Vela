@@ -1,11 +1,18 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { createConnection, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
+import { z } from 'zod'
 import type { AuthEvent, AuthPrompt } from '../providers/auth/types.ts'
-import type { RuntimeEvent, StreamDeltaEvent } from '../runtime/events.ts'
+import type {
+  ChannelStatusInfo,
+  RuntimeEvent,
+  RuntimeWebhookStatus,
+  StreamDeltaEvent,
+} from '../runtime/index.ts'
 
-export const DAEMON_PROTOCOL_VERSION = 1
+export const DAEMON_PROTOCOL_VERSION = 2
 const MAX_WIRE_FRAME_BYTES = 128 * 1024 * 1024
 
 export interface DaemonHello {
@@ -27,6 +34,8 @@ export interface DaemonStatus {
   appVersion?: string
   startedAt?: string
   uptimeMs?: number
+  channels?: ChannelStatusInfo[]
+  webhooks?: RuntimeWebhookStatus
 }
 
 export interface SerializedError {
@@ -268,5 +277,112 @@ export function createNdjsonParser(
       }
       onMessage(parsed)
     }
+  }
+}
+
+export function parseChannelSetEnabledParams(p: unknown): {
+  name: string
+  enabled: boolean
+} {
+  const obj = p as Record<string, unknown> | null | undefined
+  if (
+    !obj ||
+    typeof obj !== 'object' ||
+    typeof obj.name !== 'string' ||
+    !obj.name.trim() ||
+    typeof obj.enabled !== 'boolean'
+  ) {
+    throw new Error(
+      'Invalid channels.setEnabled params: expected { name: string, enabled: boolean }',
+    )
+  }
+  return { name: obj.name.trim(), enabled: obj.enabled }
+}
+
+export function parseChannelChatsParams(p: unknown): { channel: string } {
+  const obj = p as Record<string, unknown> | null | undefined
+  if (
+    !obj ||
+    typeof obj !== 'object' ||
+    typeof obj.channel !== 'string' ||
+    !obj.channel.trim()
+  ) {
+    throw new Error(
+      'Invalid channels.chats params: expected { channel: string }',
+    )
+  }
+  return { channel: obj.channel.trim() }
+}
+
+const channelSubmitSchema = z
+  .object({
+    channel: z.string().trim().min(1),
+    input: z
+      .object({
+        chatId: z.string().trim().min(1),
+        threadId: z.string().trim().min(1).optional(),
+        replyToMessageId: z.string().trim().min(1).optional(),
+        sessionId: z.string().trim().min(1).optional(),
+        newTopic: z
+          .object({
+            title: z.string().trim().min(1),
+          })
+          .strict()
+          .optional(),
+        text: z.string(),
+        author: z
+          .object({
+            id: z.string().min(1),
+            name: z.string().min(1),
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict()
+
+export function parseChannelSubmitParams(p: unknown): {
+  channel: string
+  input: import('../runtime/channels.ts').ChannelHostSubmitInput
+} {
+  const parsed = channelSubmitSchema.safeParse(p)
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid channels.submit params: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
+    )
+  }
+  return parsed.data
+}
+
+const MAX_CLIENT_BUFFER_BYTES = 64 * 1024 * 1024
+
+export async function probeSocketAlive(socketPath: string): Promise<boolean> {
+  if (process.platform !== 'win32' && !existsSync(socketPath)) return false
+  return new Promise<boolean>((resolve) => {
+    const probe = createConnection(socketPath)
+    let done = false
+    const finish = (alive: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      probe.destroy()
+      resolve(alive)
+    }
+    const timer = setTimeout(() => finish(false), 400)
+    probe.on('connect', () => finish(true))
+    probe.on('error', () => finish(false))
+  })
+}
+
+export function safeWriteWire(socket: Socket, msg: DaemonWireMessage): void {
+  if (socket.destroyed || !socket.writable) return
+  if (socket.writableLength > MAX_CLIENT_BUFFER_BYTES) {
+    socket.destroy()
+    return
+  }
+  try {
+    socket.write(encodeWireLine(msg))
+  } catch {
+    socket.destroy()
   }
 }

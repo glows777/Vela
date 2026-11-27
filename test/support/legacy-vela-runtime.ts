@@ -708,6 +708,20 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
       setEnabled: async () => undefined,
       remove: async () => false,
     },
+    channels: {
+      list: async () => [],
+      enable: async () => {
+        throw new Error(
+          'channels.enable is not supported in legacy test runtime',
+        )
+      },
+      disable: async () => {
+        throw new Error(
+          'channels.disable is not supported in legacy test runtime',
+        )
+      },
+      health: async () => [],
+    },
     blobs: {
       get: async () => undefined,
       list: async () => [],

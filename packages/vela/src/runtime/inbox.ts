@@ -125,22 +125,68 @@ export function enqueueInboxEvent(
   })
 }
 
+function inboxRouteInfo(row: InboxRow): {
+  routeKey?: string
+  mentionSig?: string
+  needsAnnouncement: boolean
+} {
+  let payload: Record<string, unknown>
+  try {
+    payload = JSON.parse(row.payload_json) as Record<string, unknown>
+  } catch {
+    return { needsAnnouncement: false }
+  }
+  const isRouteSource =
+    row.source === 'channel' ||
+    row.source === 'timer' ||
+    row.source === 'webhook' ||
+    row.source === 'handoff' ||
+    (row.source === 'approval' && payload.waitForInput === true)
+  const routeKey =
+    isRouteSource &&
+    typeof payload.channel === 'string' &&
+    typeof payload.externalChatId === 'string'
+      ? JSON.stringify([
+          payload.channel,
+          payload.externalChatId,
+          typeof payload.threadId === 'string' ? payload.threadId : null,
+        ])
+      : undefined
+  const isPassive = row.passive === 1
+  const isRoutine = row.source === 'timer' && payload.kind === 'routine'
+  const isDefaultWebhook =
+    row.source === 'webhook' && payload.isDefaultTarget === true
+  const needsAnnouncement =
+    row.wake === 1 &&
+    !isPassive &&
+    (isRoutine || isDefaultWebhook) &&
+    Boolean(routeKey) &&
+    typeof payload.threadId !== 'string' &&
+    typeof payload.replyToMessageId !== 'string'
+  const recipientId =
+    typeof payload.senderId === 'string' && payload.senderId
+      ? payload.senderId
+      : typeof payload.creatorId === 'string' && payload.creatorId
+        ? payload.creatorId
+        : null
+  const mentionSig =
+    row.wake === 1 && !isPassive && routeKey
+      ? JSON.stringify([payload.mentionRecipient === true, recipientId])
+      : undefined
+  return { routeKey, mentionSig, needsAnnouncement }
+}
+
 /**
- * Claims all `pending` events for `sessionId` into `runId` iff at least one pending event
- * has `wake = 1`. Accumulates `passive = 1` and `wake = 0` events into the same batch.
+ * Claims pending events for `sessionId` into `runId` iff at least one pending event
+ * has `wake = 1`. Anchors on the oldest runnable wake event so non-waking inputs for
+ * another route cannot stall the worker, isolates announcement wakes individually,
+ * prevents passive inputs from crossing routes, and keeps recipient attribution uniform.
  */
 export function claimInboxBatchInTx(
   db: VelaDatabase,
   sessionId: string,
   runId: string,
 ): InboxEventRecord[] {
-  const hasWake = db.get<{ id: string }>(
-    `SELECT id FROM inbox_events
-     WHERE session_id = ? AND status = 'pending' AND wake = 1
-     LIMIT 1`,
-    sessionId,
-  )
-  if (!hasWake) return []
   const rows = db.all<Record<string, unknown>>(
     `SELECT * FROM inbox_events
      WHERE session_id = ? AND status = 'pending'
@@ -148,14 +194,62 @@ export function claimInboxBatchInTx(
     sessionId,
   ) as unknown as InboxRow[]
   if (!rows.length) return []
-  db.run(
-    `UPDATE inbox_events
-     SET status = 'processing', run_id = ?
-     WHERE session_id = ? AND status = 'pending'`,
-    runId,
-    sessionId,
-  )
-  return rows.map((row) =>
+
+  const firstWakeIdx = rows.findIndex((row) => row.wake === 1)
+  if (firstWakeIdx === -1) return []
+
+  const anchor = rows[firstWakeIdx]!
+  const anchorInfo = inboxRouteInfo(anchor)
+
+  let selected: InboxRow[]
+  if (anchorInfo.needsAnnouncement) {
+    selected = [anchor]
+  } else {
+    selected = []
+    let activeRouteKey = anchorInfo.routeKey
+    let activeMentionSig = anchorInfo.mentionSig
+    for (const row of rows) {
+      const info = inboxRouteInfo(row)
+      if (info.needsAnnouncement) continue
+      if (info.routeKey) {
+        if (activeRouteKey && info.routeKey !== activeRouteKey) continue
+        activeRouteKey ??= info.routeKey
+      }
+      if (info.mentionSig !== undefined) {
+        if (
+          activeMentionSig !== undefined &&
+          info.mentionSig !== activeMentionSig
+        ) {
+          continue
+        }
+        activeMentionSig ??= info.mentionSig
+      }
+      selected.push(row)
+    }
+  }
+  if (!selected.some((row) => row.wake === 1)) {
+    return []
+  }
+
+  if (selected.length === rows.length) {
+    db.run(
+      `UPDATE inbox_events
+       SET status = 'processing', run_id = ?
+       WHERE session_id = ? AND status = 'pending'`,
+      runId,
+      sessionId,
+    )
+  } else {
+    const placeholders = selected.map(() => '?').join(', ')
+    db.run(
+      `UPDATE inbox_events
+       SET status = 'processing', run_id = ?
+       WHERE id IN (${placeholders})`,
+      runId,
+      ...selected.map((row) => row.id),
+    )
+  }
+  return selected.map((row) =>
     rowToInbox({ ...row, status: 'processing', run_id: runId }),
   )
 }

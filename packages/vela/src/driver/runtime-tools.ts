@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { VelaDatabase } from '../db/index.ts'
+import { isChannelEnabledInDb } from '../runtime/channel-ingress.ts'
 import {
   forwardToProjectSession,
   listProjectSessions,
@@ -10,7 +11,11 @@ import {
   startProjectSession,
 } from '../runtime/control-ops.ts'
 import type { RuntimeEventBus } from '../runtime/event-bus.ts'
-import type { BlobStore } from '../runtime/index.ts'
+import type {
+  BlobStore,
+  ChannelBinding,
+  ChannelToolSpec,
+} from '../runtime/index.ts'
 import type { MemoryStore } from '../runtime/memory/index.ts'
 import type { SubscriptionManager } from '../runtime/subscriptions.ts'
 import type { TimerScheduler } from '../runtime/timers.ts'
@@ -47,8 +52,17 @@ export interface RuntimeToolDeps {
           externalChatId: string
           threadId?: string
         }
-        humanProvenance?: { inboxEventId: string; senderName?: string }
-        attachments?: Array<{ blobId: string; name: string; mimeType?: string }>
+        humanProvenance?: {
+          inboxEventId: string
+          senderId?: string
+          senderName?: string
+        }
+        attachments?: Array<{
+          blobId: string
+          name: string
+          mimeType?: string
+          inlineOnly?: boolean
+        }>
         markSilent: () => void
       }
     | undefined
@@ -361,6 +375,12 @@ function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
           projectId: run.projectId,
           sessionId: run.sessionId,
           target: run.channelTarget,
+          ...(run.humanProvenance?.senderId
+            ? { creatorId: run.humanProvenance.senderId }
+            : {}),
+          ...(run.humanProvenance?.senderName
+            ? { creatorName: run.humanProvenance.senderName }
+            : {}),
           message: input.message,
           schedule,
           timezone: zone,
@@ -531,4 +551,67 @@ export function createRuntimeSessionToolRegistry(options: {
     registry.register(...options.extraTools)
   }
   return registry
+}
+
+/** Converts Runtime-supplied `ChannelToolSpec` items into session-scoped `ToolDefinition` instances. */
+export function adaptChannelTools(
+  resolved:
+    | { binding: ChannelBinding; tools: readonly ChannelToolSpec[] }
+    | undefined,
+  sessionId: string,
+  projectId: string | null,
+  db?: VelaDatabase,
+): ToolDefinition[] {
+  if (!resolved) return []
+  const { binding, tools } = resolved
+  return tools.map((spec) => ({
+    name: spec.name,
+    description: spec.description,
+    inputSchema: spec.inputSchema,
+    channel: binding.channel,
+    executionMode: spec.readOnly ? 'parallel' : 'sequential',
+    ...(spec.readOnly ? { annotations: { readOnlyHint: true } } : {}),
+    ...(spec.maxResultChars !== undefined
+      ? { maxResultChars: spec.maxResultChars }
+      : {}),
+    execute: async (input, ctx) => {
+      if (db) {
+        if (!isChannelEnabledInDb(db, binding.channel)) {
+          throw new Error(`Channel "${binding.channel}" is disabled`)
+        }
+        const activeRow = db.get<{ enabled: number }>(
+          'SELECT enabled FROM channel_bindings WHERE id = ?',
+          binding.id,
+        )
+        if (!activeRow || activeRow.enabled === 0) {
+          throw new Error(
+            `Channel binding for "${binding.channel}" is disabled or removed`,
+          )
+        }
+        if (binding.threadId) {
+          const rootDisabled = db.get<{ id: string }>(
+            `SELECT id FROM channel_bindings
+             WHERE channel = ? AND external_id = ? AND thread_id IS NULL AND enabled = 0
+             LIMIT 1`,
+            binding.channel,
+            binding.externalId,
+          )
+          if (rootDisabled) {
+            throw new Error(
+              `Root group binding for "${binding.channel}" is disabled`,
+            )
+          }
+        }
+      }
+      return await spec.execute(input, {
+        sessionId,
+        projectId,
+        channel: binding.channel,
+        externalChatId: binding.externalId,
+        threadId: binding.threadId,
+        kind: binding.kind,
+        signal: ctx?.signal,
+      })
+    },
+  }))
 }

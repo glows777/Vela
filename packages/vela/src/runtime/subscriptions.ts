@@ -115,9 +115,13 @@ export class SubscriptionManager {
   }
 
   findMatching(source: string, eventKey: string): SubscriptionRecord[] {
+    const matchClause =
+      source === 'github'
+        ? `(lower(event_key) = lower(?) OR event_key = '*')`
+        : `(event_key = ? OR event_key = '*')`
     const rows = this.db.all<Record<string, unknown>>(
       `SELECT * FROM subscriptions
-       WHERE source = ? AND (event_key = ? OR event_key = '*')
+       WHERE source = ? AND ${matchClause}
        ORDER BY created_at ASC`,
       source,
       eventKey,
@@ -133,22 +137,35 @@ export class SubscriptionManager {
     details?: string
     final?: boolean
     payload?: Record<string, unknown>
-  }): { matchedSessionIds: string[]; enqueuedCount: number } {
+    shouldDeliverSession?: (sessionId: string) => boolean
+  }): {
+    matchedSessionIds: string[]
+    matchedCount: number
+    enqueuedCount: number
+  } {
     const wakeSessions = new Set<string>()
+    let matchedCount = 0
     let enqueuedCount = 0
 
     this.db.transaction(() => {
       const subs = this.findMatching(input.source, input.eventKey)
+      matchedCount = subs.length
       const seenSessions = new Set<string>()
       const insertedSessions = new Set<string>()
       for (const sub of subs) {
         if (seenSessions.has(sub.sessionId)) continue
         seenSessions.add(sub.sessionId)
+        if (
+          input.shouldDeliverSession &&
+          !input.shouldDeliverSession(sub.sessionId)
+        ) {
+          continue
+        }
         const { inserted } = enqueueInboxEvent(this.db, {
           sessionId: sub.sessionId,
           projectId: sub.projectId,
           source: 'webhook',
-          dedupeKey: `${input.source}:${input.dedupeKey}:${sub.sessionId}`,
+          dedupeKey: `${input.source}:${input.dedupeKey}:${input.eventKey}:${sub.sessionId}`,
           wake: true,
           payload: {
             type: 'webhook',
@@ -180,6 +197,6 @@ export class SubscriptionManager {
     for (const sessionId of wakeSessions) {
       this.onWakeSession?.(sessionId)
     }
-    return { matchedSessionIds: [...wakeSessions], enqueuedCount }
+    return { matchedSessionIds: [...wakeSessions], matchedCount, enqueuedCount }
   }
 }

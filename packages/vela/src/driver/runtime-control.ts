@@ -302,6 +302,9 @@ export function createRuntimeControl(
         ...('enabledModels' in next
           ? { enabledModels: next.enabledModels }
           : {}),
+        ...('githubRepositories' in next
+          ? { githubRepositories: next.githubRepositories }
+          : {}),
         ...('dreamEnabled' in next ? { dreamEnabled: next.dreamEnabled } : {}),
         ...('offline' in next && next.offline !== undefined
           ? { offline: next.offline }

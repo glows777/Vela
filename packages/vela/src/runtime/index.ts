@@ -3,12 +3,21 @@ export { type BlobDirection, type BlobRecord, BlobStore } from './blobs.ts'
 export type {
   ChannelAdapter,
   ChannelAdapterContext,
+  ChannelAnnouncementInput,
+  ChannelAnnouncementResult,
   ChannelBinding,
   ChannelBindingKind,
+  ChannelChatInfo,
+  ChannelConnectionState,
   ChannelDeliveryResult,
+  ChannelHostSubmitInput,
+  ChannelHostSubmitResult,
   ChannelInboundAttachment,
   ChannelInboundMessage,
   ChannelOutboundMessage,
+  ChannelStatusInfo,
+  ChannelToolContext,
+  ChannelToolSpec,
 } from './channels.ts'
 export * from './control-ops.ts'
 export type {
@@ -55,3 +64,19 @@ export {
 } from './runtime.ts'
 export type { SubscriptionRecord } from './subscriptions.ts'
 export type { TimerKind, TimerRecord, TimerTarget } from './timers.ts'
+export {
+  extractGithubRepositories,
+  genericWebhookOptions,
+  githubWebhookOptions,
+  HttpError,
+  HttpListener,
+  normalizeWebhookConfigKey,
+  parseGenericWebhookEvent,
+  parseGithubWebhookEvents,
+  type RuntimeWebhookEvent,
+  RuntimeWebhookReceiver,
+  type RuntimeWebhookStatus,
+  type WebhookReceiverConfig,
+  webhookEventSchema,
+  webhookReceiverConfigSchema,
+} from './webhooks/index.ts'

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { tempDir } from '../../../../../test/support/vela.ts'
@@ -715,4 +715,34 @@ test('openDatabase repairs legacy v1 channel_bindings UNIQUE(channel, external_i
       now,
     ),
   ).toThrow()
+})
+
+test('readonly open succeeds on a cleanly checkpointed WAL database without -wal/-shm sidecars', () => {
+  const { dbPath, db } = openTempDb('checkpointed-wal.db')
+  const now = '2026-11-27T00:00:00Z'
+  db.run(
+    "INSERT INTO kv_meta (key, value_json, updated_at) VALUES ('wal_ro', '\"ok\"', ?)",
+    now,
+  )
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  db.close()
+
+  for (const sidecar of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+    if (existsSync(sidecar)) unlinkSync(sidecar)
+  }
+
+  const ro = openDatabase({ path: dbPath, readonly: true })
+  cleanup.push({ db: ro })
+  expect(
+    ro.get<{ value_json: string }>(
+      "SELECT value_json FROM kv_meta WHERE key = 'wal_ro'",
+    )?.value_json,
+  ).toBe('"ok"')
+  expect(() => ro.transaction(() => {}, 'IMMEDIATE')).toThrow('read-only')
+  expect(() =>
+    ro.run(
+      "INSERT INTO kv_meta (key, value_json, updated_at) VALUES ('ro_write', '1', ?)",
+      now,
+    ),
+  ).toThrow(/read-only|readonly/i)
 })

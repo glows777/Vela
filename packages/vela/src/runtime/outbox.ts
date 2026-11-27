@@ -90,6 +90,10 @@ export interface OutboxRecord {
     text: string
     title?: string
     forwardMessageId?: string
+    recipientId?: string
+    mentionRecipient?: boolean
+    isRoutine?: boolean
+    isHandoff?: boolean
     files?: { path: string; name?: string; mimeType?: string }[]
   }
   status: OutboxStatus
@@ -114,6 +118,10 @@ export interface EnqueueOutboxInput {
   text: string
   title?: string
   forwardMessageId?: string
+  recipientId?: string
+  mentionRecipient?: boolean
+  isRoutine?: boolean
+  isHandoff?: boolean
   files?: { path: string; name?: string; mimeType?: string }[]
 }
 
@@ -159,6 +167,32 @@ function rowToOutbox(row: OutboxRow): OutboxRecord {
   }
 }
 
+function isOutboxBindingDisabledInDb(
+  db: VelaDatabase,
+  row: OutboxRow,
+): boolean {
+  const exactDisabled = db.get<{ id: string }>(
+    `SELECT id FROM channel_bindings
+     WHERE channel = ? AND external_id = ? AND thread_id IS ? AND enabled = 0
+     LIMIT 1`,
+    row.channel,
+    row.external_chat_id,
+    row.thread_id,
+  )
+  if (exactDisabled) return true
+  if (row.thread_id) {
+    const rootDisabled = db.get<{ id: string }>(
+      `SELECT id FROM channel_bindings
+       WHERE channel = ? AND external_id = ? AND thread_id IS NULL AND enabled = 0
+       LIMIT 1`,
+      row.channel,
+      row.external_chat_id,
+    )
+    if (rootDisabled) return true
+  }
+  return false
+}
+
 export function enqueueOutboxInTx(
   db: VelaDatabase,
   input: EnqueueOutboxInput,
@@ -171,6 +205,10 @@ export function enqueueOutboxInTx(
     ...(input.forwardMessageId
       ? { forwardMessageId: input.forwardMessageId }
       : {}),
+    ...(input.recipientId ? { recipientId: input.recipientId } : {}),
+    ...(input.mentionRecipient ? { mentionRecipient: true } : {}),
+    ...(input.isRoutine ? { isRoutine: true } : {}),
+    ...(input.isHandoff ? { isHandoff: true } : {}),
     ...(input.files?.length ? { files: input.files } : {}),
   }
   db.run(
@@ -375,6 +413,17 @@ export class OutboxDispatcher {
             blockedSessionChannels.add(fifoKey)
             continue
           }
+          if (isOutboxBindingDisabledInDb(this.db, row)) {
+            this.db.run(
+              `UPDATE outbox
+               SET status = 'failed', last_error = ?, next_retry_at = NULL, updated_at = ?
+               WHERE id = ? AND status = 'pending'`,
+              'Channel binding is disabled',
+              stepNowIso,
+              row.id,
+            )
+            continue
+          }
           const adapter = this.getAdapter(row.channel)
           if (!adapter) continue
           const leaseToken = `${PROCESS_OWNER_PREFIX}:${process.pid}:${randomUUID()}`
@@ -414,6 +463,12 @@ export class OutboxDispatcher {
         ...(row.payload.forwardMessageId
           ? { forwardMessageId: row.payload.forwardMessageId }
           : {}),
+        ...(row.payload.recipientId
+          ? { recipientId: row.payload.recipientId }
+          : {}),
+        ...(row.payload.mentionRecipient ? { mentionRecipient: true } : {}),
+        ...(row.payload.isRoutine ? { isRoutine: true } : {}),
+        ...(row.payload.isHandoff ? { isHandoff: true } : {}),
         text: row.payload.text,
         ...(row.payload.files ? { files: row.payload.files } : {}),
       }

@@ -25,8 +25,9 @@ import { enqueueOutboxInTx } from './outbox.ts'
 import { recordChildStatusNoteForHubInTx } from './recovery.ts'
 
 export {
+  canWakeSessionInDb,
   recoverRuntimeState,
-  stopExternalSessionRuns,
+  stopSessionInRuntime,
   stopSessionRunsInDb,
 } from './recovery.ts'
 
@@ -45,6 +46,10 @@ export interface OutboxTarget {
   externalChatId: string
   threadId?: string
   replyToMessageId?: string
+  recipientId?: string
+  mentionRecipient?: boolean
+  isRoutine?: boolean
+  isHandoff?: boolean
 }
 
 function triggerFromInbox(inputs: readonly InboxEventRecord[]): RunTrigger {
@@ -243,7 +248,17 @@ export function claimNextTurnInDb(params: {
       payload: item.payload,
       createdAt: item.createdAt,
     }))
-    const initialTarget = outboxTargetFromInputs(inputs)
+    const initialTarget =
+      outboxTargetFromInputs(inputs) ??
+      (inputs.some(
+        (i) =>
+          i.wake &&
+          !i.passive &&
+          i.source === 'handoff' &&
+          i.payload.type !== 'handoff_note',
+      )
+        ? resolveOutboxTargetInDb(db, session, inputs)
+        : undefined)
     if (initialTarget) {
       db.run(
         `INSERT INTO kv_meta (key, value_json, updated_at)
@@ -366,6 +381,10 @@ export function commitCompletedTurnInTx(params: {
       externalChatId: outboxTarget.externalChatId,
       threadId: outboxTarget.threadId,
       replyToMessageId: outboxTarget.replyToMessageId,
+      recipientId: outboxTarget.recipientId,
+      mentionRecipient: outboxTarget.mentionRecipient,
+      isRoutine: outboxTarget.isRoutine,
+      isHandoff: outboxTarget.isHandoff,
       kind: 'reply',
       text: outcome.replyText,
     })
@@ -532,6 +551,10 @@ export function finalizeTurnInDb(params: {
         externalChatId: outboxTarget.externalChatId,
         threadId: outboxTarget.threadId,
         replyToMessageId: outboxTarget.replyToMessageId,
+        recipientId: outboxTarget.recipientId,
+        mentionRecipient: outboxTarget.mentionRecipient,
+        isRoutine: outboxTarget.isRoutine,
+        isHandoff: outboxTarget.isHandoff,
         kind: 'reply',
         text: result.replyText,
       })
@@ -547,15 +570,28 @@ export function finalizeTurnInDb(params: {
   })
 }
 
+function hasHandoffWake(inputs: readonly DriverInboxItem[]): boolean {
+  return inputs.some(
+    (item) =>
+      item.wake &&
+      !item.passive &&
+      item.source === 'handoff' &&
+      item.payload.type !== 'handoff_note',
+  )
+}
+
 function outboxTargetFromInputs(
   inputs: readonly DriverInboxItem[],
 ): OutboxTarget | undefined {
+  const isHandoff = hasHandoffWake(inputs)
   for (const requireWake of [true, false]) {
     for (let i = inputs.length - 1; i >= 0; i--) {
       const item = inputs[i]!
       const isRouteSource =
         item.source === 'channel' ||
         item.source === 'timer' ||
+        item.source === 'webhook' ||
+        item.source === 'handoff' ||
         (item.source === 'approval' && item.payload.waitForInput === true)
       if (!isRouteSource || item.passive) {
         continue
@@ -572,6 +608,13 @@ function outboxTargetFromInputs(
             : typeof payload.messageId === 'string'
               ? payload.messageId
               : undefined
+        const recipientId =
+          typeof payload.senderId === 'string' && payload.senderId
+            ? payload.senderId
+            : typeof payload.creatorId === 'string' && payload.creatorId
+              ? payload.creatorId
+              : undefined
+        const isRoutine = item.source === 'timer' && payload.kind === 'routine'
         return {
           channel: payload.channel,
           externalChatId: payload.externalChatId,
@@ -579,6 +622,12 @@ function outboxTargetFromInputs(
             ? { threadId: payload.threadId }
             : {}),
           ...(replyToMessageId ? { replyToMessageId } : {}),
+          ...(recipientId ? { recipientId } : {}),
+          ...(payload.mentionRecipient === true && recipientId
+            ? { mentionRecipient: true }
+            : {}),
+          ...(isRoutine ? { isRoutine: true } : {}),
+          ...(isHandoff ? { isHandoff: true } : {}),
         }
       }
     }
@@ -595,6 +644,10 @@ export function resolveOutboxTargetInDb(
   const directInput = outboxTargetFromInputs(inputs)
   if (directInput) return directInput
 
+  const isHandoff = hasHandoffWake(inputs)
+  const applyFlags = (target: OutboxTarget): OutboxTarget =>
+    isHandoff ? { ...target, isHandoff: true } : target
+
   if (runId) {
     const stored = db.get<{ value_json: string }>(
       'SELECT value_json FROM kv_meta WHERE key = ?',
@@ -608,7 +661,7 @@ export function resolveOutboxTargetInDb(
           typeof parsed.channel === 'string' &&
           typeof parsed.externalChatId === 'string'
         ) {
-          return parsed
+          return applyFlags(parsed)
         }
       } catch {}
     }
@@ -621,25 +674,28 @@ export function resolveOutboxTargetInDb(
   }>(
     `SELECT channel, external_id, thread_id FROM channel_bindings
      WHERE session_id = ? AND enabled = 1
-     ORDER BY created_at ASC LIMIT 1`,
+     ORDER BY created_at ASC, rowid ASC LIMIT 1`,
     session.id,
   )
   if (direct) {
-    return {
+    return applyFlags({
       channel: direct.channel,
       externalChatId: direct.external_id,
       ...(direct.thread_id ? { threadId: direct.thread_id } : {}),
-    }
+    })
   }
   if (session.projectId && session.kind === 'hub') {
     const root = db.get<{ channel: string; external_id: string }>(
       `SELECT channel, external_id FROM channel_bindings
        WHERE project_id = ? AND thread_id IS NULL AND enabled = 1
-       ORDER BY created_at ASC LIMIT 1`,
+       ORDER BY created_at ASC, rowid ASC LIMIT 1`,
       session.projectId,
     )
     if (root) {
-      return { channel: root.channel, externalChatId: root.external_id }
+      return applyFlags({
+        channel: root.channel,
+        externalChatId: root.external_id,
+      })
     }
   }
   return undefined

@@ -136,14 +136,35 @@
     timestamp: string
     type: "branch_summary"
   interface ChannelAdapter
+    announce?: ((input: ChannelAnnouncementInput) => Promise<ChannelAnnouncementResult | undefined>) | undefined
     deliver: (message: ChannelOutboundMessage) => Promise<ChannelDeliveryResult>
     fetchAttachment?: ((ref: string, signal?: AbortSignal) => Promise<Uint8Array>) | undefined
+    getTools?: ((binding: ChannelBinding) => readonly ChannelToolSpec[]) | undefined
+    listChats?: (() => Promise<ChannelChatInfo[]>) | undefined
+    listMessages?: ((input: { sessionId: string; externalChatId: string; threadId?: string | null; kind: ChannelBindingKind; cursor?: string; limit?: number; }) => Promise<RuntimeMessagePage>) | undefined
     readonly description?: string | undefined
     readonly name: string
     start: (ctx: ChannelAdapterContext) => Promise<void>
+    status?: (() => ChannelConnectionState) | undefined
     stop: () => Promise<void>
+    submitFromHost?: ((input: ChannelHostSubmitInput) => Promise<ChannelHostSubmitResult>) | undefined
   interface ChannelAdapterContext
+    getProject?: ((id: string) => ProjectRecord | undefined) | undefined
+    getSession?: ((id: string) => SessionRecord | undefined) | undefined
     ingest: (message: ChannelInboundMessage) => Promise<void>
+    listBindings?: ((filter?: { channel?: string; projectId?: string; enabledOnly?: boolean; }) => ChannelBinding[]) | undefined
+    steerSession?: ((sessionId: string, text: string) => Promise<void>) | undefined
+    stopSession?: ((sessionId: string, reason?: string) => Promise<boolean>) | undefined
+    subscribeDeltas?: ((listener: StreamDeltaListener) => () => void) | undefined
+    subscribeEvents?: ((listener: RuntimeEventListener) => () => void) | undefined
+  interface ChannelAnnouncementInput
+    externalChatId: string
+    idempotencyKey?: string | undefined
+    signal?: AbortSignal | undefined
+    text: string
+    threadId?: string | undefined
+  interface ChannelAnnouncementResult
+    externalMessageId?: string | undefined
   interface ChannelBinding
     channel: string
     config?: Record<string, unknown> | undefined
@@ -155,6 +176,12 @@
     sessionId: string | null
     threadId?: string | null | undefined
   type ChannelBindingKind = 'group' | 'direct'
+  interface ChannelChatInfo
+    chatId: string
+    name?: string | undefined
+  interface ChannelConnectionState
+    connected: boolean
+    error?: string | undefined
   interface ChannelDefinition
     canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
@@ -185,7 +212,20 @@
     key: string
     source: string
     summary: string
+  interface ChannelHostSubmitInput
+    author: { id: string; name: string; }
+    chatId: string
+    newTopic?: { title: string; } | undefined
+    sessionId?: string | undefined
+    text: string
+  interface ChannelHostSubmitResult
+    error?: string | undefined
+    messageId?: string | undefined
+    outcome: "posted" | "not-sent" | "uncertain"
+    sessionId?: string | undefined
+    topic?: { rootId: string; threadId: string; } | undefined
   interface ChannelInboundAttachment
+    inlineOnly?: boolean | undefined
     mimeType?: string | undefined
     name: string
     ref: string
@@ -195,10 +235,14 @@
     dedupeKey: string
     externalChatId: string
     kind: ChannelBindingKind
+    mentionRecipient?: boolean | undefined
     mentioned?: boolean | undefined
     messageId?: string | undefined
     passive?: boolean | undefined
+    preformatted?: boolean | undefined
     raw?: unknown
+    rawText?: string | undefined
+    requireExistingSession?: boolean | undefined
     senderId: string
     senderName: string
     text: string
@@ -210,12 +254,36 @@
     externalChatId: string
     files?: { path: string; name?: string; mimeType?: string; }[] | undefined
     forwardMessageId?: string | undefined
+    isHandoff?: boolean | undefined
+    isRoutine?: boolean | undefined
     kind?: "reply" | "topic_start" | "forward" | "file" | undefined
+    mentionRecipient?: boolean | undefined
     outboxId: string
+    recipientId?: string | undefined
     replyToMessageId?: string | undefined
     text: string
     threadId?: string | undefined
     title?: string | undefined
+  interface ChannelStatusInfo
+    connected: boolean
+    enabled: boolean
+    error?: string | undefined
+    name: string
+  interface ChannelToolContext
+    channel: string
+    externalChatId: string
+    kind: ChannelBindingKind
+    projectId: string | null
+    sessionId: string
+    signal?: AbortSignal | undefined
+    threadId?: string | null | undefined
+  interface ChannelToolSpec
+    execute: (input: any, context: ChannelToolContext) => Promise<unknown> | unknown
+    readonly description: string
+    readonly inputSchema: ToolInputSchema
+    readonly maxResultChars?: number | undefined
+    readonly name: string
+    readonly readOnly?: boolean | undefined
   interface CompactionEntry
     firstKeptEntryId: string
     id: string
@@ -342,12 +410,14 @@
   interface DaemonStatus
     agentDir: string
     appVersion?: string | undefined
+    channels?: ChannelStatusInfo[] | undefined
     pid?: number | undefined
     protocolVersion?: number | undefined
     running: boolean
     socketPath: string
     startedAt?: string | undefined
     uptimeMs?: number | undefined
+    webhooks?: RuntimeWebhookStatus | undefined
   function defineJsonSchemaTool: (tool: ToolDefinition & { inputSchema: VelaJsonSchema<unknown>; }) => ToolDefinition
   interface DocsPaths
     docs?: string | undefined
@@ -749,6 +819,8 @@
   interface LocalVelaRuntime
     dispose: () => Promise<void>
     extensionErrors: () => Promise<string[]>
+    getWebhookConfig: () => { webhooks?: Record<string, unknown>; eventDefaultTarget?: { channel: string; chatId: string; }; }
+    ingestWebhookEvent: (event: RuntimeWebhookEvent, defaultTarget?: { channel: string; chatId: string; }) => Promise<{ matchedSessionIds: string[]; defaultTargetSessionId?: string; enqueuedCount: number; }>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
     loginProviders: () => Promise<LoginProvider[]>
     logout: (provider: string, options?: LogoutOptions) => Promise<LogoutResult>
@@ -758,6 +830,7 @@
     readonly approvals: { list(sessionId?: string): Promise<ApprovalRecord[]>; resolve(input: { approvalId: string; decision: "approved" | "denied" | "cancelled"; reason?: string; decidedBy?: string; }): Promise<{ approval: ApprovalRecord; shouldWake: boolean; }>; }
     readonly bindings: { list(filter?: { channel?: string; projectId?: string; enabledOnly?: boolean; }): Promise<ChannelBinding[]>; get(id: string): Promise<ChannelBinding | undefined>; upsert(input: UpsertChannelBindingInput): Promise<ChannelBinding>; setEnabled(id: string, enabled: boolean): Promise<ChannelBinding | undefined>; remove(id: string): Promise<boolean>; }
     readonly blobs: { get(id: string): Promise<BlobRecord | undefined>; list(sessionId: string, direction?: BlobDirection): Promise<BlobRecord[]>; read(id: string): Promise<Uint8Array>; storeInbound(input: { id?: string; sessionId?: string | null; projectId?: string | null; messageId?: string | null; filename: string; mimeType?: string; bytes?: Uint8Array; hostPath?: string; }): Promise<BlobRecord>; }
+    readonly channels: { list(): Promise<ChannelStatusInfo[]>; setEnabled(name: string, enabled: boolean): Promise<ChannelStatusInfo>; chats(channel: string): Promise<ChannelChatInfo[]>; submit(channel: string, input: ChannelHostSubmitInput): Promise<ChannelHostSubmitResult>; }
     readonly events: { list(options?: { sessionId?: string; projectId?: string; afterSeq?: number; limit?: number; }): Promise<RuntimeEvent[]>; bufferedDeltas(sessionId: string): Promise<StreamDeltaEvent[]>; subscribe(listener: RuntimeEventListener): () => void; subscribeDeltas(listener: StreamDeltaListener): () => void; }
     readonly jobs: { list(sessionId?: string): Promise<BackgroundTask[]>; stop(sessionId: string, jobId: string): Promise<BackgroundSnapshot>; promoteForeground(sessionId: string, toolCallId?: string): Promise<string[]>; }
     readonly oauthRegistrations: { get(provider: string): Promise<OAuthRegistration | undefined>; set(provider: string, registration: OAuthRegistration): Promise<void>; delete(provider: string): Promise<boolean>; }
@@ -1126,6 +1199,8 @@
     producedBy?: string | undefined
     role: "user" | "assistant" | "system" | "tool" | null
     runId: string | null
+    senderId?: string | undefined
+    senderName?: string | undefined
     seq: number
     sessionId: string
     stopReason?: string | undefined
@@ -1143,6 +1218,18 @@
     recoveredRuns: string[]
     requeuedInboxRuns: string[]
     wokenSessions: string[]
+  type RuntimeWebhookEvent = z.infer<typeof webhookEventSchema>
+  class RuntimeWebhookReceiver
+    get port: number | undefined
+    start: () => Promise<void>
+    status: () => RuntimeWebhookStatus
+    stop: () => Promise<void>
+  interface RuntimeWebhookStatus
+    enabled: boolean
+    endpoints?: ("github" | "generic")[] | undefined
+    error?: string | undefined
+    listening: boolean
+    port?: number | undefined
   type RunTrigger = | 'user'
       | 'channel'
       | 'timer'
@@ -1303,7 +1390,7 @@
     cost?: number | undefined
     durationMs?: number | undefined
     inputTokens: number
-    kind?: "main" | "summary" | "dream" | undefined
+    kind?: "summary" | "main" | "dream" | undefined
     model: string
     outputTokens: number
     ts: number
@@ -1802,6 +1889,7 @@
     readonly approvals: { list(sessionId?: string): Promise<ApprovalRecord[]>; resolve(input: { approvalId: string; decision: "approved" | "denied" | "cancelled"; reason?: string; decidedBy?: string; }): Promise<{ approval: ApprovalRecord; shouldWake: boolean; }>; }
     readonly bindings: { list(filter?: { channel?: string; projectId?: string; enabledOnly?: boolean; }): Promise<ChannelBinding[]>; get(id: string): Promise<ChannelBinding | undefined>; upsert(input: UpsertChannelBindingInput): Promise<ChannelBinding>; setEnabled(id: string, enabled: boolean): Promise<ChannelBinding | undefined>; remove(id: string): Promise<boolean>; }
     readonly blobs: { get(id: string): Promise<BlobRecord | undefined>; list(sessionId: string, direction?: BlobDirection): Promise<BlobRecord[]>; read(id: string): Promise<Uint8Array>; storeInbound(input: { id?: string; sessionId?: string | null; projectId?: string | null; messageId?: string | null; filename: string; mimeType?: string; bytes?: Uint8Array; hostPath?: string; }): Promise<BlobRecord>; }
+    readonly channels: { list(): Promise<ChannelStatusInfo[]>; setEnabled(name: string, enabled: boolean): Promise<ChannelStatusInfo>; chats(channel: string): Promise<ChannelChatInfo[]>; submit(channel: string, input: ChannelHostSubmitInput): Promise<ChannelHostSubmitResult>; }
     readonly events: { list(options?: { sessionId?: string; projectId?: string; afterSeq?: number; limit?: number; }): Promise<RuntimeEvent[]>; bufferedDeltas(sessionId: string): Promise<StreamDeltaEvent[]>; subscribe(listener: RuntimeEventListener): () => void; subscribeDeltas(listener: StreamDeltaListener): () => void; }
     readonly jobs: { list(sessionId?: string): Promise<BackgroundTask[]>; stop(sessionId: string, jobId: string): Promise<BackgroundSnapshot>; promoteForeground(sessionId: string, toolCallId?: string): Promise<string[]>; }
     readonly oauthRegistrations: { get(provider: string): Promise<OAuthRegistration | undefined>; set(provider: string, registration: OAuthRegistration): Promise<void>; delete(provider: string): Promise<boolean>; }
@@ -1918,6 +2006,7 @@
   function verifyProviderModel: (ref: string, providers: Record<string, ProviderDefinition>, credentials: CredentialStore, signal?: AbortSignal) => Promise<void>
   function web: (options?: WebOptions) => VelaExtension
   const webConfig: ExtensionConfigDefinition
+  type WebhookReceiverConfig = z.infer<typeof webhookReceiverConfigSchema>
   interface WebOptions
     serperKey?: string | undefined
     tavilyKey?: string | undefined
@@ -2080,7 +2169,7 @@
     cost?: number | undefined
     durationMs?: number | undefined
     inputTokens: number
-    kind?: "main" | "summary" | "dream" | undefined
+    kind?: "summary" | "main" | "dream" | undefined
     model: string
     outputTokens: number
     ts: number

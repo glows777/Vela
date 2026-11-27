@@ -134,6 +134,24 @@ if (args.daemon) {
     await writeStdout(
       `Vela daemon running (pid ${status.pid}, version ${status.appVersion}, socket ${status.socketPath})\n`,
     )
+    if (status.channels?.length) {
+      const summary = status.channels
+        .map(
+          (ch) =>
+            `${ch.name}:${ch.connected ? 'connected' : ch.enabled ? 'disconnected' : 'disabled'}${ch.error ? ` (${ch.error})` : ''}`,
+        )
+        .join(', ')
+      await writeStdout(`Channels: ${summary}\n`)
+    }
+    if (status.webhooks?.enabled) {
+      const endpoints = status.webhooks.endpoints?.length
+        ? ` [${status.webhooks.endpoints.join(', ')}]`
+        : ''
+      const state = status.webhooks.listening
+        ? `listening on 127.0.0.1:${status.webhooks.port}${endpoints}`
+        : `error${status.webhooks.error ? ` (${status.webhooks.error})` : ''}`
+      await writeStdout(`Webhooks: ${state}\n`)
+    }
   } else {
     await writeStdout(`Vela daemon stopped (socket ${status.socketPath})\n`)
   }
