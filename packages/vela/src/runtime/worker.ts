@@ -584,50 +584,56 @@ function outboxTargetFromInputs(
   inputs: readonly DriverInboxItem[],
 ): OutboxTarget | undefined {
   const isHandoff = hasHandoffWake(inputs)
-  for (const requireWake of [true, false]) {
-    for (let i = inputs.length - 1; i >= 0; i--) {
-      const item = inputs[i]!
-      const isRouteSource =
-        item.source === 'channel' ||
-        item.source === 'timer' ||
-        item.source === 'webhook' ||
-        item.source === 'handoff' ||
-        (item.source === 'approval' && item.payload.waitForInput === true)
-      if (!isRouteSource || item.passive) {
-        continue
-      }
-      if (requireWake && !item.wake) continue
-      const payload = item.payload
-      if (
-        typeof payload.channel === 'string' &&
-        typeof payload.externalChatId === 'string'
-      ) {
-        const replyToMessageId =
-          typeof payload.replyToMessageId === 'string'
-            ? payload.replyToMessageId
-            : typeof payload.messageId === 'string'
-              ? payload.messageId
-              : undefined
-        const recipientId =
-          typeof payload.senderId === 'string' && payload.senderId
-            ? payload.senderId
-            : typeof payload.creatorId === 'string' && payload.creatorId
-              ? payload.creatorId
-              : undefined
-        const isRoutine = item.source === 'timer' && payload.kind === 'routine'
-        return {
-          channel: payload.channel,
-          externalChatId: payload.externalChatId,
-          ...(typeof payload.threadId === 'string'
-            ? { threadId: payload.threadId }
-            : {}),
-          ...(replyToMessageId ? { replyToMessageId } : {}),
-          ...(recipientId ? { recipientId } : {}),
-          ...(payload.mentionRecipient === true && recipientId
-            ? { mentionRecipient: true }
-            : {}),
-          ...(isRoutine ? { isRoutine: true } : {}),
-          ...(isHandoff ? { isHandoff: true } : {}),
+  // Prefer non-passive inputs first; fall back to waking passive evaluations (e.g. untagged group bursts)
+  // when no explicit human/timer/webhook trigger is in the batch.
+  for (const allowPassive of [false, true]) {
+    for (const requireWake of [true, false]) {
+      if (allowPassive && !requireWake) continue
+      for (let i = inputs.length - 1; i >= 0; i--) {
+        const item = inputs[i]!
+        const isRouteSource =
+          item.source === 'channel' ||
+          item.source === 'timer' ||
+          item.source === 'webhook' ||
+          item.source === 'handoff' ||
+          (item.source === 'approval' && item.payload.waitForInput === true)
+        if (!isRouteSource) continue
+        if (!allowPassive && item.passive) continue
+        if (allowPassive && !item.passive) continue
+        if (requireWake && !item.wake) continue
+        const payload = item.payload
+        if (
+          typeof payload.channel === 'string' &&
+          typeof payload.externalChatId === 'string'
+        ) {
+          const replyToMessageId =
+            typeof payload.replyToMessageId === 'string'
+              ? payload.replyToMessageId
+              : typeof payload.messageId === 'string'
+                ? payload.messageId
+                : undefined
+          const recipientId =
+            typeof payload.senderId === 'string' && payload.senderId
+              ? payload.senderId
+              : typeof payload.creatorId === 'string' && payload.creatorId
+                ? payload.creatorId
+                : undefined
+          const isRoutine =
+            item.source === 'timer' && payload.kind === 'routine'
+          return {
+            channel: payload.channel,
+            externalChatId: payload.externalChatId,
+            ...(typeof payload.threadId === 'string'
+              ? { threadId: payload.threadId }
+              : {}),
+            ...(replyToMessageId ? { replyToMessageId } : {}),
+            ...(recipientId ? { recipientId } : {}),
+            ...(payload.mentionRecipient === true && recipientId
+              ? { mentionRecipient: true }
+              : {}),
+            ...(isRoutine ? { isRoutine: true } : {}),
+            ...(isHandoff ? { isHandoff: true } : {}),
+          }
         }
       }
     }

@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { extname } from 'node:path'
 import type { Readable } from 'node:stream'
 import type * as LarkSdk from '@larksuiteoapi/node-sdk'
-import type { ChannelConnection } from '../legacy-channels/index.ts'
+import type { ChannelConnectionState as ChannelConnection } from '../runtime/channels.ts'
 import type { LarkCard, LarkCardAction, LarkCardResponse } from './cards.ts'
 
 let larkSdkPromise: Promise<typeof LarkSdk> | undefined

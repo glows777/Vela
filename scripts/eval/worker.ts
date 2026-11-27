@@ -17,6 +17,7 @@ import {
 } from './graders.ts'
 import { runtimePaths } from './layout.ts'
 import { type Attempt, emptyUsage, pricing } from './report.ts'
+import { runRuntimeLarkAttempt } from './runtime-lark.ts'
 import {
   burstDiscussion,
   compactionFixture,
@@ -292,7 +293,9 @@ export async function runAttempt(
         new Response(page, { headers: { 'Content-Type': 'text/html' } }),
     })
   }
-  if (config.scenario.startsWith('G')) {
+  const useRuntimeLark =
+    paths.hasRuntimeLarkAdapter && config.scenario.startsWith('G')
+  if (config.scenario.startsWith('G') && !useRuntimeLark) {
     const runtimeHelpers = await load<Record<string, unknown>>(
       config.runtime,
       paths.helpers,
@@ -354,6 +357,67 @@ export async function runAttempt(
     }
   }
   const files = fixtures(config.scenario)
+  if (useRuntimeLark) {
+    let phase = 0
+    const runtimeDeadline = setTimeout(() => {
+      result.reason = 'Scenario deadline exceeded'
+    }, 300_000)
+    try {
+      await runRuntimeLarkAttempt({
+        runtimePath: config.runtime,
+        artifactDir: config.artifactDir,
+        scenario: config.scenario,
+        thinking: config.thinking,
+        dream: config.dream,
+        providers,
+        sdkPath: paths.sdk,
+        helpersPath: paths.helpers,
+        channelName: paths.channelName,
+        memoryStorePath: paths.runtimeMemoryStore,
+        evidence,
+        getPhase: () => phase,
+        setPhase: (p) => {
+          phase = p
+        },
+      })
+      const [diff, untracked] = await Promise.all([
+        command(config.cwd, ['git', 'diff', '--name-only', 'HEAD']),
+        command(config.cwd, [
+          'git',
+          'ls-files',
+          '--others',
+          '--exclude-standard',
+        ]),
+      ])
+      evidence.changed = [
+        ...new Set(
+          `${diff.text}\n${untracked.text}`.trim().split('\n').filter(Boolean),
+        ),
+      ]
+      evidence.modelRequests = usage.requests
+      result.checks = grade(config.scenario, evidence)
+      result.status = result.checks.every((check) => check.pass)
+        ? 'pass'
+        : 'fail'
+    } catch (error) {
+      result.reason = errorReason(error)
+    } finally {
+      clearTimeout(runtimeDeadline)
+      const dbFile = join(config.artifactDir, 'data', 'vela.db')
+      if (existsSync(dbFile)) {
+        result.sessionFiles.push(relative(config.artifactDir, dbFile))
+      }
+      result.finalChars = chars(evidence.answers.at(-1) ?? '')
+      result.toolCalls = evidence.calls.length
+      result.durationMs = performance.now() - started
+      await checkpoint()
+      await Bun.write(
+        join(config.artifactDir, 'result.json'),
+        JSON.stringify(result, null, 2),
+      )
+    }
+    return result
+  }
   const exitScenario = ['G6', 'G7', 'G8'].includes(config.scenario)
   // A group session runs in the chat's workspace, so a scenario that needs files there seeds them itself.
   const workspaceScenario = config.scenario === 'G10'

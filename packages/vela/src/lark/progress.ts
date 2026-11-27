@@ -1,7 +1,8 @@
 import type { VelaEvent } from '../extension-api.ts'
-import type { ChannelOutcome } from '../legacy-channels/index.ts'
 import type { LarkCard } from './cards.ts'
 import type { LarkTransport } from './transport.ts'
+
+export type LarkRunOutcome = 'done' | 'failed' | 'stopped' | 'silent'
 
 function plain(value: string, limit: number): string {
   return value
@@ -116,45 +117,68 @@ export class LarkProgress {
   }
 
   event(event: VelaEvent): void | Promise<void> {
-    if (event.type === 'agent_settled') return this.drain()
+    if (event.type === 'agent_settled') return this.settle()
     if (this.closed || this.failure) return
     if (
       event.type === 'tool_execution_start' ||
       event.type === 'tool_execution_update' ||
       event.type === 'tool_execution_end'
     ) {
-      const state =
-        event.type === 'tool_execution_end'
-          ? event.isError
-            ? 'Failed'
-            : 'Finished'
-          : 'Running'
-      this.stage = state === 'Running' ? 'Using tools' : 'Working'
-      const summary =
-        event.type === 'tool_execution_end' ? '' : inputSummary(event.args)
-      const label =
-        event.type === 'tool_execution_end'
-          ? (this.rows.get(event.toolCallId)?.label ??
-            plain(event.toolName, 80))
-          : `${plain(event.toolName, 80)}${summary ? ` — ${summary}` : ''}`
-      this.rows.set(event.toolCallId, { state, label })
-      if (this.rows.size > 8) this.rows.delete(this.rows.keys().next().value!)
-      if (
-        event.type === 'tool_execution_end' &&
-        !event.isError &&
-        event.toolName === 'todo'
-      ) {
-        const items = todoItems(event.details)
-        if (items) this.todos = items.length ? items : undefined
+      if (event.type === 'tool_execution_end') {
+        this.recordToolEnd(
+          event.toolCallId,
+          event.toolName,
+          event.isError,
+          event.details,
+        )
+      } else {
+        this.recordToolStart(event.toolCallId, event.toolName, event.args)
       }
-      this.schedule()
     } else if (
       event.type === 'message_update' &&
       event.assistantMessageEvent.type === 'text_delta'
     ) {
-      this.stage = 'Preparing a response'
-      this.schedule()
+      this.recordTextDelta()
     }
+  }
+
+  recordToolStart(toolCallId: string, toolName: string, input: unknown): void {
+    if (this.closed || this.failure) return
+    this.stage = 'Using tools'
+    const summary = inputSummary(input)
+    const label = `${plain(toolName, 80)}${summary ? ` — ${summary}` : ''}`
+    this.rows.set(toolCallId, { state: 'Running', label })
+    if (this.rows.size > 8) this.rows.delete(this.rows.keys().next().value!)
+    this.schedule()
+  }
+
+  recordToolEnd(
+    toolCallId: string,
+    toolName: string,
+    isError: boolean,
+    details?: unknown,
+  ): void {
+    if (this.closed || this.failure) return
+    this.stage = 'Working'
+    const state = isError ? 'Failed' : 'Finished'
+    const label = this.rows.get(toolCallId)?.label ?? plain(toolName, 80)
+    this.rows.set(toolCallId, { state, label })
+    if (this.rows.size > 8) this.rows.delete(this.rows.keys().next().value!)
+    if (!isError && toolName === 'todo') {
+      const items = todoItems(details)
+      if (items) this.todos = items.length ? items : undefined
+    }
+    this.schedule()
+  }
+
+  recordTextDelta(): void {
+    if (this.closed || this.failure) return
+    this.stage = 'Preparing a response'
+    this.schedule()
+  }
+
+  settle(): Promise<void> {
+    return this.drain()
   }
 
   private snapshot(terminal = false): LarkCard {
@@ -241,7 +265,7 @@ export class LarkProgress {
    * task is still running. A live failure reported earlier already covered this card, so nothing is
    * reported here.
    */
-  async finish(outcome: Exclude<ChannelOutcome, 'silent'>): Promise<void> {
+  async finish(outcome: Exclude<LarkRunOutcome, 'silent'>): Promise<void> {
     await this.drain()
     if (this.failure) throw this.failure
     this.stage = { done: 'Finished', failed: 'Failed', stopped: 'Stopped' }[
@@ -274,7 +298,7 @@ export async function finishProgress(options: {
   messageId: string | undefined
   reactionId: string | undefined
   progress: LarkProgress | undefined
-  outcome: ChannelOutcome
+  outcome: LarkRunOutcome
 }): Promise<void> {
   const { transport, messageId, reactionId, progress, outcome } = options
   let failure: unknown

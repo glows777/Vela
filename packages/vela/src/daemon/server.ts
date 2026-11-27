@@ -1,21 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import {
   chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  linkSync,
   mkdirSync,
-  openSync,
-  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
-  writeSync,
 } from 'node:fs'
 import { createServer, type Socket } from 'node:net'
 import { dirname } from 'node:path'
 import { defaultAgentDir } from '../driver/config/paths.ts'
+import type { LarkTransport } from '../lark/index.ts'
 import type {
   AuthEvent,
   AuthInteraction,
@@ -24,6 +18,12 @@ import type {
 } from '../providers/auth/types.ts'
 import { createRuntime, type LocalVelaRuntime } from '../runtime-sdk.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
+import { DaemonLarkHost } from './lark-host.ts'
+import {
+  acquireOwnerLock,
+  DaemonAlreadyRunningError,
+  readOwnerRecord,
+} from './owner-lock.ts'
 import {
   assertSocketOrMissing,
   daemonOwnerLockPath,
@@ -48,91 +48,7 @@ import {
   startDaemonConfigWatcher,
 } from './webhooks-host.ts'
 
-const ACTIVE_OWNER_IDS = new Set<string>()
-
-function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-function readOwnerRecord(
-  lockPath: string,
-): { pid?: number; instanceId?: string } | undefined {
-  if (!existsSync(lockPath)) return undefined
-  try {
-    const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as {
-      pid?: unknown
-      instanceId?: unknown
-    }
-    return {
-      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
-      ...(typeof parsed.instanceId === 'string'
-        ? { instanceId: parsed.instanceId }
-        : {}),
-    }
-  } catch {
-    return undefined
-  }
-}
-
-function acquireOwnerLock(
-  lockPath: string,
-  instanceId: string,
-  socketPath: string,
-): () => void {
-  mkdirSync(dirname(lockPath), { recursive: true })
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const tmpPath = `${lockPath}.${process.pid}.${instanceId}.tmp`
-    try {
-      const fd = openSync(
-        tmpPath,
-        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-        0o600,
-      )
-      try {
-        writeSync(fd, JSON.stringify({ pid: process.pid, instanceId }))
-      } finally {
-        closeSync(fd)
-      }
-      linkSync(tmpPath, lockPath)
-      ACTIVE_OWNER_IDS.add(instanceId)
-      return () => {
-        ACTIVE_OWNER_IDS.delete(instanceId)
-        const current = readOwnerRecord(lockPath)
-        if (!current || current.instanceId === instanceId) {
-          rmSync(lockPath, { force: true })
-        }
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      const owner = readOwnerRecord(lockPath)
-      const ownerAlive =
-        owner?.pid !== undefined &&
-        (owner.pid === process.pid
-          ? Boolean(owner.instanceId && ACTIVE_OWNER_IDS.has(owner.instanceId))
-          : isPidAlive(owner.pid))
-      if (ownerAlive) {
-        throw new DaemonAlreadyRunningError(socketPath)
-      }
-      rmSync(lockPath, { force: true })
-    } finally {
-      rmSync(tmpPath, { force: true })
-    }
-  }
-  throw new DaemonAlreadyRunningError(socketPath)
-}
-
-export class DaemonAlreadyRunningError extends Error {
-  constructor(socketPath: string) {
-    super(`Vela daemon is already running at ${socketPath}`)
-    this.name = 'DaemonAlreadyRunningError'
-  }
-}
+export { DaemonAlreadyRunningError }
 
 export interface StartDaemonServerOptions {
   agentDir?: string
@@ -143,6 +59,8 @@ export interface StartDaemonServerOptions {
   protocolVersion?: number
   registerSignalHandlers?: boolean
   enableWebhooks?: boolean
+  enableLark?: boolean
+  larkTransport?: LarkTransport
   onClosed?: (reason: string) => void
 }
 
@@ -204,6 +122,7 @@ export async function startDaemonServer(
 
   let runtime: LocalVelaRuntime
   let webhooksHost: DaemonWebhooksHost | undefined
+  let larkHost: DaemonLarkHost | undefined
   try {
     if (process.platform !== 'win32') {
       mkdirSync(dirname(paths.socketPath), { recursive: true })
@@ -228,12 +147,32 @@ export async function startDaemonServer(
       onConfigReloaded: webhooksHost
         ? (cfg) => webhooksHost!.sync(cfg, true)
         : undefined,
+      onLarkConfigReloaded:
+        options.enableLark !== false
+          ? (cfg) => larkHost?.sync(cfg, false)
+          : undefined,
+      onChannelEnabledChange:
+        options.enableLark !== false
+          ? (name, enabled) =>
+              name === 'lark' ? larkHost?.onEnabledChanged(enabled) : undefined
+          : undefined,
+      getKnownChannelInfo: () => larkHost?.knownChannelInfo() ?? {},
     })
     await runtime.recover()
     if (webhooksHost) {
       await webhooksHost.sync(runtime.getWebhookConfig(), false)
     }
+    if (options.enableLark !== false) {
+      larkHost = new DaemonLarkHost(runtime, {
+        agentDir: paths.agentDir,
+        hostEnv,
+        logger,
+        transport: options.larkTransport,
+      })
+      await larkHost.sync(runtime.getLarkConfig(), false)
+    }
   } catch (error) {
+    await larkHost?.stop().catch(() => {})
     await webhooksHost?.stop().catch(() => {})
     releaseOwner()
     throw error
@@ -755,6 +694,7 @@ export async function startDaemonServer(
             )
           }),
         )
+        await larkHost?.stop().catch(() => {})
         await webhooksHost?.stop().catch(() => {})
         await runtime.dispose()
       } finally {

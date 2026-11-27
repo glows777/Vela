@@ -68,8 +68,19 @@ export type {
   LarkCardAction,
   LarkCardResponse,
 } from './cards.ts'
+export {
+  type LarkChat,
+  larkChatBindingConfig,
+  parseChats,
+  validateChatTools,
+} from './chats.ts'
 export type { LarkHost, LarkHostEvent, LarkVisibleMessage } from './host.ts'
 export { LarkSubmitError } from './host.ts'
+export {
+  createLarkChannelAdapter,
+  LarkChannelAdapter,
+  type LarkChannelAdapterOptions,
+} from './runtime-adapter.ts'
 export { connectLarkSetup, discoverLarkGroup } from './setup.ts'
 export type {
   LarkHistoryMessage,

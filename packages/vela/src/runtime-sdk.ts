@@ -149,6 +149,18 @@ function mergeExtensionConfig(
   return merged
 }
 
+function isLarkExtensionDisabled(
+  extensions: readonly string[] | undefined,
+): boolean {
+  let disabled = false
+  for (const entry of extensions ?? []) {
+    if (entry === '-builtin:lark') disabled = true
+    else if (entry === '+builtin:lark' || entry === 'builtin:lark')
+      disabled = false
+  }
+  return disabled
+}
+
 function createSpecialModelResolver(): ResolveSpecialModelFn {
   return async ({ modelRef, recordPath, fallbackModel }) => {
     const testing = await import('./testing/core/index.ts')
@@ -401,6 +413,15 @@ export function createRuntime(
       webhooks: initial.ownerConfig.webhooks,
       eventDefaultTarget: initial.ownerConfig.eventDefaultTarget,
     }
+    let currentLarkConfig: {
+      lark?: Record<string, unknown>
+      disabledByExtension?: boolean
+    } = {
+      lark: initial.ownerConfig.lark,
+      disabledByExtension: isLarkExtensionDisabled(
+        initial.ownerConfig.extensions,
+      ),
+    }
     let reloadQueue: Promise<void> = Promise.resolve()
     const reloadConfigInternal = (force: boolean): Promise<void> => {
       if (isEphemeral) return Promise.resolve()
@@ -421,6 +442,12 @@ export function createRuntime(
           webhooks: updated.ownerConfig.webhooks,
           eventDefaultTarget: updated.ownerConfig.eventDefaultTarget,
         }
+        currentLarkConfig = {
+          lark: updated.ownerConfig.lark,
+          disabledByExtension: isLarkExtensionDisabled(
+            updated.ownerConfig.extensions,
+          ),
+        }
         await velaDriver.control.reloadConfig({
           defaultModel: options.defaultModel ?? updated.ownerConfig.model,
           defaultThinkingLevel:
@@ -440,6 +467,7 @@ export function createRuntime(
         })
         if (disposing) return
         await options.onConfigReloaded?.(currentWebhookConfig)
+        await options.onLarkConfigReloaded?.(currentLarkConfig)
         lastConfigSig = nextConfigSig
         lastAuthSig = nextAuthSig
       })
@@ -662,6 +690,7 @@ export function createRuntime(
       ingestWebhookEvent: async (event, defaultTarget) =>
         engine.ingestWebhookEvent(event, defaultTarget),
       getWebhookConfig: () => ({ ...currentWebhookConfig }),
+      getLarkConfig: () => ({ ...currentLarkConfig }),
       dispose() {
         disposing ??= (async () => {
           try {

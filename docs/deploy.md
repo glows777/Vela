@@ -2,9 +2,7 @@
 
 `vela daemon run` runs the single-writer Vela daemon in the foreground without a terminal, serving CLI clients and SDK `connectRuntime()` callers over `<VELA_DIR>/vela.sock`.
 
-> **Channel gateway transition note (S4b-1 -> S4b-2):** `vela serve` is retired. `vela daemon run` now hosts `webhooks` (`POST /events/github` and `POST /events/generic`) directly with automatic `config.json` / `SIGHUP` reload and delivers to Runtime SQLite `subscriptions` + Runtime `ChannelAdapter`s. **Lark and Local HTTP/SSE channels** remain on the legacy SDK host (`createVela()` + `startChannels()`, which reads legacy channel subscriptions) until S4b-2 migrates them into `vela daemon`. During this step:
-> - **Using legacy Lark / Local channels:** keep `webhooks` hosted on your SDK gateway below (and stop or omit `webhooks` on `vela daemon` on that port, since daemon webhooks do not route to the SDK host's legacy subscriptions).
-> - **Using Runtime (`createRuntime()` / `connectRuntime()`) webhooks:** let `vela daemon` host `webhooks` and omit `eventReceiver` on any separate SDK host.
+> **Channel gateway transition note (`S4b-2`):** `vela serve` is retired. `vela daemon run` now hosts **Lark (`config.json` `lark`)** and **`webhooks` (`POST /events/github` and `POST /events/generic`)** natively with automatic `config.json` / `SIGHUP` reload and live enablement via `vela.db`. Only the transitional **Local HTTP/SSE** listener remains on the legacy SDK host (`createVela()` + `startChannels()`, omitting `lark`) until `S4b-3` retires `legacy-channels`. Do not run both `vela daemon` and a separate legacy SDK host with the same Lark app credentials or webhook port.
 
 The daemon has no sandbox: the operating-system account it runs under is the boundary, and anyone with access to its socket can use everything that account can. Run it as a dedicated user that holds only the files, keys and network access needed (see [Security](security.md#channel-senders)), from a systemd unit.
 

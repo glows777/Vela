@@ -22,6 +22,12 @@ export function runtimePaths(runtime: string) {
       : selected
   }
   const lark = existsSync(join(runtime, 'test/support/lark.ts'))
+  const hasRuntimeLarkAdapter = [
+    'packages/vela/src/lark/runtime-adapter.ts',
+    'packages/vela/dist/lark/runtime-adapter.js',
+  ]
+    .map((p) => join(runtime, p))
+    .some((p) => existsSync(p))
   // A session transcript moved into `<id>/transcript.jsonl` (#267); older snapshots keep `<id>.jsonl`
   const storage = [
     'packages/vela/src/driver/session/storage.ts',
@@ -56,6 +62,7 @@ export function runtimePaths(runtime: string) {
     /name:\s*['"]read['"]/.test(readFileSync(fileToolPath, 'utf8'))
   return {
     channelName: lark ? ('lark' as const) : ('feishu' as const),
+    hasRuntimeLarkAdapter,
     sqliteSessions,
     usesPiCoreToolNames,
     /** The transcript path of a session id, relative to the sessions directory. */
@@ -98,6 +105,16 @@ export function runtimePaths(runtime: string) {
       'src/extensions/feishu/index.ts',
       'packages/lark/dist/index.js',
       'packages/vela/dist/lark/index.js',
+    ),
+    sdk: path(
+      'src/index.ts',
+      'packages/vela/dist/index.js',
+      'packages/vela/dist/index.js',
+    ),
+    runtimeMemoryStore: path(
+      'src/extensions/memory/store.ts',
+      'packages/core/dist/extensions/memory/store.js',
+      'packages/vela/dist/runtime/memory/index.js',
     ),
     channelId: path(
       'src/channels/session-id.ts',

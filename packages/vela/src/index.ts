@@ -286,6 +286,9 @@ export type {
   LarkTransport,
 } from './lark/index.ts'
 export {
+  createLarkChannelAdapter,
+  LarkChannelAdapter,
+  type LarkChannelAdapterOptions,
   type LarkHost,
   type LarkHostEvent,
   type LarkOptions,

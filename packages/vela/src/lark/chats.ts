@@ -88,6 +88,22 @@ export function groupSessionOptions(
   }
 }
 
+export function larkChatBindingConfig(chat: LarkChat): Record<string, unknown> {
+  return {
+    ...(chat.environment ? { environment: chat.environment } : {}),
+    ...(chat.tools ? { tools: [...chat.tools] } : {}),
+    ...(chat.readUntagged !== undefined
+      ? { readUntagged: chat.readUntagged }
+      : {}),
+    ...(chat.model ? { model: chat.model } : {}),
+    ...(chat.thinkingLevel ? { thinkingLevel: chat.thinkingLevel } : {}),
+    ...(chat.topicModel ? { topicModel: chat.topicModel } : {}),
+    ...(chat.topicThinkingLevel
+      ? { topicThinkingLevel: chat.topicThinkingLevel }
+      : {}),
+  }
+}
+
 /** A chat's configured tools must exist after extensions load; a typo fails startup. */
 export function validateChatTools(
   chats: Iterable<LarkChat>,

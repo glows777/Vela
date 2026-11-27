@@ -238,7 +238,7 @@ The built-in `lark` extension uses Lark's long connection (WebSocket), so no pub
 
 Run `vela setup lark` in an interactive terminal to configure a group. The wizard validates the app credentials, waits for a human to mention the bot in a group, and asks for confirmation before enabling it. The confirmation shows the chat ID and, when available, the group name. If Vela cannot retrieve the name, you can confirm using the ID alone. Every member of an enabled group has full access to Vela tools. It saves credentials in user-level `config.json` (mode 0600), sends a connection message, and summarizes the saved settings. Card callbacks and other permissions are checklist items, not verified by setup; use the manual reference below. Listener configuration lives in user-level `config.json`.
 
-Then start an SDK channel host (`createVela()` + `await vela.startChannels()`, see [Serving channels during the transition](deploy.md#serving-channels-during-the-transition); `vela daemon` does not yet serve Lark before S4b) and mention the bot again to check a model-backed reply.
+Then start or reload `vela daemon` (`vela daemon start` or `vela daemon run`, see [Deploy](deploy.md); if `vela daemon` is already running, it reloads `config.json` automatically) and mention the bot again to check a model-backed reply.
 
 **Manual setup.** To configure it by hand instead of running the wizard:
 

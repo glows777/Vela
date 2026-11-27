@@ -318,6 +318,7 @@
     content: string
     path: string
   function createJsonSchema: <T = unknown>(schema: JsonSchemaObject | (() => JsonSchemaObject | PromiseLike<JsonSchemaObject>), options?: { validate?: VelaJsonSchema<T>["validate"]; }) => VelaJsonSchema<T>
+  function createLarkChannelAdapter: (options?: LarkChannelAdapterOptions) => LarkChannelAdapter
   function createLocalExecutionEnv: (options: { cwd: string; shellPath?: string; }) => ExecutionEnv
   interface CreateProjectInput
     config?: Record<string, unknown> | null | undefined
@@ -658,6 +659,29 @@
     operator?: { open_id?: string; } | undefined
   interface LarkCardResponse
     toast: { type: "success" | "info"; content: string; }
+  class LarkChannelAdapter
+    announce: (input: ChannelAnnouncementInput) => Promise<ChannelAnnouncementResult | undefined>
+    deliver: (message: ChannelOutboundMessage) => Promise<ChannelDeliveryResult>
+    fetchAttachment: (ref: string, signal?: AbortSignal) => Promise<Uint8Array>
+    getTools: (binding: ChannelBinding) => readonly ChannelToolSpec[]
+    listChats: () => Promise<ChannelChatInfo[]>
+    listMessages: (input: { sessionId: string; externalChatId: string; threadId?: string | null; kind: "group" | "direct"; cursor?: string; limit?: number; }) => Promise<RuntimeMessagePage>
+    readonly description: "Lark bot message channel (long-connection mode)"
+    readonly name: "lark"
+    readonly timezone?: unknown
+    start: (ctx: ChannelAdapterContext) => Promise<void>
+    status: () => ChannelConnectionState
+    stop: () => Promise<void>
+    submitFromHost: (input: ChannelHostSubmitInput) => Promise<ChannelHostSubmitResult>
+  interface LarkChannelAdapterOptions
+    appId?: string | undefined
+    appSecret?: string | undefined
+    chats?: unknown
+    hostEnv?: Record<string, string | undefined> | undefined
+    logger?: VelaLogger | undefined
+    owners?: string | readonly string[] | undefined
+    timezone?: unknown
+    transport?: LarkTransport | undefined
   const larkConfig: ExtensionConfigDefinition
   interface LarkHistoryMessage
     body?: { content?: string; } | undefined
@@ -819,6 +843,7 @@
   interface LocalVelaRuntime
     dispose: () => Promise<void>
     extensionErrors: () => Promise<string[]>
+    getLarkConfig: () => { lark?: Record<string, unknown>; disabledByExtension?: boolean; }
     getWebhookConfig: () => { webhooks?: Record<string, unknown>; eventDefaultTarget?: { channel: string; chatId: string; }; }
     ingestWebhookEvent: (event: RuntimeWebhookEvent, defaultTarget?: { channel: string; chatId: string; }) => Promise<{ matchedSessionIds: string[]; defaultTargetSessionId?: string; enqueuedCount: number; }>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
