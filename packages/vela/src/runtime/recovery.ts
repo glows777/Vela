@@ -259,7 +259,7 @@ export function recoverRuntimeState(params: {
     db.run(
       `UPDATE inbox_events
        SET status = 'dropped', processed_at = COALESCE(processed_at, ?)
-       WHERE passive = 1 AND status = 'pending'`,
+       WHERE passive = 1 AND wake = 1 AND status = 'pending'`,
       nowIso,
     )
   })

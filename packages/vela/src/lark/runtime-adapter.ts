@@ -659,7 +659,6 @@ export class LarkChannelAdapter implements ChannelAdapter {
     const text = messageText(message)
     const trimmedText = text?.trim()
     const isShortcut =
-      trimmedText === '!routines' ||
       trimmedText === '!timers' ||
       trimmedText === '!status' ||
       trimmedText === '!stop' ||
@@ -672,8 +671,7 @@ export class LarkChannelAdapter implements ChannelAdapter {
       !mentioned &&
       !message.thread_id &&
       !this.readUntaggedEnabled(message.chat_id) &&
-      trimmedText !== '!routines' &&
-      trimmedText !== '!timers'
+      !isShortcut
     ) {
       return
     }

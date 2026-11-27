@@ -435,7 +435,7 @@ test('R2 #3,#4,#15: deferred webhook wakes on adapter registration, passive batc
   )
 
   db.run(
-    "UPDATE inbox_events SET status = 'done' WHERE session_id = ? AND status = 'processing'",
+    "UPDATE inbox_events SET status = 'done' WHERE session_id = ? AND status IN ('pending', 'processing')",
     sid,
   )
 
