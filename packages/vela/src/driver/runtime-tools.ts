@@ -274,9 +274,26 @@ function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
             ? timer.projectId === run.projectId
             : timer.sessionId === run.sessionId
 
+        const projectDefaultTimezone = (() => {
+          if (!run.projectId) return undefined
+          const row = deps.db.get<{ config_json: string | null }>(
+            'SELECT config_json FROM projects WHERE id = ?',
+            run.projectId,
+          )
+          if (!row?.config_json) return undefined
+          try {
+            const parsed = JSON.parse(row.config_json) as { timezone?: unknown }
+            return typeof parsed.timezone === 'string' && parsed.timezone.trim()
+              ? parsed.timezone.trim()
+              : undefined
+          } catch {
+            return undefined
+          }
+        })()
+
         if (input.action === 'list') {
           return {
-            timezone: routineTimezone(),
+            timezone: routineTimezone(projectDefaultTimezone),
             timers: deps.timers.list(ownScopeFilter),
           }
         }
@@ -366,7 +383,7 @@ function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
         if (!input.schedule) {
           throw new Error('routine timers require schedule')
         }
-        const zone = routineTimezone(input.timezone)
+        const zone = routineTimezone(input.timezone ?? projectDefaultTimezone)
         const schedule =
           'at' in input.schedule
             ? { at: localRoutineInstant(input.schedule.at, zone) }

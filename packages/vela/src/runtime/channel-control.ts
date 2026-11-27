@@ -22,7 +22,7 @@ import type {
   SessionStoreControl,
 } from './domain.ts'
 import type { DriverInboxItem } from './driver.ts'
-import { enqueueInboxEvent } from './inbox.ts'
+import { cancelPendingInboxEventInDb, enqueueInboxEvent } from './inbox.ts'
 import {
   listRuntimeSessionMessages,
   type RuntimeMessagePage,
@@ -49,28 +49,60 @@ export function createChannelAdapterContext(params: {
   stopSession: (sessionId: string, reason?: string) => Promise<boolean>
   steerSession: (sessionId: string, text: string) => Promise<void>
 }): ChannelAdapterContext {
+  const ingestWithReceipt = (
+    message: Parameters<typeof ingestChannelMessageInRuntime>[0]['msg'],
+  ) =>
+    ingestChannelMessageInRuntime({
+      db: params.db,
+      blobs: params.blobs,
+      projects: params.projects,
+      sessions: params.sessions,
+      bindings: params.bindings,
+      eventBus: params.eventBus,
+      inFlightDeliveries: params.inFlightDeliveries,
+      adapter: params.adapter,
+      msg: message,
+      executeShortcut: params.executeShortcut,
+      scheduleSession: params.scheduleSession,
+    })
   return {
-    ingest: (message) =>
-      ingestChannelMessageInRuntime({
-        db: params.db,
-        blobs: params.blobs,
-        projects: params.projects,
-        sessions: params.sessions,
-        bindings: params.bindings,
-        eventBus: params.eventBus,
-        inFlightDeliveries: params.inFlightDeliveries,
-        adapter: params.adapter,
-        msg: message,
-        executeShortcut: params.executeShortcut,
-        scheduleSession: params.scheduleSession,
-      }),
+    ingest: async (message) => {
+      await ingestWithReceipt(message)
+    },
+    ingestWithReceipt,
     subscribeEvents: (listener) => params.eventBus.subscribeEvents(listener),
     subscribeDeltas: (listener) => params.eventBus.subscribeDeltas(listener),
     stopSession: params.stopSession,
     steerSession: params.steerSession,
+    discardInboxEvent: (inboxEventId) =>
+      cancelPendingInboxEventInDb(params.db, inboxEventId),
+    steerInboxEvent: async (sessionId, inboxEventId, text) => {
+      if (!cancelPendingInboxEventInDb(params.db, inboxEventId)) return false
+      await params.steerSession(sessionId, text)
+      return true
+    },
     listBindings: (filter) => params.bindings.list(filter),
     getSession: (id) => params.sessions.get(id),
     getProject: (id) => params.projects.get(id),
+  }
+}
+
+export async function registerChannelInRuntime(
+  channels: Map<string, ChannelAdapter>,
+  params: Parameters<typeof createChannelAdapterContext>[0],
+): Promise<void> {
+  const { adapter } = params
+  const existing = channels.get(adapter.name)
+  if (existing) await existing.stop()
+  channels.set(adapter.name, adapter)
+  try {
+    await adapter.start(createChannelAdapterContext(params))
+  } catch (error) {
+    if (channels.get(adapter.name) === adapter) {
+      channels.delete(adapter.name)
+    }
+    await adapter.stop().catch(() => {})
+    throw error
   }
 }
 

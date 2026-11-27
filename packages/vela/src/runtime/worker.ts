@@ -278,7 +278,12 @@ export function claimNextTurnInDb(params: {
       sessionId,
       projectId: session.projectId,
       runId,
-      payload: { type: 'run_started', runId, trigger },
+      payload: {
+        type: 'run_started',
+        runId,
+        trigger,
+        inboxEventIds: batch.map((item) => item.id),
+      },
     })
     return {
       runId,
@@ -358,6 +363,12 @@ export function commitCompletedTurnInTx(params: {
     claimed.session.id,
   )
   completeInboxBatchInTx(db, claimed.runId, now)
+  const willDeliverReply = Boolean(
+    (finalStatus === 'completed' || finalStatus === 'waiting_human') &&
+      !outcome.silent &&
+      outcome.replyText &&
+      outboxTarget,
+  )
   eventBus.append({
     sessionId: claimed.session.id,
     projectId: claimed.session.projectId,
@@ -366,14 +377,11 @@ export function commitCompletedTurnInTx(params: {
       type: 'run_finished',
       runId: claimed.runId,
       status: finalStatus,
+      ...(outcome.silent ? { silent: true } : {}),
+      ...(willDeliverReply ? { replyPending: true } : {}),
     },
   })
-  if (
-    (finalStatus === 'completed' || finalStatus === 'waiting_human') &&
-    !outcome.silent &&
-    outcome.replyText &&
-    outboxTarget
-  ) {
+  if (willDeliverReply && outboxTarget) {
     enqueueOutboxInTx(db, {
       sessionId: claimed.session.id,
       runId: claimed.runId,
@@ -386,7 +394,7 @@ export function commitCompletedTurnInTx(params: {
       isRoutine: outboxTarget.isRoutine,
       isHandoff: outboxTarget.isHandoff,
       kind: 'reply',
-      text: outcome.replyText,
+      text: outcome.replyText!,
     })
   }
   recordChildStatusNoteForHubInTx(
@@ -525,6 +533,12 @@ export function finalizeTurnInDb(params: {
     } else {
       completeInboxBatchInTx(db, claimed.runId, now)
     }
+    const willDeliverReply = Boolean(
+      (status === 'completed' || status === 'waiting_human') &&
+        !result.silent &&
+        result.replyText &&
+        outboxTarget,
+    )
     eventBus.append({
       sessionId: claimed.session.id,
       projectId: claimed.session.projectId,
@@ -533,17 +547,14 @@ export function finalizeTurnInDb(params: {
         type: 'run_finished',
         runId: claimed.runId,
         status,
+        ...(result.silent ? { silent: true } : {}),
+        ...(willDeliverReply ? { replyPending: true } : {}),
         ...(result.error ? { error: result.error } : {}),
         ...(result.errorKind ? { errorKind: result.errorKind } : {}),
         ...(result.errorHint ? { errorHint: result.errorHint } : {}),
       },
     })
-    if (
-      (status === 'completed' || status === 'waiting_human') &&
-      !result.silent &&
-      result.replyText &&
-      outboxTarget
-    ) {
+    if (willDeliverReply && outboxTarget) {
       enqueueOutboxInTx(db, {
         sessionId: claimed.session.id,
         runId: claimed.runId,
@@ -556,7 +567,7 @@ export function finalizeTurnInDb(params: {
         isRoutine: outboxTarget.isRoutine,
         isHandoff: outboxTarget.isHandoff,
         kind: 'reply',
-        text: result.replyText,
+        text: result.replyText!,
       })
     }
     if (status !== 'interrupted') {

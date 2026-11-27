@@ -14,12 +14,12 @@ import {
 import { BackgroundJobManager } from './background-jobs.ts'
 import { BlobStore } from './blobs.ts'
 import {
-  createChannelAdapterContext,
   getChannelToolsForSessionInDb,
   ingestWebhookEventInRuntime,
   isChannelEnabledInDb,
   listChannelStatusesInRuntime,
   listRuntimeOrChannelMessages,
+  registerChannelInRuntime,
   setChannelEnabledInDb,
   submitChannelHostMessageInRuntime,
 } from './channel-control.ts'
@@ -162,27 +162,20 @@ export class VelaRuntimeEngine {
 
   async registerChannel(adapter: ChannelAdapter): Promise<void> {
     if (this.disposed) throw new Error('Runtime has been disposed')
-    const existing = this.channels.get(adapter.name)
-    if (existing) {
-      await existing.stop()
-    }
-    this.channels.set(adapter.name, adapter)
-    await adapter.start(
-      createChannelAdapterContext({
-        db: this.db,
-        blobs: this.blobs,
-        projects: this.projects,
-        sessions: this.sessions,
-        bindings: this.bindings,
-        eventBus: this.eventBus,
-        inFlightDeliveries: this.inFlightDeliveries,
-        adapter,
-        executeShortcut: (s) => this.executeShortcut(s),
-        scheduleSession: (sid) => this.scheduleSession(sid),
-        stopSession: (sid, r) => this.stopSession(sid, r),
-        steerSession: (sid, t) => this.steerSession(sid, t),
-      }),
-    )
+    await registerChannelInRuntime(this.channels, {
+      db: this.db,
+      blobs: this.blobs,
+      projects: this.projects,
+      sessions: this.sessions,
+      bindings: this.bindings,
+      eventBus: this.eventBus,
+      inFlightDeliveries: this.inFlightDeliveries,
+      adapter,
+      executeShortcut: (s) => this.executeShortcut(s),
+      scheduleSession: (sid) => this.scheduleSession(sid),
+      stopSession: (sid, r) => this.stopSession(sid, r),
+      steerSession: (sid, t) => this.steerSession(sid, t),
+    })
     void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
   }
 

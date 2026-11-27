@@ -31,6 +31,7 @@ export type RuntimeEventPayload =
         | 'job'
         | 'handoff'
         | 'session'
+      inboxEventIds?: string[]
     }
   | {
       type: 'message_committed'
@@ -127,6 +128,8 @@ export type RuntimeEventPayload =
       type: 'run_finished'
       runId: string
       status: RunEndStatus
+      silent?: boolean
+      replyPending?: boolean
       error?: string
       errorKind?: AgentErrorKind
       errorHint?: string

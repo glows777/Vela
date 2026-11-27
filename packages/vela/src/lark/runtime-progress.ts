@@ -25,14 +25,21 @@ interface PendingAck {
   text: string
   isTopic: boolean
   isDirect: boolean
+  passive?: boolean
 }
 
 interface ActiveRunFeedback {
   sessionId: string
   runId: string
+  inboxEventIds?: readonly string[]
   externalChatId: string
   threadId?: string
   messageId?: string
+  isGroup: boolean
+  isPassive: boolean
+  sawTextDelta: boolean
+  reactionStarted: boolean
+  reactionRemoved: boolean
   reactionPromise?: Promise<string | undefined>
   progress?: LarkProgress
   progressPromise?: Promise<void>
@@ -42,6 +49,8 @@ interface ActiveRunFeedback {
 
 interface ControlEntry {
   sessionId: string
+  runId: string
+  inboxEventId?: string
   externalChatId: string
   isTopic: boolean
   isDirect: boolean
@@ -50,17 +59,13 @@ interface ControlEntry {
   clear: () => void
 }
 
-function ackKey(externalChatId: string, threadId?: string): string {
-  return `${externalChatId}\0${threadId ?? ''}`
-}
-
 function mapRunEndOutcome(
   status: Extract<RuntimeEvent, { type: 'run_finished' }>['status'],
-  sawSkipReply: boolean,
+  silent: boolean,
 ): LarkRunOutcome {
   if (status === 'stopped') return 'stopped'
   if (status === 'failed' || status === 'interrupted') return 'failed'
-  return sawSkipReply ? 'silent' : 'done'
+  return silent ? 'silent' : 'done'
 }
 
 /**
@@ -68,9 +73,13 @@ function mapRunEndOutcome(
  * for Runtime-hosted Lark sessions using `ChannelAdapterContext` event streams.
  */
 export class LarkRuntimeProgressManager {
-  private readonly pendingAcks = new Map<string, PendingAck[]>()
+  private readonly pendingAcks = new Map<string, PendingAck>()
   private readonly activeRuns = new Map<string, ActiveRunFeedback>()
   private readonly controls = new Map<string, ControlEntry>()
+  private readonly awaitingOutbox = new Map<
+    string,
+    { settle: (ok: boolean) => void; cancel: () => Promise<void> }
+  >()
   private readonly inflightFinish = new Set<Promise<void>>()
   private unsubEvents?: () => void
   private unsubDeltas?: () => void
@@ -96,34 +105,67 @@ export class LarkRuntimeProgressManager {
     })
   }
 
-  notePendingInbound(input: {
+  noteAdmittedInbound(input: {
+    inboxEventId: string
     externalChatId: string
     threadId?: string
     messageId?: string
     replyToId?: string
     text: string
     isDirect: boolean
+    passive?: boolean
   }): void {
     if (this.stopped) return
-    const key = ackKey(input.externalChatId, input.threadId)
+    const ownActive = this.findActiveRunByInboxEventId(input.inboxEventId)
+    if (ownActive) {
+      // `scheduleSession()` may fire `run_started` synchronously before `ingestWithReceipt()` returns.
+      const msgId = input.replyToId ?? input.messageId
+      if (msgId && !ownActive.messageId) {
+        ownActive.messageId = msgId
+      }
+      ownActive.isPassive = Boolean(input.passive)
+      if (
+        !ownActive.reactionRemoved &&
+        ownActive.isGroup &&
+        ownActive.messageId &&
+        (!ownActive.isPassive || ownActive.sawTextDelta)
+      ) {
+        this.ensureReaction(ownActive)
+      }
+      if (
+        ownActive.threadId &&
+        ownActive.messageId &&
+        !ownActive.progressPromise
+      ) {
+        this.startTopicProgressCard(ownActive, ownActive.messageId, input.text)
+      }
+      return
+    }
     const active = this.findActiveRunByRoute(
       input.externalChatId,
       input.threadId,
     )
-    if (active && !input.threadId) {
+    if (active && !input.threadId && !input.passive) {
       this.postIdleControlsCard(active, input)
-      return
     }
-    const queue = this.pendingAcks.get(key) ?? []
-    queue.push({
+    this.pendingAcks.set(input.inboxEventId, {
       messageId: input.messageId,
       replyToId: input.replyToId,
       text: input.text,
       isTopic: Boolean(input.threadId),
       isDirect: input.isDirect,
+      passive: input.passive,
     })
-    if (queue.length > 32) queue.shift()
-    this.pendingAcks.set(key, queue)
+    if (this.pendingAcks.size > 256) {
+      this.pendingAcks.delete(this.pendingAcks.keys().next().value as string)
+    }
+  }
+
+  noteOutboxOutcome(runId: string, delivered: boolean): void {
+    const entry = this.awaitingOutbox.get(runId)
+    if (!entry) return
+    this.awaitingOutbox.delete(runId)
+    entry.settle(delivered)
   }
 
   handleCardAction(event: LarkCardAction): LarkCardResponse {
@@ -160,16 +202,39 @@ export class LarkRuntimeProgressManager {
     }
     if (entry.isTopic && action !== 'stop') return ignored
     const active = this.activeRuns.get(entry.sessionId)
-    if (!active) {
+    if (!active || active.runId !== entry.runId) {
       entry.clear()
       return ignored
     }
     entry.handled = true
     entry.clear()
     if (action === 'stop') {
-      void this.ctx.stopSession?.(entry.sessionId, 'lark_card_stop')
+      if (entry.inboxEventId) {
+        this.ctx.discardInboxEvent?.(entry.inboxEventId)
+      }
+      void Promise.resolve(
+        this.ctx.stopSession?.(entry.sessionId, 'lark_card_stop'),
+      ).catch((error) => {
+        this.options.logger.warn(
+          `[lark] Failed to stop session ${entry.sessionId}: ${errorMessage(error)}`,
+        )
+      })
     } else if (action === 'steer' && entry.text) {
-      void this.ctx.steerSession?.(entry.sessionId, entry.text)
+      const steerPromise =
+        entry.inboxEventId && this.ctx.steerInboxEvent
+          ? this.ctx.steerInboxEvent(
+              entry.sessionId,
+              entry.inboxEventId,
+              entry.text,
+            )
+          : Promise.resolve(
+              this.ctx.steerSession?.(entry.sessionId, entry.text),
+            ).then(() => true)
+      void steerPromise.catch((error) => {
+        this.options.logger.warn(
+          `[lark] Failed to steer session ${entry.sessionId}: ${errorMessage(error)}`,
+        )
+      })
     }
     return {
       toast: {
@@ -194,8 +259,23 @@ export class LarkRuntimeProgressManager {
     }
     this.controls.clear()
     this.pendingAcks.clear()
-    await Promise.allSettled([...this.inflightFinish])
+
+    const pendingOutboxCancels = [...this.awaitingOutbox.values()].map((item) =>
+      item.cancel(),
+    )
+    this.awaitingOutbox.clear()
+
+    const liveRuns = [...this.activeRuns.values()]
     this.activeRuns.clear()
+    const teardownTasks = liveRuns.map((active) =>
+      this.cancelActiveFeedback(active),
+    )
+
+    await Promise.allSettled([
+      ...pendingOutboxCancels,
+      ...teardownTasks,
+      ...this.inflightFinish,
+    ])
   }
 
   private resolveLarkBinding(sessionId: string): ChannelBinding | undefined {
@@ -215,6 +295,17 @@ export class LarkRuntimeProgressManager {
     return undefined
   }
 
+  private findActiveRunByInboxEventId(
+    inboxEventId: string,
+  ): ActiveRunFeedback | undefined {
+    for (const active of this.activeRuns.values()) {
+      if (active.inboxEventIds?.includes(inboxEventId)) {
+        return active
+      }
+    }
+    return undefined
+  }
+
   private findActiveRunByRoute(
     externalChatId: string,
     threadId?: string,
@@ -230,9 +321,60 @@ export class LarkRuntimeProgressManager {
     return undefined
   }
 
+  private startTopicProgressCard(
+    active: ActiveRunFeedback,
+    messageId: string,
+    text: string,
+  ): void {
+    if (active.progressPromise) return
+    const token = randomUUID()
+    const entry: ControlEntry = {
+      sessionId: active.sessionId,
+      runId: active.runId,
+      externalChatId: active.externalChatId,
+      isTopic: true,
+      isDirect: false,
+      text,
+      handled: false,
+      clear: () => {
+        this.controls.delete(token)
+        active.controlTokens.delete(token)
+      },
+    }
+    this.controls.set(token, entry)
+    active.controlTokens.add(token)
+    const card = topicRunCard(token)
+    active.progressPromise = this.transport
+      .sendCard(active.externalChatId, card, messageId)
+      .then((cardMessageId) => {
+        const prog = new LarkProgress(
+          this.transport,
+          cardMessageId,
+          card,
+          async (error) => {
+            this.options.logger.warn(
+              `[lark] Progress card update failed: ${errorMessage(error)}`,
+            )
+          },
+        )
+        if (this.stopped || this.activeRuns.get(active.sessionId) !== active) {
+          void prog.cancel().catch(() => {})
+          return
+        }
+        active.progress = prog
+      })
+      .catch((error) => {
+        entry.clear()
+        this.options.logger.warn(
+          `[lark] Topic control card failed: ${errorMessage(error)}`,
+        )
+      })
+  }
+
   private postIdleControlsCard(
     active: ActiveRunFeedback,
     input: {
+      inboxEventId: string
       externalChatId: string
       replyToId?: string
       text: string
@@ -242,6 +384,8 @@ export class LarkRuntimeProgressManager {
     const token = randomUUID()
     const entry: ControlEntry = {
       sessionId: active.sessionId,
+      runId: active.runId,
+      inboxEventId: input.inboxEventId,
       externalChatId: input.externalChatId,
       isTopic: false,
       isDirect: input.isDirect,
@@ -265,10 +409,66 @@ export class LarkRuntimeProgressManager {
       })
   }
 
+  private ensureReaction(active: ActiveRunFeedback): void {
+    if (
+      this.stopped ||
+      active.reactionStarted ||
+      active.reactionRemoved ||
+      !active.isGroup ||
+      !active.messageId
+    ) {
+      return
+    }
+    active.reactionStarted = true
+    active.reactionPromise = this.transport
+      .addReaction(active.messageId, 'OnIt')
+      .then(async (id) => {
+        if (
+          (this.stopped || active.reactionRemoved) &&
+          active.messageId &&
+          id
+        ) {
+          await this.transport
+            .removeReaction(active.messageId, id)
+            .catch(() => {})
+          return undefined
+        }
+        return id
+      })
+      .catch((error) => {
+        this.options.logger.warn(
+          `[lark] Feedback failed: ${errorMessage(error)}`,
+        )
+        return undefined
+      })
+  }
+
+  private async cancelActiveFeedback(active: ActiveRunFeedback): Promise<void> {
+    active.reactionRemoved = true
+    if (active.progressPromise) {
+      await active.progressPromise.catch(() => {})
+    }
+    await active.progress?.cancel().catch(() => {})
+    if (active.reactionPromise && active.messageId) {
+      const id = await active.reactionPromise.catch(() => undefined)
+      if (id) {
+        await this.transport
+          .removeReaction(active.messageId, id)
+          .catch(() => {})
+      }
+    }
+  }
+
   private onStreamDelta(delta: StreamDeltaEvent): void {
     if (this.stopped || delta.type !== 'text_delta') return
     const active = this.activeRuns.get(delta.sessionId)
     if (!active || active.runId !== delta.runId) return
+    if (delta.delta) {
+      active.sawTextDelta = true
+      if (active.isPassive && !active.sawSkipReply) {
+        this.ensureReaction(active)
+      }
+    }
     active.progress?.recordTextDelta()
   }
 
@@ -277,75 +477,48 @@ export class LarkRuntimeProgressManager {
     if (event.type === 'run_started') {
       const binding = this.resolveLarkBinding(event.sessionId)
       if (!binding) return
-      const key = ackKey(binding.externalId, binding.threadId ?? undefined)
-      const pendingQueue = this.pendingAcks.get(key)
-      const pending =
-        event.trigger === 'channel' ? pendingQueue?.shift() : undefined
-      if (pendingQueue && pendingQueue.length === 0) {
-        this.pendingAcks.delete(key)
+      let pending: PendingAck | undefined
+      let matchedPassive = false
+      for (const inboxId of event.inboxEventIds ?? []) {
+        const candidate = this.pendingAcks.get(inboxId)
+        if (!candidate) continue
+        this.pendingAcks.delete(inboxId)
+        if (!candidate.passive) {
+          pending = candidate
+        } else {
+          matchedPassive = true
+          if (!pending) pending = candidate
+        }
       }
+      const isPassive = Boolean(pending?.passive && matchedPassive)
 
       const active: ActiveRunFeedback = {
         sessionId: event.sessionId,
         runId: event.runId,
+        inboxEventIds: event.inboxEventIds,
         externalChatId: binding.externalId,
         threadId: binding.threadId ?? undefined,
         messageId: pending?.replyToId ?? pending?.messageId,
+        isGroup: binding.kind === 'group',
+        isPassive,
+        sawTextDelta: false,
+        reactionStarted: false,
+        reactionRemoved: false,
         sawSkipReply: false,
         controlTokens: new Set(),
       }
       this.activeRuns.set(event.sessionId, active)
 
-      if (binding.kind === 'group' && active.messageId) {
-        active.reactionPromise = this.transport
-          .addReaction(active.messageId, 'OnIt')
-          .catch((error) => {
-            this.options.logger.warn(
-              `[lark] Feedback failed: ${errorMessage(error)}`,
-            )
-            return undefined
-          })
+      if (!isPassive && binding.kind === 'group' && active.messageId) {
+        this.ensureReaction(active)
       }
 
       if (binding.threadId && active.messageId) {
-        const token = randomUUID()
-        const entry: ControlEntry = {
-          sessionId: event.sessionId,
-          externalChatId: binding.externalId,
-          isTopic: true,
-          isDirect: false,
-          text: pending?.text ?? '',
-          handled: false,
-          clear: () => {
-            this.controls.delete(token)
-            active.controlTokens.delete(token)
-          },
-        }
-        this.controls.set(token, entry)
-        active.controlTokens.add(token)
-        const card = topicRunCard(token)
-        active.progressPromise = this.transport
-          .sendCard(binding.externalId, card, active.messageId)
-          .then((cardMessageId) => {
-            if (this.stopped || this.activeRuns.get(event.sessionId) !== active)
-              return
-            active.progress = new LarkProgress(
-              this.transport,
-              cardMessageId,
-              card,
-              async (error) => {
-                this.options.logger.warn(
-                  `[lark] Progress card update failed: ${errorMessage(error)}`,
-                )
-              },
-            )
-          })
-          .catch((error) => {
-            entry.clear()
-            this.options.logger.warn(
-              `[lark] Topic control card failed: ${errorMessage(error)}`,
-            )
-          })
+        this.startTopicProgressCard(
+          active,
+          active.messageId,
+          pending?.text ?? '',
+        )
       }
       return
     }
@@ -354,7 +527,6 @@ export class LarkRuntimeProgressManager {
     if (!active || active.runId !== event.runId) return
 
     if (event.type === 'tool_started') {
-      if (event.toolName === 'skip_reply') active.sawSkipReply = true
       active.progress?.recordToolStart(
         event.toolCallId,
         event.toolName,
@@ -381,30 +553,68 @@ export class LarkRuntimeProgressManager {
         this.controls.delete(token)
       }
       active.controlTokens.clear()
-      const outcome = mapRunEndOutcome(event.status, active.sawSkipReply)
-      const task = (async () => {
+      if (this.activeRuns.get(event.sessionId) === active) {
+        this.activeRuns.delete(event.sessionId)
+      }
+      const outcome = mapRunEndOutcome(
+        event.status,
+        event.silent ?? active.sawSkipReply,
+      )
+      const finalize = async (finalOutcome: LarkRunOutcome): Promise<void> => {
         try {
-          if (active.progressPromise) await active.progressPromise
+          if (finalOutcome === 'silent') {
+            active.reactionRemoved = true
+          }
+          if (active.progressPromise) {
+            await active.progressPromise.catch(() => {})
+          }
           const reactionId = active.reactionPromise
-            ? await active.reactionPromise
+            ? await active.reactionPromise.catch(() => undefined)
             : undefined
           await finishProgress({
             transport: this.transport,
             messageId: active.messageId,
             reactionId,
             progress: active.progress,
-            outcome,
+            outcome: finalOutcome,
           })
+          if (finalOutcome === 'silent') {
+            await active.progress?.cancel().catch(() => {})
+          }
         } catch (error) {
           this.options.logger.warn(
             `[lark] Run feedback completion failed: ${errorMessage(error)}`,
           )
-        } finally {
-          if (this.activeRuns.get(event.sessionId) === active) {
-            this.activeRuns.delete(event.sessionId)
-          }
         }
-      })()
+      }
+
+      if (event.replyPending && outcome === 'done') {
+        const waitPromise = new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            if (this.awaitingOutbox.delete(event.runId)) {
+              void this.cancelActiveFeedback(active).finally(resolve)
+            } else {
+              resolve()
+            }
+          }, 30_000)
+          this.awaitingOutbox.set(event.runId, {
+            settle: (ok) => {
+              clearTimeout(timer)
+              void finalize(ok ? 'done' : 'failed').finally(resolve)
+            },
+            cancel: async () => {
+              clearTimeout(timer)
+              await this.cancelActiveFeedback(active)
+              resolve()
+            },
+          })
+        })
+        this.inflightFinish.add(waitPromise)
+        void waitPromise.finally(() => this.inflightFinish.delete(waitPromise))
+        return
+      }
+
+      const task = finalize(outcome)
       this.inflightFinish.add(task)
       void task.finally(() => this.inflightFinish.delete(task))
     }

@@ -149,10 +149,13 @@
     stop: () => Promise<void>
     submitFromHost?: ((input: ChannelHostSubmitInput) => Promise<ChannelHostSubmitResult>) | undefined
   interface ChannelAdapterContext
+    discardInboxEvent?: ((inboxEventId: string) => boolean) | undefined
     getProject?: ((id: string) => ProjectRecord | undefined) | undefined
     getSession?: ((id: string) => SessionRecord | undefined) | undefined
     ingest: (message: ChannelInboundMessage) => Promise<void>
+    ingestWithReceipt?: ((message: ChannelInboundMessage) => Promise<ChannelIngestReceipt>) | undefined
     listBindings?: ((filter?: { channel?: string; projectId?: string; enabledOnly?: boolean; }) => ChannelBinding[]) | undefined
+    steerInboxEvent?: ((sessionId: string, inboxEventId: string, text: string) => Promise<boolean>) | undefined
     steerSession?: ((sessionId: string, text: string) => Promise<void>) | undefined
     stopSession?: ((sessionId: string, reason?: string) => Promise<boolean>) | undefined
     subscribeDeltas?: ((listener: StreamDeltaListener) => () => void) | undefined
@@ -247,6 +250,7 @@
     senderName: string
     text: string
     threadId?: string | undefined
+    threadRootId?: string | undefined
     timestamp: string
     wake?: boolean | undefined
   interface ChannelOutboundMessage
@@ -261,6 +265,7 @@
     outboxId: string
     recipientId?: string | undefined
     replyToMessageId?: string | undefined
+    runId?: string | undefined
     text: string
     threadId?: string | undefined
     title?: string | undefined
@@ -719,7 +724,7 @@
     messageId: string
   interface LarkTransport
     addReaction: (messageId: string, emoji: "OnIt" | "DONE" | "CrossMark") => Promise<string>
-    forward: (messageId: string, threadId: string) => Promise<LarkSentMessage>
+    forward: (messageId: string, threadId: string, uuid?: string) => Promise<LarkSentMessage>
     getBotId: () => Promise<string>
     getResource: (messageId: string, key: string, type: "image" | "file") => Promise<Readable>
     getSenderName: (openId: string) => Promise<string | undefined>
@@ -843,7 +848,7 @@
   interface LocalVelaRuntime
     dispose: () => Promise<void>
     extensionErrors: () => Promise<string[]>
-    getLarkConfig: () => { lark?: Record<string, unknown>; disabledByExtension?: boolean; }
+    getLarkConfig: () => { lark?: Record<string, unknown>; larkError?: string; disabledByExtension?: boolean; }
     getWebhookConfig: () => { webhooks?: Record<string, unknown>; eventDefaultTarget?: { channel: string; chatId: string; }; }
     ingestWebhookEvent: (event: RuntimeWebhookEvent, defaultTarget?: { channel: string; chatId: string; }) => Promise<{ matchedSessionIds: string[]; defaultTargetSessionId?: string; enqueuedCount: number; }>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
@@ -1110,6 +1115,7 @@
       | 'job'
       | 'handoff'
       | 'session'
+      inboxEventIds?: string[]
       }
       | {
       type: 'message_committed'
@@ -1206,6 +1212,8 @@
       type: 'run_finished'
       runId: string
       status: RunEndStatus
+      silent?: boolean
+      replyPending?: boolean
       error?: string
       errorKind?: AgentErrorKind
       errorHint?: string

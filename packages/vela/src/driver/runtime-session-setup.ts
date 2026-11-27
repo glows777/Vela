@@ -682,6 +682,17 @@ export async function prepareSessionSetup(params: {
       registry.setDefaultToolModifiers([...baseModifiers, ...loadout.modifiers])
     }
   }
+  // Project defaultTools (e.g. per-chat Lark `tools`) takes precedence over global/workspace tool lists
+  // unless an explicit per-run override selected tools.
+  if (override?.tools === undefined && !override?.noTools) {
+    applyRuntimeProjectToolSelection(
+      state.db,
+      registry,
+      projectId,
+      baseModifiers,
+      { hasChannelBinding, sessionKind, onlyIfConfigured: true },
+    )
+  }
 
   if (state.sessionActiveTools.has(sessionId)) {
     registry.setSelection(state.sessionActiveTools.get(sessionId))

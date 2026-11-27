@@ -176,10 +176,28 @@ function inboxRouteInfo(row: InboxRow): {
   return { routeKey, mentionSig, needsAnnouncement }
 }
 
+const PASSIVE_BATCH_MAX_BYTES = 400 * 1024
+
+export function cancelPendingInboxEventInDb(
+  db: VelaDatabase,
+  inboxEventId: string,
+  now = new Date().toISOString(),
+): boolean {
+  const res = db.run(
+    `UPDATE inbox_events
+     SET status = 'done', processed_at = COALESCE(processed_at, ?)
+     WHERE id = ? AND status = 'pending'`,
+    now,
+    inboxEventId,
+  )
+  return res.changes > 0
+}
+
 /**
  * Claims pending events for `sessionId` into `runId` iff at least one pending event
  * has `wake = 1`. Anchors on the oldest runnable wake event so non-waking inputs for
  * another route cannot stall the worker, isolates announcement wakes individually,
+ * partitions waking passive batches from explicit requests (capped at 400 KB),
  * prevents passive inputs from crossing routes, and keeps recipient attribution uniform.
  */
 export function claimInboxBatchInTx(
@@ -200,15 +218,37 @@ export function claimInboxBatchInTx(
 
   const anchor = rows[firstWakeIdx]!
   const anchorInfo = inboxRouteInfo(anchor)
+  const anchorPassive = anchor.passive === 1
 
   let selected: InboxRow[]
   if (anchorInfo.needsAnnouncement) {
     selected = [anchor]
+  } else if (anchorPassive) {
+    selected = []
+    let batchBytes = 0
+    for (const row of rows) {
+      if (row.passive !== 1) continue
+      const info = inboxRouteInfo(row)
+      if (
+        anchorInfo.routeKey &&
+        info.routeKey &&
+        info.routeKey !== anchorInfo.routeKey
+      ) {
+        continue
+      }
+      const bytes = Buffer.byteLength(row.payload_json, 'utf8')
+      if (selected.length > 0 && batchBytes + bytes > PASSIVE_BATCH_MAX_BYTES) {
+        break
+      }
+      selected.push(row)
+      batchBytes += bytes
+    }
   } else {
     selected = []
     let activeRouteKey = anchorInfo.routeKey
     let activeMentionSig = anchorInfo.mentionSig
     for (const row of rows) {
+      if (row.passive === 1 && row.wake === 1) continue
       const info = inboxRouteInfo(row)
       if (info.needsAnnouncement) continue
       if (info.routeKey) {

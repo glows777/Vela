@@ -9,7 +9,7 @@ import {
 import { createServer, type Socket } from 'node:net'
 import { dirname } from 'node:path'
 import { defaultAgentDir } from '../driver/config/paths.ts'
-import type { LarkTransport } from '../lark/index.ts'
+import type { LarkTransport } from '../lark/transport.ts'
 import type {
   AuthEvent,
   AuthInteraction,
@@ -158,10 +158,6 @@ export async function startDaemonServer(
           : undefined,
       getKnownChannelInfo: () => larkHost?.knownChannelInfo() ?? {},
     })
-    await runtime.recover()
-    if (webhooksHost) {
-      await webhooksHost.sync(runtime.getWebhookConfig(), false)
-    }
     if (options.enableLark !== false) {
       larkHost = new DaemonLarkHost(runtime, {
         agentDir: paths.agentDir,
@@ -169,7 +165,6 @@ export async function startDaemonServer(
         logger,
         transport: options.larkTransport,
       })
-      await larkHost.sync(runtime.getLarkConfig(), false)
     }
   } catch (error) {
     await larkHost?.stop().catch(() => {})
@@ -619,6 +614,53 @@ export async function startDaemonServer(
     mode: 0o600,
   })
   renameSync(tmpPidPath, paths.pidPath)
+
+  // Start Lark synchronization after the IPC socket is already accepting CLI clients,
+  // while gating crash recovery & default-target webhooks until Lark readiness settles (up to 5s).
+  let larkInitTimer: ReturnType<typeof setTimeout> | undefined
+  const larkInitPromise = larkHost
+    ? larkHost.sync(runtime.getLarkConfig(), false).catch((error) => {
+        logger.warn(
+          `[daemon] Initial Lark sync failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      })
+    : Promise.resolve()
+  try {
+    if (larkHost) {
+      await Promise.race([
+        larkInitPromise,
+        new Promise<void>((resolve) => {
+          larkInitTimer = setTimeout(resolve, 5_000)
+          larkInitTimer.unref()
+        }),
+      ])
+    }
+    if (!closing) {
+      await runtime.recover()
+      if (webhooksHost) {
+        await webhooksHost.sync(runtime.getWebhookConfig(), false)
+      }
+    }
+  } catch (error) {
+    clearTimeout(larkInitTimer)
+    unsubEvents()
+    unsubDeltas()
+    await larkHost?.stop().catch(() => {})
+    await webhooksHost?.stop().catch(() => {})
+    await runtime.dispose().catch(() => {})
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve())
+    }).catch(() => {})
+    const pidInfo = readOwnerRecord(paths.pidPath)
+    if (!pidInfo?.instanceId || pidInfo.instanceId === instanceId) {
+      removeStaleSocketFile(paths.socketPath)
+      rmSync(paths.pidPath, { force: true })
+    }
+    releaseOwner()
+    throw error
+  } finally {
+    clearTimeout(larkInitTimer)
+  }
 
   configWatcher = startDaemonConfigWatcher(
     paths.agentDir,

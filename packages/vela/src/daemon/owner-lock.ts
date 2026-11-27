@@ -7,11 +7,13 @@ import {
   openSync,
   readFileSync,
   rmSync,
+  statSync,
   writeSync,
 } from 'node:fs'
 import { dirname } from 'node:path'
 
 const ACTIVE_OWNER_IDS = new Set<string>()
+const STALE_RECLAIM_LOCK_MS = 10_000
 
 export class DaemonAlreadyRunningError extends Error {
   constructor(socketPath: string) {
@@ -28,6 +30,48 @@ function isPidAlive(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+function isOwnerActive(
+  owner: { pid?: number; instanceId?: string } | undefined,
+): boolean {
+  if (owner?.pid === undefined) return false
+  return owner.pid === process.pid
+    ? Boolean(owner.instanceId && ACTIVE_OWNER_IDS.has(owner.instanceId))
+    : isPidAlive(owner.pid)
+}
+
+function tryWithReclaimLock(lockPath: string, fn: () => void): boolean {
+  const reclaimPath = `${lockPath}.reclaim`
+  for (let i = 0; i < 2; i++) {
+    try {
+      const fd = openSync(
+        reclaimPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      )
+      closeSync(fd)
+      try {
+        fn()
+      } finally {
+        rmSync(reclaimPath, { force: true })
+      }
+      return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return false
+      try {
+        const st = statSync(reclaimPath)
+        if (Date.now() - st.mtimeMs > STALE_RECLAIM_LOCK_MS) {
+          rmSync(reclaimPath, { force: true })
+          continue
+        }
+      } catch {
+        continue
+      }
+      return false
+    }
+  }
+  return false
 }
 
 export function readOwnerRecord(
@@ -81,15 +125,24 @@ export function acquireOwnerLock(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
       const owner = readOwnerRecord(lockPath)
-      const ownerAlive =
-        owner?.pid !== undefined &&
-        (owner.pid === process.pid
-          ? Boolean(owner.instanceId && ACTIVE_OWNER_IDS.has(owner.instanceId))
-          : isPidAlive(owner.pid))
-      if (ownerAlive) {
+      if (isOwnerActive(owner)) {
         throw new DaemonAlreadyRunningError(socketPath)
       }
-      rmSync(lockPath, { force: true })
+      const reclaimed = tryWithReclaimLock(lockPath, () => {
+        const latest = readOwnerRecord(lockPath)
+        if (isOwnerActive(latest)) {
+          throw new DaemonAlreadyRunningError(socketPath)
+        }
+        if (
+          latest?.pid === owner?.pid &&
+          latest?.instanceId === owner?.instanceId
+        ) {
+          rmSync(lockPath, { force: true })
+        }
+      })
+      if (!reclaimed) {
+        throw new DaemonAlreadyRunningError(socketPath)
+      }
     } finally {
       rmSync(tmpPath, { force: true })
     }

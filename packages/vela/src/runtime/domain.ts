@@ -514,6 +514,47 @@ export class SessionStoreControl {
     return this.get(id)!
   }
 
+  reconcileProjectDefaults(project: ProjectRecord): void {
+    const now = new Date().toISOString()
+    const location =
+      project.defaultLocation ??
+      (project.cwd ? { environment: 'local', cwd: project.cwd } : null)
+    const locationJson = location ? JSON.stringify(location) : null
+    const topicModel =
+      typeof project.config?.topicModel === 'string' &&
+      project.config.topicModel.trim()
+        ? project.config.topicModel.trim()
+        : project.defaultModel
+    const topicThinking =
+      typeof project.config?.topicThinkingLevel === 'string' &&
+      project.config.topicThinkingLevel.trim()
+        ? project.config.topicThinkingLevel.trim()
+        : project.defaultThinkingLevel
+
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE sessions
+         SET location_json = ?, model = ?, thinking_level = ?, updated_at = ?
+         WHERE project_id = ? AND archived = 0 AND kind = 'hub'`,
+        locationJson,
+        project.defaultModel,
+        project.defaultThinkingLevel,
+        now,
+        project.id,
+      )
+      this.db.run(
+        `UPDATE sessions
+         SET location_json = ?, model = ?, thinking_level = ?, updated_at = ?
+         WHERE project_id = ? AND archived = 0 AND kind = 'topic'`,
+        locationJson,
+        topicModel,
+        topicThinking,
+        now,
+        project.id,
+      )
+    })
+  }
+
   delete(id: string): boolean {
     const { deleted, blobPaths, hadTimers } = this.db.transaction(() => {
       const existing = this.get(id)

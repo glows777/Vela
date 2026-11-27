@@ -5,8 +5,7 @@ import type { TimerRecord } from './timers.ts'
 export type ControlShortcut = 'stop' | 'restart' | 'status' | 'timers'
 
 /**
- * Parses direct Runtime control shortcuts (`!stop`, `!restart`, `!status`, `!timers`).
- * Legacy `!routines` is intentionally not supported in v0.9.
+ * Parses direct Runtime control shortcuts (`!stop`, `!restart`, `!status`, `!timers`, and legacy `!routines`).
  */
 export function parseControlShortcut(
   text: string,
@@ -20,6 +19,7 @@ export function parseControlShortcut(
     case '!status':
       return 'status'
     case '!timers':
+    case '!routines':
       return 'timers'
     default:
       return undefined

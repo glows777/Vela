@@ -249,10 +249,17 @@ test('Eval runtime-lark runner executes G1 and G3 scenarios end-to-end with inje
   initGitRepo(cwdG1)
   const modelG1 = createFauxModel({
     responses: [
-      () =>
-        fauxText(
-          'Based on recent messages, the release meeting starts at 14:30 UTC.',
-        ),
+      (req) => {
+        const serialized = JSON.stringify(req.prompt)
+        const match = serialized.match(
+          /release meeting starts at (\d{2}:\d{2} UTC)/i,
+        )
+        return fauxText(
+          match
+            ? `Based on recent messages, the release meeting starts at ${match[1]}.`
+            : 'Release meeting time not found in prompt context.',
+        )
+      },
     ],
   })
   const attemptG1 = await runAttempt(

@@ -147,20 +147,10 @@ export async function larkSetup(host: Host): Promise<boolean> {
       }
     }
     updateEnabled(settings.extensions)
-    let projectNote = ''
-    if (host.projectSettingsPath && existsSync(host.projectSettingsPath)) {
-      const projectText = readFileSync(host.projectSettingsPath, 'utf8')
-      try {
-        const project = object(JSON.parse(projectText))
-        updateEnabled(project.extensions)
-      } catch (error) {
-        projectNote = ` Could not check project extension settings (${formatJsonParseError(host.projectSettingsPath, projectText, error)}).`
-      }
-    }
     const disabled = enabled
       ? ''
-      : ' Lark is disabled by extensions settings; remove -builtin:lark or add +builtin:lark before starting.'
-    const summary = `Lark configured in ${path}. Connection message sent. Start or reload \`vela daemon\` (\`vela daemon start\` / \`vela daemon run\`, see docs/deploy.md), then mention the bot in the group. Card callback and other scopes were not checked.${disabled}${projectNote}`
+      : ` Lark is disabled by ${path} extensions settings; remove -builtin:lark or add +builtin:lark before starting.`
+    const summary = `Lark configured in ${path}. Connection message sent. Start or reload \`vela daemon\` (\`vela daemon start\` / \`vela daemon run\`, see docs/deploy.md), then mention the bot in the group. Card callback and other scopes were not checked.${disabled}`
     host.addNotice(summary)
     host.setSummary(summary)
     return true

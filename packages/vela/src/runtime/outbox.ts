@@ -477,6 +477,7 @@ export class OutboxDispatcher {
       const { row, adapter, leaseToken } = candidate
       const message: ChannelOutboundMessage = {
         outboxId: row.id,
+        ...(row.runId ? { runId: row.runId } : {}),
         kind: row.kind,
         channel: row.channel,
         externalChatId: row.externalChatId,

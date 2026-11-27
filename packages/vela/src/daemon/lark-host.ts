@@ -1,17 +1,19 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  createLarkChannelAdapter,
   type LarkChat,
-  type LarkTransport,
   larkChatBindingConfig,
   parseChats,
-} from '../lark/index.ts'
+} from '../lark/chats.ts'
+import { createLarkChannelAdapter } from '../lark/runtime-adapter.ts'
+import type { LarkTransport } from '../lark/transport.ts'
 import type { LocalVelaRuntime } from '../runtime-sdk-types.ts'
 import { errorMessage, type VelaLogger } from '../shared/logger.ts'
+import { routineTimezone } from '../shared/routine-time.ts'
 
 export interface DaemonLarkConfig {
   lark?: Record<string, unknown>
+  larkError?: string
   disabledByExtension?: boolean
 }
 
@@ -45,6 +47,7 @@ export class DaemonLarkHost {
   private syncQueue: Promise<void> = Promise.resolve()
   private lastConfig: DaemonLarkConfig = {}
   private lastFingerprint = ''
+  private registered = false
   private lastError?: string
   private configured = false
   private stopped = false
@@ -94,8 +97,16 @@ export class DaemonLarkHost {
     return next
   }
 
+  private async unregisterIfRegistered(): Promise<void> {
+    this.lastFingerprint = ''
+    if (!this.registered) return
+    this.registered = false
+    await this.runtime.unregisterChannel('lark').catch(() => {})
+  }
+
   private async syncProjectAndBindings(
     chats: readonly LarkChat[],
+    timezone?: string,
   ): Promise<void> {
     const existingBindings = await this.runtime.bindings.list({
       channel: 'lark',
@@ -113,17 +124,22 @@ export class DaemonLarkHost {
       const desiredLocation = { environment, cwd }
       const desiredTools = chat.tools ? [...chat.tools] : null
       const desiredProjectConfig =
-        chat.topicModel || chat.topicThinkingLevel
+        chat.topicModel || chat.topicThinkingLevel || timezone
           ? {
               ...(chat.topicModel ? { topicModel: chat.topicModel } : {}),
               ...(chat.topicThinkingLevel
                 ? { topicThinkingLevel: chat.topicThinkingLevel }
                 : {}),
+              ...(timezone ? { timezone } : {}),
             }
           : null
-      const desiredConfig = larkChatBindingConfig(chat)
+      const desiredConfig: Record<string, unknown> = {
+        ...larkChatBindingConfig(chat),
+        managed: true,
+      }
       const existing = rootBindingsByChat.get(chat.id)
       let projectId = existing?.projectId ?? null
+      let shouldReconcileSessions = false
 
       if (projectId) {
         const existingProject = await this.runtime.projects.get(projectId)
@@ -147,13 +163,9 @@ export class DaemonLarkHost {
           const configChanged =
             stableJson(existingProject.config ?? null) !==
             stableJson(desiredProjectConfig)
-          if (
-            locationChanged ||
-            modelChanged ||
-            thinkingChanged ||
-            toolsChanged ||
-            configChanged
-          ) {
+          shouldReconcileSessions =
+            locationChanged || modelChanged || thinkingChanged || configChanged
+          if (shouldReconcileSessions || toolsChanged) {
             await this.runtime.projects.update(projectId, {
               cwd,
               defaultLocation: desiredLocation,
@@ -162,6 +174,9 @@ export class DaemonLarkHost {
               defaultTools: desiredTools,
               config: desiredProjectConfig,
             })
+            if (shouldReconcileSessions) {
+              await this.runtime.reconcileProjectSessions?.(projectId)
+            }
           }
         }
       }
@@ -182,10 +197,23 @@ export class DaemonLarkHost {
         projectId = created.id
       }
 
+      const wasManagedDisabled = existing?.config?.disabledBySync === true
+      const explicitDbDisable =
+        existing && !existing.enabled && !wasManagedDisabled
+      const nextEnabled = !explicitDbDisable
+      const existingSemanticConfig = existing?.config
+        ? Object.fromEntries(
+            Object.entries(existing.config).filter(
+              ([k]) => k !== 'disabledBySync',
+            ),
+          )
+        : undefined
       if (
-        !existing?.enabled ||
+        !existing ||
+        existing.enabled !== nextEnabled ||
+        wasManagedDisabled ||
         existing.projectId !== projectId ||
-        stableJson(existing.config) !== stableJson(desiredConfig)
+        stableJson(existingSemanticConfig) !== stableJson(desiredConfig)
       ) {
         await this.runtime.bindings.upsert({
           channel: 'lark',
@@ -193,15 +221,28 @@ export class DaemonLarkHost {
           threadId: null,
           kind: 'group',
           projectId,
-          enabled: true,
+          enabled: nextEnabled,
           config: desiredConfig,
         })
       }
     }
 
     for (const [chatId, binding] of rootBindingsByChat) {
-      if (!activeChatIds.has(chatId) && binding.enabled) {
-        await this.runtime.bindings.setEnabled(binding.id, false)
+      if (
+        !activeChatIds.has(chatId) &&
+        binding.enabled &&
+        binding.config?.managed === true
+      ) {
+        await this.runtime.bindings.upsert({
+          id: binding.id,
+          channel: binding.channel,
+          externalId: binding.externalId,
+          threadId: null,
+          kind: 'group',
+          projectId: binding.projectId,
+          enabled: false,
+          config: { ...(binding.config ?? {}), disabledBySync: true },
+        })
       }
     }
   }
@@ -213,6 +254,7 @@ export class DaemonLarkHost {
     if (this.stopped) return
     const { hostEnv, logger, transport } = this.options
     const hasLarkConfig =
+      config.larkError !== undefined ||
       config.lark !== undefined ||
       hasAnyLarkEnv(hostEnv) ||
       transport !== undefined
@@ -220,34 +262,37 @@ export class DaemonLarkHost {
     if (!hasLarkConfig) {
       this.configured = false
       this.lastError = undefined
-      if (this.lastFingerprint) {
-        this.lastFingerprint = ''
-        await this.runtime.unregisterChannel('lark').catch(() => {})
-      }
+      await this.unregisterIfRegistered()
       return
     }
 
     this.configured = true
-    let chats: LarkChat[]
-    try {
-      chats = parseChats(config.lark?.chats)
-    } catch (error) {
-      this.lastError = errorMessage(error)
+    if (config.larkError) {
+      this.lastError = config.larkError
       logger.warn(`[daemon] Invalid Lark configuration: ${this.lastError}`)
-      if (this.lastFingerprint) {
-        this.lastFingerprint = ''
-        await this.runtime.unregisterChannel('lark').catch(() => {})
-      }
+      await this.unregisterIfRegistered()
       return
     }
 
+    let chats: LarkChat[]
+    let validatedTimezone: string | undefined
     try {
-      await this.syncProjectAndBindings(chats)
+      chats = parseChats(config.lark?.chats)
+      if (config.lark?.timezone !== undefined) {
+        if (
+          typeof config.lark.timezone !== 'string' ||
+          !config.lark.timezone.trim()
+        ) {
+          throw new Error(
+            'lark.timezone must be a non-empty IANA timezone string',
+          )
+        }
+        validatedTimezone = routineTimezone(config.lark.timezone)
+      }
     } catch (error) {
       this.lastError = errorMessage(error)
-      logger.warn(
-        `[daemon] Lark project/binding sync failed: ${this.lastError}`,
-      )
+      logger.warn(`[daemon] Invalid Lark configuration: ${this.lastError}`)
+      await this.unregisterIfRegistered()
       return
     }
 
@@ -257,10 +302,18 @@ export class DaemonLarkHost {
 
     if (config.disabledByExtension || !enabledInDb) {
       this.lastError = undefined
-      if (this.lastFingerprint) {
-        this.lastFingerprint = ''
-        await this.runtime.unregisterChannel('lark').catch(() => {})
-      }
+      await this.unregisterIfRegistered()
+      return
+    }
+
+    try {
+      await this.syncProjectAndBindings(chats, validatedTimezone)
+    } catch (error) {
+      this.lastError = errorMessage(error)
+      logger.warn(
+        `[daemon] Lark project/binding sync failed: ${this.lastError}`,
+      )
+      await this.unregisterIfRegistered()
       return
     }
 
@@ -280,11 +333,11 @@ export class DaemonLarkHost {
       appSecret: appSecret ?? hostEnv.LARK_APP_SECRET ?? '',
       owners: owners ?? hostEnv.LARK_OWNERS ?? '',
       chats,
-      timezone: config.lark?.timezone ?? null,
+      timezone: validatedTimezone ?? null,
       hasCustomTransport: Boolean(transport),
     })
 
-    if (!force && nextFingerprint === this.lastFingerprint) {
+    if (!force && this.registered && nextFingerprint === this.lastFingerprint) {
       return
     }
 
@@ -296,18 +349,21 @@ export class DaemonLarkHost {
       chats,
       logger,
       transport,
-      timezone: config.lark?.timezone,
+      timezone: validatedTimezone,
       hostEnv,
     })
     try {
       await this.runtime.registerChannel(adapter)
       if (this.stopped) {
+        this.registered = false
         await this.runtime.unregisterChannel('lark').catch(() => {})
         return
       }
+      this.registered = true
       this.lastFingerprint = nextFingerprint
     } catch (error) {
       this.lastError = errorMessage(error)
+      this.registered = false
       this.lastFingerprint = ''
       logger.warn(`[daemon] Lark channel could not start: ${this.lastError}`)
     }
@@ -316,9 +372,6 @@ export class DaemonLarkHost {
   async stop(): Promise<void> {
     this.stopped = true
     await this.syncQueue.catch(() => {})
-    if (this.lastFingerprint) {
-      this.lastFingerprint = ''
-      await this.runtime.unregisterChannel('lark').catch(() => {})
-    }
+    await this.unregisterIfRegistered()
   }
 }

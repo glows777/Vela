@@ -55,6 +55,7 @@ async function toRuntimeMessageRecord(
   sessionId: string,
   ownAppId: string,
   senderName: (id: string) => Promise<string>,
+  hostPostAuthor?: (messageId: string) => string | undefined,
 ): Promise<RuntimeMessageRecord | undefined> {
   if (row.deleted || !row.message_id || !row.create_time) return undefined
   const date = new Date(Number(row.create_time))
@@ -66,10 +67,27 @@ async function toRuntimeMessageRecord(
     mentions: row.mentions,
   })
   if (!text) return undefined
-  const fromApp =
+  const fromOwnApp =
     row.sender?.sender_type === 'app' &&
     (!ownAppId || row.sender.id === ownAppId)
-  if (fromApp) {
+  if (fromOwnApp) {
+    const recordedAuthor = hostPostAuthor?.(row.message_id)
+    if (recordedAuthor) {
+      const prefix = `${recordedAuthor}: `
+      const body = text.startsWith(prefix) ? text.slice(prefix.length) : text
+      return {
+        id: row.message_id,
+        sessionId,
+        runId: null,
+        seq: 0,
+        kind: 'message',
+        role: 'user',
+        text: body,
+        content: body,
+        senderName: recordedAuthor,
+        createdAt: date.toISOString(),
+      }
+    }
     return {
       id: row.message_id,
       sessionId,
@@ -83,22 +101,12 @@ async function toRuntimeMessageRecord(
       createdAt: date.toISOString(),
     }
   }
-  const signed = text.match(/^([^:\n]+): ([\s\S]*)$/)
-  if (row.sender?.sender_type === 'app' && signed) {
-    return {
-      id: row.message_id,
-      sessionId,
-      runId: null,
-      seq: 0,
-      kind: 'message',
-      role: 'user',
-      text: signed[2]!,
-      content: signed[2]!,
-      senderName: signed[1]!,
-      createdAt: date.toISOString(),
-    }
-  }
-  const resolvedName = await senderName(row.sender?.id ?? 'unknown')
+  const resolvedName =
+    row.sender?.sender_type === 'app'
+      ? await senderName(row.sender?.id ?? 'unknown').catch(
+          () => row.sender?.id ?? 'App',
+        )
+      : await senderName(row.sender?.id ?? 'unknown')
   return {
     id: row.message_id,
     sessionId,
@@ -124,6 +132,7 @@ export async function listLarkRuntimeMessages(params: {
   ownAppId: string
   transport?: LarkTransport
   senderName: (id: string) => Promise<string>
+  hostPostAuthor?: (messageId: string) => string | undefined
 }): Promise<RuntimeMessagePage> {
   const {
     sessionId,
@@ -134,6 +143,7 @@ export async function listLarkRuntimeMessages(params: {
     ownAppId,
     transport,
     senderName,
+    hostPostAuthor,
   } = params
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
     throw new Error('Lark history limit must be an integer from 1 to 50')
@@ -168,6 +178,7 @@ export async function listLarkRuntimeMessages(params: {
           sessionId,
           ownAppId,
           senderName,
+          hostPostAuthor,
         ),
       ),
     )
@@ -195,12 +206,15 @@ export async function submitLarkRuntimeHostMessage(params: {
   isChatEnabled: (chatId: string) => boolean
   getTopicRoot?: (threadId: string) => string | undefined
   rememberTopicRoot: (threadId: string, rootId: string) => void
-  noteHostInbound?: (info: {
+  rememberHostPost?: (messageId: string, authorName: string) => void
+  noteAdmittedInbound?: (info: {
+    inboxEventId: string
     externalChatId: string
     threadId?: string
     messageId: string
     replyToId: string
     text: string
+    isDirect: boolean
   }) => void
 }): Promise<ChannelHostSubmitResult> {
   const { input, ctx, transport, isConnected, isChatEnabled } = params
@@ -214,6 +228,7 @@ export async function submitLarkRuntimeHostMessage(params: {
     return { outcome: 'not-sent', error: 'Lark group is not enabled' }
   }
   let targetThreadId: string | undefined
+  let targetRootId: string | undefined
   if (input.newTopic) {
     if (title === '') {
       return {
@@ -234,14 +249,23 @@ export async function submitLarkRuntimeHostMessage(params: {
     const rootBinding = bindings.find(
       (b) => b.externalId === chatId && !b.threadId,
     )
-    const session = ctx?.getSession?.(input.sessionId)
+    if (!rootBinding?.enabled) {
+      return { outcome: 'not-sent', error: 'Lark group is not enabled' }
+    }
+    const projectHubId = rootBinding.projectId
+      ? ctx?.getProject?.(rootBinding.projectId)?.hubSessionId
+      : undefined
     const isRootHub =
-      Boolean(rootBinding?.projectId) &&
-      session?.kind === 'hub' &&
-      session.projectId === rootBinding?.projectId
-    if (!isRootHub && rootBinding?.sessionId !== input.sessionId) {
+      Boolean(
+        rootBinding.sessionId && rootBinding.sessionId === input.sessionId,
+      ) || Boolean(projectHubId && projectHubId === input.sessionId)
+    if (!isRootHub) {
       const topicBinding = bindings.find(
-        (b) => b.externalId === chatId && b.sessionId === input.sessionId,
+        (b) =>
+          b.externalId === chatId &&
+          b.enabled &&
+          b.threadId &&
+          b.sessionId === input.sessionId,
       )
       if (!topicBinding?.threadId) {
         return {
@@ -250,6 +274,13 @@ export async function submitLarkRuntimeHostMessage(params: {
         }
       }
       targetThreadId = topicBinding.threadId
+      targetRootId = params.getTopicRoot?.(targetThreadId)
+      if (!targetRootId) {
+        return {
+          outcome: 'not-sent',
+          error: 'Unknown Lark topic root for session',
+        }
+      }
     }
   }
 
@@ -274,20 +305,25 @@ export async function submitLarkRuntimeHostMessage(params: {
       }
       posted = sent
     } else {
-      const replyTarget =
-        params.getTopicRoot?.(targetThreadId) ?? targetThreadId
-      posted = await transport.reply(replyTarget, signed, undefined)
+      const opened = await transport.startTopic(targetRootId!, signed)
+      if (!opened?.messageId) {
+        throw new Error('Lark topic reply returned no message receipt')
+      }
+      posted = {
+        ...opened,
+        topic: { rootId: opened.rootId, threadId: opened.threadId },
+      }
     }
   } catch (error) {
     return { outcome: 'uncertain', error: errorMessage(error) }
   }
+  params.rememberHostPost?.(posted.messageId, name)
 
   try {
     let topic: { rootId: string; threadId: string } | undefined
     let anchor = posted.messageId
     if (targetThreadId) {
-      const resolvedRoot =
-        posted.topic?.rootId ?? params.getTopicRoot?.(targetThreadId)
+      const resolvedRoot = posted.topic?.rootId ?? targetRootId
       if (posted.topic?.threadId && posted.topic.threadId !== targetThreadId) {
         throw new Error('Lark returned a different topic')
       }
@@ -307,14 +343,6 @@ export async function submitLarkRuntimeHostMessage(params: {
 
     const dedupeId = input.newTopic ? posted.messageId : anchor
     const threadId = topic?.threadId ?? targetThreadId
-    params.noteHostInbound?.({
-      externalChatId: chatId,
-      threadId,
-      messageId: dedupeId,
-      replyToId: anchor,
-      text,
-    })
-
     const rawEvent: LarkMessageEvent = {
       sender: { sender_type: 'app' },
       message: {
@@ -329,12 +357,13 @@ export async function submitLarkRuntimeHostMessage(params: {
       },
     }
 
-    await ctx.ingest({
+    const ingestPayload = {
       channel: 'lark',
       dedupeKey: `lark:${dedupeId}`,
       externalChatId: chatId,
-      kind: 'group',
+      kind: 'group' as const,
       ...(threadId ? { threadId } : {}),
+      ...(topic?.rootId ? { threadRootId: topic.rootId } : {}),
       messageId: anchor,
       senderId: `sdk:${id}`,
       senderName: name,
@@ -347,31 +376,42 @@ export async function submitLarkRuntimeHostMessage(params: {
       wake: true,
       timestamp: new Date().toISOString(),
       raw: rawEvent,
-    })
-
-    const bindings =
-      ctx.listBindings?.({ channel: 'lark', enabledOnly: true }) ?? []
-    let resolvedSessionId = input.sessionId
-    if (threadId) {
-      const b = bindings.find(
-        (row) => row.externalId === chatId && row.threadId === threadId,
-      )
-      if (b?.sessionId) resolvedSessionId = b.sessionId
+    }
+    let receipt:
+      | Awaited<
+          ReturnType<NonNullable<ChannelAdapterContext['ingestWithReceipt']>>
+        >
+      | undefined
+    if (ctx.ingestWithReceipt) {
+      receipt = await ctx.ingestWithReceipt(ingestPayload)
     } else {
-      const root = bindings.find(
-        (row) => row.externalId === chatId && !row.threadId,
-      )
-      if (root?.sessionId) {
-        resolvedSessionId = root.sessionId
-      } else if (root?.projectId) {
-        resolvedSessionId =
-          ctx.getProject?.(root.projectId)?.hubSessionId ?? resolvedSessionId
+      await ctx.ingest(ingestPayload)
+    }
+
+    if (receipt && !receipt.admitted) {
+      return {
+        outcome: 'posted',
+        messageId: posted.messageId,
+        error: receipt.reason
+          ? `Lark message ${posted.messageId} was posted, but Runtime declined admission: ${receipt.reason}`
+          : `Lark message ${posted.messageId} was posted, but Runtime did not admit it`,
       }
+    }
+    if (receipt?.inboxEventId) {
+      params.noteAdmittedInbound?.({
+        inboxEventId: receipt.inboxEventId,
+        externalChatId: chatId,
+        threadId,
+        messageId: dedupeId,
+        replyToId: anchor,
+        text,
+        isDirect: false,
+      })
     }
 
     return {
       outcome: 'posted',
-      ...(resolvedSessionId ? { sessionId: resolvedSessionId } : {}),
+      ...(receipt?.sessionId ? { sessionId: receipt.sessionId } : {}),
       messageId: posted.messageId,
       ...(topic ? { topic } : {}),
     }

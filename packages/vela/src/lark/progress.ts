@@ -259,6 +259,11 @@ export class LarkProgress {
       await new Promise((resolve) => setTimeout(resolve, delay))
   }
 
+  async cancel(): Promise<void> {
+    this.failure ??= new Error('Cancelled')
+    await this.drain()
+  }
+
   /**
    * Writes the terminal card with its own retry budget and throws when it stays unwritten. The caller
    * reports that failure as final, because the answer has already been delivered: it must not claim the

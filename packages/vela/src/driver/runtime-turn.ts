@@ -179,27 +179,30 @@ function resolvePrimaryChannelRoute(inputs: readonly DriverInboxItem[]):
       threadId?: string
     }
   | undefined {
-  for (const requireWake of [true, false]) {
-    for (let i = inputs.length - 1; i >= 0; i--) {
-      const item = inputs[i]!
-      const isRouteSource =
-        item.source === 'channel' ||
-        item.source === 'timer' ||
-        item.source === 'webhook' ||
-        (item.source === 'approval' && item.payload.waitForInput === true)
-      if (!isRouteSource || item.passive) {
-        continue
-      }
-      if (requireWake && !item.wake) continue
-      const p = item.payload
-      if (
-        typeof p.channel === 'string' &&
-        typeof p.externalChatId === 'string'
-      ) {
-        return {
-          channel: p.channel,
-          externalChatId: p.externalChatId,
-          ...(typeof p.threadId === 'string' ? { threadId: p.threadId } : {}),
+  for (const allowPassive of [false, true]) {
+    for (const requireWake of [true, false]) {
+      if (allowPassive && !requireWake) continue
+      for (let i = inputs.length - 1; i >= 0; i--) {
+        const item = inputs[i]!
+        const isRouteSource =
+          item.source === 'channel' ||
+          item.source === 'timer' ||
+          item.source === 'webhook' ||
+          (item.source === 'approval' && item.payload.waitForInput === true)
+        if (!isRouteSource) continue
+        if (!allowPassive && item.passive) continue
+        if (allowPassive && !item.passive) continue
+        if (requireWake && !item.wake) continue
+        const p = item.payload
+        if (
+          typeof p.channel === 'string' &&
+          typeof p.externalChatId === 'string'
+        ) {
+          return {
+            channel: p.channel,
+            externalChatId: p.externalChatId,
+            ...(typeof p.threadId === 'string' ? { threadId: p.threadId } : {}),
+          }
         }
       }
     }
@@ -220,9 +223,18 @@ function extractInputMeta(
     blobId: string
     name: string
     mimeType?: string
+    inlineOnly?: boolean
   }> = []
+  const hasNonPassiveRoute = inputs.some(
+    (item) =>
+      !item.passive &&
+      (item.source === 'channel' ||
+        item.source === 'timer' ||
+        item.source === 'webhook' ||
+        (item.source === 'approval' && item.payload.waitForInput === true)),
+  )
   for (const item of inputs) {
-    if (item.passive) continue
+    if (item.passive && (hasNonPassiveRoute || !item.wake)) continue
     const p = item.payload
     if (item.source === 'channel' && channelTarget) {
       if (
@@ -240,8 +252,9 @@ function extractInputMeta(
       replyToMessageId = p.messageId
     }
     if (
-      item.source === 'user' ||
-      (item.source === 'channel' && p.type !== 'session_forward')
+      !item.passive &&
+      (item.source === 'user' ||
+        (item.source === 'channel' && p.type !== 'session_forward'))
     ) {
       humanProvenance = {
         inboxEventId: item.id,
@@ -709,7 +722,11 @@ export function applyRuntimeProjectToolSelection(
   registry: ToolRegistry,
   projectId: string | null,
   baseModifiers: readonly string[],
-  options: { hasChannelBinding?: boolean; sessionKind?: string } = {},
+  options: {
+    hasChannelBinding?: boolean
+    sessionKind?: string
+    onlyIfConfigured?: boolean
+  } = {},
 ): void {
   if (projectId) {
     const proj = db.get<{ default_tools_json: string | null }>(
@@ -740,7 +757,9 @@ export function applyRuntimeProjectToolSelection(
       return
     }
   }
-  registry.setDefaultToolModifiers([...baseModifiers])
+  if (!options.onlyIfConfigured) {
+    registry.setDefaultToolModifiers([...baseModifiers])
+  }
 }
 
 /** Reads persisted human-turn metadata for an already-started run during recovery/resume. */

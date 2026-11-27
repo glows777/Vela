@@ -56,7 +56,11 @@ export interface LarkTransport {
     title: string,
     uuid?: string,
   ): Promise<LarkSentMessage & { rootId: string; threadId: string }>
-  forward(messageId: string, threadId: string): Promise<LarkSentMessage>
+  forward(
+    messageId: string,
+    threadId: string,
+    uuid?: string,
+  ): Promise<LarkSentMessage>
   send(
     chatId: string,
     text: string,
@@ -236,12 +240,15 @@ export function larkTransport(
         threadId: data.thread_id,
       }
     },
-    async forward(messageId, threadId) {
+    async forward(messageId, threadId, uuid) {
       const client = await getClient()
       const { data } = checked(
         await client.im.message.forward({
           path: { message_id: messageId },
-          params: { receive_id_type: 'thread_id' },
+          params: {
+            receive_id_type: 'thread_id',
+            ...(uuid === undefined ? {} : { uuid }),
+          },
           data: { receive_id: threadId },
         }),
       )

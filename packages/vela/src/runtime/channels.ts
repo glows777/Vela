@@ -42,6 +42,7 @@ export interface ChannelInboundMessage {
   externalChatId: string
   kind: ChannelBindingKind
   threadId?: string
+  threadRootId?: string
   messageId?: string
   senderId: string
   senderName: string
@@ -64,6 +65,7 @@ export interface ChannelInboundMessage {
 /** Outbound payload delivered by `Runtime` `outbox` through a `ChannelAdapter`. */
 export interface ChannelOutboundMessage {
   outboxId: string
+  runId?: string
   kind?: 'reply' | 'topic_start' | 'forward' | 'file'
   channel: string
   externalChatId: string
@@ -153,13 +155,30 @@ export interface ChannelToolSpec {
   ): Promise<unknown> | unknown
 }
 
+export interface ChannelIngestReceipt {
+  admitted: boolean
+  sessionId?: string
+  inboxEventId?: string
+  shortcut?: boolean
+  reason?: string
+}
+
 export interface ChannelAdapterContext {
   /** Submit a normalized inbound event into the durable `inbox_events` queue. */
   ingest(message: ChannelInboundMessage): Promise<void>
+  ingestWithReceipt?(
+    message: ChannelInboundMessage,
+  ): Promise<ChannelIngestReceipt>
   subscribeEvents?(listener: RuntimeEventListener): () => void
   subscribeDeltas?(listener: StreamDeltaListener): () => void
   stopSession?(sessionId: string, reason?: string): Promise<boolean>
   steerSession?(sessionId: string, text: string): Promise<void>
+  discardInboxEvent?(inboxEventId: string): boolean
+  steerInboxEvent?(
+    sessionId: string,
+    inboxEventId: string,
+    text: string,
+  ): Promise<boolean>
   listBindings?(filter?: {
     channel?: string
     projectId?: string

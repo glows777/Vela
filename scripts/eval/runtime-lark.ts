@@ -29,6 +29,7 @@ export async function runRuntimeLarkAttempt(params: {
   evidence: Evidence
   getPhase: () => number
   setPhase: (p: number) => void
+  signal?: AbortSignal
 }): Promise<void> {
   const {
     runtimePath,
@@ -44,6 +45,7 @@ export async function runRuntimeLarkAttempt(params: {
     evidence,
     getPhase,
     setPhase,
+    signal,
   } = params
 
   const sdkMod = await load<typeof import('../../packages/vela/src/index.ts')>(
@@ -98,7 +100,6 @@ export async function runRuntimeLarkAttempt(params: {
 
   const files = fixtures(scenario)
   const exitScenario = ['G6', 'G7', 'G8'].includes(scenario)
-  const workspaceScenario = scenario === 'G10'
   const recallScenario = scenario === 'G7' || scenario === 'G8'
   const topicRoots =
     scenario === 'G6'
@@ -118,12 +119,67 @@ export async function runRuntimeLarkAttempt(params: {
   mkdirSync(dataDir, { recursive: true })
   mkdirSync(workspace, { recursive: true })
 
-  if (recallScenario) {
-    evidence.recallPaths = {
-      workspace,
-      artifactDir: resolve(artifactDir),
-    }
-    evidence.recallMemory = []
+  // Track exact message/topic destinations from transport calls so deliveries never rely on guesses.
+  const messageThreadScope = new Map<string, string>()
+  const threadToRoot = new Map<string, string>()
+  for (const rootId of topicRoots) {
+    messageThreadScope.set(`trigger_${rootId}`, rootId)
+    threadToRoot.set(`thread_${rootId}`, rootId)
+  }
+  if (['G4', 'G5'].includes(scenario)) {
+    messageThreadScope.set('trigger', 'root')
+    threadToRoot.set('thread', 'root')
+  }
+
+  const trackedDeliveries: Evidence['deliveries'] = []
+  const trackedTopics: string[] = []
+  const baseTransport = fake.transport
+  const trackedTransport: typeof fake.transport = {
+    ...baseTransport,
+    send: async (chatId, text, uuid) => {
+      const receipt = await baseTransport.send(chatId, text, uuid)
+      if (receipt) {
+        trackedDeliveries.push({
+          scope: 'group',
+          ...(receipt.messageId ? { messageId: receipt.messageId } : {}),
+          text: text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
+        })
+      }
+      return receipt
+    },
+    reply: async (messageId, text, uuid) => {
+      const receipt = await baseTransport.reply(messageId, text, uuid)
+      const rootId = messageThreadScope.get(messageId)
+      trackedDeliveries.push({
+        scope: rootId ? 'topic' : 'group',
+        ...(rootId ? { topicRootId: rootId } : {}),
+        messageId,
+        text: text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
+      })
+      return receipt
+    },
+    startTopic: async (messageId, title, uuid) => {
+      const isExistingTopicAnchor =
+        Array.from(threadToRoot.values()).includes(messageId) ||
+        messageThreadScope.has(messageId)
+      const opened = await baseTransport.startTopic(messageId, title, uuid)
+      const knownRoot =
+        messageThreadScope.get(messageId) ?? opened.rootId ?? messageId
+      if (!isExistingTopicAnchor) {
+        trackedTopics.push(title)
+        if (opened.threadId) {
+          threadToRoot.set(opened.threadId, knownRoot)
+        }
+      } else {
+        trackedDeliveries.push({
+          scope: 'topic',
+          topicRootId: knownRoot,
+          messageId: opened.messageId,
+          text: title.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
+        })
+      }
+      return opened
+    },
   }
 
   const runtime = sdkMod.createRuntime({
@@ -139,7 +195,13 @@ export async function runRuntimeLarkAttempt(params: {
 
   const logicalBySessionId = new Map<string, string>()
   const sessionIdByTopicRoot = new Map<string, string>()
-  const mapSessionId = (sid: string) => logicalBySessionId.get(sid) ?? sid
+  const rawMemoryBySessionId = new Map<string, string[]>()
+  const calls = new Map<string, Call>()
+  let channelStarted = false
+  let channelError: unknown
+  let burstDelivered = false
+  let hubSessionId: string | undefined
+
   const refreshTopicMappings = async () => {
     const bindings = await runtime.bindings.list({ channel: channelName })
     for (const rootId of topicRoots) {
@@ -153,12 +215,6 @@ export async function runRuntimeLarkAttempt(params: {
       }
     }
   }
-
-  const calls = new Map<string, Call>()
-  let channelStarted = false
-  let channelError: unknown
-  let burstDelivered = false
-  let hubSessionId: string | undefined
 
   const unsub = runtime.events.subscribe((event) => {
     if (event.type === 'run_started') {
@@ -187,12 +243,14 @@ export async function runRuntimeLarkAttempt(params: {
     if (
       recallScenario &&
       event.type === 'message_committed' &&
-      event.customType === 'memory' &&
-      mapSessionId(event.sessionId) ===
-        `${channelName}-oc_group-${topicRoots[1]}`
+      event.customType === 'memory'
     ) {
       const content = event.message.content
-      if (typeof content === 'string') evidence.recallMemory!.push(content)
+      if (typeof content === 'string') {
+        const existing = rawMemoryBySessionId.get(event.sessionId) ?? []
+        existing.push(content)
+        rawMemoryBySessionId.set(event.sessionId, existing)
+      }
     }
     if (event.type === 'tool_started') {
       const evalToolNameMap: Record<string, string> = {
@@ -209,17 +267,11 @@ export async function runRuntimeLarkAttempt(params: {
       if (typeof rawArgs.path === 'string') {
         rawArgs.path = relative(workspace, resolve(workspace, rawArgs.path))
       }
-      if (
-        typeof rawArgs.target === 'string' &&
-        logicalBySessionId.has(rawArgs.target)
-      ) {
-        rawArgs.target = logicalBySessionId.get(rawArgs.target)!
-      }
       const call: Call = {
         name: evalToolNameMap[event.toolName] ?? event.toolName,
         args: rawArgs,
         phase: getPhase(),
-        sessionId: mapSessionId(event.sessionId),
+        sessionId: event.sessionId,
         success: false,
       }
       calls.set(event.toolCallId, call)
@@ -229,15 +281,7 @@ export async function runRuntimeLarkAttempt(params: {
       const call = calls.get(event.toolCallId)
       if (call) {
         call.success = !event.isError
-        const mappedSid = call.sessionId
-        if (
-          (recallScenario &&
-            (mappedSid === `${channelName}-oc_group-${topicRoots[1]}` ||
-              call.name === 'memory')) ||
-          (scenario === 'G6' && mappedSid?.endsWith('-g6_b'))
-        ) {
-          call.output = event.result
-        }
+        call.output = event.result
       }
     }
     if (
@@ -249,6 +293,19 @@ export async function runRuntimeLarkAttempt(params: {
     }
   })
 
+  const onAbort = () => {
+    void (async () => {
+      const sessions = await runtime.sessions.list().catch(() => [])
+      await Promise.all(
+        sessions.map((s) =>
+          runtime.stop(s.id, 'Scenario deadline exceeded').catch(() => {}),
+        ),
+      )
+      await runtime.dispose().catch(() => {})
+    })()
+  }
+  signal?.addEventListener('abort', onAbort, { once: true })
+
   try {
     const project = await runtime.projects.create({
       name: 'oc_group',
@@ -259,6 +316,13 @@ export async function runRuntimeLarkAttempt(params: {
     hubSessionId = project.hubSessionId ?? undefined
     if (hubSessionId) {
       logicalBySessionId.set(hubSessionId, `${channelName}-oc_group`)
+    }
+    if (recallScenario) {
+      evidence.recallPaths = {
+        workspace: join(dataDir, 'projects', project.id, 'memory'),
+        artifactDir: resolve(artifactDir),
+      }
+      evidence.recallMemory = []
     }
     await runtime.bindings.upsert({
       channel: channelName,
@@ -273,15 +337,24 @@ export async function runRuntimeLarkAttempt(params: {
       appId: 'eval-bot',
       owners: ['ou_alice'],
       chats: ['oc_group'],
-      transport: fake.transport,
+      transport: trackedTransport,
     })
     await runtime.registerChannel(adapter)
 
-    const topicMessageScope = new Map<string, string>()
+    const waitStartedAndIdle = async () => {
+      while (!channelStarted && !channelError && !signal?.aborted) {
+        await Bun.sleep(1)
+      }
+      signal?.throwIfAborted?.()
+      await runtime.waitForIdle()
+      signal?.throwIfAborted?.()
+      if (channelError) throw channelError
+    }
 
     if (exitScenario) {
       evidence.inputs = []
       for (const [index, text] of prompts(scenario).entries()) {
+        signal?.throwIfAborted?.()
         setPhase(index)
         if (index === (scenario === 'G6' ? 1 : 0)) {
           for (const [path, content] of Object.entries(files)) {
@@ -292,7 +365,6 @@ export async function runRuntimeLarkAttempt(params: {
         channelStarted = false
         const topicRootId = topicRoots[index]!
         const triggerId = `trigger_${topicRootId}`
-        topicMessageScope.set(triggerId, topicRootId)
         evidence.inputs.push({ topicRootId, text })
         fake.deliver(
           helpers.larkEvent({
@@ -303,26 +375,27 @@ export async function runRuntimeLarkAttempt(params: {
             content: JSON.stringify({ text: `@_user_1 ${text}` }),
           }),
         )
-        while (!channelStarted && !channelError) await Bun.sleep(1)
-        await runtime.waitForIdle()
+        await waitStartedAndIdle()
         await refreshTopicMappings()
-        if (channelError) throw channelError
 
         if (scenario === 'G8' && index === 0 && dream) {
           const storeSid = sessionIdByTopicRoot.get(topicRoots[0]!)
           if (storeSid) {
-            await runtime.prompt(storeSid, { text: '/dream' })
+            const cmdRes = await runtime.sessions.runCommand(storeSid, '/dream')
+            if (!cmdRes.handled) {
+              throw new Error('G8 /dream command was not handled')
+            }
             await runtime.waitForIdle()
+            signal?.throwIfAborted?.()
           }
         }
         if (recallScenario && index === 0) {
-          const { MemoryStore } = await load<
+          const { MemoryStore, resolveMemoryDirs } = await load<
             typeof import('../../packages/vela/src/runtime/memory/index.ts')
           >(runtimePath, memoryStorePath)
-          const projectStore = new MemoryStore(
-            join(dataDir, 'memory', 'projects', project.id),
-          )
-          const globalStore = new MemoryStore(join(dataDir, 'memory'))
+          const dirs = resolveMemoryDirs(dataDir, project.id)
+          const projectStore = new MemoryStore(dirs.localDir)
+          const globalStore = new MemoryStore(dirs.globalDir)
           const combined = [...projectStore.list(), ...globalStore.list()]
           evidence.memoryEntries = combined.map(({ name, content }) => ({
             name,
@@ -334,19 +407,11 @@ export async function runRuntimeLarkAttempt(params: {
           )
         }
       }
-      for (const item of fake.sent) {
-        const mappedRoot = item.messageId
-          ? topicMessageScope.get(item.messageId)
-          : undefined
-        evidence.deliveries.push({
-          scope: mappedRoot ? 'topic' : 'group',
-          ...(mappedRoot ? { topicRootId: mappedRoot } : {}),
-          ...(item.messageId ? { messageId: item.messageId } : {}),
-          text: item.text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
-        })
-      }
-      evidence.answers = evidence.deliveries.map((item) => item.text)
     } else {
+      for (const [path, content] of Object.entries(files)) {
+        await mkdir(dirname(join(workspace, path)), { recursive: true })
+        await Bun.write(join(workspace, path), content)
+      }
       if (scenario === 'G11') {
         fake.deliver(
           helpers.larkEvent({
@@ -356,16 +421,8 @@ export async function runRuntimeLarkAttempt(params: {
             content: JSON.stringify({ text: prompts(scenario)[0] }),
           }),
         )
-        while (!channelStarted && !channelError) await Bun.sleep(1)
-        await runtime.waitForIdle()
-        if (channelError) throw channelError
+        await waitStartedAndIdle()
         channelStarted = false
-      }
-      if (workspaceScenario) {
-        for (const [path, content] of Object.entries(files)) {
-          await mkdir(dirname(join(workspace, path)), { recursive: true })
-          await Bun.write(join(workspace, path), content)
-        }
       }
       const unmentioned = scenario === 'G3' || scenario === 'G10'
       fake.deliver(
@@ -383,36 +440,46 @@ export async function runRuntimeLarkAttempt(params: {
             : {}),
         }),
       )
-      while (!channelStarted && !channelError) await Bun.sleep(1)
-      await runtime.waitForIdle()
-      if (channelError) throw channelError
-      if (workspaceScenario) {
-        for (const path of Object.keys(files)) {
-          evidence.files[path] = await Bun.file(join(workspace, path))
-            .text()
-            .catch(() => '')
-        }
+      await waitStartedAndIdle()
+      for (const path of Object.keys(files)) {
+        evidence.files[path] = await Bun.file(join(workspace, path))
+          .text()
+          .catch(() => '')
       }
-      evidence.topics = fake.topics.map((topic) => topic.title)
-      evidence.deliveries = fake.sent.map((item) => ({
-        scope:
-          scenario === 'G9' ||
-          scenario === 'G11' ||
-          (item.messageId === 'trigger' && !['G4', 'G5'].includes(scenario))
-            ? 'group'
-            : 'topic',
-        ...(item.messageId ? { messageId: item.messageId } : {}),
-        text: item.text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
-      }))
-      evidence.answers = evidence.deliveries.map((item) => item.text)
     }
 
-    for (const call of evidence.calls) {
-      if (call.sessionId && logicalBySessionId.has(call.sessionId)) {
-        call.sessionId = logicalBySessionId.get(call.sessionId)
+    await refreshTopicMappings()
+    if (recallScenario) {
+      const recallSid = sessionIdByTopicRoot.get(topicRoots[1]!)
+      if (recallSid) {
+        evidence.recallMemory = [...(rawMemoryBySessionId.get(recallSid) ?? [])]
       }
     }
+    for (const call of evidence.calls) {
+      const rawSid = call.sessionId
+      if (rawSid && logicalBySessionId.has(rawSid)) {
+        call.sessionId = logicalBySessionId.get(rawSid)
+      }
+      if (
+        typeof call.args.target === 'string' &&
+        logicalBySessionId.has(call.args.target)
+      ) {
+        call.args.target = logicalBySessionId.get(call.args.target)!
+      }
+      const keepOutput =
+        (recallScenario &&
+          (call.sessionId === `${channelName}-oc_group-${topicRoots[1]}` ||
+            call.name === 'memory')) ||
+        (scenario === 'G6' && call.sessionId?.endsWith('-g6_b'))
+      if (!keepOutput) {
+        delete call.output
+      }
+    }
+    evidence.topics = trackedTopics
+    evidence.deliveries = trackedDeliveries
+    evidence.answers = trackedDeliveries.map((item) => item.text)
   } finally {
+    signal?.removeEventListener('abort', onAbort)
     unsub()
     await runtime.dispose().catch(() => {})
   }

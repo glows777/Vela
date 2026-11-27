@@ -122,7 +122,7 @@ The running process keeps the old code until the restart. A run in progress is s
 
 ## Serving channels during the transition
 
-Until S4b-2 migrates **Lark and Local HTTP/SSE channels** onto `vela daemon`, run legacy Lark / Local adapters (and webhooks targeting legacy Lark subscriptions) on the legacy SDK host (`createVela()` + `startChannels()`). If `vela daemon` is running on the same host with `webhooks` configured, remove `webhooks` from `config.json` for that daemon or pass `extensionConfig: { ...config.extensionConfig, channel: undefined }` on one of the two processes so only the intended subscription store owns the port.
+`vela daemon run` already hosts Lark and `webhooks` (`#595`). Only if you still rely on the legacy Local HTTP/SSE listener (`local`) until `S4b-3` retires `legacy-channels`, run a separate Local-only SDK host (`createVela()` + `startChannels()`, without `lark()`). Do not load `lark()` or duplicate `webhooks` in this script when `vela daemon` runs on the same host.
 
 Node.js ESM does **not** resolve bare package imports (`import ... from '@glows777/vela'`) from a global `npm install -g` installation. Create a dedicated directory with a local `@glows777/vela` install under the `vela` user:
 
@@ -134,18 +134,15 @@ sudo -u vela sh -c 'cd /home/vela/gateway && npm init -y && npm install @glows77
 Write `/home/vela/gateway/gateway.mjs`:
 
 ```js
-import { createVela, lark, larkConfig, local, loadConfig } from '@glows777/vela'
+import { createVela, loadConfig, local } from '@glows777/vela'
 
 const config = loadConfig({
   cwd: process.cwd(),
   agentDir: process.env.VELA_DIR,
   env: process.env,
-  extensionConfigs: [larkConfig],
 })
-const larkCfg = config.extensionConfig.lark
 const localCfg = config.settings.local
 const extensions = [
-  ...(larkCfg?.appId && larkCfg?.appSecret ? [lark()] : []),
   ...(localCfg?.enabled && typeof localCfg.token === 'string' && localCfg.token
     ? [
         local({

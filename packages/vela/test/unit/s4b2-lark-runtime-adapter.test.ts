@@ -296,11 +296,18 @@ test('LarkChannelAdapter handles group mentions, dedup, self-ignore, owner DM vs
 test('LarkChannelAdapter supports passive group evaluation, skip_reply, readUntagged: false, and topic routing', async () => {
   const dir = makeTempDir()
   const fake = createFakeTransport()
+  const events: Array<{
+    type: string
+    toolName?: string
+    isError?: boolean
+    status?: string
+    silent?: boolean
+  }> = []
   const model = createFauxModel({
     responses: [
-      // 1. Passive message in oc_passive -> model chooses skip_reply
-      () => fauxToolCall('skip_reply', { reason: 'casual chat' }),
-      () => fauxText(''),
+      // 1. Passive message in oc_passive -> valid empty schema skip_reply even with non-empty text (suppressed!)
+      () => fauxToolCall('skip_reply', {}),
+      () => fauxText('Suppressed because skip_reply succeeded'),
       // 2. Passive burst in oc_passive -> model replies with replyToMessageId preserved
       () => fauxText('Passive answer for Bob'),
       // 3. Mentioned topic message -> creates topic session & replies
@@ -315,6 +322,13 @@ test('LarkChannelAdapter supports passive group evaluation, skip_reply, readUnta
     logger: silentLogger,
   })
   cleanups.push(() => runtime.dispose())
+  runtime.events.subscribe((e) => {
+    if (e.type === 'tool_finished') {
+      events.push({ type: e.type, toolName: e.toolName, isError: e.isError })
+    } else if (e.type === 'run_finished') {
+      events.push({ type: e.type, status: e.status, silent: e.silent })
+    }
+  })
 
   const p1 = await runtime.projects.create({
     name: 'oc_passive',
@@ -380,10 +394,13 @@ test('LarkChannelAdapter supports passive group evaluation, skip_reply, readUnta
     ),
   )
   await waitFor(
-    async () =>
-      (await runtime.sessions.list()).some(
-        (s) => s.projectId === p1.id && s.state === 'idle',
-      ),
+    () =>
+      events.some(
+        (e) =>
+          e.type === 'tool_finished' &&
+          e.toolName === 'skip_reply' &&
+          e.isError === false,
+      ) && events.some((e) => e.type === 'run_finished' && e.silent === true),
     'skip_reply completed cleanly',
   )
   await runtime.waitForIdle()
@@ -592,13 +609,22 @@ test('LarkChannelAdapter handles attachments, FileTooLarge, unsupported message 
 test('LarkChannelAdapter supports listChats, listMessages, submitFromHost, lark_search_history, and run-control card stop', async () => {
   const dir = makeTempDir()
   const fake = createFakeTransport()
-  fake.searchResults.push({
-    message_id: 'hist_1',
-    create_time: '1700000000000',
-    msg_type: 'text',
-    body: { content: JSON.stringify({ text: 'Release checklist ready' }) },
-    sender: { id: 'ou_bob', sender_type: 'user' },
-  })
+  fake.searchResults.push(
+    {
+      message_id: 'hist_1',
+      create_time: '1700000000000',
+      msg_type: 'text',
+      body: { content: JSON.stringify({ text: 'Release checklist ready' }) },
+      sender: { id: 'ou_bob', sender_type: 'user' },
+    },
+    {
+      message_id: 'hist_unrelated',
+      create_time: '1700000000500',
+      msg_type: 'text',
+      body: { content: JSON.stringify({ text: 'Unrelated coffee chat' }) },
+      sender: { id: 'ou_alice', sender_type: 'user' },
+    },
+  )
   fake.history.push({
     message_id: 'h_root',
     create_time: '1700000001000',
@@ -610,13 +636,15 @@ test('LarkChannelAdapter supports listChats, listMessages, submitFromHost, lark_
   let slowStarted = false
   const model = createFauxModel({
     responses: [
-      () => fauxToolCall('lark_search_history', { query: 'release' }),
+      () => fauxToolCall('lark_search_history', { keyword: 'release' }),
       (ctx) => {
         const toolOutput = JSON.stringify(ctx.prompt)
+        const hasMatch = toolOutput.includes('Release checklist ready')
+        const excludedNonmatch = !toolOutput.includes('Unrelated coffee chat')
         return fauxText(
-          toolOutput.includes('Release checklist ready')
+          hasMatch && excludedNonmatch
             ? 'Searched and found release checklist'
-            : 'Missing search result',
+            : `Unexpected filter output: ${toolOutput.slice(0, 120)}`,
         )
       },
       () => {
@@ -693,6 +721,7 @@ test('LarkChannelAdapter supports listChats, listMessages, submitFromHost, lark_
       fake.sent.some((m) => m.text === 'Searched and found release checklist'),
     'lark_search_history answer',
   )
+  await runtime.waitForIdle()
 
   // Unconfigured chat rejects host submit
   const disabledSubmit = await adapter.submitFromHost({

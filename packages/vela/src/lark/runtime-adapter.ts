@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type {
   ChannelAdapter,
@@ -16,6 +17,7 @@ import type {
 } from '../runtime/channels.ts'
 import type { RuntimeMessagePage } from '../runtime/messages.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
+import { routineTimezone } from '../shared/routine-time.ts'
 import { FileTooLarge, MAX_ATTACHMENT_BYTES } from './attachments.ts'
 import { type LarkChat, parseChats } from './chats.ts'
 import { LarkConnection } from './connection.ts'
@@ -37,6 +39,29 @@ import {
 } from './transport.ts'
 
 const SEEN_MESSAGES = 1000
+const PREFETCH_CACHE_MAX = 128
+
+function outboxUuid(outboxId: string, step: string): string {
+  const combined = `${outboxId}:${step}`
+  if (combined.length <= 50) return combined
+  return `${step}:${createHash('sha256').update(combined).digest('hex').slice(0, 42)}`
+}
+
+function abortPromise<T>(signal?: AbortSignal): Promise<T> {
+  if (!signal) return new Promise<T>(() => {})
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason ?? new DOMException('Aborted', 'AbortError'),
+    )
+  }
+  return new Promise<T>((_resolve, reject) => {
+    signal.addEventListener(
+      'abort',
+      () => reject(signal.reason ?? new DOMException('Aborted', 'AbortError')),
+      { once: true },
+    )
+  })
+}
 
 export interface LarkChannelAdapterOptions {
   appId?: string
@@ -103,12 +128,17 @@ export class LarkChannelAdapter implements ChannelAdapter {
   private readonly connection = new LarkConnection()
   private unsubConnection?: () => void
   private progressManager?: LarkRuntimeProgressManager
+  private stopController?: AbortController
   private readonly seen = new Set<string>()
+  private readonly inFlightSeen = new Set<string>()
   private readonly names = new Map<string, Promise<string>>()
   private readonly pending = new Set<Promise<void>>()
+  private readonly routeQueues = new Map<string, Promise<void>>()
+  private readonly prefetchedAttachments = new Map<string, Uint8Array>()
   private readonly threadRootIds = new Map<string, string>()
   private readonly lastReplies = new Map<string, LarkSentMessage>()
   private readonly handledTriggers = new Map<string, LarkSentMessage>()
+  private readonly hostPostAuthors = new Map<string, string>()
 
   constructor(options: LarkChannelAdapterOptions = {}) {
     const env = options.hostEnv ?? {}
@@ -120,7 +150,14 @@ export class LarkChannelAdapter implements ChannelAdapter {
     )
     this.logger = options.logger ?? silentLogger
     this.customTransport = options.transport
-    this.timezone = options.timezone
+    if (options.timezone !== undefined) {
+      if (typeof options.timezone !== 'string' || !options.timezone.trim()) {
+        throw new Error(
+          'lark.timezone must be a non-empty IANA timezone string',
+        )
+      }
+      this.timezone = routineTimezone(options.timezone)
+    }
   }
 
   status(): ChannelConnectionState {
@@ -130,6 +167,8 @@ export class LarkChannelAdapter implements ChannelAdapter {
   async start(ctx: ChannelAdapterContext): Promise<void> {
     this.ctx = ctx
     this.stopped = false
+    this.stopController?.abort(new DOMException('Restarted', 'AbortError'))
+    this.stopController = new AbortController()
     this.botId = undefined
     this.unsubConnection?.()
     this.unsubConnection = this.connection.subscribe((state) => {
@@ -193,6 +232,9 @@ export class LarkChannelAdapter implements ChannelAdapter {
 
   async stop(): Promise<void> {
     this.stopped = true
+    this.stopController?.abort(
+      new DOMException('Adapter stopped', 'AbortError'),
+    )
     this.connection.stop()
     this.unsubConnection?.()
     this.unsubConnection = undefined
@@ -202,6 +244,9 @@ export class LarkChannelAdapter implements ChannelAdapter {
       this.progressManager = undefined
     }
     await Promise.allSettled([...this.pending])
+    this.routeQueues.clear()
+    this.prefetchedAttachments.clear()
+    this.inFlightSeen.clear()
     this.connectionState = { connected: false }
   }
 
@@ -209,7 +254,16 @@ export class LarkChannelAdapter implements ChannelAdapter {
     ref: string,
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
-    signal?.throwIfAborted?.()
+    const cached = this.prefetchedAttachments.get(ref)
+    if (cached) {
+      this.prefetchedAttachments.delete(ref)
+      return cached
+    }
+    const combinedSignal =
+      signal && this.stopController
+        ? AbortSignal.any([signal, this.stopController.signal])
+        : (signal ?? this.stopController?.signal)
+    combinedSignal?.throwIfAborted?.()
     if (!this.transport) throw new Error('Lark is not connected')
     const parsed = decodeLarkRef(ref)
     if (!parsed) throw new Error(`Unsupported Lark attachment ref: ${ref}`)
@@ -218,23 +272,54 @@ export class LarkChannelAdapter implements ChannelAdapter {
       parsed.key,
       parsed.kind,
     )
-    return readStreamWithCap(stream, signal)
+    return readStreamWithCap(stream, combinedSignal)
+  }
+
+  private async preflightAttachment(
+    ref: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const bytes = await this.fetchAttachment(ref, signal)
+    this.prefetchedAttachments.set(ref, bytes)
+    if (this.prefetchedAttachments.size > PREFETCH_CACHE_MAX) {
+      this.prefetchedAttachments.delete(
+        this.prefetchedAttachments.keys().next().value as string,
+      )
+    }
   }
 
   async deliver(
     message: ChannelOutboundMessage,
   ): Promise<ChannelDeliveryResult> {
+    const kind = message.kind ?? 'reply'
+    try {
+      const result = await this.deliverInner(message, kind)
+      if (message.runId && kind === 'reply') {
+        this.progressManager?.noteOutboxOutcome(message.runId, true)
+      }
+      return result
+    } catch (error) {
+      if (message.runId && kind === 'reply') {
+        this.progressManager?.noteOutboxOutcome(message.runId, false)
+      }
+      throw error
+    }
+  }
+
+  private async deliverInner(
+    message: ChannelOutboundMessage,
+    kind: NonNullable<ChannelOutboundMessage['kind']>,
+  ): Promise<ChannelDeliveryResult> {
     if (!this.transport) {
       throw new Error('Lark is not connected')
     }
-    const kind = message.kind ?? 'reply'
     if (kind === 'topic_start') {
       const title = (message.title ?? message.text).trim()
       if (message.replyToMessageId) {
         const opened = await this.transport.startTopic(
           message.replyToMessageId,
           title,
-          message.outboxId,
+          outboxUuid(message.outboxId, 'topic'),
         )
         if (opened.threadId && opened.rootId) {
           this.threadRootIds.set(opened.threadId, opened.rootId)
@@ -248,12 +333,16 @@ export class LarkChannelAdapter implements ChannelAdapter {
       const root = await this.transport.send(
         message.externalChatId,
         title,
-        message.outboxId,
+        outboxUuid(message.outboxId, 'root'),
       )
       if (!root?.messageId) {
         throw new Error('Lark send returned no message receipt for topic_start')
       }
-      const opened = await this.transport.startTopic(root.messageId, title)
+      const opened = await this.transport.startTopic(
+        root.messageId,
+        title,
+        outboxUuid(message.outboxId, 'topic'),
+      )
       if (opened.threadId && opened.rootId) {
         this.threadRootIds.set(opened.threadId, opened.rootId)
       }
@@ -271,7 +360,11 @@ export class LarkChannelAdapter implements ChannelAdapter {
           'Lark forward delivery requires forwardMessageId and threadId',
         )
       }
-      const receipt = await this.transport.forward(forwardId, message.threadId)
+      const receipt = await this.transport.forward(
+        forwardId,
+        message.threadId,
+        outboxUuid(message.outboxId, 'fwd'),
+      )
       return {
         externalMessageId: receipt.messageId,
         threadId: message.threadId,
@@ -283,15 +376,20 @@ export class LarkChannelAdapter implements ChannelAdapter {
       if (!firstFile) {
         throw new Error('Lark file delivery requires at least one file')
       }
-      const bytes = new Uint8Array(await readFile(firstFile.path))
       const rootId = this.resolveTopicRoot(message.threadId)
+      if (message.threadId && !rootId && !message.replyToMessageId) {
+        throw new Error(
+          `Cannot deliver file to Lark topic ${message.threadId}: unknown root message ID`,
+        )
+      }
+      const bytes = new Uint8Array(await readFile(firstFile.path))
       const receipt = await sendLarkFile(this.transport, {
         chatId: message.externalChatId,
         name: firstFile.name ?? firstFile.path,
         bytes,
         replyToId: rootId ?? message.replyToMessageId,
         replyInThread: message.threadId ? true : undefined,
-        uuid: message.outboxId,
+        uuid: outboxUuid(message.outboxId, 'file'),
       })
       return { externalMessageId: receipt.messageId }
     }
@@ -309,35 +407,71 @@ export class LarkChannelAdapter implements ChannelAdapter {
       ? `<at user_id="${message.recipientId}"></at> ${message.text}`
       : message.text
 
-    const replyTarget =
-      message.replyToMessageId ?? this.resolveTopicRoot(message.threadId)
-    let receipt: LarkSentMessage | undefined
-    if (replyTarget) {
-      receipt = await this.transport.reply(replyTarget, text, message.outboxId)
+    if (message.replyToMessageId) {
+      const receipt = await this.transport.reply(
+        message.replyToMessageId,
+        text,
+        outboxUuid(message.outboxId, 'reply'),
+      )
       if (!this.appId && !message.threadId) {
         this.lastReplies.set(message.externalChatId, receipt)
       }
-    } else {
-      const sent = await this.transport.send(
-        message.externalChatId,
-        text,
-        message.outboxId,
-      )
-      if (sent) receipt = sent
+      return receipt?.messageId ? { externalMessageId: receipt.messageId } : {}
     }
-    return receipt?.messageId ? { externalMessageId: receipt.messageId } : {}
+
+    if (message.threadId) {
+      const rootId = this.resolveTopicRoot(message.threadId)
+      if (!rootId) {
+        throw new Error(
+          `Cannot deliver reply to Lark topic ${message.threadId}: unknown root message ID`,
+        )
+      }
+      const opened = await this.transport.startTopic(
+        rootId,
+        text,
+        outboxUuid(message.outboxId, 'reply'),
+      )
+      if (opened.threadId && opened.threadId !== message.threadId) {
+        throw new Error('Lark returned a different topic')
+      }
+      if (opened.rootId) {
+        this.threadRootIds.set(message.threadId, opened.rootId)
+      }
+      return {
+        externalMessageId: opened.messageId,
+        threadId: opened.threadId ?? message.threadId,
+        rootId: opened.rootId ?? rootId,
+      }
+    }
+
+    const sent = await this.transport.send(
+      message.externalChatId,
+      text,
+      outboxUuid(message.outboxId, 'send'),
+    )
+    return sent?.messageId ? { externalMessageId: sent.messageId } : {}
   }
 
   async announce(
     input: ChannelAnnouncementInput,
   ): Promise<ChannelAnnouncementResult | undefined> {
-    if (!this.transport) return undefined
-    input.signal?.throwIfAborted?.()
-    const receipt = await this.transport.send(
+    if (!this.transport || this.stopped) return undefined
+    const signal =
+      input.signal && this.stopController
+        ? AbortSignal.any([input.signal, this.stopController.signal])
+        : (input.signal ?? this.stopController?.signal)
+    signal?.throwIfAborted?.()
+    const sendPromise = this.transport.send(
       input.externalChatId,
       input.text,
-      input.idempotencyKey,
+      outboxUuid(input.idempotencyKey ?? randomUUID(), 'ann'),
     )
+    const receipt = signal
+      ? await Promise.race([
+          sendPromise,
+          abortPromise<undefined | LarkSentMessage>(signal),
+        ])
+      : await sendPromise
     if (!receipt?.messageId) return undefined
     return { externalMessageId: receipt.messageId }
   }
@@ -355,6 +489,7 @@ export class LarkChannelAdapter implements ChannelAdapter {
       ownAppId: this.appId,
       transport: this.transport,
       senderName: (id) => this.senderName(id),
+      hostPostAuthor: (messageId) => this.hostPostAuthors.get(messageId),
     })
   }
 
@@ -362,14 +497,15 @@ export class LarkChannelAdapter implements ChannelAdapter {
     const transport = this.connectionState.connected
       ? this.transport
       : undefined
-    const bindings =
-      this.ctx?.listBindings?.({ channel: 'lark', enabledOnly: true }) ?? []
-    const bindingChatIds = bindings
-      .filter((b) => b.kind === 'group' && !b.threadId)
-      .map((b) => b.externalId)
-    const ids = [...new Set([...this.chats.keys(), ...bindingChatIds])]
+    const ids = this.ctx?.listBindings
+      ? this.ctx
+          .listBindings({ channel: 'lark', enabledOnly: true })
+          .filter((b) => b.kind === 'group' && !b.threadId)
+          .map((b) => b.externalId)
+      : [...this.chats.keys()]
+    const uniqueIds = [...new Set(ids)]
     return Promise.all(
-      ids.map(async (chatId) => {
+      uniqueIds.map(async (chatId) => {
         const name = await larkChatName(transport, chatId)
         return name === undefined ? { chatId } : { chatId, name }
       }),
@@ -388,11 +524,16 @@ export class LarkChannelAdapter implements ChannelAdapter {
       getTopicRoot: (threadId) => this.resolveTopicRoot(threadId),
       rememberTopicRoot: (threadId, rootId) =>
         this.threadRootIds.set(threadId, rootId),
-      noteHostInbound: (info) =>
-        this.progressManager?.notePendingInbound({
-          ...info,
-          isDirect: false,
-        }),
+      rememberHostPost: (messageId, authorName) => {
+        this.hostPostAuthors.set(messageId, authorName)
+        if (this.hostPostAuthors.size > SEEN_MESSAGES) {
+          this.hostPostAuthors.delete(
+            this.hostPostAuthors.keys().next().value as string,
+          )
+        }
+      },
+      noteAdmittedInbound: (info) =>
+        this.progressManager?.noteAdmittedInbound(info),
     })
   }
 
@@ -430,21 +571,27 @@ export class LarkChannelAdapter implements ChannelAdapter {
   }
 
   private isChatActiveInRuntime(chatId: string): boolean {
-    if (this.chats.has(chatId)) return true
-    const bindings =
-      this.ctx?.listBindings?.({ channel: 'lark', enabledOnly: true }) ?? []
-    return bindings.some(
-      (b) => b.externalId === chatId && b.kind === 'group' && !b.threadId,
-    )
+    if (this.ctx?.listBindings) {
+      const bindings = this.ctx.listBindings({
+        channel: 'lark',
+        enabledOnly: true,
+      })
+      return bindings.some(
+        (b) => b.externalId === chatId && b.kind === 'group' && !b.threadId,
+      )
+    }
+    return this.chats.has(chatId)
   }
 
   private readUntaggedEnabled(chatId: string): boolean {
-    const fromConfig = this.chats.get(chatId)?.readUntagged
-    if (fromConfig !== undefined) return fromConfig !== false
     const binding = this.ctx
       ?.listBindings?.({ channel: 'lark', enabledOnly: true })
       ?.find((b) => b.externalId === chatId && !b.threadId)
-    return binding?.config?.readUntagged !== false
+    if (binding?.config?.readUntagged !== undefined) {
+      return binding.config.readUntagged !== false
+    }
+    const fromConfig = this.chats.get(chatId)?.readUntagged
+    return fromConfig !== false
   }
 
   private senderName(id: string): Promise<string> {
@@ -462,15 +609,27 @@ export class LarkChannelAdapter implements ChannelAdapter {
     return name
   }
 
+  private enqueueRouteTask(routeKey: string, run: () => Promise<void>): void {
+    const prev = this.routeQueues.get(routeKey) ?? Promise.resolve()
+    const next = prev
+      .catch(() => {})
+      .then(run)
+      .finally(() => {
+        if (this.routeQueues.get(routeKey) === next) {
+          this.routeQueues.delete(routeKey)
+        }
+      })
+    this.routeQueues.set(routeKey, next)
+    this.pending.add(next)
+    void next.finally(() => this.pending.delete(next))
+  }
+
   private receive(event: LarkMessageEvent): void {
     if (this.stopped || !this.ctx) return
     const { message } = event
-    if (message.message_id) {
-      if (this.seen.has(message.message_id)) return
-      this.seen.add(message.message_id)
-      if (this.seen.size > SEEN_MESSAGES) {
-        this.seen.delete(this.seen.values().next().value as string)
-      }
+    const msgId = message.message_id
+    if (msgId) {
+      if (this.seen.has(msgId) || this.inFlightSeen.has(msgId)) return
     }
     const senderId = event.sender.sender_id?.open_id || 'unknown'
     const isOwnerDm = message.chat_type === 'p2p' && this.owners.has(senderId)
@@ -486,14 +645,24 @@ export class LarkChannelAdapter implements ChannelAdapter {
     const mentioned =
       !!this.botId &&
       !!message.mentions?.some((mention) => mention.id?.open_id === this.botId)
-    const passive = group && !mentioned && !message.thread_id
+    const text = messageText(message)
+    const trimmedText = text?.trim()
+    const isShortcut =
+      trimmedText === '!routines' ||
+      trimmedText === '!timers' ||
+      trimmedText === '!status' ||
+      trimmedText === '!stop' ||
+      trimmedText === '!restart'
+    const passive = group && !mentioned && !message.thread_id && !isShortcut
     if (group && !this.botId) return
 
-    const text = messageText(message)
     if (
-      passive &&
+      group &&
+      !mentioned &&
+      !message.thread_id &&
       !this.readUntaggedEnabled(message.chat_id) &&
-      text?.trim() !== '!routines'
+      trimmedText !== '!routines' &&
+      trimmedText !== '!timers'
     ) {
       return
     }
@@ -511,46 +680,63 @@ export class LarkChannelAdapter implements ChannelAdapter {
         : undefined
     if (topic) this.threadRootIds.set(topic.threadId, topic.rootId)
 
-    const task = processLarkInboundEvent({
-      event,
-      meta: {
-        senderId,
-        group,
-        mentioned,
-        passive,
-        replyToId,
-        requireExistingSession,
-        topic,
-        rawText: text,
-      },
-      ctx: this.ctx,
-      transport: this.transport,
-      appId: this.appId,
-      logger: this.logger,
-      isStopped: () => this.stopped,
-      senderName: (id) => this.senderName(id),
-      groupBoundary: (chatId) => {
-        const reply = this.lastReplies.get(chatId)
-        const handled = this.handledTriggers.get(chatId)
-        if (!reply) return handled
-        if (!handled) return reply
-        return Number(handled.createTime) >= Number(reply.createTime)
-          ? handled
-          : reply
-      },
-      noteHandled: (chatId, messageId, createTime) => {
-        const current = this.handledTriggers.get(chatId)
-        if (current && Number(createTime) < Number(current.createTime)) return
-        this.handledTriggers.set(chatId, { messageId, createTime })
-      },
-      deliver: (msg) => this.deliver(msg),
-      notePendingInbound: (input) =>
-        this.progressManager?.notePendingInbound(input),
-    }).catch((error) => {
-      this.logger.warn(`[lark] Failed to handle message: ${String(error)}`)
+    if (msgId) this.inFlightSeen.add(msgId)
+    const routeKey = `${message.chat_id}\0${topic?.threadId ?? ''}`
+    this.enqueueRouteTask(routeKey, async () => {
+      try {
+        const committed = await processLarkInboundEvent({
+          event,
+          meta: {
+            senderId,
+            group,
+            mentioned,
+            passive,
+            replyToId,
+            requireExistingSession,
+            topic,
+            rawText: text,
+          },
+          ctx: this.ctx!,
+          transport: this.transport,
+          appId: this.appId,
+          logger: this.logger,
+          isStopped: () => this.stopped,
+          signal: this.stopController?.signal,
+          senderName: (id) => this.senderName(id),
+          groupBoundary: (chatId) => {
+            const reply = this.lastReplies.get(chatId)
+            const handled = this.handledTriggers.get(chatId)
+            if (!reply) return handled
+            if (!handled) return reply
+            return Number(handled.createTime) >= Number(reply.createTime)
+              ? handled
+              : reply
+          },
+          noteHandled: (chatId, messageId, createTime) => {
+            const current = this.handledTriggers.get(chatId)
+            if (current && Number(createTime) < Number(current.createTime)) {
+              return
+            }
+            this.handledTriggers.set(chatId, { messageId, createTime })
+          },
+          deliver: (msg) => this.deliver(msg),
+          preflightAttachment: (ref, signal) =>
+            this.preflightAttachment(ref, signal),
+          noteAdmittedInbound: (info) =>
+            this.progressManager?.noteAdmittedInbound(info),
+        })
+        if (msgId && committed) {
+          this.seen.add(msgId)
+          if (this.seen.size > SEEN_MESSAGES) {
+            this.seen.delete(this.seen.values().next().value as string)
+          }
+        }
+      } catch (error) {
+        this.logger.warn(`[lark] Failed to handle message: ${String(error)}`)
+      } finally {
+        if (msgId) this.inFlightSeen.delete(msgId)
+      }
     })
-    this.pending.add(task)
-    void task.finally(() => this.pending.delete(task))
   }
 }
 

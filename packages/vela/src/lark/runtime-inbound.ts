@@ -2,6 +2,7 @@ import type { ImageContent } from '../extension-api.ts'
 import type {
   ChannelAdapterContext,
   ChannelInboundAttachment,
+  ChannelIngestReceipt,
   ChannelOutboundMessage,
 } from '../runtime/channels.ts'
 import type { VelaLogger } from '../shared/logger.ts'
@@ -101,19 +102,23 @@ export async function processLarkInboundEvent(params: {
   appId: string
   logger: VelaLogger
   isStopped: () => boolean
+  signal?: AbortSignal
   senderName: (id: string) => Promise<string>
   groupBoundary: (chatId: string) => LarkSentMessage | undefined
   noteHandled: (chatId: string, messageId: string, createTime: string) => void
   deliver: (msg: ChannelOutboundMessage) => Promise<unknown>
-  notePendingInbound: (input: {
+  preflightAttachment?: (ref: string, signal?: AbortSignal) => Promise<void>
+  noteAdmittedInbound: (info: {
+    inboxEventId: string
     externalChatId: string
     threadId?: string
     messageId?: string
     replyToId?: string
     text: string
     isDirect: boolean
+    passive?: boolean
   }) => void
-}): Promise<void> {
+}): Promise<boolean> {
   const {
     event,
     meta,
@@ -122,14 +127,29 @@ export async function processLarkInboundEvent(params: {
     appId,
     logger,
     isStopped,
+    signal,
     senderName,
     groupBoundary,
     noteHandled,
     deliver,
-    notePendingInbound,
+    preflightAttachment,
+    noteAdmittedInbound,
   } = params
-  if (isStopped()) return
+  if (isStopped() || signal?.aborted) return false
   const { message } = event
+
+  const existingTopicBinding = meta.topic
+    ? ctx
+        .listBindings?.({ channel: 'lark', enabledOnly: true })
+        ?.find(
+          (b) =>
+            b.externalId === message.chat_id &&
+            b.threadId === meta.topic!.threadId,
+        )
+    : undefined
+  if (meta.requireExistingSession && !existingTopicBinding) {
+    return false
+  }
 
   if (meta.rawText === undefined) {
     if (transport && !meta.passive) {
@@ -144,7 +164,7 @@ export async function processLarkInboundEvent(params: {
         text: UNSUPPORTED_MESSAGE,
       })
     }
-    return
+    return true
   }
 
   const triggerAttachments: ChannelInboundAttachment[] = []
@@ -182,7 +202,7 @@ export async function processLarkInboundEvent(params: {
       const ref = encodeLarkRef(IMG_REF_PREFIX, message.message_id, keys[i]!)
       triggerRefs.add(ref)
       triggerAttachments.push({
-        name: `image-${i + 1}.png`,
+        name: `image-${i + 1}`,
         ref,
         inlineOnly: true,
       })
@@ -196,7 +216,7 @@ export async function processLarkInboundEvent(params: {
         baseText = `[file: ${name}]`
       } catch (error) {
         await reportFailure(error)
-        return
+        return false
       }
     }
   }
@@ -205,6 +225,7 @@ export async function processLarkInboundEvent(params: {
     event.sender.sender_type === 'app'
       ? meta.senderId
       : await senderName(meta.senderId)
+  if (isStopped() || signal?.aborted) return false
 
   const isSlash = !meta.passive && baseText.startsWith('/')
   let formattedText = baseText
@@ -222,7 +243,7 @@ export async function processLarkInboundEvent(params: {
       const ref = encodeLarkRef(IMG_REF_PREFIX, histMsg.message_id, key)
       if (!historyRefs.has(ref)) {
         historyRefs.set(ref, {
-          name: `history-${historyRefs.size + 1}.png`,
+          name: `history-${historyRefs.size + 1}`,
           ref,
           inlineOnly: true,
         })
@@ -232,15 +253,6 @@ export async function processLarkInboundEvent(params: {
     return placeholders
   }
 
-  const existingTopicBinding = meta.topic
-    ? ctx
-        .listBindings?.({ channel: 'lark', enabledOnly: true })
-        ?.find(
-          (b) =>
-            b.externalId === message.chat_id &&
-            b.threadId === meta.topic!.threadId,
-        )
-    : undefined
   const isNewTopic = Boolean(
     meta.topic && !meta.requireExistingSession && !existingTopicBinding,
   )
@@ -292,7 +304,7 @@ export async function processLarkInboundEvent(params: {
             recipientId: meta.senderId,
             text: `Couldn't read the topic history: ${errorMessage(error)}. Check im:message:readonly and im:message.group_msg permissions and retry.`,
           })
-          return
+          return false
         }
       } else if (meta.group && transport) {
         try {
@@ -323,30 +335,40 @@ export async function processLarkInboundEvent(params: {
     }
   }
 
+  if (isStopped() || signal?.aborted) return false
+
   const dedupeKey = message.message_id
     ? `lark:${message.message_id}`
     : `lark:${message.chat_id}:${message.create_time ?? Date.now()}:${meta.senderId}`
 
-  if (!meta.passive) {
-    notePendingInbound({
-      externalChatId: message.chat_id,
-      threadId: meta.topic?.threadId,
-      messageId: message.message_id,
-      replyToId: meta.replyToId,
-      text: baseText,
-      isDirect: !meta.group,
-    })
+  const validHistoryImages: ChannelInboundAttachment[] = []
+  if (historyImageOrder.length > 0 && preflightAttachment) {
+    for (const att of historyImageOrder) {
+      if (isStopped() || signal?.aborted) return false
+      try {
+        await preflightAttachment(att.ref, signal)
+        validHistoryImages.push(att)
+      } catch (error) {
+        logger.warn(
+          `[lark] Skipping unreadable historical image ${att.name}: ${errorMessage(error)}`,
+        )
+      }
+    }
+  } else {
+    validHistoryImages.push(...historyImageOrder)
   }
+  if (isStopped() || signal?.aborted) return false
 
   const submitIngest = async (
     atts: ChannelInboundAttachment[],
-  ): Promise<void> => {
-    await ctx.ingest({
+  ): Promise<ChannelIngestReceipt | undefined> => {
+    const payload = {
       channel: 'lark',
       dedupeKey,
       externalChatId: message.chat_id,
-      kind: meta.group ? 'group' : 'direct',
+      kind: meta.group ? ('group' as const) : ('direct' as const),
       ...(meta.topic ? { threadId: meta.topic.threadId } : {}),
+      ...(meta.topic?.rootId ? { threadRootId: meta.topic.rootId } : {}),
       ...(meta.replyToId ? { messageId: meta.replyToId } : {}),
       senderId: meta.senderId,
       senderName: name,
@@ -364,31 +386,67 @@ export async function processLarkInboundEvent(params: {
         ? new Date(Number(message.create_time)).toISOString()
         : new Date().toISOString(),
       raw: event,
-    })
+    }
+    if (ctx.ingestWithReceipt) {
+      return ctx.ingestWithReceipt(payload)
+    }
+    await ctx.ingest(payload)
+    return undefined
   }
 
-  const initialAttachments = [...historyImageOrder, ...triggerAttachments]
+  const initialAttachments = [...validHistoryImages, ...triggerAttachments]
   try {
-    await submitIngest(initialAttachments)
+    const receipt = await submitIngest(initialAttachments)
+    if (receipt && !receipt.admitted) {
+      return receipt.reason === 'duplicate'
+    }
+    if (!receipt?.shortcut && receipt?.inboxEventId) {
+      noteAdmittedInbound({
+        inboxEventId: receipt.inboxEventId,
+        externalChatId: message.chat_id,
+        threadId: meta.topic?.threadId,
+        messageId: message.message_id,
+        replyToId: meta.replyToId,
+        text: baseText,
+        isDirect: !meta.group,
+        passive: meta.passive,
+      })
+    }
     if (!meta.passive && message.message_id && message.create_time) {
       noteHandled(message.chat_id, message.message_id, message.create_time)
     }
+    return true
   } catch (error) {
-    if (error instanceof FileTooLarge && historyImageOrder.length > 0) {
+    if (error instanceof FileTooLarge && validHistoryImages.length > 0) {
       try {
-        await submitIngest([...triggerAttachments])
+        const retryReceipt = await submitIngest([...triggerAttachments])
+        if (retryReceipt && !retryReceipt.admitted) {
+          return retryReceipt.reason === 'duplicate'
+        }
+        if (!retryReceipt?.shortcut && retryReceipt?.inboxEventId) {
+          noteAdmittedInbound({
+            inboxEventId: retryReceipt.inboxEventId,
+            externalChatId: message.chat_id,
+            threadId: meta.topic?.threadId,
+            messageId: message.message_id,
+            replyToId: meta.replyToId,
+            text: baseText,
+            isDirect: !meta.group,
+            passive: meta.passive,
+          })
+        }
         if (!meta.passive && message.message_id && message.create_time) {
           noteHandled(message.chat_id, message.message_id, message.create_time)
         }
-        return
+        return true
       } catch (retryError) {
         await reportFailure(retryError)
-        return
+        return false
       }
     }
     if (triggerRefs.size > 0) {
       await reportFailure(error)
-      return
+      return false
     }
     throw error
   }
