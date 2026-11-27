@@ -524,6 +524,10 @@ export async function stopDaemon(
     try {
       await rpcOnce(paths.socketPath, 'daemon.stop', undefined, 5000)
     } catch {}
+  } else if (liveOwner?.pid && liveOwner.pid !== process.pid) {
+    try {
+      process.kill(liveOwner.pid, 'SIGTERM')
+    } catch {}
   }
   const exited = await waitForDaemonExit(
     paths.socketPath,

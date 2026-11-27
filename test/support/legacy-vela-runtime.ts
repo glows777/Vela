@@ -12,6 +12,7 @@ import {
 } from '../../packages/vela/src/driver/index.ts'
 import type { RuntimeSessionInspection } from '../../packages/vela/src/driver/runtime-types.ts'
 import type {
+  ProjectRecord,
   RuntimeEvent,
   RuntimeEventListener,
   RuntimeEventPayload,
@@ -387,22 +388,59 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
     }
   }
 
-  const runtime = {
+  const legacyProjects = new Map<string, ProjectRecord>()
+
+  const runtime: VelaRuntime = {
     agentDir: (vela as unknown as { agentDir?: string }).agentDir ?? '',
     ready: () => vela.ready(),
     extensionErrors: async () => [],
     reloadConfig: async () => {},
     projects: {
-      list: async () => [],
-      get: async () => undefined,
-      getByCwd: async () => undefined,
-      create: async () => {
-        throw new Error('unsupported in legacy test shim')
+      list: async (opts?: { includeArchived?: boolean }) =>
+        [...legacyProjects.values()].filter(
+          (p) => opts?.includeArchived || !p.archived,
+        ),
+      get: async (id: string) => legacyProjects.get(id),
+      getByCwd: async (cwd: string) =>
+        [...legacyProjects.values()].find((p) => p.cwd === cwd && !p.archived),
+      create: async (
+        input: Parameters<VelaRuntime['projects']['create']>[0],
+      ) => {
+        const now = new Date().toISOString()
+        const rec: ProjectRecord = {
+          id: input.id ?? randomUUID(),
+          name: input.name,
+          cwd: input.cwd ?? null,
+          dataDir: input.dataDir ?? null,
+          hubSessionId: null,
+          defaultDriver: input.defaultDriver ?? 'vela',
+          defaultLocation: input.defaultLocation ?? null,
+          defaultModel: input.defaultModel ?? null,
+          defaultThinkingLevel: input.defaultThinkingLevel ?? null,
+          defaultTools: input.defaultTools ? [...input.defaultTools] : null,
+          config: input.config ?? null,
+          archived: false,
+          createdAt: now,
+          updatedAt: now,
+        }
+        legacyProjects.set(rec.id, rec)
+        return rec
       },
-      update: async () => {
-        throw new Error('unsupported in legacy test shim')
+      update: async (
+        id: string,
+        patch: Parameters<VelaRuntime['projects']['update']>[1],
+      ) => {
+        const existing = legacyProjects.get(id)
+        if (!existing) throw new Error(`Project ${id} not found`)
+        const updated: ProjectRecord = {
+          ...existing,
+          ...patch,
+          updatedAt: new Date().toISOString(),
+        }
+        legacyProjects.set(id, updated)
+        return updated
       },
-      remove: async () => false,
+      remove: async (id: string) => legacyProjects.delete(id),
     },
     trust: {
       check: async () => true,

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import { lstatSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { canonicalLocalPath } from '../db/trust.ts'
 
@@ -78,11 +77,7 @@ export function resolveDaemonPaths(
       socketPath = preferred
     } else {
       const hashName = `vela-${shortDirHash(dir)}.sock`
-      const inTmpdir = join(tmpdir(), hashName)
-      socketPath =
-        Buffer.byteLength(inTmpdir) <= POSIX_SOCKET_MAX_BYTES
-          ? inTmpdir
-          : join('/tmp', hashName)
+      socketPath = join('/tmp', hashName)
       assertSocketByteLimit(socketPath)
     }
   }

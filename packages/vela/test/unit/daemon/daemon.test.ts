@@ -8,7 +8,6 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   connectRuntime,
@@ -66,7 +65,7 @@ test('resolveDaemonPaths falls back cleanly when agentDir/vela.sock exceeds POSI
   } else {
     expect(Buffer.byteLength(longPaths.socketPath)).toBeLessThanOrEqual(96)
     expect(longPaths.socketPath).toMatch(/vela-[0-9a-f]{12}\.sock$/)
-    expect(longPaths.socketPath.startsWith(tmpdir())).toBe(true)
+    expect(longPaths.socketPath.startsWith('/tmp/')).toBe(true)
   }
 })
 

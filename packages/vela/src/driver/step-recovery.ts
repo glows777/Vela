@@ -448,19 +448,31 @@ export function repairStoppedPendingToolStepInTx(options: {
   )
   const repairRunId = stepRow?.run_id ?? undefined
   void runId
+  const runStatus = repairRunId
+    ? db.get<{ status: string }>(
+        'SELECT status FROM runs WHERE id = ?',
+        repairRunId,
+      )?.status
+    : undefined
+  const wasCleanStop = runStatus === 'stopped'
+  const repairedStatus = wasCleanStop ? 'skipped' : 'interrupted'
+  const repairedMessage = (toolName: string) =>
+    wasCleanStop
+      ? `Tool ${toolName} was stopped before execution completed.`
+      : `Tool ${toolName} was interrupted by a restart and may have partially run. Do not blindly repeat it; verify its effects first.`
   const now = new Date().toISOString()
 
   const appended = store.runInTransaction(() => {
     let rows = loadStepToolCallRows(db, sessionId, step.entryId)
     if (rows.length === 0) {
       for (const [idx, call] of step.calls.entries()) {
-        const msg = `Tool ${call.toolName} was stopped before execution completed.`
+        const msg = repairedMessage(call.toolName)
         db.run(
           `INSERT INTO vela_tool_calls (
              id, session_id, run_id, assistant_message_id, tool_call_id, call_index,
              tool_name, input_json, execution_mode, replay, status, attempt,
              is_error, preview, result_json, finished_at, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sequential', 'none', 'skipped', 0, 1, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sequential', 'none', ?, 0, 1, ?, ?, ?, ?, ?)`,
           crypto.randomUUID(),
           sessionId,
           repairRunId ?? null,
@@ -469,6 +481,7 @@ export function repairStoppedPendingToolStepInTx(options: {
           idx,
           call.toolName,
           JSON.stringify(call.input ?? {}),
+          repairedStatus,
           msg,
           JSON.stringify({ type: 'error-text', value: msg }),
           now,
@@ -480,12 +493,13 @@ export function repairStoppedPendingToolStepInTx(options: {
     } else {
       for (const row of rows) {
         if (TERMINAL_STATUSES.has(row.status)) continue
-        const msg = `Tool ${row.tool_name} was stopped before execution completed.`
+        const msg = repairedMessage(row.tool_name)
         db.run(
           `UPDATE vela_tool_calls
-           SET status = 'skipped', is_error = 1, preview = ?, result_json = ?,
+           SET status = ?, is_error = 1, preview = ?, result_json = ?,
                finished_at = COALESCE(finished_at, ?), updated_at = ?
            WHERE id = ?`,
+          repairedStatus,
           msg,
           JSON.stringify({ type: 'error-text', value: msg }),
           now,
