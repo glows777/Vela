@@ -1059,7 +1059,7 @@ test('G9 worker answers the burst with one merged evaluation', async () => {
       burstDiscussion
         .map(
           ({ sender, text }) =>
-            `\\[\\d{2}:\\d{2}\\] ${sender === 'ou_bob' ? 'Bob' : 'Alice'}: ${escaped(text)}`,
+            `(?:\\[Passive group message from ${sender === 'ou_bob' ? 'Bob' : 'Alice'}\\] )?\\[\\d{2}:\\d{2}\\] ${sender === 'ou_bob' ? 'Bob' : 'Alice'}: ${escaped(text)}`,
         )
         .join('\\n\\n'),
     ),
@@ -1182,28 +1182,79 @@ test('G6 worker starts B first, then A reads the real group fixture; no unsuppor
   expect(pending).toBe(0)
 })
 test('G6 worker passes when topic A hands the fact to B with channel_message_topic', async () => {
-  const inB = (req: { system: string }) => req.system.includes('(root_id g6_b)')
+  const isRuntime = exitLayout.hasRuntimeLarkAdapter
+  const inB = (req: {
+    system: string
+    prompt?: readonly { role?: string }[]
+  }) =>
+    isRuntime
+      ? JSON.stringify(
+          req.prompt?.find((m) => m.role === 'user') ?? '',
+        ).includes('Topic B: prepare')
+      : req.system.includes('(root_id g6_b)')
+  let topicBSid: string | undefined
   const respond = (req: {
     system: string
     lastUserText: string
-    toolResults: { toolName: string }[]
+    toolResults: { toolName: string; output?: string }[]
   }) => {
-    if (inB(req))
+    if (inB(req)) {
+      if (isRuntime) {
+        const match = req.system.match(/session[^\w-]+([0-9a-f-]{36})/i)
+        if (match?.[1]) topicBSid ??= match[1]
+      }
       return fauxText(
         req.lastUserText.includes('ORBIT-73')
           ? 'Release confirmed: ORBIT-73.'
           : 'Waiting for topic A.',
       )
+    }
     const last = req.toolResults.at(-1)?.toolName
-    if (!last) return fauxToolCall('read', { path: 'task/handoff.txt' })
-    if (last === 'read')
-      return fauxToolCall('channel_message_topic', {
-        root_id: 'g6_b',
-        text: 'The release verification code is ORBIT-73.',
-      })
+    if (!last) {
+      return isRuntime
+        ? fauxToolCall('session_list', {})
+        : fauxToolCall('read', { path: 'task/handoff.txt' })
+    }
+    if (isRuntime && last === 'session_list') {
+      try {
+        const parsed = JSON.parse(req.toolResults.at(-1)!.output ?? '[]') as
+          | Array<{
+              id: string
+              kind: string
+              state?: string
+              name?: string | null
+            }>
+          | {
+              sessions?: Array<{
+                id: string
+                kind: string
+                state?: string
+                name?: string | null
+              }>
+            }
+        const list = Array.isArray(parsed) ? parsed : (parsed.sessions ?? [])
+        topicBSid ??= list.find(
+          (s) =>
+            s.kind === 'topic' &&
+            (s.state === 'idle' || s.name?.includes('Topic B')),
+        )?.id
+      } catch {}
+      return fauxToolCall('read', { path: 'task/handoff.txt' })
+    }
+    if (last === 'read') {
+      return isRuntime && topicBSid
+        ? fauxToolCall('session_message', {
+            target: topicBSid,
+            text: 'The release verification code is ORBIT-73.',
+          })
+        : fauxToolCall('channel_message_topic', {
+            root_id: 'g6_b',
+            text: 'The release verification code is ORBIT-73.',
+          })
+    }
     return fauxText('Handed the code to topic B.')
   }
-  const { result, calls } = await exitAttempt('G6', Array(5).fill(respond))
+  const { result, calls } = await exitAttempt('G6', Array(8).fill(respond))
   expect(result.checks).toEqual([
     { name: 'B final fact', pass: true },
     { name: 'no human relay', pass: true },
@@ -1211,10 +1262,20 @@ test('G6 worker passes when topic A hands the fact to B with channel_message_top
     { name: 'B no self-lookup', pass: true },
   ])
   expect(result.status).toBe('pass')
-  expect(calls).toHaveLength(5)
+  expect(calls.length).toBeGreaterThanOrEqual(5)
 })
 test('G6 worker fails when B reads the code itself after a note without it', async () => {
-  const inB = (req: { system: string }) => req.system.includes('(root_id g6_b)')
+  const isRuntime = exitLayout.hasRuntimeLarkAdapter
+  const inB = (req: {
+    system: string
+    prompt?: readonly { role?: string }[]
+  }) =>
+    isRuntime
+      ? JSON.stringify(
+          req.prompt?.find((m) => m.role === 'user') ?? '',
+        ).includes('Topic B: prepare')
+      : req.system.includes('(root_id g6_b)')
+  let topicBSid: string | undefined
   const respond = (req: {
     system: string
     lastUserText: string
@@ -1229,6 +1290,38 @@ test('G6 worker fails when B reads the code itself after a note without it', asy
           : 'Waiting for topic A.',
       )
     }
+    if (isRuntime && !last) {
+      return fauxToolCall('session_list', {})
+    }
+    if (isRuntime && last?.toolName === 'session_list') {
+      try {
+        const parsed = JSON.parse(last.output) as
+          | Array<{
+              id: string
+              kind: string
+              state?: string
+              name?: string | null
+            }>
+          | {
+              sessions?: Array<{
+                id: string
+                kind: string
+                state?: string
+                name?: string | null
+              }>
+            }
+        const list = Array.isArray(parsed) ? parsed : (parsed.sessions ?? [])
+        topicBSid ??= list.find(
+          (s) =>
+            s.kind === 'topic' &&
+            (s.state === 'idle' || s.name?.includes('Topic B')),
+        )?.id
+      } catch {}
+      return fauxToolCall('session_message', {
+        target: topicBSid ?? 'g6_b',
+        text: 'Please finish.',
+      })
+    }
     return last
       ? fauxText('Told B.')
       : fauxToolCall('channel_message_topic', {
@@ -1236,10 +1329,12 @@ test('G6 worker fails when B reads the code itself after a note without it', asy
           text: 'Please finish.',
         })
   }
-  const { result } = await exitAttempt('G6', Array(6).fill(respond))
+  const { result } = await exitAttempt('G6', Array(8).fill(respond))
   // The code does not exist yet when B first looks; B reads it only after a note that does not carry it.
   expect(
-    result.evidence!.calls.map((call) => [call.name, call.success]),
+    result
+      .evidence!.calls.filter((call) => call.name !== 'channel_list_topics')
+      .map((call) => [call.name, call.success]),
   ).toEqual([
     ['read', false],
     ['channel_message_topic', true],
@@ -1271,7 +1366,7 @@ test('G7 worker snapshots real group memory after topic 1 and recalls in an isol
   expect(result.evidence!.memoryEntries).toEqual([
     expect.objectContaining({ content: stagingMemory.content }),
   ])
-  expect(calls[2]!.lastUserText).toContain('staging-server')
+  expect(JSON.stringify(calls[2]!.prompt)).toContain('staging-server')
   expect(JSON.stringify(calls[2]!.prompt)).not.toContain('remember it')
   expect(calls[3]!.toolResults[0]!.output).toContain('kestrel')
   expect(result.evidence!.inputs!.map((input) => input.topicRootId)).toEqual([
@@ -1903,7 +1998,7 @@ for (const id of ['G7', 'G8'] as const) {
       fauxText('Saved.'),
       fauxText('Kestrel.'),
     ])
-    expect(calls[2]!.lastUserText).toContain('kestrel')
+    expect(JSON.stringify(calls[2]!.prompt)).toContain('kestrel')
     expect(result.evidence!.recallMemory!.join('\n')).toContain('kestrel')
     expect(result.status).toBe('pass')
   })

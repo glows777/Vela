@@ -18,7 +18,6 @@ import {
 import {
   inferImageMimeFromBytes,
   inferImageMimeFromName,
-  preserveChannelControlTools,
 } from './runtime-prompt.ts'
 import {
   formatRuntimeMemoryContent,
@@ -28,7 +27,6 @@ import type { SessionStore } from './session/index.ts'
 import { messageText } from './session/message-queue.ts'
 import { expandEnvironmentSkill } from './skills/environment-skills.ts'
 import type { SkillDefinition } from './skills/loader.ts'
-import type { ToolRegistry } from './tools/registry.ts'
 import type { TokenTracker } from './usage/tracker.ts'
 
 export function assistantText(msg: AssistantModelMessage | undefined): string {
@@ -699,7 +697,11 @@ export function flushUnconsumedSteering(options: {
   if (options.unconsumed.length === 0) return
   let insertedAny = false
   for (const msg of options.unconsumed) {
-    const text = messageText(msg).trim()
+    const rawText = messageText(msg).trim()
+    const hasImages =
+      Array.isArray(msg.content) &&
+      msg.content.some((part) => part.type === 'image')
+    const text = rawText || (hasImages ? '[Image attachment]' : '')
     if (!text) continue
     const res = enqueueInboxEvent(options.db, {
       sessionId: options.sessionId,
@@ -713,52 +715,6 @@ export function flushUnconsumedSteering(options: {
   }
   if (insertedAny && options.wake && options.shouldWakeSession) {
     options.wakeSession?.(options.sessionId)
-  }
-}
-
-/** Applies persisted per-project tool overrides onto `registry` on top of runtime base modifiers. */
-export function applyRuntimeProjectToolSelection(
-  db: VelaDatabase,
-  registry: ToolRegistry,
-  projectId: string | null,
-  baseModifiers: readonly string[],
-  options: {
-    hasChannelBinding?: boolean
-    sessionKind?: string
-    onlyIfConfigured?: boolean
-  } = {},
-): void {
-  if (projectId) {
-    const proj = db.get<{ default_tools_json: string | null }>(
-      'SELECT default_tools_json FROM projects WHERE id = ?',
-      projectId,
-    )
-    if (proj?.default_tools_json) {
-      const list = JSON.parse(proj.default_tools_json) as unknown
-      if (
-        !Array.isArray(list) ||
-        !list.every((item) => typeof item === 'string')
-      ) {
-        throw new Error(
-          `Invalid default_tools_json for project ${projectId}: expected a JSON array of tool names`,
-        )
-      }
-      if (
-        list.length > 0 &&
-        list.every((name) => name.startsWith('+') || name.startsWith('-'))
-      ) {
-        registry.setDefaultToolModifiers([...baseModifiers, ...list])
-      } else {
-        registry.setDefaultToolModifiers(baseModifiers)
-        registry.setSelection(
-          preserveChannelControlTools(list, { ...options, projectId }),
-        )
-      }
-      return
-    }
-  }
-  if (!options.onlyIfConfigured) {
-    registry.setDefaultToolModifiers([...baseModifiers])
   }
 }
 

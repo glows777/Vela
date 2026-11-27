@@ -19,6 +19,43 @@ import { enqueueInboxEvent } from './inbox.ts'
 import { type ControlShortcut, parseControlShortcut } from './shortcuts.ts'
 
 const CHANNEL_ENABLED_PREFIX = 'channel_enabled:'
+const HOST_POST_AUTHOR_PREFIX = 'host_post_author:'
+
+export function persistHostPostAuthorInTx(
+  db: VelaDatabase,
+  channel: string,
+  externalMessageId: string,
+  authorName: string,
+): void {
+  if (!channel || !externalMessageId || !authorName) return
+  db.run(
+    `INSERT INTO kv_meta (key, value_json, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+    `${HOST_POST_AUTHOR_PREFIX}${channel}:${externalMessageId}`,
+    JSON.stringify(authorName),
+    new Date().toISOString(),
+  )
+}
+
+export function getHostPostAuthorInDb(
+  db: VelaDatabase,
+  channel: string,
+  externalMessageId: string,
+): string | undefined {
+  if (!channel || !externalMessageId) return undefined
+  const row = db.get<{ value_json: string }>(
+    'SELECT value_json FROM kv_meta WHERE key = ?',
+    `${HOST_POST_AUTHOR_PREFIX}${channel}:${externalMessageId}`,
+  )
+  if (!row) return undefined
+  try {
+    const parsed = JSON.parse(row.value_json) as unknown
+    return typeof parsed === 'string' && parsed ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export function isChannelEnabledInDb(db: VelaDatabase, name: string): boolean {
   const row = db.get<{ value_json: string }>(
@@ -46,6 +83,19 @@ export function setChannelEnabledInDb(
     JSON.stringify(enabled),
     new Date().toISOString(),
   )
+}
+
+export function isChannelBindingActive(
+  db: VelaDatabase,
+  bindings: ChannelBindingStore,
+  binding: ChannelBinding,
+): boolean {
+  if (!binding.enabled || !isChannelEnabledInDb(db, binding.channel)) {
+    return false
+  }
+  if (!binding.threadId) return true
+  const root = bindings.findByExternal(binding.channel, binding.externalId)
+  return !(root && !root.enabled)
 }
 
 export function getActiveHubSession(
@@ -423,6 +473,19 @@ export async function ingestChannelMessageInRuntime(params: {
             ...(attachments.length ? { attachments } : {}),
           },
         })
+        if (
+          enqueued.inserted &&
+          msg.senderId.startsWith('sdk:') &&
+          msg.messageId &&
+          msg.senderName
+        ) {
+          persistHostPostAuthorInTx(
+            db,
+            msg.channel,
+            msg.messageId,
+            msg.senderName,
+          )
+        }
         if (enqueued.inserted && wake && !passive && eventBus) {
           resolveWaitForInputOnUserReplyInTx(db, eventBus, {
             sessionId: session.id,

@@ -24,6 +24,7 @@ import { localRoutineInstant, routineTimezone } from '../shared/routine-time.ts'
 import { createBackgroundTools } from './extensions/background/tool.ts'
 import { createMemoryTool } from './extensions/memory/tool.ts'
 import { createTodoTool } from './extensions/todo/tool.ts'
+import { preserveChannelControlTools } from './runtime-prompt.ts'
 import { createRuntimeWebTools } from './runtime-resources.ts'
 import { createCoreTools } from './tools/index.ts'
 import {
@@ -41,6 +42,7 @@ export interface RuntimeToolDeps {
   subscriptions: SubscriptionManager
   scheduleSession: (sessionId: string) => void
   flushOutbox?: () => void
+  getChannelTimezone?: (channel: string) => string | undefined
   getRunContext: (sessionId: string) =>
     | {
         runId: string
@@ -275,20 +277,34 @@ function createRuntimeTools(deps: RuntimeToolDeps): ToolDefinition[] {
             : timer.sessionId === run.sessionId
 
         const projectDefaultTimezone = (() => {
-          if (!run.projectId) return undefined
-          const row = deps.db.get<{ config_json: string | null }>(
-            'SELECT config_json FROM projects WHERE id = ?',
-            run.projectId,
-          )
-          if (!row?.config_json) return undefined
-          try {
-            const parsed = JSON.parse(row.config_json) as { timezone?: unknown }
-            return typeof parsed.timezone === 'string' && parsed.timezone.trim()
-              ? parsed.timezone.trim()
-              : undefined
-          } catch {
-            return undefined
+          if (run.projectId) {
+            const row = deps.db.get<{ config_json: string | null }>(
+              'SELECT config_json FROM projects WHERE id = ?',
+              run.projectId,
+            )
+            if (row?.config_json) {
+              try {
+                const parsed = JSON.parse(row.config_json) as {
+                  timezone?: unknown
+                }
+                if (
+                  typeof parsed.timezone === 'string' &&
+                  parsed.timezone.trim()
+                ) {
+                  return parsed.timezone.trim()
+                }
+              } catch {}
+            }
           }
+          const channelName =
+            run.channelTarget?.channel ??
+            deps.db.get<{ channel: string }>(
+              'SELECT channel FROM channel_bindings WHERE session_id = ? AND enabled = 1 LIMIT 1',
+              run.sessionId,
+            )?.channel
+          return channelName
+            ? deps.getChannelTimezone?.(channelName)
+            : undefined
         })()
 
         if (input.action === 'list') {
@@ -631,4 +647,66 @@ export function adaptChannelTools(
       })
     },
   }))
+}
+
+/** Applies persisted per-project tool overrides onto `registry` on top of runtime base modifiers. */
+export function applyRuntimeProjectToolSelection(
+  db: VelaDatabase,
+  registry: ToolRegistry,
+  projectId: string | null,
+  baseModifiers: readonly string[],
+  options: {
+    hasChannelBinding?: boolean
+    sessionKind?: string
+    onlyIfConfigured?: boolean
+    excludeTools?: readonly string[]
+  } = {},
+): void {
+  const excludeSet = options.excludeTools?.length
+    ? new Set(options.excludeTools)
+    : undefined
+  if (projectId) {
+    const proj = db.get<{ default_tools_json: string | null }>(
+      'SELECT default_tools_json FROM projects WHERE id = ?',
+      projectId,
+    )
+    if (proj?.default_tools_json) {
+      const list = JSON.parse(proj.default_tools_json) as unknown
+      if (
+        !Array.isArray(list) ||
+        !list.every((item) => typeof item === 'string')
+      ) {
+        throw new Error(
+          `Invalid default_tools_json for project ${projectId}: expected a JSON array of tool names`,
+        )
+      }
+      if (
+        list.length > 0 &&
+        list.every((name) => name.startsWith('+') || name.startsWith('-'))
+      ) {
+        const excludeModifiers = options.excludeTools?.map((t) => `-${t}`) ?? []
+        registry.setDefaultToolModifiers([
+          ...baseModifiers,
+          ...list,
+          ...excludeModifiers,
+        ])
+      } else {
+        registry.setDefaultToolModifiers(baseModifiers)
+        const preserved = preserveChannelControlTools(list, {
+          ...options,
+          projectId,
+        })
+        registry.setSelection(
+          excludeSet
+            ? preserved.filter((name) => !excludeSet.has(name))
+            : preserved,
+        )
+      }
+      return
+    }
+  }
+  if (!options.onlyIfConfigured) {
+    const excludeModifiers = options.excludeTools?.map((t) => `-${t}`) ?? []
+    registry.setDefaultToolModifiers([...baseModifiers, ...excludeModifiers])
+  }
 }

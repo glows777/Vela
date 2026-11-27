@@ -190,6 +190,83 @@ export async function startDaemonServer(
   const clients = new Set<ConnectedClient>()
   let nextPromptId = 1
   let closing: Promise<void> | undefined
+  let configWatcher: ReturnType<typeof startDaemonConfigWatcher> | undefined
+
+  const onSigHup = () => {
+    void runtime.reloadConfig().catch((err) => {
+      logger.warn(
+        `[daemon] SIGHUP config reload failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    })
+  }
+  const onSigInt = () => {
+    void close('SIGINT')
+  }
+  const onSigTerm = () => {
+    void close('SIGTERM')
+  }
+
+  const close = (reason = 'dispose'): Promise<void> => {
+    closing ??= (async () => {
+      if (options.registerSignalHandlers !== false) {
+        process.off('SIGHUP', onSigHup)
+        process.off('SIGINT', onSigInt)
+        process.off('SIGTERM', onSigTerm)
+      }
+      configWatcher?.stop()
+      unsubEvents()
+      unsubDeltas()
+      for (const client of clients) {
+        for (const active of client.activeLogins.values()) {
+          active.controller.abort(
+            new DOMException('Daemon closing', 'AbortError'),
+          )
+        }
+        for (const ctrl of client.activeLogouts.values()) {
+          ctrl.abort(new DOMException('Daemon closing', 'AbortError'))
+        }
+        client.socket.end()
+        client.socket.destroy()
+      }
+      clients.clear()
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve())
+      }).catch(() => {})
+      try {
+        const sessions = await runtime.sessions
+          .list({ includeArchived: true })
+          .catch(() => [])
+        await Promise.all(
+          sessions.map(async (session) => {
+            const jobs = await runtime.jobs.list(session.id).catch(() => [])
+            await Promise.all(
+              jobs
+                .filter((job) => job.snapshot.state === 'running')
+                .map((job) =>
+                  runtime.jobs
+                    .stop(session.id, job.snapshot.id)
+                    .catch(() => {}),
+                ),
+            )
+          }),
+        )
+        await larkHost?.stop().catch(() => {})
+        await webhooksHost?.stop().catch(() => {})
+        await runtime.dispose()
+      } finally {
+        const pidInfo = readOwnerRecord(paths.pidPath)
+        const stillOwnsFiles =
+          !pidInfo?.instanceId || pidInfo.instanceId === instanceId
+        if (stillOwnsFiles) {
+          removeStaleSocketFile(paths.socketPath)
+          rmSync(paths.pidPath, { force: true })
+        }
+        releaseOwner()
+        options.onClosed?.(reason)
+      }
+    })()
+    return closing
+  }
 
   const unsubEvents = runtime.events.subscribe((event) => {
     for (const c of clients) {
@@ -204,7 +281,6 @@ export async function startDaemonServer(
 
   // biome-ignore lint/suspicious/noExplicitAny: RPC params decoded dynamically from NDJSON
   type Handler = (p: any, client: ConnectedClient) => Promise<unknown> | unknown
-  let configWatcher: ReturnType<typeof startDaemonConfigWatcher> | undefined
   const handlers: Record<string, Handler> = {
     'daemon.hello': () => hello,
     'daemon.status': async (): Promise<DaemonStatus> => {
@@ -662,96 +738,23 @@ export async function startDaemonServer(
     clearTimeout(larkInitTimer)
   }
 
-  configWatcher = startDaemonConfigWatcher(
-    paths.agentDir,
-    () => runtime.reloadConfig(),
-    undefined,
-    (err) => {
-      logger.warn(
-        `[daemon] Automatic config reload failed: ${err instanceof Error ? err.message : String(err)}`,
-      )
-    },
-  )
-
-  const onSigHup = () => {
-    void runtime.reloadConfig().catch((err) => {
-      logger.warn(
-        `[daemon] SIGHUP config reload failed: ${err instanceof Error ? err.message : String(err)}`,
-      )
-    })
-  }
-  const onSigInt = () => {
-    void close('SIGINT')
-  }
-  const onSigTerm = () => {
-    void close('SIGTERM')
-  }
-  if (options.registerSignalHandlers !== false) {
-    process.on('SIGHUP', onSigHup)
-    process.on('SIGINT', onSigInt)
-    process.on('SIGTERM', onSigTerm)
-  }
-
-  const close = (reason = 'dispose'): Promise<void> => {
-    closing ??= (async () => {
-      if (options.registerSignalHandlers !== false) {
-        process.off('SIGHUP', onSigHup)
-        process.off('SIGINT', onSigInt)
-        process.off('SIGTERM', onSigTerm)
-      }
-      configWatcher?.stop()
-      unsubEvents()
-      unsubDeltas()
-      for (const client of clients) {
-        for (const active of client.activeLogins.values()) {
-          active.controller.abort(
-            new DOMException('Daemon closing', 'AbortError'),
-          )
-        }
-        for (const ctrl of client.activeLogouts.values()) {
-          ctrl.abort(new DOMException('Daemon closing', 'AbortError'))
-        }
-        client.socket.end()
-        client.socket.destroy()
-      }
-      clients.clear()
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve())
-      }).catch(() => {})
-      try {
-        const sessions = await runtime.sessions
-          .list({ includeArchived: true })
-          .catch(() => [])
-        await Promise.all(
-          sessions.map(async (session) => {
-            const jobs = await runtime.jobs.list(session.id).catch(() => [])
-            await Promise.all(
-              jobs
-                .filter((job) => job.snapshot.state === 'running')
-                .map((job) =>
-                  runtime.jobs
-                    .stop(session.id, job.snapshot.id)
-                    .catch(() => {}),
-                ),
-            )
-          }),
+  if (!closing) {
+    configWatcher = startDaemonConfigWatcher(
+      paths.agentDir,
+      () => runtime.reloadConfig(),
+      undefined,
+      (err) => {
+        logger.warn(
+          `[daemon] Automatic config reload failed: ${err instanceof Error ? err.message : String(err)}`,
         )
-        await larkHost?.stop().catch(() => {})
-        await webhooksHost?.stop().catch(() => {})
-        await runtime.dispose()
-      } finally {
-        const pidInfo = readOwnerRecord(paths.pidPath)
-        const stillOwnsFiles =
-          !pidInfo?.instanceId || pidInfo.instanceId === instanceId
-        if (stillOwnsFiles) {
-          removeStaleSocketFile(paths.socketPath)
-          rmSync(paths.pidPath, { force: true })
-        }
-        releaseOwner()
-        options.onClosed?.(reason)
-      }
-    })()
-    return closing
+      },
+    )
+
+    if (options.registerSignalHandlers !== false) {
+      process.on('SIGHUP', onSigHup)
+      process.on('SIGINT', onSigInt)
+      process.on('SIGTERM', onSigTerm)
+    }
   }
 
   return {

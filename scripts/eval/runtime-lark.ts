@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ProviderDefinition } from '../../packages/vela/src/providers/models/index.ts'
 import type { Call, Evidence, ScenarioId } from './graders.ts'
@@ -22,7 +22,8 @@ export async function runRuntimeLarkAttempt(params: {
   thinking: string
   dream?: boolean
   providers: Record<string, ProviderDefinition>
-  sdkPath: string
+  runtimeSdkPath: string
+  runtimeLarkAdapterPath: string
   helpersPath: string
   channelName: 'lark' | 'feishu'
   memoryStorePath: string
@@ -38,7 +39,8 @@ export async function runRuntimeLarkAttempt(params: {
     thinking,
     dream,
     providers,
-    sdkPath,
+    runtimeSdkPath,
+    runtimeLarkAdapterPath,
     helpersPath,
     channelName,
     memoryStorePath,
@@ -48,10 +50,12 @@ export async function runRuntimeLarkAttempt(params: {
     signal,
   } = params
 
-  const sdkMod = await load<typeof import('../../packages/vela/src/index.ts')>(
-    runtimePath,
-    sdkPath,
-  )
+  const sdkMod = await load<
+    typeof import('../../packages/vela/src/runtime-sdk.ts')
+  >(runtimePath, runtimeSdkPath)
+  const larkAdapterMod = await load<
+    typeof import('../../packages/vela/src/lark/runtime-adapter.ts')
+  >(runtimePath, runtimeLarkAdapterPath)
   const runtimeHelpers = await load<Record<string, unknown>>(
     runtimePath,
     helpersPath,
@@ -108,14 +112,9 @@ export async function runRuntimeLarkAttempt(params: {
         ? ['g8_store', 'g8_recall']
         : ['g7_store', 'g7_recall']
 
+  const projectId = `${channelName}-oc_group`
   const dataDir = join(artifactDir, 'data')
-  const workspace = join(
-    dataDir,
-    'channels',
-    channelName,
-    'oc_group',
-    'workspace',
-  )
+  const workspace = join(dataDir, 'projects', projectId, 'workspace')
   mkdirSync(dataDir, { recursive: true })
   mkdirSync(workspace, { recursive: true })
 
@@ -255,6 +254,7 @@ export async function runRuntimeLarkAttempt(params: {
     if (event.type === 'tool_started') {
       const evalToolNameMap: Record<string, string> = {
         session_start: 'channel_start_topic',
+        session_list: 'channel_list_topics',
         session_message: 'channel_message_topic',
         wait_for_input: 'channel_wait_for_input',
         skip_reply: 'channel_skip_reply',
@@ -264,9 +264,6 @@ export async function runRuntimeLarkAttempt(params: {
         event.input && typeof event.input === 'object'
           ? { ...(event.input as Record<string, unknown>) }
           : {}
-      if (typeof rawArgs.path === 'string') {
-        rawArgs.path = relative(workspace, resolve(workspace, rawArgs.path))
-      }
       const call: Call = {
         name: evalToolNameMap[event.toolName] ?? event.toolName,
         args: rawArgs,
@@ -308,6 +305,7 @@ export async function runRuntimeLarkAttempt(params: {
 
   try {
     const project = await runtime.projects.create({
+      id: projectId,
       name: 'oc_group',
       cwd: workspace,
       hubSessionId: true,
@@ -319,7 +317,7 @@ export async function runRuntimeLarkAttempt(params: {
     }
     if (recallScenario) {
       evidence.recallPaths = {
-        workspace: join(dataDir, 'projects', project.id, 'memory'),
+        workspace: resolve(workspace),
         artifactDir: resolve(artifactDir),
       }
       evidence.recallMemory = []
@@ -333,7 +331,7 @@ export async function runRuntimeLarkAttempt(params: {
       enabled: true,
     })
 
-    const adapter = sdkMod.createLarkChannelAdapter({
+    const adapter = larkAdapterMod.createLarkChannelAdapter({
       appId: 'eval-bot',
       owners: ['ou_alice'],
       chats: ['oc_group'],
@@ -381,12 +379,41 @@ export async function runRuntimeLarkAttempt(params: {
         if (scenario === 'G8' && index === 0 && dream) {
           const storeSid = sessionIdByTopicRoot.get(topicRoots[0]!)
           if (storeSid) {
-            const cmdRes = await runtime.sessions.runCommand(storeSid, '/dream')
-            if (!cmdRes.handled) {
-              throw new Error('G8 /dream command was not handled')
+            const dreamNotices: string[] = []
+            const unsubDream = runtime.events.subscribe((evt) => {
+              if (evt.sessionId === storeSid && evt.type === 'notify') {
+                dreamNotices.push(evt.message)
+              }
+            })
+            try {
+              const cmdRes = await runtime.sessions.runCommand(
+                storeSid,
+                '/dream',
+              )
+              if (!cmdRes.handled) {
+                throw new Error('G8 /dream command was not handled')
+              }
+              await runtime.waitForIdle()
+              signal?.throwIfAborted?.()
+            } finally {
+              unsubDream()
             }
-            await runtime.waitForIdle()
-            signal?.throwIfAborted?.()
+            const dreamFailure = dreamNotices.find(
+              (m) =>
+                m.includes('Memory is not enabled') ||
+                m.startsWith('[dream] Failed:') ||
+                m.startsWith('[dream] Skipped all'),
+            )
+            const hasDreamReport = dreamNotices.some(
+              (m) =>
+                m.startsWith('[dream]') &&
+                !m.includes('Starting memory consolidation'),
+            )
+            if (dreamFailure || !hasDreamReport) {
+              throw new Error(
+                `G8 /dream consolidation failed: ${dreamFailure ?? 'no completion report'}`,
+              )
+            }
           }
         }
         if (recallScenario && index === 0) {

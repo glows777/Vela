@@ -251,13 +251,12 @@ test('Eval runtime-lark runner executes G1 and G3 scenarios end-to-end with inje
     responses: [
       (req) => {
         const serialized = JSON.stringify(req.prompt)
+        expect(serialized).toContain('14:30 UTC')
         const match = serialized.match(
           /release meeting starts at (\d{2}:\d{2} UTC)/i,
         )
         return fauxText(
-          match
-            ? `Based on recent messages, the release meeting starts at ${match[1]}.`
-            : 'Release meeting time not found in prompt context.',
+          `Based on recent messages, the release meeting starts at ${match![1]}.`,
         )
       },
     ],
@@ -281,6 +280,7 @@ test('Eval runtime-lark runner executes G1 and G3 scenarios end-to-end with inje
     reason: attemptG1.reason,
     checks: attemptG1.checks,
   }).toMatchObject({ status: 'pass' })
+  expect(attemptG1.evidence?.answers.at(-1)).toContain('14:30 UTC')
 
   // G3: untagged passive chat -> no reply delivered
   const cwdG3 = join(dir, 'g3-cwd')

@@ -51,6 +51,7 @@ export class DaemonLarkHost {
   private lastError?: string
   private configured = false
   private stopped = false
+  private currentAdapter?: ReturnType<typeof createLarkChannelAdapter>
 
   constructor(
     private readonly runtime: LocalVelaRuntime,
@@ -133,13 +134,14 @@ export class DaemonLarkHost {
               ...(timezone ? { timezone } : {}),
             }
           : null
+      const desiredSemanticConfig = larkChatBindingConfig(chat)
       const desiredConfig: Record<string, unknown> = {
-        ...larkChatBindingConfig(chat),
+        ...desiredSemanticConfig,
         managed: true,
+        synced: desiredSemanticConfig,
       }
       const existing = rootBindingsByChat.get(chat.id)
       let projectId = existing?.projectId ?? null
-      let shouldReconcileSessions = false
 
       if (projectId) {
         const existingProject = await this.runtime.projects.get(projectId)
@@ -157,15 +159,28 @@ export class DaemonLarkHost {
           const thinkingChanged =
             (existingProject.defaultThinkingLevel ?? undefined) !==
             (chat.thinkingLevel ?? undefined)
+          const topicModelChanged =
+            (existingProject.config?.topicModel ?? undefined) !==
+            (chat.topicModel ?? undefined)
+          const topicThinkingChanged =
+            (existingProject.config?.topicThinkingLevel ?? undefined) !==
+            (chat.topicThinkingLevel ?? undefined)
           const toolsChanged =
             stableJson(existingProject.defaultTools ?? null) !==
             stableJson(desiredTools)
           const configChanged =
             stableJson(existingProject.config ?? null) !==
             stableJson(desiredProjectConfig)
-          shouldReconcileSessions =
-            locationChanged || modelChanged || thinkingChanged || configChanged
-          if (shouldReconcileSessions || toolsChanged) {
+          const reconcileFields = {
+            location: locationChanged,
+            model: modelChanged,
+            thinkingLevel: thinkingChanged,
+            topicModel: topicModelChanged || modelChanged,
+            topicThinkingLevel: topicThinkingChanged || thinkingChanged,
+          }
+          const hasSessionDefaultChange =
+            Object.values(reconcileFields).some(Boolean)
+          if (hasSessionDefaultChange || toolsChanged || configChanged) {
             await this.runtime.projects.update(projectId, {
               cwd,
               defaultLocation: desiredLocation,
@@ -174,8 +189,11 @@ export class DaemonLarkHost {
               defaultTools: desiredTools,
               config: desiredProjectConfig,
             })
-            if (shouldReconcileSessions) {
-              await this.runtime.reconcileProjectSessions?.(projectId)
+            if (hasSessionDefaultChange) {
+              await this.runtime.reconcileProjectSessions?.(
+                projectId,
+                reconcileFields,
+              )
             }
           }
         }
@@ -201,20 +219,40 @@ export class DaemonLarkHost {
       const explicitDbDisable =
         existing && !existing.enabled && !wasManagedDisabled
       const nextEnabled = !explicitDbDisable
-      const existingSemanticConfig = existing?.config
-        ? Object.fromEntries(
-            Object.entries(existing.config).filter(
-              ([k]) => k !== 'disabledBySync',
-            ),
-          )
-        : undefined
-      if (
+      const hasSyncedSnapshot =
+        existing?.config !== undefined && 'synced' in existing.config
+      const syncedChanged = hasSyncedSnapshot
+        ? stableJson(existing.config?.synced) !==
+          stableJson(desiredSemanticConfig)
+        : existing?.config?.managed !== true ||
+          stableJson({
+            ...(existing.config?.readUntagged !== undefined
+              ? { readUntagged: existing.config.readUntagged }
+              : {}),
+          }) !== stableJson(desiredSemanticConfig)
+      const needsUpdate =
         !existing ||
         existing.enabled !== nextEnabled ||
         wasManagedDisabled ||
         existing.projectId !== projectId ||
-        stableJson(existingSemanticConfig) !== stableJson(desiredConfig)
-      ) {
+        syncedChanged ||
+        !hasSyncedSnapshot
+      if (needsUpdate) {
+        const mergedConfig: Record<string, unknown> = existing?.config
+          ? (() => {
+              const {
+                disabledBySync: _disabled,
+                synced: _synced,
+                ...rest
+              } = existing.config
+              return {
+                ...rest,
+                ...(syncedChanged ? desiredSemanticConfig : {}),
+                managed: true,
+                synced: desiredSemanticConfig,
+              }
+            })()
+          : desiredConfig
         await this.runtime.bindings.upsert({
           channel: 'lark',
           externalId: chat.id,
@@ -222,7 +260,7 @@ export class DaemonLarkHost {
           kind: 'group',
           projectId,
           enabled: nextEnabled,
-          config: desiredConfig,
+          config: mergedConfig,
         })
       }
     }
@@ -352,6 +390,7 @@ export class DaemonLarkHost {
       timezone: validatedTimezone,
       hostEnv,
     })
+    this.currentAdapter = adapter
     try {
       await this.runtime.registerChannel(adapter)
       if (this.stopped) {
@@ -371,6 +410,8 @@ export class DaemonLarkHost {
 
   async stop(): Promise<void> {
     this.stopped = true
+    await this.currentAdapter?.stop().catch(() => {})
+    this.currentAdapter = undefined
     await this.syncQueue.catch(() => {})
     await this.unregisterIfRegistered()
   }

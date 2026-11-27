@@ -38,6 +38,7 @@ interface ActiveRunFeedback {
   isGroup: boolean
   isPassive: boolean
   sawTextDelta: boolean
+  cancelled: boolean
   reactionStarted: boolean
   reactionRemoved: boolean
   reactionPromise?: Promise<string | undefined>
@@ -145,7 +146,30 @@ export class LarkRuntimeProgressManager {
       input.externalChatId,
       input.threadId,
     )
-    if (active && !input.threadId && !input.passive) {
+    if (active && input.threadId && !input.passive) {
+      void Promise.resolve(
+        this.ctx.steerInboxEvent?.(
+          active.sessionId,
+          input.inboxEventId,
+          input.text,
+        ),
+      )
+        .then((steered) => {
+          if (steered) {
+            this.pendingAcks.delete(input.inboxEventId)
+          }
+        })
+        .catch((error) => {
+          this.options.logger.warn(
+            `[lark] Failed to auto-steer topic session ${active.sessionId}: ${errorMessage(error)}`,
+          )
+        })
+    } else if (
+      active &&
+      !active.isPassive &&
+      !input.threadId &&
+      !input.passive
+    ) {
       this.postIdleControlsCard(active, input)
     }
     this.pendingAcks.set(input.inboxEventId, {
@@ -357,7 +381,7 @@ export class LarkRuntimeProgressManager {
             )
           },
         )
-        if (this.stopped || this.activeRuns.get(active.sessionId) !== active) {
+        if (this.stopped || active.cancelled) {
           void prog.cancel().catch(() => {})
           return
         }
@@ -444,6 +468,7 @@ export class LarkRuntimeProgressManager {
   }
 
   private async cancelActiveFeedback(active: ActiveRunFeedback): Promise<void> {
+    active.cancelled = true
     active.reactionRemoved = true
     if (active.progressPromise) {
       await active.progressPromise.catch(() => {})
@@ -487,7 +512,8 @@ export class LarkRuntimeProgressManager {
           pending = candidate
         } else {
           matchedPassive = true
-          if (!pending) pending = candidate
+          // Select the newest passive input in the batch to match outboxTargetFromInputs.
+          if (!pending || pending.passive) pending = candidate
         }
       }
       const isPassive = Boolean(pending?.passive && matchedPassive)
@@ -502,6 +528,7 @@ export class LarkRuntimeProgressManager {
         isGroup: binding.kind === 'group',
         isPassive,
         sawTextDelta: false,
+        cancelled: false,
         reactionStarted: false,
         reactionRemoved: false,
         sawSkipReply: false,
@@ -563,6 +590,7 @@ export class LarkRuntimeProgressManager {
       const finalize = async (finalOutcome: LarkRunOutcome): Promise<void> => {
         try {
           if (finalOutcome === 'silent') {
+            active.cancelled = true
             active.reactionRemoved = true
           }
           if (active.progressPromise) {

@@ -447,6 +447,12 @@ export class OutboxDispatcher {
               stepNowIso,
               row.id,
             )
+            this.getAdapter(row.channel)?.onDeliverySettled?.({
+              outboxId: row.id,
+              ...(row.run_id ? { runId: row.run_id } : {}),
+              kind: row.kind,
+              status: 'failed',
+            })
             continue
           }
           const adapter = this.getAdapter(row.channel)
@@ -562,6 +568,12 @@ export class OutboxDispatcher {
           })
           if (applied) {
             delivered++
+            adapter.onDeliverySettled?.({
+              outboxId: row.id,
+              ...(row.runId ? { runId: row.runId } : {}),
+              kind: row.kind,
+              status: 'sent',
+            })
             if (row.kind === 'topic_start') {
               this.onTopicBound?.(row.sessionId)
             }
@@ -661,7 +673,17 @@ export class OutboxDispatcher {
             this.db.run('DELETE FROM kv_meta WHERE key = ?', leaseKey(row.id))
             return ok
           })
-          if (applied) failed++
+          if (applied) {
+            failed++
+            if (attempt >= MAX_OUTBOX_ATTEMPTS) {
+              adapter.onDeliverySettled?.({
+                outboxId: row.id,
+                ...(row.runId ? { runId: row.runId } : {}),
+                kind: row.kind,
+                status: 'failed',
+              })
+            }
+          }
         } finally {
           if (LIVE_OUTBOX_LEASES.get(row.id) === leaseToken) {
             LIVE_OUTBOX_LEASES.delete(row.id)

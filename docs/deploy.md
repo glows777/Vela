@@ -155,6 +155,8 @@ const extensions = [
       ]
     : []),
 ]
+const { eventReceiver: _eventReceiver, ...localChannelConfig } =
+  config.extensionConfig?.channel ?? {}
 const vela = createVela({
   cwd: config.cwd,
   agentDir: config.agentDir,
@@ -165,7 +167,10 @@ const vela = createVela({
   credentials: config.credentials,
   limits: config.settings.limits,
   extensions,
-  extensionConfig: config.extensionConfig,
+  extensionConfig: {
+    ...config.extensionConfig,
+    channel: localChannelConfig,
+  },
   eventDefaultTarget: config.settings.eventDefaultTarget,
 })
 let shuttingDown = false
@@ -185,7 +190,7 @@ await vela.ready()
 await vela.startChannels()
 ```
 
-`loadConfig()` already maps top-level `webhooks` from `config.json` into `config.extensionConfig.channel.eventReceiver`, so forwarding `extensionConfig: config.extensionConfig` enables both GitHub and generic webhooks on this host as well.
+Omitting `extensionConfig.channel.eventReceiver` ensures this temporary Local-only host does not start a duplicate webhook listener alongside `vela daemon`, which already hosts top-level `webhooks` and `lark`.
 
 In `/etc/systemd/system/vela.service`, keep `WorkingDirectory=/home/vela/workspace`, `Environment=VELA_DIR=/home/vela/.vela`, and `EnvironmentFile=/etc/vela/vela.env`, and set:
 

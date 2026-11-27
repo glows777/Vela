@@ -26,7 +26,11 @@ import {
   listLarkRuntimeMessages,
   submitLarkRuntimeHostMessage,
 } from './runtime-host.ts'
-import { decodeLarkRef, processLarkInboundEvent } from './runtime-inbound.ts'
+import {
+  decodeLarkRef,
+  processLarkInboundEvent,
+  raceWithSignal,
+} from './runtime-inbound.ts'
 import { LarkRuntimeProgressManager } from './runtime-progress.ts'
 import { historySearchSchema, searchHistory } from './search-history.ts'
 import { sendLarkFile } from './send-file.ts'
@@ -118,7 +122,7 @@ export class LarkChannelAdapter implements ChannelAdapter {
   private readonly chats: Map<string, LarkChat>
   private readonly logger: VelaLogger
   private readonly customTransport?: LarkTransport
-  readonly timezone?: unknown
+  readonly timezone?: string
 
   private ctx?: ChannelAdapterContext
   private transport?: LarkTransport & Partial<LarkChatNames>
@@ -203,15 +207,19 @@ export class LarkChannelAdapter implements ChannelAdapter {
     this.progressManager = manager
 
     try {
-      const botId = await transport.getBotId()
+      const botId = await raceWithSignal(
+        transport.getBotId(),
+        this.stopController.signal,
+      )
       if (!active()) return
       this.botId = botId
     } catch (error) {
+      if (this.stopped || !active()) return
       this.logger.warn(
         `[lark] Cannot identify bot; group messages will be ignored: ${String(error)}`,
       )
     }
-    if (!active()) return
+    if (this.stopped || !active()) return
 
     try {
       manager.start()
@@ -267,10 +275,9 @@ export class LarkChannelAdapter implements ChannelAdapter {
     if (!this.transport) throw new Error('Lark is not connected')
     const parsed = decodeLarkRef(ref)
     if (!parsed) throw new Error(`Unsupported Lark attachment ref: ${ref}`)
-    const stream = await this.transport.getResource(
-      parsed.messageId,
-      parsed.key,
-      parsed.kind,
+    const stream = await raceWithSignal(
+      this.transport.getResource(parsed.messageId, parsed.key, parsed.kind),
+      combinedSignal,
     )
     return readStreamWithCap(stream, combinedSignal)
   }
@@ -288,21 +295,22 @@ export class LarkChannelAdapter implements ChannelAdapter {
     }
   }
 
-  async deliver(
-    message: ChannelOutboundMessage,
-  ): Promise<ChannelDeliveryResult> {
+  deliver(message: ChannelOutboundMessage): Promise<ChannelDeliveryResult> {
     const kind = message.kind ?? 'reply'
-    try {
-      const result = await this.deliverInner(message, kind)
-      if (message.runId && kind === 'reply') {
-        this.progressManager?.noteOutboxOutcome(message.runId, true)
-      }
-      return result
-    } catch (error) {
-      if (message.runId && kind === 'reply') {
-        this.progressManager?.noteOutboxOutcome(message.runId, false)
-      }
-      throw error
+    return this.deliverInner(message, kind)
+  }
+
+  onDeliverySettled(info: {
+    outboxId: string
+    runId?: string
+    kind: string
+    status: 'sent' | 'failed'
+  }): void {
+    if (info.runId && info.kind === 'reply') {
+      this.progressManager?.noteOutboxOutcome(
+        info.runId,
+        info.status === 'sent',
+      )
     }
   }
 
@@ -489,7 +497,9 @@ export class LarkChannelAdapter implements ChannelAdapter {
       ownAppId: this.appId,
       transport: this.transport,
       senderName: (id) => this.senderName(id),
-      hostPostAuthor: (messageId) => this.hostPostAuthors.get(messageId),
+      hostPostAuthor: (messageId) =>
+        this.hostPostAuthors.get(messageId) ??
+        this.ctx?.getHostPostAuthor?.(messageId),
     })
   }
 
@@ -531,6 +541,7 @@ export class LarkChannelAdapter implements ChannelAdapter {
             this.hostPostAuthors.keys().next().value as string,
           )
         }
+        this.ctx?.recordHostPostAuthor?.(messageId, authorName)
       },
       noteAdmittedInbound: (info) =>
         this.progressManager?.noteAdmittedInbound(info),

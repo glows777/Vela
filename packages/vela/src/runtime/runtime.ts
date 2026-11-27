@@ -21,6 +21,7 @@ import {
   listRuntimeOrChannelMessages,
   registerChannelInRuntime,
   setChannelEnabledInDb,
+  steerSessionInRuntime,
   submitChannelHostMessageInRuntime,
 } from './channel-control.ts'
 import type {
@@ -61,6 +62,7 @@ import { executeRuntimeClaimedTurn } from './turn-runner.ts'
 import {
   canWakeSessionInDb,
   claimNextTurnInDb,
+  computeNextWakeDelayMs,
   recoverRuntimeState,
   stopSessionInRuntime,
 } from './worker.ts'
@@ -174,7 +176,11 @@ export class VelaRuntimeEngine {
       executeShortcut: (s) => this.executeShortcut(s),
       scheduleSession: (sid) => this.scheduleSession(sid),
       stopSession: (sid, r) => this.stopSession(sid, r),
-      steerSession: (sid, t) => this.steerSession(sid, t),
+      steerSession: async (sid, t) => {
+        await this.steerSession(sid, t)
+      },
+      trySteerSession: (sid, t, images) =>
+        this.steerSession(sid, t, images, true),
     })
     void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
   }
@@ -330,25 +336,24 @@ export class VelaRuntimeEngine {
     return result
   }
 
-  async steerSession(sessionId: string, text: string): Promise<void> {
-    if (this.disposed) throw new Error('Runtime has been disposed')
-    const session = this.sessions.get(sessionId)
-    if (!session) throw new Error(`Session ${sessionId} not found`)
-    this.db.run(
-      `UPDATE sessions SET followup_streak = 0, updated_at = ? WHERE id = ?`,
-      new Date().toISOString(),
+  steerSession(
+    sessionId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType: string }>,
+    noQueueFallback = false,
+  ): Promise<boolean> {
+    return steerSessionInRuntime({
+      disposed: this.disposed,
+      db: this.db,
+      sessions: this.sessions,
+      drivers: this.drivers,
+      activeWorkers: this.activeWorkers,
+      submitPrompt: (input) => this.submitPrompt(input),
       sessionId,
-    )
-    const driver = this.drivers.get(session.driver)
-    if (
-      this.activeWorkers.has(sessionId) &&
-      driver?.capabilities.steer &&
-      driver.steer
-    ) {
-      const accepted = await driver.steer(sessionId, text)
-      if (accepted !== false) return
-    }
-    this.submitPrompt({ sessionId, text, source: 'user', wake: true })
+      text,
+      images,
+      noQueueFallback,
+    })
   }
 
   requestApproval(input: {
@@ -585,24 +590,14 @@ export class VelaRuntimeEngine {
       this.nextWakeTimer = undefined
     }
     if (this.disposed || !this.db.open) return
-    const timerDue = this.db.get<{ next_at: string | null }>(
-      `SELECT min(next_fire_at) AS next_at FROM timers WHERE enabled = 1 AND next_fire_at IS NOT NULL`,
-    )?.next_at
     const registeredChannels = [...this.channels.keys()].filter((name) =>
       this.isChannelEnabled(name),
     )
-    const outboxDue = this.outbox.nextPendingWakeAt(registeredChannels)
-    let earliestMs = Number.POSITIVE_INFINITY
-    for (const candidate of [timerDue, outboxDue]) {
-      if (!candidate) continue
-      const ms = Date.parse(candidate)
-      if (Number.isFinite(ms) && ms < earliestMs) earliestMs = ms
-    }
-    if (!Number.isFinite(earliestMs)) return
-    const delayMs = Math.max(
-      0,
-      Math.min(earliestMs - Date.now(), 2_147_483_647),
+    const delayMs = computeNextWakeDelayMs(
+      this.db,
+      this.outbox.nextPendingWakeAt(registeredChannels) ?? undefined,
     )
+    if (delayMs === undefined) return
     this.nextWakeTimer = setTimeout(() => {
       this.nextWakeTimer = undefined
       if (this.disposed || !this.db.open) return

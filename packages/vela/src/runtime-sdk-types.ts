@@ -387,7 +387,16 @@ export interface LocalVelaRuntime extends VelaRuntime {
     disabledByExtension?: boolean
   }
   /** @internal Syncs active `hub`/`topic` session defaults after daemon project config changes. */
-  reconcileProjectSessions?(projectId: string): Promise<void>
+  reconcileProjectSessions?(
+    projectId: string,
+    fields?: {
+      location?: boolean
+      model?: boolean
+      thinkingLevel?: boolean
+      topicModel?: boolean
+      topicThinkingLevel?: boolean
+    },
+  ): Promise<void>
 }
 
 export interface CreateRuntimeOptions {

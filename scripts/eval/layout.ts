@@ -111,6 +111,16 @@ export function runtimePaths(runtime: string) {
       'packages/vela/dist/index.js',
       'packages/vela/dist/index.js',
     ),
+    runtimeSdk: path(
+      'src/index.ts',
+      'packages/vela/dist/runtime-sdk.js',
+      'packages/vela/dist/runtime-sdk.js',
+    ),
+    runtimeLarkAdapter: path(
+      'src/extensions/feishu/index.ts',
+      'packages/vela/dist/lark/runtime-adapter.js',
+      'packages/vela/dist/lark/runtime-adapter.js',
+    ),
     runtimeMemoryStore: path(
       'src/extensions/memory/store.ts',
       'packages/core/dist/extensions/memory/store.js',

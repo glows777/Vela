@@ -85,6 +85,34 @@ function extractFileDescriptor(message: LarkMessageEvent['message']): {
   return { key: fileKey, name: safeName(rawName) }
 }
 
+export function raceWithSignal<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason ?? new DOMException('Aborted', 'AbortError'),
+    )
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
 export async function processLarkInboundEvent(params: {
   event: LarkMessageEvent
   meta: {
@@ -224,7 +252,7 @@ export async function processLarkInboundEvent(params: {
   const name =
     event.sender.sender_type === 'app'
       ? meta.senderId
-      : await senderName(meta.senderId)
+      : await raceWithSignal(senderName(meta.senderId), signal)
   if (isStopped() || signal?.aborted) return false
 
   const isSlash = !meta.passive && baseText.startsWith('/')
@@ -273,9 +301,9 @@ export async function processLarkInboundEvent(params: {
           const history = []
           let pageToken: string | undefined
           do {
-            const page = await transport.listTopicMessages(
-              meta.topic.threadId,
-              pageToken,
+            const page = await raceWithSignal(
+              transport.listTopicMessages(meta.topic.threadId, pageToken),
+              signal,
             )
             history.push(...page.items)
             pageToken = page.pageToken
@@ -285,7 +313,7 @@ export async function processLarkInboundEvent(params: {
             message,
             appId,
             question,
-            senderName,
+            senderName: (id) => raceWithSignal(senderName(id), signal),
             downloadImages: collectHistoryImages,
           })
           formattedText = context.text
@@ -294,6 +322,7 @@ export async function processLarkInboundEvent(params: {
             if (att) historyImageOrder.push(att)
           }
         } catch (error) {
+          if (isStopped() || signal?.aborted) return false
           await deliver({
             outboxId: `topic-hist-err-${message.message_id ?? Date.now()}`,
             kind: 'reply',
@@ -308,17 +337,20 @@ export async function processLarkInboundEvent(params: {
         }
       } else if (meta.group && transport) {
         try {
-          const history = await transport.listMessages(message.chat_id, {
-            before: message.create_time,
-            limit: 50,
-          })
+          const history = await raceWithSignal(
+            transport.listMessages(message.chat_id, {
+              before: message.create_time,
+              limit: 50,
+            }),
+            signal,
+          )
           const context = await readGroupContext(history, {
             chatId: message.chat_id,
             message,
             previous: groupBoundary(message.chat_id),
             appId,
             question,
-            senderName,
+            senderName: (id) => raceWithSignal(senderName(id), signal),
             downloadImages: collectHistoryImages,
           })
           formattedText = context.text
@@ -327,6 +359,7 @@ export async function processLarkInboundEvent(params: {
             if (att) historyImageOrder.push(att)
           }
         } catch (error) {
+          if (isStopped() || signal?.aborted) return false
           logger.warn(
             `[lark] Failed to fetch context for chat ${message.chat_id}: ${String(error)}. History images require im:resource permission.`,
           )

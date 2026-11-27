@@ -26,6 +26,7 @@ import { recordChildStatusNoteForHubInTx } from './recovery.ts'
 
 export {
   canWakeSessionInDb,
+  computeNextWakeDelayMs,
   recoverRuntimeState,
   stopSessionInRuntime,
   stopSessionRunsInDb,

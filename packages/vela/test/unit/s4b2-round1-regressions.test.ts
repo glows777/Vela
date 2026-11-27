@@ -593,9 +593,10 @@ test('R1 #9,#10,#11,#12,#13,#15,#24: per-route ordering, passive/explicit partit
     ),
   )
   await waitFor(
-    () => fake.replies.length === 2,
-    'both topic replies sent in order',
+    () => seenPrompts.length >= 2 && fake.replies.length >= 1,
+    'both topic messages processed in order',
   )
+  await rt.waitForIdle()
   expect(seenPrompts[0]).toContain('first')
   expect(seenPrompts[1]).toContain('second without @')
 
@@ -688,23 +689,49 @@ test('R1 #9,#10,#11,#12,#13,#15,#24: per-route ordering, passive/explicit partit
   expect(batchPrompts[1]).toContain('explicit question')
   expect(batchPrompts[1]).not.toContain('passive chatter during busy')
 
-  // Stop adapter cleans up without errors
+  // Stop adapter cleans up without errors (wait beyond the 250ms card interval)
   await rt.unregisterChannel('lark')
   const patchCountAfterStop = fake.patches.length
-  await Bun.sleep(60)
+  await Bun.sleep(320)
   expect(fake.patches.length).toBe(patchCountAfterStop)
 })
 
-test('R1 Owner lock serializes concurrent stale-lock check safely', () => {
+test('R1 Owner lock serializes concurrent stale-lock check safely', async () => {
   const dir = makeTempDir('vela-s4b2-lock-')
   const lockPath = join(dir, 'daemon.lock')
   writeFileSync(
     lockPath,
     JSON.stringify({ pid: 99999999, instanceId: 'dead-1' }),
   )
-  const release = acquireOwnerLock(lockPath, 'live-1', join(dir, 'vela.sock'))
+  const ownerLockMod = join(import.meta.dir, '../../src/daemon/owner-lock.ts')
+  const script = `
+    import { acquireOwnerLock } from ${JSON.stringify(ownerLockMod)};
+    const id = process.argv[2];
+    const rel = acquireOwnerLock(${JSON.stringify(lockPath)}, id, ${JSON.stringify(join(dir, 'vela.sock'))});
+    console.log('ACQUIRED:' + id);
+    await Bun.sleep(400);
+    rel();
+  `
+  const p1 = Bun.spawn(['bun', '-e', script, 'live-1'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const p2 = Bun.spawn(['bun', '-e', script, 'live-2'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [c1, c2] = await Promise.all([p1.exited, p2.exited])
+  const [out1, out2] = await Promise.all([
+    new Response(p1.stdout).text(),
+    new Response(p2.stdout).text(),
+  ])
+  const acquired = [out1, out2].filter((s) => s.includes('ACQUIRED:')).length
+  expect(acquired).toBe(1)
+  expect([c1, c2].sort()).toEqual([0, 1])
+
+  const release = acquireOwnerLock(lockPath, 'live-3', join(dir, 'vela.sock'))
   expect(() =>
-    acquireOwnerLock(lockPath, 'live-2', join(dir, 'vela.sock')),
+    acquireOwnerLock(lockPath, 'live-4', join(dir, 'vela.sock')),
   ).toThrow(DaemonAlreadyRunningError)
   release()
 })

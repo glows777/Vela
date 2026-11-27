@@ -178,6 +178,16 @@ function inboxRouteInfo(row: InboxRow): {
 
 const PASSIVE_BATCH_MAX_BYTES = 400 * 1024
 
+function passivePreparedTextBytes(row: InboxRow): number {
+  try {
+    const parsed = JSON.parse(row.payload_json) as { text?: unknown }
+    if (typeof parsed.text === 'string') {
+      return Buffer.byteLength(parsed.text, 'utf8')
+    }
+  } catch {}
+  return Buffer.byteLength(row.payload_json, 'utf8')
+}
+
 export function cancelPendingInboxEventInDb(
   db: VelaDatabase,
   inboxEventId: string,
@@ -224,9 +234,11 @@ export function claimInboxBatchInTx(
   if (anchorInfo.needsAnnouncement) {
     selected = [anchor]
   } else if (anchorPassive) {
-    selected = []
-    let batchBytes = 0
-    for (const row of rows) {
+    const anchorBytes = passivePreparedTextBytes(anchor)
+    const prefix: InboxRow[] = []
+    let batchBytes = anchorBytes
+    for (let i = firstWakeIdx - 1; i >= 0; i--) {
+      const row = rows[i]!
       if (row.passive !== 1) continue
       const info = inboxRouteInfo(row)
       if (
@@ -236,8 +248,32 @@ export function claimInboxBatchInTx(
       ) {
         continue
       }
-      const bytes = Buffer.byteLength(row.payload_json, 'utf8')
-      if (selected.length > 0 && batchBytes + bytes > PASSIVE_BATCH_MAX_BYTES) {
+      const bytes = passivePreparedTextBytes(row)
+      if (batchBytes + bytes > PASSIVE_BATCH_MAX_BYTES) {
+        break
+      }
+      prefix.unshift(row)
+      batchBytes += bytes
+    }
+    selected = [...prefix, anchor]
+    for (let i = firstWakeIdx + 1; i < rows.length; i++) {
+      const row = rows[i]!
+      if (row.passive !== 1) {
+        // Explicit waking inputs cannot join a passive batch, and passive tail rows behind
+        // an explicit request must wait behind it in chronological order.
+        if (row.wake === 1) break
+        continue
+      }
+      const info = inboxRouteInfo(row)
+      if (
+        anchorInfo.routeKey &&
+        info.routeKey &&
+        info.routeKey !== anchorInfo.routeKey
+      ) {
+        break
+      }
+      const bytes = passivePreparedTextBytes(row)
+      if (batchBytes + bytes > PASSIVE_BATCH_MAX_BYTES) {
         break
       }
       selected.push(row)

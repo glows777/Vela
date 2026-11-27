@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'node:fs'
-import { mkdir, readdir, readFile, realpath } from 'node:fs/promises'
+import { mkdir, readdir, readFile, readlink, realpath } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LanguageModelV4, LanguageModelV4Usage } from '@ai-sdk/provider'
@@ -245,9 +245,8 @@ export async function runAttempt(
       const workspaceDir = join(
         config.artifactDir,
         'data',
-        'channels',
-        paths.channelName,
-        'oc_group',
+        'projects',
+        `${paths.channelName}-oc_group`,
         'workspace',
       )
       const baseline = new Map<string, string>()
@@ -261,7 +260,8 @@ export async function runAttempt(
         thinking: config.thinking,
         dream: config.dream,
         providers,
-        sdkPath: paths.sdk,
+        runtimeSdkPath: paths.runtimeSdk,
+        runtimeLarkAdapterPath: paths.runtimeLarkAdapter,
         helpersPath: paths.helpers,
         channelName: paths.channelName,
         memoryStorePath: paths.runtimeMemoryStore,
@@ -277,7 +277,12 @@ export async function runAttempt(
         const walk = async (dir: string): Promise<void> => {
           for (const entry of await readdir(dir, { withFileTypes: true })) {
             const full = join(dir, entry.name)
-            if (entry.isDirectory()) {
+            if (entry.isSymbolicLink()) {
+              observedFiles.set(
+                relative(workspaceDir, full),
+                `symlink:${await readlink(full)}`,
+              )
+            } else if (entry.isDirectory()) {
               await walk(full)
             } else if (entry.isFile()) {
               observedFiles.set(

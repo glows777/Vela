@@ -9,7 +9,7 @@
     readonly capabilities: AgentDriverCapabilities
     readonly name: string
     runTurn: (request: DriverTurnRequest) => Promise<DriverTurnResult>
-    steer?: ((sessionId: string, text: string) => boolean | Promise<boolean>) | undefined
+    steer?: ((sessionId: string, text: string, images?: Array<{ data: string; mimeType: string; }>) => boolean | Promise<boolean>) | undefined
     waitForBackground?: (() => Promise<void>) | undefined
   interface AgentDriverCapabilities
     readonly approval: boolean
@@ -142,19 +142,23 @@
     getTools?: ((binding: ChannelBinding) => readonly ChannelToolSpec[]) | undefined
     listChats?: (() => Promise<ChannelChatInfo[]>) | undefined
     listMessages?: ((input: { sessionId: string; externalChatId: string; threadId?: string | null; kind: ChannelBindingKind; cursor?: string; limit?: number; }) => Promise<RuntimeMessagePage>) | undefined
+    onDeliverySettled?: ((info: { outboxId: string; runId?: string; kind: string; status: "sent" | "failed"; }) => void) | undefined
     readonly description?: string | undefined
     readonly name: string
+    readonly timezone?: string | undefined
     start: (ctx: ChannelAdapterContext) => Promise<void>
     status?: (() => ChannelConnectionState) | undefined
     stop: () => Promise<void>
     submitFromHost?: ((input: ChannelHostSubmitInput) => Promise<ChannelHostSubmitResult>) | undefined
   interface ChannelAdapterContext
     discardInboxEvent?: ((inboxEventId: string) => boolean) | undefined
+    getHostPostAuthor?: ((externalMessageId: string) => string | undefined) | undefined
     getProject?: ((id: string) => ProjectRecord | undefined) | undefined
     getSession?: ((id: string) => SessionRecord | undefined) | undefined
     ingest: (message: ChannelInboundMessage) => Promise<void>
     ingestWithReceipt?: ((message: ChannelInboundMessage) => Promise<ChannelIngestReceipt>) | undefined
     listBindings?: ((filter?: { channel?: string; projectId?: string; enabledOnly?: boolean; }) => ChannelBinding[]) | undefined
+    recordHostPostAuthor?: ((externalMessageId: string, authorName: string) => void) | undefined
     steerInboxEvent?: ((sessionId: string, inboxEventId: string, text: string) => Promise<boolean>) | undefined
     steerSession?: ((sessionId: string, text: string) => Promise<void>) | undefined
     stopSession?: ((sessionId: string, reason?: string) => Promise<boolean>) | undefined
@@ -671,9 +675,10 @@
     getTools: (binding: ChannelBinding) => readonly ChannelToolSpec[]
     listChats: () => Promise<ChannelChatInfo[]>
     listMessages: (input: { sessionId: string; externalChatId: string; threadId?: string | null; kind: "group" | "direct"; cursor?: string; limit?: number; }) => Promise<RuntimeMessagePage>
+    onDeliverySettled: (info: { outboxId: string; runId?: string; kind: string; status: "sent" | "failed"; }) => void
     readonly description: "Lark bot message channel (long-connection mode)"
     readonly name: "lark"
-    readonly timezone?: unknown
+    readonly timezone?: string | undefined
     start: (ctx: ChannelAdapterContext) => Promise<void>
     status: () => ChannelConnectionState
     stop: () => Promise<void>

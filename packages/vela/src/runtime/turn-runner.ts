@@ -9,6 +9,7 @@ import {
 } from './driver.ts'
 import type { RuntimeEventBus } from './event-bus.ts'
 import type { RunEndStatus } from './events.ts'
+import { requeueProcessingForRunInTx } from './inbox.ts'
 import {
   type ClaimedTurn,
   commitCompletedTurnInTx,
@@ -85,6 +86,35 @@ export async function executeRuntimeClaimedTurn(params: {
           },
         })
       : { skipTurn: false, outboxTarget: initialTarget, inputs: claimed.inputs }
+    if (announced.deferTurn) {
+      const now = new Date().toISOString()
+      db.transaction(() => {
+        db.run(
+          `UPDATE runs
+           SET status = 'interrupted', owner_token = NULL, finished_at = ?, updated_at = ?
+           WHERE id = ? AND owner_token = ?`,
+          now,
+          now,
+          claimed.runId,
+          claimed.ownerToken,
+        )
+        db.run(
+          `UPDATE sessions SET state = 'idle', waiting_reason = NULL, updated_at = ? WHERE id = ?`,
+          now,
+          claimed.session.id,
+        )
+        requeueProcessingForRunInTx(db, claimed.runId)
+        db.run(
+          'DELETE FROM kv_meta WHERE key IN (?, ?, ?, ?, ?)',
+          `run_target:${claimed.runId}`,
+          `stop_requested:${claimed.runId}`,
+          `run_silent:${claimed.runId}`,
+          `run_handoff_depth:${claimed.runId}`,
+          `run_input_meta:${claimed.runId}`,
+        )
+      })
+      return { lostOwnership: false, status: 'interrupted' }
+    }
     if (announced.skipTurn) {
       finalizeTurnInDb({
         db,

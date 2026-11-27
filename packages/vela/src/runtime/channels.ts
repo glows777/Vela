@@ -186,15 +186,24 @@ export interface ChannelAdapterContext {
   }): ChannelBinding[]
   getSession?(id: string): SessionRecord | undefined
   getProject?(id: string): ProjectRecord | undefined
+  recordHostPostAuthor?(externalMessageId: string, authorName: string): void
+  getHostPostAuthor?(externalMessageId: string): string | undefined
 }
 
 /** First-class external messaging adapter hosted by `Runtime`. */
 export interface ChannelAdapter {
   readonly name: string
   readonly description?: string
+  readonly timezone?: string
   start(ctx: ChannelAdapterContext): Promise<void>
   stop(): Promise<void>
   deliver(message: ChannelOutboundMessage): Promise<ChannelDeliveryResult>
+  onDeliverySettled?(info: {
+    outboxId: string
+    runId?: string
+    kind: string
+    status: 'sent' | 'failed'
+  }): void
   fetchAttachment?(ref: string, signal?: AbortSignal): Promise<Uint8Array>
   status?(): ChannelConnectionState
   listMessages?(input: {

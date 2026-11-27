@@ -412,6 +412,7 @@ export function createRuntime(
       ),
       getChannelTools: (sid, runId) =>
         engine.getChannelToolsForSession(sid, runId),
+      getChannelTimezone: (channel) => engine.channelAdapter(channel)?.timezone,
       hostEnv,
       contextFiles: options.contextFiles,
       skills: options.skills,
@@ -603,7 +604,9 @@ export function createRuntime(
         const res = engine.submitPrompt({ ...input, sessionId })
         return { eventId: res.event.id, inserted: res.inserted }
       },
-      steer: (sessionId, text) => engine.steerSession(sessionId, text),
+      steer: async (sessionId, text) => {
+        await engine.steerSession(sessionId, text)
+      },
       stop: (sessionId, reason) => engine.stopSession(sessionId, reason),
       waitForIdle: (sessionId) => engine.waitForIdle(sessionId),
       jobs: {
@@ -715,9 +718,18 @@ export function createRuntime(
         engine.ingestWebhookEvent(event, defaultTarget),
       getWebhookConfig: () => ({ ...currentWebhookConfig }),
       getLarkConfig: () => ({ ...currentLarkConfig }),
-      reconcileProjectSessions: async (projectId: string) => {
+      reconcileProjectSessions: async (
+        projectId: string,
+        fields?: {
+          location?: boolean
+          model?: boolean
+          thinkingLevel?: boolean
+          topicModel?: boolean
+          topicThinkingLevel?: boolean
+        },
+      ) => {
         const project = engine.projects.get(projectId)
-        if (project) engine.sessions.reconcileProjectDefaults(project)
+        if (project) engine.sessions.reconcileProjectDefaults(project, fields)
       },
       dispose() {
         disposing ??= (async () => {
