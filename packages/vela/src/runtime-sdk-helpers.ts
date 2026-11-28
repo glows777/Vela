@@ -43,33 +43,18 @@ export function mergeExtensionConfig(
 }
 
 export function isLarkExtensionDisabled(
-  extensions: readonly string[] | undefined,
+  ownerExtensions: readonly string[] | undefined,
+  explicitExtensions?: readonly (string | VelaExtension)[],
 ): boolean {
   let disabled = false
-  for (const entry of extensions ?? []) {
-    if (entry === '-builtin:lark') disabled = true
-    else if (entry === '+builtin:lark' || entry === 'builtin:lark')
-      disabled = false
-  }
-  return disabled
-}
-
-export function partitionRuntimeExtensions(
-  extensions: readonly (string | VelaExtension)[] | undefined,
-): {
-  specs: string[]
-  inline: VelaExtension[]
-} {
-  const specs: string[] = []
-  const inline: VelaExtension[] = []
-  for (const entry of extensions ?? []) {
-    if (typeof entry === 'string') {
-      specs.push(entry)
-    } else if (typeof entry === 'function') {
-      inline.push(entry)
+  for (const list of [ownerExtensions, explicitExtensions]) {
+    for (const entry of list ?? []) {
+      if (entry === '-builtin:lark') disabled = true
+      else if (entry === '+builtin:lark' || entry === 'builtin:lark')
+        disabled = false
     }
   }
-  return { specs, inline }
+  return disabled
 }
 
 export function createSpecialModelResolver(): ResolveSpecialModelFn {

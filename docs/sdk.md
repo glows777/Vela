@@ -119,7 +119,7 @@ Key `VelaRuntime` namespaces and methods:
 
 ### Multiple sessions & prompting
 
-One Runtime can run many sessions concurrently (`projects.create` + `sessions.create`). A session's queue accepts `steer(sessionId, text)` while running, or `prompt(sessionId, input)` to queue into `inbox_events`. Input starting with `/` that matches a built-in command (`/memory`, `/dream`, `/tasks`, `/bashes`, `/cache`) or an extension command executes directly instead of calling the model (`runtime.sessions.runCommand()`).
+One Runtime can run many sessions concurrently (`projects.create` + `sessions.create`). A session's queue accepts `steer(sessionId, text)` while running, or `prompt(sessionId, input)` to queue model input into `inbox_events` (`prompt()` resolves once queued—`await runtime.waitForIdle(sessionId)` before reading completed messages). To execute a built-in command (`/memory`, `/dream`, `/tasks`, `/bashes`, `/cache`) or extension command, call `await runtime.sessions.runCommand(sessionId, '/dream')` rather than `prompt()`.
 
 See [03-multi-session.ts](../examples/sdk/03-multi-session.ts) and [daemon-client.ts](../examples/daemon-client.ts).
 

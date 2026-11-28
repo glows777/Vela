@@ -1,5 +1,6 @@
 import { errorMessage } from '../../../shared/logger.ts'
 import type { BackgroundCommands } from '../../tools/background.ts'
+import type { VelaSession } from '../../vela-session.ts'
 import type { ExtensionContext, VelaExtension } from '../types.ts'
 import { BackgroundJobs } from './jobs.ts'
 import { tasks } from './tasks.ts'
@@ -44,7 +45,12 @@ export function background(options: BackgroundOptions = {}): VelaExtension {
       handler: async (args: string, ctx: ExtensionContext) => {
         try {
           // `session_start` installs the job table before any command runs.
-          ctx.notify(await tasks(args, table(ctx.session.registry.background)))
+          ctx.notify(
+            await tasks(
+              args,
+              table((ctx.session as VelaSession).registry.background),
+            ),
+          )
         } catch (error) {
           ctx.notify(errorMessage(error), 'error')
         }
@@ -53,15 +59,17 @@ export function background(options: BackgroundOptions = {}): VelaExtension {
     vela.registerCommand('tasks', tasksCommand)
     vela.registerCommand('bashes', tasksCommand)
     vela.on('session_start', (_event, { session }) => {
-      session.registry.background = new BackgroundJobs(
-        session,
+      const vs = session as VelaSession
+      vs.registry.background = new BackgroundJobs(
+        vs,
         vela.logger,
         options.shellPath,
       )
     })
     vela.on('session_shutdown', async (_event, { session }) => {
-      const jobs = session.registry.background
-      session.registry.background = undefined
+      const vs = session as VelaSession
+      const jobs = vs.registry.background
+      vs.registry.background = undefined
       await jobs?.stopAll()
     })
   }

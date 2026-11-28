@@ -4,7 +4,7 @@ import {
   MEMORY_RULES,
   type MemoryStore,
 } from '../../../runtime/memory/store.ts'
-import type { VelaExtension, VelaSession } from '../../extension-api.ts'
+import type { ExtensionSession, VelaExtension } from '../../extension-api.ts'
 import {
   customMessageIfChanged,
   lastCustomMessage,
@@ -54,7 +54,7 @@ export function memory(): VelaExtension {
     })
     vela.registerTool(createMemoryTool(store, () => store))
 
-    const contentFor = (session: VelaSession): string | null => {
+    const contentFor = (session: ExtensionSession): string | null => {
       const index = store.buildIndex()
       // Deleting the last entry must replace the old index; a session that never had one stays quiet
       return (

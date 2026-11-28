@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { stopDaemon } from '@glows777/vela'
+import { connectRuntime, stopDaemon } from '@glows777/vela'
 import {
   _electron,
   chromium,
@@ -3759,6 +3759,30 @@ async function packaged(appPath: string) {
         'Apache License',
       ),
     )
+    assert(
+      (await stat(resolve(resources, 'docs/sdk.md'))).isFile(),
+      'Packaged app ships Vela docs directory in Resources',
+    )
+    const packagedRuntime = await connectRuntime({
+      agentDir: data,
+      autoStart: false,
+    })
+    try {
+      const packagedSessions = await packagedRuntime.sessions.list()
+      assert(packagedSessions.length > 0, 'Packaged daemon has active session')
+      const inspected = await packagedRuntime.sessions.inspect(
+        packagedSessions[0]!.id,
+        { previewPrompt: true },
+      )
+      const packagedSystemPrompt = inspected.promptSnapshot?.systemPrompt ?? ''
+      assert(
+        packagedSystemPrompt.includes('<docs>') &&
+          packagedSystemPrompt.includes(resolve(resources, 'docs')),
+        `Packaged daemon system prompt must point <docs> at ${resolve(resources, 'docs')}`,
+      )
+    } finally {
+      await packagedRuntime.dispose()
+    }
     checks.push(
       'Packaged app launches with scratch home/data/profile, isolated renderer, minimum window, system themes, bundled licenses, and no specimen.',
     )

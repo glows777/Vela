@@ -8,7 +8,7 @@
  */
 import { connectRuntime, getDaemonStatus } from '@glows777/vela'
 
-const status = await getDaemonStatus()
+const status = await getDaemonStatus({ hostEnv: process.env })
 if (!status.running) {
   console.error(
     'No running vela daemon found. Start one first with: vela daemon start',
@@ -16,7 +16,12 @@ if (!status.running) {
   process.exit(1)
 }
 
-const runtime = await connectRuntime({ agentDir: status.agentDir })
+const runtime = await connectRuntime({
+  agentDir: status.agentDir,
+  socketPath: status.socketPath,
+  hostEnv: process.env,
+  autoStart: false,
+})
 try {
   const session = await runtime.sessions.create({ name: 'daemon-client-demo' })
   const unsubscribe = runtime.events.subscribe((event) => {

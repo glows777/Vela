@@ -10,6 +10,7 @@ import {
 import type { VelaLogger } from '../../shared/logger.ts'
 import type { ModelPricing } from '../../shared/pricing.ts'
 import type { ModelInput, ProviderUsage } from '../../shared/provider-types.ts'
+import type { ExtensionSession } from '../extensions/types.ts'
 import type { ModelMessage } from '../messages.ts'
 import { normalizeUsage, type StepUsage } from '../usage/tracker.ts'
 import type { VelaSession } from '../vela-session.ts'
@@ -178,8 +179,11 @@ export class MemoryDream {
   }
 
   /** Collects human-authored user turns from the completed SDK session turn. */
-  collect(session: VelaSession, turnMessages?: readonly ModelMessage[]): void {
-    if (this.scope.kind !== 'tagged') return
+  collect(
+    session: ExtensionSession | VelaSession,
+    turnMessages?: readonly ModelMessage[],
+  ): void {
+    if (this.scope.kind !== 'tagged' || !('store' in session)) return
     const sourceMsgs = turnMessages ?? session.messages
     const refs = sourceMsgs.flatMap((msg) => {
       if (msg.role !== 'user' || session.customMessageOf(msg)) return []
@@ -430,8 +434,8 @@ export class MemoryDream {
   }
 
   /** Triggers an asynchronous auto-dream if due, tracked on the legacy session's backgroundWork. */
-  schedule(session: VelaSession, logger: VelaLogger): void {
-    if (!this.due()) return
+  schedule(session: ExtensionSession | VelaSession, logger: VelaLogger): void {
+    if (!this.due() || !('trackWork' in session)) return
     const work = this.run(session).catch((error) =>
       logger.warn(
         `[dream] ${error instanceof Error ? error.message : String(error)}`,
@@ -441,10 +445,15 @@ export class MemoryDream {
   }
 
   run(
-    target: VelaSession | DreamRunnerContext,
+    target: VelaSession | DreamRunnerContext | ExtensionSession,
     signal?: AbortSignal,
   ): Promise<string> {
     if (this.running) return this.running
+    if (!('tracker' in target) && !('recordUsage' in target)) {
+      return Promise.reject(
+        new Error('Dream requires a session with a model tracker'),
+      )
+    }
     const runnerCtx =
       'tracker' in target ? sessionRunnerContext(target) : target
     const controller = new AbortController()

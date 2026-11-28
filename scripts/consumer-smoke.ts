@@ -61,7 +61,6 @@ import {
   type RuntimeEvent,
   type SessionKind,
   type SessionState,
-  type VelaExtension,
   type VelaRuntime,
 } from '@glows777/vela'
 import * as rootNamespace from '@glows777/vela'
@@ -72,6 +71,7 @@ import {
   ToolExecutionResult,
   type ExtensionAPI,
   type ToolContent,
+  type VelaExtension,
 } from '@glows777/vela/extension-api'
 import {
   cleanupTestVelas,
@@ -255,11 +255,55 @@ try {
 }
 void mkdirSync
 
+// Default createRuntime() resolves packaged docs into <docs>; docs: false omits them.
+const docsSystems: string[] = []
+const docsModel = createFauxModel({
+  responses: [
+    (req) => {
+      docsSystems.push(req.system ?? '')
+      return fauxText('docs on')
+    },
+    (req) => {
+      docsSystems.push(req.system ?? '')
+      return fauxText('docs off')
+    },
+  ],
+})
+const docsOnRuntime = createRuntime({
+  ephemeral: true,
+  defaultModel: docsModel,
+  mcp: false,
+})
+const docsOffRuntime = createRuntime({
+  ephemeral: true,
+  defaultModel: docsModel,
+  mcp: false,
+  docs: false,
+})
+try {
+  await docsOnRuntime.ready()
+  await docsOffRuntime.ready()
+  const ds1 = await docsOnRuntime.sessions.create({ name: 'docs-on' })
+  await docsOnRuntime.prompt(ds1.id, { text: 'check docs' })
+  await docsOnRuntime.waitForIdle(ds1.id)
+  const ds2 = await docsOffRuntime.sessions.create({ name: 'docs-off' })
+  await docsOffRuntime.prompt(ds2.id, { text: 'check no docs' })
+  await docsOffRuntime.waitForIdle(ds2.id)
+  if (!docsSystems[0]?.includes('<docs>') || !docsSystems[0]?.includes('docs/sdk.md'))
+    throw new Error('packaged createRuntime() did not include default <docs> section')
+  if (docsSystems[1]?.includes('<docs>'))
+    throw new Error('docs: false failed to suppress <docs> section')
+} finally {
+  await docsOnRuntime.dispose()
+  await docsOffRuntime.dispose()
+}
+
 // Photon WASM must resolve from the installed package under both Node and Bun.
 const image: ImageContent = { type: 'image', data: '${IMAGE}', mimeType: 'image/png' }
+const imgModel = createFauxModel({ responses: [fauxText('image received')] })
 const imgRuntime = createRuntime({
   ephemeral: true,
-  defaultModel: createFauxModel({ responses: [fauxText('image received')] }),
+  defaultModel: imgModel,
   mcp: false,
 })
 try {
@@ -276,9 +320,20 @@ try {
     attachments: [{ blobId: blob.id, name: 'wide.png', mimeType: 'image/png', inlineOnly: true }],
   })
   await imgRuntime.waitForIdle(imgSession.id)
+  const providerUserFiles =
+    imgModel.calls[0]?.prompt.flatMap((m) =>
+      m.role === 'user' && Array.isArray(m.content)
+        ? m.content.filter((p) => p.type === 'file' && p.mediaType.startsWith('image/'))
+        : [],
+    ) ?? []
   const imgPage = await imgRuntime.sessions.messages({ sessionId: imgSession.id })
   const storedUser = imgPage.messages.find((m) => m.role === 'user')
-  if (!storedUser || JSON.stringify(storedUser.content).includes(image.data))
+  if (
+    providerUserFiles.length !== 1 ||
+    !storedUser ||
+    JSON.stringify(imgModel.calls[0]?.prompt).includes(image.data) ||
+    JSON.stringify(storedUser.content).includes(image.data)
+  )
     throw new Error('packaged image prompt was not resized and sent as an image')
   console.log('image sdk ok')
 } finally {

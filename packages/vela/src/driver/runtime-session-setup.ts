@@ -24,6 +24,7 @@ import { createSessionLocalExecutionEnv } from './execution/local.ts'
 import { resolveLocation } from './execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import type { ExtensionRunner } from './extensions/runner.ts'
+import type { ExtensionSession } from './extensions/types.ts'
 import type { ModelMessage } from './messages.ts'
 import { localDateString } from './prompt/environment.ts'
 import type { SystemPromptBuilder } from './prompt/index.ts'
@@ -60,7 +61,6 @@ import type {
 import type { SessionStore } from './session/index.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
 import { ToolRegistry } from './tools/registry.ts'
-import type { VelaSession } from './vela-session.ts'
 
 export type { DriverSharedState }
 
@@ -92,7 +92,7 @@ export interface PreparedSessionEnv {
   projectDefaultTools?: string[]
   registry: ToolRegistry
   extensionRunner: ExtensionRunner
-  ensureSessionStarted: (extView: VelaSession) => Promise<void>
+  ensureSessionStarted: (extView: ExtensionSession) => Promise<void>
   extensionErrors: string[]
   mcpLease?: RuntimeMcpLease
   memoryStores: { local: MemoryStore; global: MemoryStore; dirs: MemoryDirs }
@@ -430,7 +430,9 @@ export async function prepareSessionSetup(params: {
   const extensionRunner = cachedRunner.runner
   const extensionErrors = cachedRunner.errors
   let refreshRuntimeSections = () => {}
-  const ensureSessionStarted = async (extView: VelaSession): Promise<void> => {
+  const ensureSessionStarted = async (
+    extView: ExtensionSession,
+  ): Promise<void> => {
     cachedRunner.lastView = extView
     if (cachedRunner.started) return
     cachedRunner.started = true

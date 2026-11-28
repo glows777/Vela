@@ -11,6 +11,7 @@ import { dirname } from 'node:path'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import type { LarkTransport } from '../lark/transport.ts'
 import { createRuntime, type LocalVelaRuntime } from '../runtime-sdk.ts'
+import type { DocsPaths } from '../shared/docs-paths.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import { createAuthLoginHandler, type PendingLoginClient } from './auth-rpc.ts'
@@ -59,6 +60,7 @@ export interface StartDaemonServerOptions {
   enableWebhooks?: boolean
   enableLark?: boolean
   defaultModel?: ModelInput
+  docs?: DocsPaths | false
   larkTransport?: LarkTransport
   onCreateLarkTransport?: (info: {
     appId?: string
@@ -141,6 +143,7 @@ export async function startDaemonServer(
       agentDir: paths.agentDir,
       hostEnv,
       ...(options.defaultModel ? { defaultModel: options.defaultModel } : {}),
+      ...(options.docs !== undefined ? { docs: options.docs } : {}),
       logger,
       onConfigReloaded: webhooksHost
         ? (cfg) => webhooksHost!.sync(cfg, true)

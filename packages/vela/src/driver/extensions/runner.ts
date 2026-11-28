@@ -10,9 +10,9 @@ import {
   toolContentText,
   withoutForeignReasoning,
 } from '../messages.ts'
+import type { SessionStore } from '../session/index.ts'
 import { isJsonSchemaTool } from '../tools/json-schema.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
-import type { VelaSession } from '../vela-session.ts'
 import type {
   AfterProviderResponseEvent,
   BeforeAgentStartEventResult,
@@ -32,8 +32,14 @@ import type {
   ExtensionAPI,
   ExtensionCommand,
   ExtensionContext,
+  ExtensionSession,
   VelaExtension,
 } from './types.ts'
+
+export type RuntimeExtensionSession = ExtensionSession & {
+  registry: ToolRegistry
+  store: SessionStore
+}
 
 interface RunnerDeps {
   cwd: string
@@ -270,7 +276,10 @@ export class ExtensionRunner {
     ]
   }
 
-  context(session: VelaSession, signal = session.signal): ExtensionContext {
+  context(
+    session: ExtensionSession,
+    signal = session.signal,
+  ): ExtensionContext {
     return {
       session,
       notify: (message, level = 'info') => session.notify(message, level),
@@ -306,14 +315,14 @@ export class ExtensionRunner {
   }
 
   /** Read-only notification: handlers are not awaited and errors are logged. */
-  notify(event: VelaEvent, session: VelaSession): void {
+  notify(event: VelaEvent, session: ExtensionSession): void {
     this.dispatch(event.type, event, session)
   }
 
   private dispatch(
     name: ExtensionEventName,
     event: unknown,
-    session: VelaSession,
+    session: ExtensionSession,
   ): void {
     const handlers = this.list(name)
     if (!handlers.length) return
@@ -332,7 +341,7 @@ export class ExtensionRunner {
   /** Lifecycle events: await each handler in order; shutdown failures are reported after all handlers. */
   private async lifecycle(
     event: { type: 'session_start' | 'session_shutdown' },
-    session: VelaSession,
+    session: ExtensionSession,
   ) {
     const ctx = this.context(session)
     const errors: unknown[] = []
@@ -348,11 +357,11 @@ export class ExtensionRunner {
       throw new AggregateError(errors, 'Session shutdown handlers failed')
   }
 
-  sessionStart(session: VelaSession) {
+  sessionStart(session: ExtensionSession) {
     return this.lifecycle({ type: 'session_start' }, session)
   }
 
-  sessionShutdown(session: VelaSession) {
+  sessionShutdown(session: ExtensionSession) {
     return this.lifecycle({ type: 'session_shutdown' }, session)
   }
 
@@ -361,7 +370,7 @@ export class ExtensionRunner {
    * (later handlers override). A failing handler is logged and skipped.
    */
   async beforeTree(
-    session: VelaSession,
+    session: ExtensionSession,
     preparation: TreePreparation,
     signal: AbortSignal,
   ): Promise<SessionBeforeTreeEventResult> {
@@ -383,7 +392,10 @@ export class ExtensionRunner {
   }
 
   /** session_tree: awaited in order, errors logged. */
-  async tree(session: VelaSession, event: SessionTreeEvent): Promise<void> {
+  async tree(
+    session: ExtensionSession,
+    event: SessionTreeEvent,
+  ): Promise<void> {
     const ctx = this.context(session)
     for (const { extension, fn } of this.list(event.type)) {
       try {
@@ -396,7 +408,7 @@ export class ExtensionRunner {
 
   /** session_before_fork: true when a handler cancels. A failing handler is logged and skipped. */
   async beforeFork(
-    session: VelaSession,
+    session: ExtensionSession,
     entryId: string,
     position: 'before' | 'at',
   ): Promise<boolean> {
@@ -452,7 +464,7 @@ export class ExtensionRunner {
    * as the handlers before it left it.
    */
   async beforeAgentStart(
-    session: VelaSession,
+    session: RuntimeExtensionSession,
     prompt: string,
   ): Promise<{
     sections: Record<string, string>
@@ -471,8 +483,7 @@ export class ExtensionRunner {
     const ctx = this.context(session)
     for (const { extension, fn } of this.list('before_agent_start')) {
       // No replacement yet: handlers read the built prompt, never the previous turn's
-      event.systemPrompt =
-        systemPrompt ?? session.buildSystem(event.sections, null)
+      event.systemPrompt = systemPrompt ?? session.buildSystem(event.sections)
       try {
         const result = (await fn(event, ctx)) as
           | BeforeAgentStartEventResult
@@ -496,7 +507,7 @@ export class ExtensionRunner {
    * handled the input. A throwing handler is logged and skipped.
    */
   async input(
-    session: VelaSession,
+    session: ExtensionSession,
     text: string,
     source: InputSource,
     streamingBehavior?: 'steer',
@@ -535,7 +546,7 @@ export class ExtensionRunner {
    * the identity of the model that sends this request. A throwing handler is logged and the previous result kept.
    */
   async transformContext(
-    session: VelaSession,
+    session: RuntimeExtensionSession,
     messages: ModelMessage[],
     producer: string,
   ): Promise<ModelMessage[]> {
@@ -562,7 +573,7 @@ export class ExtensionRunner {
 
   /** before_provider_request: handlers edit `params` in place or return replacements; errors are logged. */
   async beforeProviderRequest(
-    session: VelaSession,
+    session: ExtensionSession,
     params: ProviderRequestParams,
   ): Promise<ProviderRequestParams> {
     let current = params
@@ -586,7 +597,7 @@ export class ExtensionRunner {
 
   /** after_provider_response: awaited in order before the response is read; errors are logged. */
   async afterProviderResponse(
-    session: VelaSession,
+    session: ExtensionSession,
     headers: Record<string, string>,
   ): Promise<void> {
     const event: AfterProviderResponseEvent = {
@@ -604,7 +615,10 @@ export class ExtensionRunner {
   }
 
   /** provider_stream_event: a read-only notification like the VelaEvents (not awaited). */
-  providerStreamEvent(session: VelaSession, event: ProviderStreamEvent): void {
+  providerStreamEvent(
+    session: ExtensionSession,
+    event: ProviderStreamEvent,
+  ): void {
     this.dispatch(event.type, event, session)
   }
 
@@ -614,7 +628,7 @@ export class ExtensionRunner {
    * The returned input is the same object as the one passed in when nothing changed.
    */
   async toolCall(
-    session: VelaSession,
+    session: ExtensionSession,
     toolCallId: string | undefined,
     toolName: string,
     input: unknown,
@@ -687,7 +701,7 @@ export class ExtensionRunner {
 
   /** tool_result: a handler returns `{ output }` to replace the text the model sees; handlers chain. On error the previous result is kept. */
   async toolResult(
-    session: VelaSession,
+    session: ExtensionSession,
     toolCallId: string | undefined,
     toolName: string,
     input: unknown,
@@ -741,7 +755,7 @@ export class ExtensionRunner {
    * `signal` is this command's own abort signal (ctx.signal).
    */
   async runCommand(
-    session: VelaSession,
+    session: ExtensionSession,
     text: string,
     signal: AbortSignal,
   ): Promise<boolean> {

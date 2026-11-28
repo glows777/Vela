@@ -32,7 +32,7 @@ const RETIRED_OPERATIONAL_PATTERNS = [
 ] as const
 
 const RETIREMENT_NOTICE_RE =
-  /\b(?:retired|removed|replaced|replaces|instead of|legacy|migration|upgrading|removed in v0\.9|exit(?:s|ing)?\s+(?:with\s+)?code\s+2|fail(?:s|ing)?\s+fast)\b/i
+  /\b(?:retired|removed|replaced|replaces|instead of|migration|upgrading|removed in v0\.9|legacy channel gateway|exit(?:s|ing)?\s+(?:with\s+)?code\s+2|fail(?:s|ing)?\s+fast)\b/i
 
 function extractInterfaceKeys(
   publicApi: string,
@@ -90,7 +90,11 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
   docFiles.sort()
 
   const userFacingFiles = new Set<string>(docFiles)
-  for (const extra of ['README.md', '.skills/verify-vela/core.md']) {
+  for (const extra of [
+    'README.md',
+    '.skills/verify-vela/core.md',
+    '.skills/verify-vela/journeys.md',
+  ]) {
     const abs = join(root, extra)
     if (existsSync(abs)) userFacingFiles.add(abs)
   }

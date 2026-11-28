@@ -2,7 +2,11 @@ import { withProviderHooks } from '../providers/index.ts'
 import { resolveModel } from '../providers/models/index.ts'
 import type { DriverInboxItem, DriverTurnRequest } from '../runtime/driver.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
-import type { ExtensionRunner } from './extensions/runner.ts'
+import type {
+  ExtensionRunner,
+  RuntimeExtensionSession,
+} from './extensions/runner.ts'
+import type { ExtensionSession } from './extensions/types.ts'
 import { type ModelMessage, normalizeUserMessage } from './messages.ts'
 import type { DriverSharedState } from './runtime-dispose.ts'
 import {
@@ -13,14 +17,13 @@ import type { VelaAgentDriverOptions } from './runtime-types.ts'
 import type { SessionStore } from './session/index.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import type { TokenTracker } from './usage/tracker.ts'
-import type { VelaSession } from './vela-session.ts'
 
 /** Configures tool interception with MCP discovery readiness, extension `tool_call`/`tool_result` hooks, and approvals. */
 export function wireRuntimeToolInterception(params: {
   registry: ToolRegistry
   prepared: PreparedSessionEnv
   extensionRunner: ExtensionRunner
-  extView: VelaSession
+  extView: ExtensionSession
   sessionId: string
   signal: AbortSignal
   toolApprovalCheck?: VelaAgentDriverOptions['toolApprovalCheck']
@@ -102,7 +105,7 @@ export function wireRuntimeToolInterception(params: {
 /** Runs `input` extension hooks against user inbox inputs, returning `handled: true` if every input was consumed. */
 export async function applyInputExtensionHooks(params: {
   extensionRunner: ExtensionRunner
-  extView: VelaSession
+  extView: ExtensionSession
   request: DriverTurnRequest
 }): Promise<{ request: DriverTurnRequest; handledAll: boolean }> {
   const { extensionRunner, extView, request } = params
@@ -140,7 +143,7 @@ export async function applyInputExtensionHooks(params: {
 /** Runs `before_agent_start` extension hooks, updating prompt sections/overrides and committing custom messages. */
 export async function applyBeforeAgentStartHooks(params: {
   extensionRunner: ExtensionRunner
-  extView: VelaSession
+  extView: RuntimeExtensionSession
   prepared: PreparedSessionEnv
   request: DriverTurnRequest
   activeStore: SessionStore
@@ -199,7 +202,7 @@ export async function applyBeforeAgentStartHooks(params: {
 export function wrapModelWithExtensionHooks(
   model: ModelInput,
   extensionRunner: ExtensionRunner,
-  extView: VelaSession,
+  extView: ExtensionSession,
 ): ModelInput {
   const hasProviderHooks =
     extensionRunner.hasHandlers('before_provider_request') ||

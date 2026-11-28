@@ -2,9 +2,9 @@ import { afterEach, expect, test } from 'bun:test'
 import {
   type ExtensionAPI,
   ToolExecutionResult,
-  type VelaSession,
 } from '@glows777/vela/extension-api'
 import { z } from 'zod'
+import type { VelaSession } from '../../packages/vela/src/driver/index.ts'
 import {
   type FauxRequest,
   fauxText,
@@ -116,7 +116,7 @@ test('while running, a non-triggering message waits for the tool results; a trig
   let session: VelaSession | undefined
   function ext(vela: ExtensionAPI) {
     vela.on('session_start', (_event, ctx) => {
-      session = ctx.session
+      session = ctx.session as VelaSession
     })
     vela.registerTool({
       name: 'work',
@@ -239,7 +239,7 @@ test('while running, deliverAs steer queues until after the current step', async
   let session: VelaSession | undefined
   function ext(vela: ExtensionAPI) {
     vela.on('session_start', (_event, ctx) => {
-      session = ctx.session
+      session = ctx.session as VelaSession
     })
     vela.registerTool({
       name: 'work',

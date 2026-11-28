@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { startDaemonServer } from '@glows777/vela'
 import {
   settingsTransport,
@@ -68,9 +69,30 @@ async function resolveDefaultModel() {
   return undefined
 }
 
+function resolveDaemonDocs() {
+  const daemonDir = dirname(fileURLToPath(import.meta.url))
+  for (const base of [
+    resolve(daemonDir, '..', '..', '..'),
+    resolve(daemonDir, '..', '..', '..', '..'),
+  ]) {
+    const docs = join(base, 'docs')
+    if (existsSync(docs)) {
+      const readme = join(base, 'README.md')
+      const examples = join(base, 'examples')
+      return {
+        ...(existsSync(readme) ? { readme } : {}),
+        docs,
+        ...(existsSync(examples) ? { examples } : {}),
+      }
+    }
+  }
+  return undefined
+}
+
 async function main(): Promise<void> {
   const { agentDir, socketPath } = parseCliArgs(process.argv.slice(2))
   const defaultModel = await resolveDefaultModel()
+  const docs = resolveDaemonDocs()
   const fakeMode = process.env.VELA_DESKTOP_LARK === 'fake'
   const fixtureDir = process.env.VELA_DESKTOP_LARK_DIR?.trim()
   const larkTransport =
@@ -84,6 +106,7 @@ async function main(): Promise<void> {
       registerSignalHandlers: true,
       onClosed: () => resolve(),
       ...(defaultModel ? { defaultModel } : {}),
+      ...(docs ? { docs } : {}),
       ...(larkTransport ? { larkTransport } : {}),
       ...(fakeMode && !fixtureDir
         ? {

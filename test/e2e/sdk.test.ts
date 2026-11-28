@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   createRuntime,
@@ -36,7 +36,9 @@ test('createRuntime() and the testing helpers import by package name', async () 
     runtime.events.subscribe((event) => events.push(event))
     await runtime.prompt(sessionId, { text: 'hello' })
     await runtime.waitForIdle(sessionId)
-    expect(events.some((e) => e.type === 'run_finished')).toBe(true)
+    expect(
+      events.some((e) => e.type === 'run_finished' && e.status === 'completed'),
+    ).toBe(true)
     const page = await runtime.sessions.messages({ sessionId })
     expect(page.messages.at(-1)).toMatchObject({
       role: 'assistant',
@@ -82,7 +84,7 @@ test('createRuntime() sessions expose built-in background tools and accept inlin
     await runtime.prompt(session.id, { text: 'run echo' })
     await runtime.waitForIdle(session.id)
     const inspected = await runtime.sessions.inspect(session.id)
-    expect(inspected.allTools).toEqual(
+    expect(inspected.activeTools).toEqual(
       expect.arrayContaining(['bash', 'background_output', 'background_stop']),
     )
     expect(seenToolCalls).toEqual(['bash'])
@@ -94,6 +96,14 @@ test('createRuntime() sessions expose built-in background tools and accept inlin
 test('createRuntime() supports docs paths and systemPrompt / appendSystemPrompt overrides', async () => {
   const seenSystems: string[] = []
   const dir = tempDir()
+  const docsFixtureDir = join(dir.path, 'fixture-docs')
+  mkdirSync(docsFixtureDir, { recursive: true })
+  const fixtureReadme = join(dir.path, 'README.md')
+  const fixtureExamples = join(dir.path, 'examples')
+  mkdirSync(fixtureExamples, { recursive: true })
+  writeFileSync(fixtureReadme, '# Fixture Vela\n')
+  writeFileSync(join(docsFixtureDir, 'sdk.md'), '# SDK Docs\n')
+
   const model = createFauxModel({
     responses: [
       (req) => {
@@ -104,12 +114,21 @@ test('createRuntime() supports docs paths and systemPrompt / appendSystemPrompt 
         seenSystems.push(req.system ?? '')
         return fauxText('second')
       },
+      (req) => {
+        seenSystems.push(req.system ?? '')
+        return fauxText('third')
+      },
     ],
   })
-  const runtimeDefaultDocs = createRuntime({
+  const runtimeWithDocs = createRuntime({
     ephemeral: true,
     defaultModel: model,
     mcp: false,
+    docs: {
+      readme: fixtureReadme,
+      docs: docsFixtureDir,
+      examples: fixtureExamples,
+    },
     appendSystemPrompt: 'CUSTOM_APPEND_LINE',
   })
   const runtimeNoDocs = createRuntime({
@@ -117,29 +136,44 @@ test('createRuntime() supports docs paths and systemPrompt / appendSystemPrompt 
     defaultModel: model,
     mcp: false,
     docs: false,
+  })
+  const runtimeCustomPrompt = createRuntime({
+    ephemeral: true,
+    defaultModel: model,
+    mcp: false,
     systemPrompt: 'CUSTOM_SYSTEM_PROMPT',
   })
   try {
-    await runtimeDefaultDocs.ready()
+    await runtimeWithDocs.ready()
     await runtimeNoDocs.ready()
+    await runtimeCustomPrompt.ready()
 
-    const s1 = await runtimeDefaultDocs.sessions.create({ name: 'docs-on' })
-    await runtimeDefaultDocs.sessions.configure(s1.id, { cwd: dir.path })
-    await runtimeDefaultDocs.prompt(s1.id, { text: 'one' })
-    await runtimeDefaultDocs.waitForIdle(s1.id)
+    const s1 = await runtimeWithDocs.sessions.create({ name: 'docs-on' })
+    await runtimeWithDocs.sessions.configure(s1.id, { cwd: dir.path })
+    await runtimeWithDocs.prompt(s1.id, { text: 'one' })
+    await runtimeWithDocs.waitForIdle(s1.id)
 
     const s2 = await runtimeNoDocs.sessions.create({ name: 'docs-off' })
     await runtimeNoDocs.sessions.configure(s2.id, { cwd: dir.path })
     await runtimeNoDocs.prompt(s2.id, { text: 'two' })
     await runtimeNoDocs.waitForIdle(s2.id)
 
+    const s3 = await runtimeCustomPrompt.sessions.create({ name: 'custom-sys' })
+    await runtimeCustomPrompt.sessions.configure(s3.id, { cwd: dir.path })
+    await runtimeCustomPrompt.prompt(s3.id, { text: 'three' })
+    await runtimeCustomPrompt.waitForIdle(s3.id)
+
     expect(seenSystems[0]).toContain('<docs>')
+    expect(seenSystems[0]).toContain(docsFixtureDir)
     expect(seenSystems[0]).toContain('CUSTOM_APPEND_LINE')
-    expect(seenSystems[1]).toContain('CUSTOM_SYSTEM_PROMPT')
+    expect(seenSystems[1]).toContain('<tools>')
     expect(seenSystems[1]).not.toContain('<docs>')
+    expect(seenSystems[2]).toContain('CUSTOM_SYSTEM_PROMPT')
+    expect(seenSystems[2]).not.toContain('<docs>')
   } finally {
-    await runtimeDefaultDocs.dispose()
+    await runtimeWithDocs.dispose()
     await runtimeNoDocs.dispose()
+    await runtimeCustomPrompt.dispose()
     dir.cleanup()
   }
 })
@@ -222,7 +256,13 @@ test('with ephemeral: true nothing is persisted: sessions live in memory and tem
     await runtime.waitForIdle(session.id)
     expect(existsSync(join(agentDir, 'vela.db'))).toBe(false)
     const page = await runtime.sessions.messages({ sessionId: session.id })
-    expect(page.messages.length).toBeGreaterThanOrEqual(2)
+    expect(page.messages.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'tool',
+      'assistant',
+    ])
+    expect(page.messages[3]).toMatchObject({ role: 'assistant', text: 'first' })
   } finally {
     await runtime.dispose()
   }

@@ -1,10 +1,11 @@
 import type { ProviderDefinition } from '../../providers/models/index.ts'
 import type { VelaLogger } from '../../shared/logger.ts'
+import type { CustomMessageInfo } from '../agent/events.ts'
+import type { ModelMessage } from '../messages.ts'
 import type { ToolDefinition } from '../tools/registry.ts'
-import type { VelaSession } from '../vela-session.ts'
 import type { ExtensionEventName, ExtensionEvents } from './events.ts'
 
-export type { CustomMessage } from '../agent/events.ts'
+export type { CustomMessage, CustomMessageInfo } from '../agent/events.ts'
 export type { SendMessageOptions } from '../session/options.ts'
 export type {
   AfterProviderResponseEvent,
@@ -43,9 +44,24 @@ export type {
  */
 export type VelaExtension = (vela: ExtensionAPI) => void | Promise<void>
 
+/** Session view exposed to extension hooks and commands via `ctx.session`. */
+export interface ExtensionSession {
+  readonly id: string
+  readonly cwd: string
+  readonly name?: string
+  readonly channel?: string
+  readonly messages: readonly ModelMessage[]
+  readonly signal: AbortSignal | undefined
+  getActiveTools(): string[]
+  setActiveTools(names: string[] | undefined): void
+  customMessageOf(message: ModelMessage): CustomMessageInfo | undefined
+  buildSystem(sections?: Record<string, string>): string
+  notify(message: string, level?: 'info' | 'warning' | 'error'): void
+}
+
 /** A handler's second argument: the headless session context that fired the event. */
 export interface ExtensionContext {
-  session: VelaSession
+  session: ExtensionSession
   /** Emit a user-visible notification on the session event stream. */
   notify(message: string, level?: 'info' | 'warning' | 'error'): void
   cwd: string

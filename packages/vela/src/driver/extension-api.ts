@@ -61,4 +61,3 @@ export type {
 } from './tools/types.ts'
 export { SpilledToolOutput, ToolExecutionResult } from './tools/types.ts'
 export type { StepRecord, StepUsage, UsageTotals } from './usage/tracker.ts'
-export type { VelaSession } from './vela-session.ts'

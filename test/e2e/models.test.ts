@@ -627,7 +627,11 @@ test('a model selected by a before_agent_start hook sends and records its own re
     extensions: [
       (vela) => {
         vela.on('before_agent_start', (event, ctx) => {
-          if (event.prompt === 'route to b') ctx.session.setModel('fake/b')
+          if (event.prompt === 'route to b') {
+            ;(
+              ctx.session as unknown as { setModel: (id: string) => void }
+            ).setModel('fake/b')
+          }
         })
       },
     ],

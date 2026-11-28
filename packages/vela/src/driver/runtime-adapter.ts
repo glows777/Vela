@@ -147,7 +147,7 @@ export function createVelaAgentDriver(
 
   void state.extHost.reload({
     configured: options.extensions,
-    inline: options.inlineExtensions,
+    explicit: options.explicitExtensions,
     extensionConfig: options.extensionConfig ?? {},
   })
 

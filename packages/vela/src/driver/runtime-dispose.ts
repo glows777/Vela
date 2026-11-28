@@ -8,6 +8,7 @@ import type { VelaLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import type { ProjectSettings } from './config/project-settings.ts'
 import type { ExtensionRunner } from './extensions/runner.ts'
+import type { ExtensionSession } from './extensions/types.ts'
 import type { MemoryDream } from './memory/dream.ts'
 import type { ModelMessage } from './messages.ts'
 import type { RuntimeBackgroundController } from './runtime-background.ts'
@@ -23,7 +24,6 @@ import type {
 } from './runtime-types.ts'
 import type { BashExecutionEntry } from './session/entries.ts'
 import type { ToolRegistry } from './tools/registry.ts'
-import type { VelaSession } from './vela-session.ts'
 
 export interface CachedSessionRunner {
   key: string
@@ -32,7 +32,7 @@ export interface CachedSessionRunner {
   errors: string[]
   releaseHost: () => void
   started: boolean
-  lastView?: VelaSession
+  lastView?: ExtensionSession
   refs: number
   retired?: boolean
 }

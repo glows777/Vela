@@ -88,6 +88,19 @@ test('#591 / #599 / #602: checkDocsConsistency catches retired APIs, operational
     expect(afterRetirementNotice).not.toContain('docs/channels.md')
     expect(afterRetirementNotice).not.toContain('examples/sdk/demo.ts')
 
+    // Standalone "legacy" word inside @glows777/vela/legacy-desktop must not self-exempt a bare import
+    writeFileSync(
+      join(root, 'examples/sdk/demo.ts'),
+      'import "@glows777/vela/legacy-desktop"\n',
+    )
+    expect((await checkDocsConsistency(root)).join('\n')).toContain(
+      'examples/sdk/demo.ts:1: contains non-retirement operational reference to retired "@glows777/vela/legacy-desktop"',
+    )
+    writeFileSync(
+      join(root, 'examples/sdk/demo.ts'),
+      'import { createRuntime } from "@glows777/vela"\nvoid createRuntime\n',
+    )
+
     // Verify missing env:<encodedName>:<posixCwd> is caught even when env:<encodedOwnerDataDir>:<encodedName>:<posixCwd> is present
     writeFileSync(
       join(root, 'docs/settings.md'),

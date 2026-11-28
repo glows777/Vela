@@ -1,7 +1,7 @@
 import type { CustomMessage } from '../agent/events.ts'
 import type { ModelMessage } from '../messages.ts'
 import { messageText } from '../session/message-queue.ts'
-import type { VelaSession } from '../vela-session.ts'
+import type { ExtensionSession } from './types.ts'
 
 /**
  * Per-turn content for after the cached prefix: a custom message only when the last message of
@@ -10,7 +10,7 @@ import type { VelaSession } from '../vela-session.ts'
  * new process and after switching branches. Fixed instructions stay in the system prompt.
  */
 export function customMessageIfChanged(
-  session: VelaSession,
+  session: ExtensionSession,
   customType: string,
   content: string,
 ): CustomMessage | undefined {
@@ -21,7 +21,7 @@ export function customMessageIfChanged(
 
 /** The last message of `customType` in the model-visible context, if any (used to announce that its content is now empty). */
 export function lastCustomMessage(
-  session: VelaSession,
+  session: ExtensionSession,
   customType: string,
 ): ModelMessage | undefined {
   return session.messages.findLast(

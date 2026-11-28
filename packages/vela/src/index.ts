@@ -135,7 +135,6 @@ export {
 export type {
   McpExposure,
   McpHttpServerConfig,
-  McpOptions,
   McpServerConfig,
   McpServersFile,
   McpStdioServerConfig,

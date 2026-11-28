@@ -107,19 +107,18 @@ An MCP server runs with your permissions (stdio) or acts with the credentials yo
 
 ## SDK
 
-`createRuntime()` automatically connects to servers configured under top-level `mcpServers` in `<agentDir>/config.json` (and trusted `<cwd>/.vela/config.json`) unless `mcp: false` or `ephemeral: true` is passed:
+`createRuntime()` automatically connects to user servers configured under top-level `mcpServers` in `<agentDir>/config.json` (skipped when `ephemeral: true` is set) and trusted `<cwd>/.vela/config.json` servers unless `mcp: false` is passed:
 
 ```ts
 import { createRuntime } from '@glows777/vela'
 
 const runtime = createRuntime({
-  agentDir: '~/.vela',
   defaultModel: 'anthropic/<model-id>',
   hostEnv: process.env,
 })
 ```
 
-Call `await runtime.dispose()` to close pooled MCP connections and stop stdio servers.
+Pass `mcp: false` to disable all MCP connections (including trusted project `.vela/config.json` servers). Call `await runtime.dispose()` to close pooled MCP connections and stop stdio servers.
 
 ## Not supported yet
 

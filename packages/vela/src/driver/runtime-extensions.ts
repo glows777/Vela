@@ -10,22 +10,21 @@ import {
   discoverExtensions,
   type ExtensionEntry,
   extensionName,
-  resolveExtensionEntries,
 } from './config/extension-discovery.ts'
 import { importExtension } from './config/extensions.ts'
 import type { ExecutionEnv } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
 import { tasks as formatTasksCommand } from './extensions/background/tasks.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
-import type { VelaExtension } from './extensions/types.ts'
+import type { ExtensionSession, VelaExtension } from './extensions/types.ts'
 import type { MemoryDream } from './memory/dream.ts'
 import type { ModelMessage } from './messages.ts'
 import type { RuntimeBackgroundController } from './runtime-background.ts'
 import { resolveRuntimeDream } from './runtime-dream.ts'
+import { PersistentInlineExtension } from './runtime-inline-extension.ts'
 import type { SessionStore } from './session/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
 import type { TokenTracker } from './usage/tracker.ts'
-import type { VelaSession } from './vela-session.ts'
 
 export const BUILTIN_NATIVE_EXTENSIONS = new Set([
   'background',
@@ -306,17 +305,18 @@ function resolveNonBuiltinExtensionEntries(
     }
     fileEntries.push(raw)
   }
-  let entries: ExtensionEntry[] = []
-  try {
-    entries = resolveExtensionEntries(
-      fileEntries,
-      discoverExtensions(discoveredDir),
-      [],
-      [],
-    )
-  } catch (error) {
-    errors.push(`[extensions] ${errorMessage(error)}`)
+  const paths: string[] = [...discoverExtensions(discoveredDir)]
+  for (const raw of fileEntries) {
+    try {
+      paths.push(...discoverExtensions(raw, true))
+    } catch (error) {
+      errors.push(`[extensions] ${errorMessage(error)}`)
+    }
   }
+  const entries: ExtensionEntry[] = [...new Set(paths)].map((path) => ({
+    name: extensionName(path),
+    path,
+  }))
   return { entries, disabledBuiltins, errors }
 }
 
@@ -372,6 +372,8 @@ export class RuntimeExtensionHost {
     superseded: false,
   }
   private readonly retiredSnapshots = new Set<HostExtensionSnapshot>()
+  private readonly pendingShutdowns = new Set<Promise<void>>()
+  private readonly inlineSlots = new Map<number, PersistentInlineExtension>()
   private loadPromise: Promise<void> = Promise.resolve()
 
   constructor(
@@ -382,6 +384,21 @@ export class RuntimeExtensionHost {
       onBeforeImport?: () => Promise<void> | void
     },
   ) {}
+
+  private startRunnerShutdown(
+    runner: ExtensionRunner | undefined,
+  ): Promise<void> {
+    if (!runner) return Promise.resolve()
+    let tracked!: Promise<void>
+    tracked = runner
+      .shutdown()
+      .catch(() => {})
+      .finally(() => {
+        this.pendingShutdowns.delete(tracked)
+      })
+    this.pendingShutdowns.add(tracked)
+    return tracked
+  }
 
   unregisterExtensionProviders(): void {
     const loaded = this.current.runner?.loaded() ?? []
@@ -394,18 +411,24 @@ export class RuntimeExtensionHost {
 
   reload(options: {
     configured?: readonly string[]
-    inline?: readonly VelaExtension[]
+    explicit?: readonly (string | VelaExtension)[]
     extensionConfig: Record<string, Record<string, unknown>>
   }): Promise<void> {
     const errors: string[] = []
-    const resolved = resolveNonBuiltinExtensionEntries(
+    const resolvedOwner = resolveNonBuiltinExtensionEntries(
       options.configured ?? [],
       join(this.deps.agentDir, 'extensions'),
     )
-    for (const err of resolved.errors) {
+    const disabledBuiltins = new Set(resolvedOwner.disabledBuiltins)
+    for (const err of resolvedOwner.errors) {
       errors.push(err)
       this.deps.logger.error(err)
     }
+
+    const explicit = options.explicit ?? []
+    const hasExplicitStrings = explicit.some(
+      (item) => typeof item === 'string' && !/^[+-]?builtin:/.test(item),
+    )
 
     const prevLoad = this.loadPromise
     const runLoad = prevLoad
@@ -417,19 +440,77 @@ export class RuntimeExtensionHost {
           errors.push(msg)
           this.deps.logger.error(msg)
         }
-        const factories = await loadExtensionEntries({
-          entries: resolved.entries,
-          onBeforeImport: this.deps.onBeforeImport,
-          onError: recordLoadError,
-        })
-        for (const [idx, ext] of (options.inline ?? []).entries()) {
-          factories.push(
-            wrapReportedExtension(
-              ext,
-              recordLoadError,
-              ext.name || `inline#${idx + 1}`,
-            ),
-          )
+        if (resolvedOwner.entries.length > 0 || hasExplicitStrings) {
+          await this.deps.onBeforeImport?.()
+        }
+        const seenPaths = new Set<string>()
+        const factories: VelaExtension[] = []
+        for (const entry of resolvedOwner.entries) {
+          if ('builtin' in entry) continue
+          const key = resolve(entry.path)
+          if (seenPaths.has(key)) continue
+          seenPaths.add(key)
+          try {
+            const ext = await importExtension(key, entry.name)
+            factories.push(wrapReportedExtension(ext, recordLoadError, key))
+          } catch (error) {
+            recordLoadError(
+              `[extensions] Failed to load ${key}: ${errorMessage(error)}`,
+            )
+          }
+        }
+        for (const [idx, item] of explicit.entries()) {
+          if (typeof item === 'function') {
+            let slot = this.inlineSlots.get(idx)
+            if (!slot) {
+              slot = new PersistentInlineExtension(item, `inline#${idx + 1}`)
+              this.inlineSlots.set(idx, slot)
+            }
+            factories.push(
+              wrapReportedExtension(
+                slot.asFactory(),
+                recordLoadError,
+                slot.name,
+              ),
+            )
+            continue
+          }
+          const builtin = /^([+-]?)builtin:(.+)$/.exec(item)
+          if (builtin) {
+            const name = builtin[2]!
+            if (builtin[1] === '-') {
+              disabledBuiltins.add(name)
+            } else {
+              disabledBuiltins.delete(name)
+            }
+            if (
+              !BUILTIN_NATIVE_EXTENSIONS.has(name) &&
+              !(builtin[1] === '-' && name === 'rag')
+            ) {
+              recordLoadError(
+                `[extensions] Unknown built-in extension builtin:${name}`,
+              )
+            }
+            continue
+          }
+          try {
+            const discovered = discoverExtensions(item, true)
+            for (const path of discovered) {
+              const key = resolve(path)
+              if (seenPaths.has(key)) continue
+              seenPaths.add(key)
+              try {
+                const ext = await importExtension(key, extensionName(key))
+                factories.push(wrapReportedExtension(ext, recordLoadError, key))
+              } catch (error) {
+                recordLoadError(
+                  `[extensions] Failed to load ${key}: ${errorMessage(error)}`,
+                )
+              }
+            }
+          } catch (error) {
+            recordLoadError(`[extensions] ${errorMessage(error)}`)
+          }
         }
         const runner = new ExtensionRunner(
           {
@@ -450,13 +531,13 @@ export class RuntimeExtensionHost {
           registry: nextRegistry,
           runner,
           errors,
-          disabledBuiltins: resolved.disabledBuiltins,
+          disabledBuiltins,
           refs: 0,
           superseded: false,
         }
         if (previous.runner) {
           if (previous.refs === 0) {
-            await previous.runner.shutdown().catch(() => {})
+            await this.startRunnerShutdown(previous.runner)
           } else {
             this.retiredSnapshots.add(previous)
           }
@@ -495,7 +576,7 @@ export class RuntimeExtensionHost {
         snapshot.refs = Math.max(0, snapshot.refs - 1)
         if (snapshot.superseded && snapshot.refs === 0) {
           this.retiredSnapshots.delete(snapshot)
-          void snapshot.runner?.shutdown().catch(() => {})
+          void this.startRunnerShutdown(snapshot.runner)
         }
       },
     }
@@ -593,7 +674,7 @@ export class RuntimeExtensionHost {
 
   async shutdown(): Promise<void> {
     await this.loadPromise.catch(() => {})
-    await this.current.runner?.shutdown().catch(() => {})
+    const currentRunner = this.current.runner
     this.current = {
       generation: this.generation,
       registry: new ToolRegistry(undefined),
@@ -602,14 +683,24 @@ export class RuntimeExtensionHost {
       refs: 0,
       superseded: true,
     }
+    void this.startRunnerShutdown(currentRunner)
     for (const retired of this.retiredSnapshots) {
-      await retired.runner?.shutdown().catch(() => {})
+      void this.startRunnerShutdown(retired.runner)
     }
     this.retiredSnapshots.clear()
+    while (this.pendingShutdowns.size > 0) {
+      await Promise.allSettled([...this.pendingShutdowns])
+    }
+    for (const slot of this.inlineSlots.values()) {
+      for (const msg of await slot.shutdown()) {
+        this.deps.logger.error(msg)
+      }
+    }
+    this.inlineSlots.clear()
   }
 }
 
-/** Lightweight `VelaSession`-compatible view passed to extension hooks & slash commands inside `VelaAgentDriver`. */
+/** Lightweight `ExtensionSession` view (with internal `registry` and `store` for `ExtensionRunner`) used inside `VelaAgentDriver`. */
 export function createExtensionSessionView(params: {
   sessionId: string
   cwd: string
@@ -625,8 +716,12 @@ export function createExtensionSessionView(params: {
   buildSystem?: (sections?: Record<string, string>) => string
   onNotify?: (message: string, level: 'info' | 'warning' | 'error') => void
   onSetActiveTools?: (names: string[] | undefined) => void
-}): VelaSession {
-  const view = {
+}): ExtensionSession & {
+  registry: ToolRegistry
+  store: SessionStore
+  emit(event: unknown): void
+} {
+  return {
     id: params.sessionId,
     cwd: params.cwd,
     get name() {
@@ -643,6 +738,16 @@ export function createExtensionSessionView(params: {
     setActiveTools: (names: string[] | undefined) => {
       params.registry.setSelection(names)
       params.onSetActiveTools?.(names)
+    },
+    customMessageOf: (message: ModelMessage) => {
+      const id = params.store.idOf(message)
+      const entry = id ? params.store.getEntry(id) : undefined
+      if (entry?.type !== 'custom_message') return undefined
+      return {
+        customType: entry.customType,
+        display: entry.display,
+        ...(entry.details === undefined ? {} : { details: entry.details }),
+      }
     },
     buildSystem: (sections?: Record<string, string>) =>
       params.buildSystem?.(sections) ?? '',
@@ -689,5 +794,4 @@ export function createExtensionSessionView(params: {
       }
     },
   }
-  return view as unknown as VelaSession
 }

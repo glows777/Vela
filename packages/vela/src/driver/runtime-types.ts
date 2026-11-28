@@ -168,7 +168,6 @@ export interface RuntimeReloadableConfig {
   defaultTools?: readonly string[]
   extensionConfig?: Record<string, Record<string, unknown>>
   extensions?: readonly string[]
-  inlineExtensions?: readonly VelaExtension[]
   enabledModels?: readonly string[]
   githubRepositories?: readonly string[]
   dreamEnabled?: boolean
@@ -205,7 +204,7 @@ export interface VelaAgentDriverOptions {
   defaultTools?: readonly string[]
   extensionConfig?: Record<string, Record<string, unknown>>
   extensions?: readonly string[]
-  inlineExtensions?: readonly VelaExtension[]
+  explicitExtensions?: readonly (string | VelaExtension)[]
   enabledModels?: readonly string[]
   githubRepositories?: readonly string[]
   getChannelTools?: (

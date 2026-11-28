@@ -238,6 +238,7 @@ VELA_MODEL=faux:run.json vela -p "summarize README.md"        # offline replay
 From code:
 
 ```ts
+import { createRuntime } from '@glows777/vela'
 import { recordModel, replayScenario } from '@glows777/vela/testing'
 
 const recorder = recordModel(realModel, { path: 'run.json' })
@@ -246,10 +247,12 @@ const runtime = createRuntime({
   defaultModel: recorder.model,
   mcp: false,
 })
-runtime.events.subscribe((event) => {
-  if (event.type === 'run_started') recorder.addInput(String(event.trigger))
-})
-// ... use runtime as usual ...
+const session = await runtime.sessions.create({ name: 'record' })
+for (const text of ['hello']) {
+  recorder.addInput(text)
+  await runtime.prompt(session.id, { text })
+  await runtime.waitForIdle(session.id)
+}
 await recorder.flush()
 
 // later, offline:

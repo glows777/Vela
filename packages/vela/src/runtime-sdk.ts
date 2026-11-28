@@ -36,7 +36,6 @@ import {
   createSpecialModelResolver,
   isLarkExtensionDisabled,
   mergeExtensionConfig,
-  partitionRuntimeExtensions,
 } from './runtime-sdk-helpers.ts'
 import type {
   CreateRuntimeOptions,
@@ -234,13 +233,7 @@ export function createRuntime(
       })
     }
 
-    const { specs: explicitExtensionSpecs, inline: inlineExtensions } =
-      partitionRuntimeExtensions(options.extensions)
-    const mergeExtensions = (ownerExtensions: readonly string[] | undefined) =>
-      explicitExtensionSpecs.length > 0
-        ? [...(ownerExtensions ?? []), ...explicitExtensionSpecs]
-        : ownerExtensions
-    const initialExtensions = mergeExtensions(initial.ownerConfig.extensions)
+    const explicitExtensions = options.extensions
 
     const velaDriver = createVelaAgentDriver({
       db,
@@ -271,9 +264,10 @@ export function createRuntime(
       tools: options.tools,
       defaultTools: initial.ownerConfig.tools,
       extensionConfig: initial.extensionConfig,
-      extensions: initialExtensions,
-      inlineExtensions:
-        inlineExtensions.length > 0 ? inlineExtensions : undefined,
+      extensions: initial.ownerConfig.extensions,
+      explicitExtensions: explicitExtensions?.length
+        ? explicitExtensions
+        : undefined,
       enabledModels: initial.ownerConfig.enabledModels,
       githubRepositories: extractGithubRepositories(
         initial.ownerConfig.webhooks,
@@ -315,7 +309,10 @@ export function createRuntime(
     } = {
       lark: initial.ownerConfig.lark,
       ...(initial.larkError ? { larkError: initial.larkError } : {}),
-      disabledByExtension: isLarkExtensionDisabled(initialExtensions),
+      disabledByExtension: isLarkExtensionDisabled(
+        initial.ownerConfig.extensions,
+        explicitExtensions,
+      ),
     }
     let reloadQueue: Promise<void> = Promise.resolve()
     const reloadConfigInternal = (force: boolean): Promise<void> => {
@@ -333,9 +330,6 @@ export function createRuntime(
         }
         const updated = computeConfigState()
         if (disposing) return
-        const reloadedExtensions = mergeExtensions(
-          updated.ownerConfig.extensions,
-        )
         currentWebhookConfig = {
           webhooks: updated.ownerConfig.webhooks,
           eventDefaultTarget: updated.ownerConfig.eventDefaultTarget,
@@ -343,7 +337,10 @@ export function createRuntime(
         currentLarkConfig = {
           lark: updated.ownerConfig.lark,
           ...(updated.larkError ? { larkError: updated.larkError } : {}),
-          disabledByExtension: isLarkExtensionDisabled(reloadedExtensions),
+          disabledByExtension: isLarkExtensionDisabled(
+            updated.ownerConfig.extensions,
+            explicitExtensions,
+          ),
         }
         await velaDriver.control.reloadConfig({
           defaultModel: options.defaultModel ?? updated.ownerConfig.model,
@@ -355,7 +352,7 @@ export function createRuntime(
           limits: updated.limits,
           defaultTools: updated.ownerConfig.tools,
           extensionConfig: updated.extensionConfig,
-          extensions: reloadedExtensions,
+          extensions: updated.ownerConfig.extensions,
           enabledModels: updated.ownerConfig.enabledModels,
           githubRepositories: extractGithubRepositories(
             updated.ownerConfig.webhooks,
