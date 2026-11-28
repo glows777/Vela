@@ -100,6 +100,7 @@ export function RoutineDialog({
               target: { chatId: project.id },
             }
             const children = sessions.flatMap((session): Place[] => {
+              if (session.isHub) return []
               if (project.channel === 'lark') {
                 return session.topic
                   ? [
@@ -318,8 +319,9 @@ export function RoutineDialog({
                 <p className={styles.note}>Reading where Vela can answer…</p>
               ) : places.length === 0 ? (
                 <p className={styles.note}>
-                  Routines answer in a project chat, so send a message in a
-                  project first.
+                  {targets.length === 0
+                    ? 'Create or connect a project before adding a routine.'
+                    : 'Routines answer in a project chat, so send a message in a project first.'}
                 </p>
               ) : (
                 <Select

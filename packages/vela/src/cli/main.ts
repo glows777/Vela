@@ -81,6 +81,7 @@ if (args.daemon) {
       '../daemon/server.ts'
     )
     let resolveClosed!: () => void
+    let closedReason = 'dispose'
     const closed = new Promise<void>((resolvePromise) => {
       resolveClosed = resolvePromise
     })
@@ -89,10 +90,13 @@ if (args.daemon) {
         agentDir,
         hostEnv: env,
         logger,
-        onClosed: () => resolveClosed(),
+        onClosed: (reason) => {
+          closedReason = reason
+          resolveClosed()
+        },
       })
       await closed
-      process.exit(0)
+      process.exit(closedReason === 'shutdown_timeout' ? 1 : 0)
     } catch (error) {
       if (error instanceof DaemonAlreadyRunningError) {
         console.error(error.message)
@@ -255,10 +259,17 @@ const logger =
 
 let runtime: Awaited<ReturnType<typeof openCliRuntime>> | undefined
 let activeSessionId: string | undefined
-let clearTransientApproval: (() => Promise<void>) | undefined
+let probeSessionId: string | undefined
+let clearSessionOverrides: (() => Promise<void>) | undefined
+let disconnectListener: ((error: Error) => void) | undefined
 let signalCode: number | undefined
 const exit = async (code: number): Promise<never> => {
-  await clearTransientApproval?.().catch(() => {})
+  if (probeSessionId && runtime) {
+    const id = probeSessionId
+    probeSessionId = undefined
+    await runtime.sessions.delete(id).catch(() => {})
+  }
+  await clearSessionOverrides?.().catch(() => {})
   await runtime?.dispose().catch(() => {})
   process.exit(signalCode ?? code)
 }
@@ -269,6 +280,7 @@ try {
     hostEnv: env,
     noSession: args.noSession,
     logger,
+    onDisconnect: (err) => disconnectListener?.(err),
   })
 
   if (mode !== 'interactive') {
@@ -299,17 +311,21 @@ try {
     let extensionErrors = await runtime.extensionErrors()
     if (args.extensions.length > 0 || args.noExtensions) {
       const probeId = `list-models-${newSessionId()}`
+      probeSessionId = probeId
       await runtime.sessions.create({
         id: probeId,
         location: { environment: 'local', cwd },
       })
+      const resolvedExts = args.extensions.map((ext) =>
+        /^[+-]?builtin:/.test(ext) ? ext : resolve(cwd, ext),
+      )
       try {
         await runtime.sessions.configure(probeId, {
           cwd,
           ...(Object.keys(transientEnv).length > 0
             ? { env: transientEnv }
             : {}),
-          extensions: args.extensions,
+          extensions: resolvedExts,
           noExtensions: args.noExtensions,
         })
         const snap = await runtime.sessions.inspect(probeId, {
@@ -317,6 +333,7 @@ try {
         })
         extensionErrors = snap.extensionErrors
       } finally {
+        probeSessionId = undefined
         await runtime.sessions.delete(probeId).catch(() => {})
       }
     }
@@ -369,6 +386,7 @@ try {
     agentDir,
     approve: args.approve,
     interactive: mode === 'interactive',
+    noSession: args.noSession,
     trust: runtime.trust,
   })
   if (trust.warning) console.error(trust.warning)
@@ -376,21 +394,16 @@ try {
   const offline = ['1', 'true', 'yes'].includes(
     (env.VELA_OFFLINE ?? '').toLowerCase(),
   )
-  const approvedSessionIds = new Set<string>()
+  const configuredSessionIds = new Set<string>()
   let cliOverride = buildCliSessionOverride(args, env, cwd, args.approve)
-  clearTransientApproval = async () => {
-    if (!runtime || args.noSession || args.approve === undefined) {
+  clearSessionOverrides = async () => {
+    if (!runtime || args.noSession) {
       return
     }
-    const {
-      approve: _approve,
-      approveLocation: _loc,
-      ...withoutApproval
-    } = cliOverride
-    const targets = new Set(approvedSessionIds)
+    const targets = new Set(configuredSessionIds)
     if (activeSessionId) targets.add(activeSessionId)
     for (const sid of targets) {
-      await runtime.sessions.configure(sid, withoutApproval).catch(() => {})
+      await runtime.sessions.configure(sid, {}).catch(() => {})
     }
   }
 
@@ -441,6 +454,7 @@ try {
     const client = new CliSessionClient(runtime, sessionId)
     try {
       await runtime.ready().catch(() => {})
+      configuredSessionIds.add(sessionId)
       await client.configure(cliOverride)
       const snap = await client.refresh({ includeEntries: false })
       const line = formatContextFileList(snap.resources.contextFiles, {
@@ -486,10 +500,16 @@ try {
       newSessionId,
       configure: async (target, opts) => {
         try {
-          if (args.approve !== undefined) {
-            approvedSessionIds.add(target.id)
-          }
-          await target.configure(cliOverride)
+          configuredSessionIds.add(target.id)
+          const effectiveOverride =
+            opts?.startup === false && opts?.resume
+              ? {
+                  ...cliOverride,
+                  model: undefined,
+                  thinkingLevel: undefined,
+                }
+              : cliOverride
+          await target.configure(effectiveOverride)
           const snap = await target.refresh()
           if (!snap.modelInfo && !opts?.quiet) {
             console.error(
@@ -509,6 +529,12 @@ try {
       agentDir,
       offline,
       attachLogger: interactiveLogger?.attach,
+      registerDisconnectHandler: (handler) => {
+        disconnectListener = handler
+        return () => {
+          if (disconnectListener === handler) disconnectListener = undefined
+        }
+      },
       setupOnly: args.setup,
       setupTarget: args.setupTarget,
       noSession: args.noSession,
@@ -526,7 +552,7 @@ try {
         cliOverride = buildCliSessionOverride(args, env, cwd, args.approve)
       },
       onExit: async () => {
-        await clearTransientApproval?.().catch(() => {})
+        await clearSessionOverrides?.().catch(() => {})
         await runtime?.dispose()
       },
     })

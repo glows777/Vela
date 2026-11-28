@@ -667,6 +667,7 @@ export class RuntimeExtensionHost {
         registry: options.registry,
         models: this.deps.models,
         parent: options.noExtensions ? undefined : options.hostSnapshot.runner,
+        sessionScoped: true,
       },
       factories,
       [auditLog],

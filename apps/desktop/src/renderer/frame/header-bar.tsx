@@ -80,7 +80,7 @@ export function HeaderBar({
       {confirmRemove && project?.channel === 'local' && onRemoveProject ? (
         <ConfirmDialog
           title="Remove project"
-          description={`Remove “${projectName(project)}” from Vela? Files in ${project.cwd} stay on this computer.`}
+          description={`Remove “${projectName(project)}” from Vela? Its Vela chat history will be deleted; files in ${project.cwd} stay on this computer.`}
           trigger={confirmRemove}
           onCancel={() => setConfirmRemove(undefined)}
           onConfirm={() => {

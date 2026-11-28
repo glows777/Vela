@@ -96,6 +96,12 @@ async function steerInboxEventInRuntime(params: {
     text: string,
     images?: Array<{ data: string; mimeType: string }>,
   ) => Promise<boolean>
+  trySteerInboxEvent?: (
+    sessionId: string,
+    inboxEventId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType: string }>,
+  ) => Promise<boolean> | boolean
   steerSession: (sessionId: string, text: string) => Promise<void>
   sessionId: string
   inboxEventId: string
@@ -164,11 +170,22 @@ async function steerInboxEventInRuntime(params: {
   )
   if (stillPending?.status !== 'pending') return false
 
+  const inlineImages = images.length > 0 ? images : undefined
+  if (params.trySteerInboxEvent) {
+    return Boolean(
+      await params.trySteerInboxEvent(
+        sessionId,
+        inboxEventId,
+        steerText,
+        inlineImages,
+      ),
+    )
+  }
   if (params.trySteerSession) {
     const accepted = await params.trySteerSession(
       sessionId,
       steerText,
-      images.length > 0 ? images : undefined,
+      inlineImages,
     )
     if (!accepted) return false
   } else {
@@ -200,6 +217,12 @@ export function createChannelAdapterContext(params: {
     text: string,
     images?: Array<{ data: string; mimeType: string }>,
   ) => Promise<boolean>
+  trySteerInboxEvent?: (
+    sessionId: string,
+    inboxEventId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType: string }>,
+  ) => Promise<boolean> | boolean
   reportStatus?: (status: ChannelConnectionState) => void
 }): ChannelAdapterContext {
   const ingestWithReceipt = async (
@@ -246,6 +269,7 @@ export function createChannelAdapterContext(params: {
         db: params.db,
         blobs: params.blobs,
         trySteerSession: params.trySteerSession,
+        trySteerInboxEvent: params.trySteerInboxEvent,
         steerSession: params.steerSession,
         sessionId,
         inboxEventId,
@@ -321,8 +345,8 @@ export async function steerSessionInRuntime(params: {
   const driver = drivers.get(session.driver)
   if (
     activeWorkers.has(sessionId) &&
-    driver?.capabilities.steer &&
-    driver.steer
+    (driver?.capabilities?.steer ?? Boolean(driver?.steer)) &&
+    driver?.steer
   ) {
     resetStreak()
     if ((await driver.steer(sessionId, text, images)) !== false) return true
@@ -432,6 +456,14 @@ export function createChannelStatusTracker(
   }
 }
 
+const startingAdapters = new WeakSet<ChannelAdapter>()
+
+export function isChannelAdapterReady(
+  adapter: ChannelAdapter | undefined,
+): adapter is ChannelAdapter {
+  return Boolean(adapter && !startingAdapters.has(adapter))
+}
+
 export async function registerChannelInRuntime(
   channels: Map<string, ChannelAdapter>,
   params: Parameters<typeof createChannelAdapterContext>[0],
@@ -444,6 +476,7 @@ export async function registerChannelInRuntime(
     statusTracker?.markStopped(adapter.name)
   }
   const reportStatus = statusTracker?.begin(adapter.name)
+  startingAdapters.add(adapter)
   channels.set(adapter.name, adapter)
   try {
     await adapter.start(
@@ -452,6 +485,7 @@ export async function registerChannelInRuntime(
         ...(reportStatus ? { reportStatus } : {}),
       }),
     )
+    startingAdapters.delete(adapter)
     if (statusTracker && channels.get(adapter.name) === adapter) {
       statusTracker.markInitialIfUnset(
         adapter.name,
@@ -459,6 +493,7 @@ export async function registerChannelInRuntime(
       )
     }
   } catch (error) {
+    startingAdapters.delete(adapter)
     if (channels.get(adapter.name) === adapter) {
       channels.delete(adapter.name)
     }
@@ -580,7 +615,7 @@ export async function listRuntimeOrChannelMessages(
   const binding = resolveSessionChannelBinding(db, bindings, session)
   if (binding && isBindingActive(db, bindings, binding)) {
     const adapter = channels.get(binding.channel)
-    if (adapter?.listMessages) {
+    if (isChannelAdapterReady(adapter) && adapter.listMessages) {
       if (
         input.cursor &&
         (input.cursor.startsWith(DB_CURSOR_PREFIX) ||
@@ -637,14 +672,14 @@ export function listChannelStatusesInRuntime(
   const rows: ChannelStatusInfo[] = []
   for (const name of [...names].sort()) {
     const adapter = channels.get(name)
+    const ready = isChannelAdapterReady(adapter)
     const enabled = isChannelEnabledInDb(db, name)
     const state = adapter?.status?.()
     const error = state?.error ?? lastErrors?.get(name)
     rows.push({
       name,
       enabled,
-      connected:
-        enabled && Boolean(adapter && (state ? state.connected : true)),
+      connected: enabled && Boolean(ready && (state ? state.connected : true)),
       ...(error ? { error } : {}),
     })
   }
@@ -664,7 +699,7 @@ export function submitChannelHostMessageInRuntime(
     })
   }
   const adapter = channels.get(channel)
-  if (!adapter?.submitFromHost) {
+  if (!isChannelAdapterReady(adapter) || !adapter.submitFromHost) {
     throw new Error(`Channel "${channel}" does not support host submission`)
   }
   return adapter.submitFromHost(input)
@@ -715,7 +750,7 @@ export function getChannelToolsForSessionInDb(
   }
   if (!binding) return undefined
   const adapter = channels.get(binding.channel)
-  if (!adapter?.getTools) return undefined
+  if (!isChannelAdapterReady(adapter) || !adapter.getTools) return undefined
   const tools = adapter.getTools(binding)
   return tools.length > 0 ? { binding, tools } : undefined
 }

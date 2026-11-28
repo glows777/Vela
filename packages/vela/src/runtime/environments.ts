@@ -13,6 +13,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function deepEqualConfigValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false
+    }
+    return a.every((item, idx) => deepEqualConfigValue(item, b[idx]))
+  }
+  if (isRecord(a) && isRecord(b)) {
+    const keysA = Object.keys(a)
+    const keysB = Object.keys(b)
+    if (keysA.length !== keysB.length) return false
+    return keysA.every(
+      (key) => Object.hasOwn(b, key) && deepEqualConfigValue(a[key], b[key]),
+    )
+  }
+  return false
+}
+
 export interface EnvironmentRegistryOptions {
   dataDir: string
   environments?: unknown
@@ -75,13 +94,26 @@ function parseDockerDefinition(
   } as const
 }
 
+const envRegistryUpdaters = new WeakMap<
+  EnvironmentRegistry,
+  (next: unknown) => void
+>()
+
+/** Internal-only helper to hot-reload owner `environments` config for subsequent resolves without tearing down active sessions. */
+export function updateEnvironmentRegistryConfig(
+  registry: EnvironmentRegistry,
+  environments: unknown,
+): void {
+  envRegistryUpdaters.get(registry)?.(environments)
+}
+
 /**
  * Owns runtime execution environments (local metadata + Docker container lifecycle,
  * credential proxy bindings, and dead-container cache invalidation/re-probing).
  */
 export class EnvironmentRegistry {
   readonly dataDir: string
-  private readonly definitions: Record<string, unknown>
+  private definitions: Record<string, unknown>
   private readonly hostEnv: Record<string, string | undefined>
   private readonly guestPath?: string
   private readonly dockerHost?: string
@@ -91,6 +123,7 @@ export class EnvironmentRegistry {
     env: ExecutionEnv,
   ) => Promise<boolean>
   private readonly opened = new Map<string, Promise<ExecutionEnv>>()
+  private readonly retired = new Set<Promise<ExecutionEnv>>()
   private readonly locks = new Map<string, Promise<unknown>>()
   private readonly cleanups = new Set<Promise<void>>()
   private readonly cleanupErrors: unknown[] = []
@@ -130,8 +163,31 @@ export class EnvironmentRegistry {
     } else {
       if (!isRecord(options.environments))
         throw Error('Owner environments must be an object')
-      this.definitions = options.environments
+      this.definitions = { ...options.environments }
     }
+    envRegistryUpdaters.set(this, (nextEnvironments) => {
+      if (this.disposed) return
+      const nextDefs =
+        nextEnvironments === undefined
+          ? {}
+          : isRecord(nextEnvironments)
+            ? { ...nextEnvironments }
+            : undefined
+      if (!nextDefs) {
+        throw Error('Owner environments must be an object')
+      }
+      const prevDefs = this.definitions
+      const keys = new Set([...Object.keys(prevDefs), ...Object.keys(nextDefs)])
+      for (const name of keys) {
+        if (!this.opened.has(name)) continue
+        if (!deepEqualConfigValue(prevDefs[name], nextDefs[name])) {
+          throw Error(
+            `Docker configuration for "${name}" changed while already open; explicit owner restart required`,
+          )
+        }
+      }
+      this.definitions = nextDefs
+    })
   }
 
   hasDockerEnvironments(): boolean {
@@ -261,8 +317,9 @@ export class EnvironmentRegistry {
     this.disposed = true
     this.disposing ??= (async () => {
       await Promise.allSettled([...this.locks.values()])
-      const pending = [...this.opened.values()]
+      const pending = [...this.opened.values(), ...this.retired.values()]
       this.opened.clear()
+      this.retired.clear()
       const results = await Promise.allSettled(pending)
       for (const result of results) {
         if (result.status === 'fulfilled') {

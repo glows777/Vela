@@ -1,14 +1,15 @@
+import { join } from 'node:path'
 import { canonicalLocalPath } from '../db/trust.ts'
 import { supportedThinkingLevels } from '../providers/models/catalog.ts'
 import {
   limitsForModel,
   type ModelInfo,
-  resolveModel,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../providers/models/index.ts'
 import { clearPendingUserInbox } from '../runtime/control-inbox.ts'
-import { getActiveChannelForSession } from '../runtime/control-ops.ts'
+import { getBoundChannelForSession } from '../runtime/control-ops.ts'
+import { cancelPendingInboxEventInDb } from '../runtime/inbox.ts'
 import type { CompactionResult } from './agent/events.ts'
 import { ContextManager } from './context/manager.ts'
 import { resolveRequestSnapshot } from './context/request.ts'
@@ -22,6 +23,7 @@ import {
   prepareSessionSetup,
   resolveSessionModels,
 } from './runtime-session-setup.ts'
+import { buildSteeringMessage } from './runtime-steering.ts'
 import type {
   RuntimeReloadableConfig,
   RuntimeSessionInspection,
@@ -33,7 +35,7 @@ import {
   type SessionEntry,
   type SessionTreeNode,
 } from './session/entries.ts'
-import { exportBranch } from './session/export.ts'
+import { assertSafeExportTarget, exportBranch } from './session/export.ts'
 import { SessionStore } from './session/index.ts'
 import type { ForkOptions, NavigateTreeOptions } from './session/options.ts'
 import type { BackgroundSnapshot, BackgroundTask } from './tools/background.ts'
@@ -110,6 +112,12 @@ export interface RuntimeControlHandle {
     messages: ModelMessage[],
     tracker: TokenTracker,
   ): Promise<boolean>
+  steerInboxEvent(
+    sessionId: string,
+    inboxEventId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType: string }>,
+  ): boolean
   closeSession(sessionId: string): Promise<void>
 }
 
@@ -337,6 +345,16 @@ export function createRuntimeControl(
       sessionId: string,
       override: RuntimeSessionOverride,
     ): Promise<void> {
+      if (Object.keys(override).length === 0) {
+        state.sessionOverrides.delete(sessionId)
+        state.sessionResourceSnapshots.delete(sessionId)
+        const existingSpecial = state.specialModels.get(sessionId)
+        if (existingSpecial) {
+          state.specialModels.delete(sessionId)
+          await existingSpecial.flush?.().catch(() => {})
+        }
+        return
+      }
       const { store, saved } = await loadStore(sessionId)
       if (override.cwd) {
         const row = state.db.get<{ location_json: string | null }>(
@@ -381,6 +399,12 @@ export function createRuntimeControl(
         await store.flush()
       }
 
+      const existingSpecial = state.specialModels.get(sessionId)
+      if (existingSpecial) {
+        state.specialModels.delete(sessionId)
+        state.specialModelSources.delete(sessionId)
+        await existingSpecial.flush?.().catch(() => {})
+      }
       if (
         override.model === 'mock' ||
         override.model?.startsWith('faux:') ||
@@ -389,45 +413,18 @@ export function createRuntimeControl(
         if (!state.options.resolveSpecialModel) {
           throw new Error('Special test/record models are unavailable here')
         }
-        const existingSpecial = state.specialModels.get(sessionId)
-        if (existingSpecial) {
-          state.specialModels.delete(sessionId)
-          await existingSpecial.flush?.().catch(() => {})
-        }
-        const activeModels = resolveSessionModels(state, override)
-        let fallbackModel: ReturnType<typeof resolveModel> | undefined
-        if (
-          override.recordPath &&
-          override.model !== 'mock' &&
-          !override.model?.startsWith('faux:')
-        ) {
-          const candidateRef =
-            override.model ??
-            saved?.model ??
-            (typeof state.reloadable.defaultModel === 'string'
-              ? state.reloadable.defaultModel
-              : undefined)
-          fallbackModel = resolveModel(
-            candidateRef ?? state.reloadable.defaultModel,
-            {
-              providers: activeModels.providerDefinitions(),
-              credentials: activeModels.credentials,
-            },
-          )
-        }
-        const special = await state.options.resolveSpecialModel({
-          modelRef: override.model,
-          recordPath: override.recordPath,
-          fallbackModel,
-        })
-        if (special) {
-          state.specialModels.set(sessionId, special)
-        }
-      } else {
-        const existingSpecial = state.specialModels.get(sessionId)
-        if (existingSpecial) {
-          state.specialModels.delete(sessionId)
-          await existingSpecial.flush?.().catch(() => {})
+        if (override.model === 'mock' || override.model?.startsWith('faux:')) {
+          const special = await state.options.resolveSpecialModel({
+            modelRef: override.model,
+            recordPath: override.recordPath,
+          })
+          if (special) {
+            state.specialModels.set(sessionId, special)
+            state.specialModelSources.set(sessionId, {
+              envModel: override.model,
+              envRecord: override.recordPath,
+            })
+          }
         }
       }
 
@@ -464,13 +461,14 @@ export function createRuntimeControl(
         thinking_level: string | null
       }>('SELECT thinking_level FROM sessions WHERE id = ?', sessionId)
       const channel =
-        getActiveChannelForSession(state.db, sessionId) ?? saved?.channel
+        getBoundChannelForSession(state.db, sessionId) ?? saved?.channel
       const resolved = activeModels.resolve(modelRef, {
         channel: () => channel,
       })
       const existingSpecial = state.specialModels.get(sessionId)
       if (existingSpecial) {
         state.specialModels.delete(sessionId)
+        state.specialModelSources.delete(sessionId)
         await existingSpecial.flush?.().catch(() => {})
       }
       if (override) {
@@ -491,6 +489,13 @@ export function createRuntimeControl(
         const clamped = supported[0]!
         updateSessionColumn(state.db, sessionId, 'thinking_level', clamped)
         store.setThinkingLevelChoice(clamped)
+        const latestOverride = state.sessionOverrides.get(sessionId)
+        if (latestOverride?.thinkingLevel !== undefined) {
+          state.sessionOverrides.set(sessionId, {
+            ...latestOverride,
+            thinkingLevel: undefined,
+          })
+        }
       }
       await store.flush()
       return resolved.info
@@ -515,6 +520,8 @@ export function createRuntimeControl(
       }
       let nextLevel = level
       const activeModels = resolveSessionModels(state, override)
+      const channel =
+        getBoundChannelForSession(state.db, sessionId) ?? saved?.channel
       const modelRef =
         saved?.model ??
         (typeof state.reloadable.defaultModel === 'string'
@@ -522,7 +529,9 @@ export function createRuntimeControl(
           : undefined)
       if (modelRef) {
         try {
-          const info = activeModels.resolve(modelRef).info
+          const info = activeModels.resolve(modelRef, {
+            channel: () => channel,
+          }).info
           const supported = supportedThinkingLevels(info, THINKING_LEVELS)
           if (!supported.includes(level) && supported.length > 0) {
             nextLevel = supported[0]!
@@ -612,12 +621,34 @@ export function createRuntimeControl(
       if (live.length > 0) {
         state.activeSteering.set(sessionId, [])
       }
+      const now = new Date().toISOString()
       const liveTexts = live
-        .map((m) =>
-          typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-        )
+        .map((m) => {
+          const inboxEventId = state.activeSteeringInboxIds.get(m)
+          if (inboxEventId) {
+            state.activeSteeringInboxIds.delete(m)
+            cancelPendingInboxEventInDb(state.db, inboxEventId, now)
+          }
+          return typeof m.content === 'string'
+            ? m.content
+            : JSON.stringify(m.content)
+        })
         .filter((t) => t.trim().length > 0)
       return { steering: [...dbQueued, ...liveTexts] }
+    },
+
+    steerInboxEvent(
+      sessionId: string,
+      inboxEventId: string,
+      text: string,
+      images?: Array<{ data: string; mimeType: string }>,
+    ): boolean {
+      const list = state.activeSteering.get(sessionId)
+      if (!list) return false
+      const msg = buildSteeringMessage(text, images)
+      state.activeSteeringInboxIds.set(msg, inboxEventId)
+      list.push(msg)
+      return true
     },
 
     listJobs(sessionId?: string): BackgroundTask[] {
@@ -661,13 +692,22 @@ export function createRuntimeControl(
         sessionId,
       )
       const override = state.sessionOverrides.get(sessionId)
+      const resolvedBaseCwd = baseCwd ?? override?.cwd ?? process.cwd()
+      assertSafeExportTarget(
+        join(state.options.agentDir, 'vela.db'),
+        resolvedBaseCwd,
+        outputPath,
+      )
+      if (state.db.path && state.db.path !== ':memory:') {
+        assertSafeExportTarget(state.db.path, resolvedBaseCwd, outputPath)
+      }
       const location = saved?.location ?? {
         environment: 'local' as const,
-        cwd: baseCwd ?? override?.cwd ?? process.cwd(),
+        cwd: resolvedBaseCwd,
       }
       return exportBranch({
         id: sessionId,
-        baseCwd: baseCwd ?? override?.cwd ?? process.cwd(),
+        baseCwd: resolvedBaseCwd,
         location,
         path: outputPath,
         entries: store.getBranch(),

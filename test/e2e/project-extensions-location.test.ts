@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createRuntime } from '@glows777/vela'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
-import { parseArgs } from '../../packages/vela/src/cli/setup.ts'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
 import {
@@ -15,13 +15,7 @@ import {
   loadConfig,
   type VelaOptions,
 } from '../../packages/vela/src/driver/index.ts'
-import { loadConfig as loadCliConfig } from '../../packages/vela/src/load-config.ts'
 import { createVela } from '../support/compat-vela.ts'
-import {
-  cliHostExtensionConfig,
-  cliProjectExtensions,
-  loadCliExtensions,
-} from '../support/legacy-cli-helpers.ts'
 
 interface Record {
   kind: string
@@ -466,15 +460,15 @@ test('the first plain input loads its project input handler before contacting th
   }
 })
 
-test('CLI memory and RAG stay host-owned across two projects and project idle closes', async () => {
+test('Runtime memory stays host-owned across two projects without loading project memory config', async () => {
   const dir = tempDir()
   const aDir = join(dir.path, 'A')
   const bDir = join(dir.path, 'B')
-  const args = parseArgs([])
   const agentDir = join(dir.path, 'user')
   mkdirSync(agentDir)
+  const ownerConfigPath = join(agentDir, 'config.json')
   writeFileSync(
-    join(agentDir, 'config.json'),
+    ownerConfigPath,
     JSON.stringify({
       memory: { dream: false },
     }),
@@ -488,56 +482,118 @@ test('CLI memory and RAG stay host-owned across two projects and project idle cl
       }),
     )
   }
-  const config = loadCliConfig({
-    cwd: aDir,
-    agentDir,
-    trusted: true,
-    env: {},
-    builtins: ['memory'],
-  })
-  const host = await loadCliExtensions(config, args, () => {}, true)
-  const extensionConfig = cliHostExtensionConfig(config, args)
-  const select = cliProjectExtensions(config, args)
-  const projectFactories: string[] = []
-  const vela = createVela({
-    cwd: aDir,
-    dataDir: join(dir.path, 'host'),
-    model: createFauxModel({
-      responses: [fauxText('A'), fauxText('B'), fauxText('B again')],
-    }),
-    extensions: host,
-    extensionConfig,
-    sessionResources: {
-      ...config.sessionResources!,
-      workspaceModeAt: () => 'all',
-      projectExtensions: async (input) => {
-        const selected = await select(input)
-        return {
-          ...selected,
-          load: async () => {
-            const factories = await selected.load()
-            projectFactories.push(...factories.map((factory) => factory.name))
-            return factories
-          },
+  const backdateDreamTurns = () => {
+    const db = openDatabase({ path: join(agentDir, 'vela.db') })
+    try {
+      const staleTime = Date.now() - 3 * 24 * 3600_000
+      const rows = db.all<{ key: string; value_json: string }>(
+        "SELECT key, value_json FROM kv_meta WHERE key LIKE 'memory_dream:%'",
+      )
+      for (const row of rows) {
+        const parsed = JSON.parse(row.value_json) as {
+          pendingRefs?: Array<{ time?: number }>
         }
-      },
-    },
+        if (Array.isArray(parsed.pendingRefs)) {
+          for (const entry of parsed.pendingRefs) {
+            entry.time = staleTime
+          }
+          db.run(
+            'UPDATE kv_meta SET value_json = ? WHERE key = ?',
+            JSON.stringify(parsed),
+            row.key,
+          )
+        }
+      }
+    } finally {
+      db.close()
+    }
+  }
+  const countDreamRuns = (): number => {
+    const db = openDatabase({ path: join(agentDir, 'vela.db') })
+    try {
+      const rows = db.all<{ value_json: string }>(
+        "SELECT value_json FROM kv_meta WHERE key LIKE 'memory_dream:%'",
+      )
+      let runs = 0
+      for (const row of rows) {
+        const parsed = JSON.parse(row.value_json) as { lastRun?: unknown }
+        if (parsed.lastRun) runs += 1
+      }
+      return runs
+    } finally {
+      db.close()
+    }
+  }
+
+  const offModel = createFauxModel({
+    responses: [fauxText('A'), fauxText('B'), fauxText('B again')],
+  })
+  const offRuntime = createRuntime({
+    agentDir,
+    defaultModel: offModel,
+    hostEnv: {},
+    mcp: false,
   })
   try {
-    const a = vela.session('a')
-    const b = vela.session('b', { cwd: bDir })
-    await a.prompt('A')
-    await b.prompt('B')
-    await a.close()
-    await b.prompt('B remains active')
-    expect(projectFactories).toEqual([])
-    expect(host.map((factory) => factory.name)).toEqual(['memory'])
-    expect(b.getActiveTools()).toContain('memory')
-    expect(extensionConfig.memory).toEqual({ dream: false })
+    await offRuntime.ready()
+    await offRuntime.trust.approve(aDir, true)
+    await offRuntime.trust.approve(bDir, true)
+    const a = await offRuntime.sessions.create({
+      location: { environment: 'local', cwd: aDir },
+    })
+    const b = await offRuntime.sessions.create({
+      location: { environment: 'local', cwd: bDir },
+    })
+    await offRuntime.prompt(a.id, { text: 'A' })
+    await offRuntime.waitForIdle(a.id)
+    await offRuntime.prompt(b.id, { text: 'B' })
+    await offRuntime.waitForIdle(b.id)
+    backdateDreamTurns()
+    await offRuntime.prompt(b.id, { text: 'B remains active' })
+    await offRuntime.waitForIdle(b.id)
+    const inspectedB = await offRuntime.sessions.inspect(b.id)
+    expect(inspectedB.activeTools).toContain('memory')
+    expect(inspectedB.extensionErrors).toEqual([])
   } finally {
-    await vela.dispose()
+    await offRuntime.dispose()
+  }
+  expect(offModel.calls).toHaveLength(3)
+  expect(countDreamRuns()).toBe(0)
+
+  // Control: enabling memory.dream in the owner config causes the backdated turn to dream.
+  writeFileSync(
+    ownerConfigPath,
+    JSON.stringify({
+      memory: { dream: true },
+    }),
+  )
+  const onModel = createFauxModel({
+    responses: [
+      fauxText('A enabled'),
+      fauxText(JSON.stringify({ summary: 'Consolidated', actions: [] })),
+    ],
+  })
+  const onRuntime = createRuntime({
+    agentDir,
+    defaultModel: onModel,
+    hostEnv: {},
+    mcp: false,
+  })
+  try {
+    await onRuntime.ready()
+    const a2 = await onRuntime.sessions.create({
+      location: { environment: 'local', cwd: aDir },
+    })
+    await onRuntime.prompt(a2.id, { text: 'trigger dream check' })
+    await onRuntime.waitForIdle(a2.id)
+    for (let i = 0; i < 50 && onModel.calls.length < 2; i++) {
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  } finally {
+    await onRuntime.dispose()
     dir.cleanup()
   }
+  expect(onModel.calls.length).toBeGreaterThanOrEqual(2)
 })
 
 test('preparing a same-cwd nonlocal target cannot inherit local project authority or prematurely replace its tools', async () => {

@@ -19,6 +19,7 @@ export type {
   ChannelHostSubmitResult,
   ChannelInboundAttachment,
   ChannelInboundMessage,
+  ChannelIngestReceipt,
   ChannelOutboundMessage,
   ChannelStatusInfo,
   ChannelToolContext,
@@ -48,6 +49,7 @@ export type {
 export {
   EnvironmentRegistry,
   type EnvironmentRegistryOptions,
+  updateEnvironmentRegistryConfig,
 } from './environments.ts'
 export type {
   ChannelRuntimeEventListener,

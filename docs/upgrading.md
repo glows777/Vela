@@ -25,7 +25,7 @@ Vela v0.9 uses a single `<agentDir>/config.json` (plus trusted `<cwd>/.vela/conf
 
 Notes:
 - Remove `$schema` if present, and remove `builtin:rag` / `+builtin:rag` / `-builtin:rag` from `extensions`.
-- Project `.vela/config.json` files cannot override host-owned keys (`providers`, `lark`, `webhooks`, `environments`, `location`, `eventDefaultTarget`), and top-level `local` is rejected across all configs.
+- Project `.vela/config.json` files cannot override host-owned keys (`providers`, `lark`, `webhooks`, `environments`, `location`, `eventDefaultTarget`), and top-level `local` is retired and rejected across all configs.
 - After merging into `config.json`, archive or delete `settings.json`, `models.json`, and `mcp.json` so Vela stops treating the directory as un-migrated (or keep `config.json` alongside them).
 
 ### Prompt to Migrate With an AI Assistant

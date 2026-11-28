@@ -22,6 +22,13 @@ const MAX_HANDOFF_DEPTH = 3
 const OUTSIDE_WORKSPACE_MSG =
   'Choose a file inside this workspace using a relative path.'
 
+import {
+  getActiveChannelForSession,
+  getBoundChannelForSession,
+} from './channel-binding-lookup.ts'
+
+export { getActiveChannelForSession, getBoundChannelForSession }
+
 function clipLine(text: string, limit = 200): string {
   const line = text.replace(/\s+/g, ' ').trim()
   return line.length > limit ? `${line.slice(0, limit)}…` : line
@@ -114,86 +121,6 @@ function resolveRootBindingForCaller(
   return fallback
     ? { channel: fallback.channel, externalId: fallback.external_id }
     : undefined
-}
-
-export function getActiveChannelForSession(
-  db: VelaDatabase,
-  sessionId: string,
-  callerRunId?: string,
-): string | undefined {
-  if (callerRunId) {
-    const stored = db.get<{ value_json: string }>(
-      'SELECT value_json FROM kv_meta WHERE key = ?',
-      `run_target:${callerRunId}`,
-    )
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored.value_json) as { channel?: unknown }
-        if (typeof parsed.channel === 'string' && parsed.channel) {
-          return parsed.channel
-        }
-      } catch {
-        /* fall back to persisted bindings */
-      }
-    }
-  }
-  const sessions = new SessionStoreControl(db)
-  const session = sessions.get(sessionId)
-  if (!session) return undefined
-  const direct = db.all<{
-    id: string
-    channel: string
-    external_id: string
-    thread_id: string | null
-  }>(
-    `SELECT id, channel, external_id, thread_id FROM channel_bindings
-     WHERE session_id = ? AND enabled = 1
-     ORDER BY created_at ASC, rowid ASC`,
-    sessionId,
-  )
-  for (const row of direct) {
-    if (row.thread_id) {
-      const root = db.get<{ enabled: number }>(
-        `SELECT enabled FROM channel_bindings
-         WHERE channel = ? AND external_id = ? AND thread_id IS NULL
-         ORDER BY created_at ASC, rowid ASC LIMIT 1`,
-        row.channel,
-        row.external_id,
-      )
-      if (root && root.enabled === 0) continue
-    }
-    const enabledRow = db.get<{ value_json: string }>(
-      'SELECT value_json FROM kv_meta WHERE key = ?',
-      `channel_enabled:${row.channel}`,
-    )
-    if (enabledRow) {
-      try {
-        if (JSON.parse(enabledRow.value_json) === false) continue
-      } catch {}
-    }
-    return row.channel
-  }
-  if (session.projectId && session.kind === 'hub') {
-    const roots = db.all<{ channel: string }>(
-      `SELECT channel FROM channel_bindings
-       WHERE project_id = ? AND thread_id IS NULL AND enabled = 1
-       ORDER BY created_at ASC, rowid ASC`,
-      session.projectId,
-    )
-    for (const root of roots) {
-      const enabledRow = db.get<{ value_json: string }>(
-        'SELECT value_json FROM kv_meta WHERE key = ?',
-        `channel_enabled:${root.channel}`,
-      )
-      if (enabledRow) {
-        try {
-          if (JSON.parse(enabledRow.value_json) === false) continue
-        } catch {}
-      }
-      return root.channel
-    }
-  }
-  return undefined
 }
 
 export interface ControlOpsContext {

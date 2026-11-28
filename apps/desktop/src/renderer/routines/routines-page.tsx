@@ -120,13 +120,17 @@ export function RoutinesPage({ snapshot }: { snapshot: Snapshot }) {
             A routine is a message Vela sends itself at a set time. It answers
             it like any other message.
           </p>
-          <Button type="button" onClick={() => setCreating(true)}>
+          <Button
+            type="button"
+            disabled={targets.length === 0}
+            onClick={() => setCreating(true)}
+          >
             New routine
           </Button>
         </div>
         {groups.length === 0 ? (
           <p className={styles.note}>
-            Create a project to give Vela a routine.
+            Create or connect a project to give Vela a routine.
           </p>
         ) : null}
         {groups.map((group) => (

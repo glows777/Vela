@@ -24,6 +24,7 @@ export interface LoginCapableClient {
   socket: Socket
   activeLogins: Map<number, PendingLoginClient>
   preCancelledLogins: Set<number>
+  isDisconnected?: () => boolean
 }
 
 export function createAuthLoginHandler(
@@ -39,6 +40,13 @@ export function createAuthLoginHandler(
     },
     client: LoginCapableClient,
   ) => {
+    if (
+      client.socket.destroyed ||
+      !client.socket.writable ||
+      client.isDisconnected?.()
+    ) {
+      throw new DOMException('Client disconnected', 'AbortError')
+    }
     const controller = new AbortController()
     if (client.preCancelledLogins.delete(p.loginId)) {
       controller.abort(new DOMException('Cancelled', 'AbortError'))
@@ -90,6 +98,14 @@ export function createAuthLoginHandler(
             settle(new DOMException('Prompt cancelled', 'AbortError'))
           }
           if (controller.signal.aborted) {
+            onLoginAbort()
+            return
+          }
+          if (
+            client.socket.destroyed ||
+            !client.socket.writable ||
+            client.isDisconnected?.()
+          ) {
             onLoginAbort()
             return
           }

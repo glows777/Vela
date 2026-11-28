@@ -234,25 +234,32 @@ export function encodeWireLine(message: DaemonWireMessage): string {
 /** Incremental NDJSON line parser over a byte/string stream using streaming UTF-8 decoding and bounded frames. */
 export function createNdjsonParser(
   onMessage: (message: DaemonWireMessage) => void,
-  onParseError?: (error: unknown, rawLine: string) => void,
+  onParseError?: (error: unknown, rawLine: string) => boolean | undefined,
   maxFrameBytes = MAX_WIRE_FRAME_BYTES,
 ): (chunk: Buffer | string) => void {
   const decoder = new StringDecoder('utf8')
   let buffer = ''
   let oversized = false
+  let aborted = false
   return (chunk) => {
+    if (aborted) return
     const text = typeof chunk === 'string' ? chunk : decoder.write(chunk)
     buffer += text
     for (;;) {
+      if (aborted) break
       const newlineIdx = buffer.indexOf('\n')
       if (newlineIdx === -1) {
         if (Buffer.byteLength(buffer, 'utf8') > maxFrameBytes) {
           oversized = true
           buffer = ''
-          onParseError?.(
-            new Error(`IPC frame exceeded ${maxFrameBytes} byte limit`),
-            '',
-          )
+          if (
+            onParseError?.(
+              new Error(`IPC frame exceeded ${maxFrameBytes} byte limit`),
+              '',
+            ) === false
+          ) {
+            aborted = true
+          }
         }
         break
       }
@@ -264,17 +271,25 @@ export function createNdjsonParser(
       }
       if (!line.length) continue
       if (Buffer.byteLength(line, 'utf8') > maxFrameBytes) {
-        onParseError?.(
-          new Error(`IPC frame exceeded ${maxFrameBytes} byte limit`),
-          '',
-        )
+        if (
+          onParseError?.(
+            new Error(`IPC frame exceeded ${maxFrameBytes} byte limit`),
+            '',
+          ) === false
+        ) {
+          aborted = true
+          break
+        }
         continue
       }
       let parsed: DaemonWireMessage
       try {
         parsed = decodeIpcValue(JSON.parse(line)) as DaemonWireMessage
       } catch (error) {
-        onParseError?.(error, line)
+        if (onParseError?.(error, line) === false) {
+          aborted = true
+          break
+        }
         continue
       }
       if (
@@ -283,7 +298,10 @@ export function createNdjsonParser(
         Array.isArray(parsed) ||
         typeof (parsed as { type?: unknown }).type !== 'string'
       ) {
-        onParseError?.(new Error('Invalid IPC message'), line)
+        if (onParseError?.(new Error('Invalid IPC message'), line) === false) {
+          aborted = true
+          break
+        }
         continue
       }
       onMessage(parsed)
@@ -365,7 +383,7 @@ export function parseChannelSubmitParams(p: unknown): {
   return parsed.data
 }
 
-const MAX_CLIENT_BUFFER_BYTES = 64 * 1024 * 1024
+const MAX_CLIENT_BUFFER_BYTES = 256 * 1024 * 1024
 
 export async function probeSocketAlive(socketPath: string): Promise<boolean> {
   if (process.platform !== 'win32' && !existsSync(socketPath)) return false

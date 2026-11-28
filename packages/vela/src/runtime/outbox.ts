@@ -265,6 +265,7 @@ export function enqueueOutboxInTx(
 export class OutboxDispatcher {
   private flushing: Promise<{ delivered: number; failed: number }> | undefined
   private flushAgain = false
+  private flushNowMs: number | undefined
   private readonly inFlightByChannel = new Map<string, Set<Promise<void>>>()
 
   constructor(
@@ -381,25 +382,34 @@ export class OutboxDispatcher {
   async flushOnce(
     nowMs?: number,
   ): Promise<{ delivered: number; failed: number }> {
+    this.flushNowMs = nowMs
     if (this.flushing) {
       this.flushAgain = true
       return this.flushing
     }
     this.flushAgain = false
-    this.flushing = (async () => {
-      let delivered = 0
-      let failed = 0
-      do {
-        this.flushAgain = false
-        const pass = await this.runFlush(nowMs)
-        delivered += pass.delivered
-        failed += pass.failed
-      } while (this.flushAgain)
-      return { delivered, failed }
-    })().finally(() => {
-      this.flushing = undefined
-    })
-    return this.flushing
+    let run: Promise<{ delivered: number; failed: number }> | undefined
+    run = (async () => {
+      try {
+        let delivered = 0
+        let failed = 0
+        do {
+          this.flushAgain = false
+          const passNow = this.flushNowMs
+          this.flushNowMs = undefined
+          const pass = await this.runFlush(passNow)
+          delivered += pass.delivered
+          failed += pass.failed
+        } while (this.flushAgain)
+        return { delivered, failed }
+      } finally {
+        if (this.flushing === run) {
+          this.flushing = undefined
+        }
+      }
+    })()
+    this.flushing = run
+    return run
   }
 
   async drain(): Promise<void> {

@@ -28,6 +28,7 @@ export interface InteractiveOptions {
     options?: {
       quiet?: boolean
       startup?: boolean
+      resume?: boolean
     },
   ) => Promise<boolean> | boolean
   /** Called before exit */
@@ -64,4 +65,5 @@ export interface InteractiveOptions {
   /** Transient caller provider credentials for model discovery in TUI (`/model` / Ctrl+P). */
   modelEnv?: Record<string, string>
   onConfigured?: () => void
+  registerDisconnectHandler?: (handler: (error: Error) => void) => () => void
 }

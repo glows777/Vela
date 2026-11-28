@@ -66,10 +66,10 @@ export async function prepareInteractiveSession(
   )
   try {
     const setupNext = startup && Boolean(options.agentDir)
-    await options.configure(session, { quiet: setupNext, startup })
+    await options.configure(session, { quiet: setupNext, startup, resume })
     const inspection = await session.refresh({ includeEntries: true })
     if (!isModelUsable(session, options.hasUsableModel) && !setupNext) {
-      await options.configure(session, { quiet: false, startup })
+      await options.configure(session, { quiet: false, startup, resume })
     }
     return {
       session,

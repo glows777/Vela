@@ -9,7 +9,6 @@ import {
 } from './driver/index.ts'
 import { type McpServersFile, mcpConfig } from './mcp/index.ts'
 
-export { extensionName } from './driver/diagnostics.ts'
 export type {
   ExtensionEntry,
   LoadConfigOptions,
@@ -17,7 +16,7 @@ export type {
   ProviderConfig,
   VelaSettings,
 } from './driver/index.ts'
-export { importExtension, loadModels } from './driver/index.ts'
+export { loadModels } from './driver/index.ts'
 
 export interface VelaConfig extends CoreConfig {
   settings: VelaSettings

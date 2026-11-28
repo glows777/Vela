@@ -1,20 +1,21 @@
 import { randomUUID } from 'node:crypto'
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
-import { createServer, type Socket } from 'node:net'
-import { dirname } from 'node:path'
+import { createServer } from 'node:net'
+import { dirname, join } from 'node:path'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import type { LarkTransport } from '../lark/transport.ts'
 import { createRuntime, type LocalVelaRuntime } from '../runtime-sdk.ts'
 import type { DocsPaths } from '../shared/docs-paths.ts'
 import { silentLogger, type VelaLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
-import { createAuthLoginHandler, type PendingLoginClient } from './auth-rpc.ts'
 import { registerBuiltinExtensionHostModules } from './extension-host.ts'
 import { DaemonLarkHost } from './lark-host.ts'
 import {
@@ -25,6 +26,7 @@ import {
 import {
   assertSocketOrMissing,
   daemonOwnerLockPath,
+  ensurePrivateSocketDir,
   removeStaleSocketFile,
   resolveDaemonPaths,
 } from './paths.ts'
@@ -32,15 +34,15 @@ import {
   createNdjsonParser,
   DAEMON_PROTOCOL_VERSION,
   type DaemonHello,
-  type DaemonStatus,
   getAppVersion,
-  parseChannelChatsParams,
-  parseChannelSetEnabledParams,
-  parseChannelSubmitParams,
   probeSocketAlive,
   safeWriteWire,
   serializeError,
 } from './protocol.ts'
+import {
+  type ConnectedClient,
+  createDaemonHandlers,
+} from './server-handlers.ts'
 import { resolveSettingsOwnerHooks } from './settings-discovery.ts'
 import {
   DaemonWebhooksHost,
@@ -81,20 +83,25 @@ export interface DaemonServerHandle {
   close(reason?: string): Promise<void>
 }
 
-interface ConnectedClient {
-  socket: Socket
-  subEvents: boolean
-  subDeltas: boolean
-  subChannels: boolean
-  activeLogins: Map<number, PendingLoginClient>
-  activeLogouts: Map<number, AbortController>
-  activeDiscoveries: Map<number, AbortController>
-  preCancelledLogins: Set<number>
-  preCancelledLogouts: Set<number>
-  preCancelledDiscoveries: Set<number>
+const safeWrite = safeWriteWire
+const MAX_PRECANCEL_ENTRIES = 256
+
+function addBounded(set: Set<number>, value: number): void {
+  if (set.size >= MAX_PRECANCEL_ENTRIES) {
+    const oldest = set.values().next().value
+    if (oldest !== undefined) set.delete(oldest)
+  }
+  set.add(value)
 }
 
-const safeWrite = safeWriteWire
+function readConfigStatSig(agentDir: string): string {
+  try {
+    const st = statSync(join(agentDir, 'config.json'))
+    return `${st.ino}:${st.mtimeMs}:${st.size}`
+  } catch {
+    return 'missing'
+  }
+}
 
 /**
  * Starts the single-writer local daemon holding `createRuntime()` and listening
@@ -104,12 +111,14 @@ export async function startDaemonServer(
   options: StartDaemonServerOptions = {},
 ): Promise<DaemonServerHandle> {
   registerBuiltinExtensionHostModules({ startDaemonServer })
+  // vela-boundary: allow
+  const endpointEnv = options.hostEnv ?? process.env
   const hostEnv = options.hostEnv ?? {}
   const logger = options.logger ?? silentLogger
-  const rawAgentDir = options.agentDir ?? defaultAgentDir(hostEnv)
-  const paths = resolveDaemonPaths(rawAgentDir, options.socketPath, hostEnv)
+  const rawAgentDir = options.agentDir ?? defaultAgentDir(endpointEnv)
+  const paths = resolveDaemonPaths(rawAgentDir, options.socketPath, endpointEnv)
 
-  mkdirSync(paths.agentDir, { recursive: true })
+  mkdirSync(paths.agentDir, { recursive: true, mode: 0o700 })
   assertSocketOrMissing(paths.socketPath)
   const instanceId = randomUUID()
   const ownerLockPath = daemonOwnerLockPath(paths.agentDir)
@@ -122,13 +131,32 @@ export async function startDaemonServer(
   let runtime: LocalVelaRuntime
   let webhooksHost: DaemonWebhooksHost | undefined
   let larkHost: DaemonLarkHost | undefined
+  let initialConfigSig = 'missing'
   try {
     if (process.platform !== 'win32') {
-      mkdirSync(dirname(paths.socketPath), { recursive: true })
+      ensurePrivateSocketDir(paths.socketPath)
+      const preProbeIno = (() => {
+        try {
+          return lstatSync(paths.socketPath).ino
+        } catch {
+          return undefined
+        }
+      })()
       if (await probeSocketAlive(paths.socketPath)) {
         throw new DaemonAlreadyRunningError(paths.socketPath)
       }
-      removeStaleSocketFile(paths.socketPath)
+      if (preProbeIno !== undefined) {
+        const postProbeIno = (() => {
+          try {
+            return lstatSync(paths.socketPath).ino
+          } catch {
+            return undefined
+          }
+        })()
+        if (postProbeIno === preProbeIno) {
+          removeStaleSocketFile(paths.socketPath)
+        }
+      }
     }
 
     if (options.enableWebhooks !== false) {
@@ -139,6 +167,7 @@ export async function startDaemonServer(
       )
     }
 
+    initialConfigSig = readConfigStatSig(paths.agentDir)
     runtime = createRuntime({
       agentDir: paths.agentDir,
       hostEnv,
@@ -199,36 +228,109 @@ export async function startDaemonServer(
   }
 
   const clients = new Set<ConnectedClient>()
+  const sessionOverrideOwners = new Map<string, ConnectedClient>()
+  const sessionConfigureQueues = new Map<string, Promise<void>>()
+  const serializeSessionConfigure = <T>(
+    sessionId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    const prev = sessionConfigureQueues.get(sessionId) ?? Promise.resolve()
+    const run = prev.catch(() => {}).then(fn)
+    const tail = run.then(
+      () => {},
+      () => {},
+    )
+    sessionConfigureQueues.set(sessionId, tail)
+    void tail.finally(() => {
+      if (sessionConfigureQueues.get(sessionId) === tail) {
+        sessionConfigureQueues.delete(sessionId)
+      }
+    })
+    return run
+  }
+  const DAEMON_SHUTDOWN_DEADLINE_MS = 30_000
   let nextPromptId = 1
   let closing: Promise<void> | undefined
+  let didBindSocket = false
+  let boundSocketIno: number | undefined
+  let ownershipReleased = false
+  const finalizeOwnership = () => {
+    if (ownershipReleased) return
+    ownershipReleased = true
+    const pidInfo = readOwnerRecord(paths.pidPath)
+    const currentSocketIno = (() => {
+      try {
+        return lstatSync(paths.socketPath).ino
+      } catch {
+        return undefined
+      }
+    })()
+    const ownerUnchanged =
+      didBindSocket &&
+      (!pidInfo?.instanceId || pidInfo.instanceId === instanceId)
+    if (
+      ownerUnchanged &&
+      boundSocketIno !== undefined &&
+      currentSocketIno === boundSocketIno
+    ) {
+      removeStaleSocketFile(paths.socketPath)
+    }
+    if (
+      ownerUnchanged &&
+      (currentSocketIno === undefined || currentSocketIno === boundSocketIno)
+    ) {
+      rmSync(paths.pidPath, { force: true })
+    }
+    releaseOwner()
+  }
+  let signalHandlersAttached = false
   let configWatcher: ReturnType<typeof startDaemonConfigWatcher> | undefined
 
   const onSigHup = () => {
+    if (closing) return
     void runtime.reloadConfig().catch((err) => {
       logger.warn(
         `[daemon] SIGHUP config reload failed: ${err instanceof Error ? err.message : String(err)}`,
       )
     })
   }
+  const forceExitOnSecondSignal = (sig: 'SIGINT' | 'SIGTERM'): never => {
+    logger.warn(`[daemon] Received second ${sig} during shutdown; forcing exit`)
+    try {
+      finalizeOwnership()
+    } catch {}
+    // vela-boundary: allow
+    process.exit(sig === 'SIGINT' ? 130 : 143)
+  }
+  const handleSignalClose = (sig: 'SIGINT' | 'SIGTERM') => {
+    void close(sig).catch((error) => {
+      logger.warn(
+        `[daemon] ${sig} shutdown timed out or failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      options.onClosed?.('shutdown_timeout')
+    })
+  }
   const onSigInt = () => {
-    void close('SIGINT')
+    if (closing) forceExitOnSecondSignal('SIGINT')
+    handleSignalClose('SIGINT')
   }
   const onSigTerm = () => {
-    void close('SIGTERM')
+    if (closing) forceExitOnSecondSignal('SIGTERM')
+    handleSignalClose('SIGTERM')
   }
 
   const close = (reason = 'dispose'): Promise<void> => {
     closing ??= (async () => {
-      if (options.registerSignalHandlers !== false) {
-        process.off('SIGHUP', onSigHup)
-        process.off('SIGINT', onSigInt)
-        process.off('SIGTERM', onSigTerm)
-      }
       configWatcher?.stop()
       unsubEvents()
       unsubDeltas()
       unsubChannels()
-      for (const client of clients) {
+      const serverClosed = new Promise<void>((resolve) => {
+        server.close(() => resolve())
+      }).catch(() => {})
+      const snapshotClients = [...clients]
+      for (const client of snapshotClients) {
+        client.disconnected = true
         for (const active of client.activeLogins.values()) {
           active.controller.abort(
             new DOMException('Daemon closing', 'AbortError'),
@@ -240,43 +342,91 @@ export async function startDaemonServer(
         for (const ctrl of client.activeDiscoveries.values()) {
           ctrl.abort(new DOMException('Daemon closing', 'AbortError'))
         }
-        client.socket.end()
-        client.socket.destroy()
+      }
+      await Promise.all(
+        snapshotClients.map(
+          (client) =>
+            new Promise<void>((resolve) => {
+              if (client.socket.destroyed || !client.socket.writable) {
+                client.socket.destroy()
+                resolve()
+                return
+              }
+              const timer = setTimeout(() => {
+                client.socket.destroy()
+                resolve()
+              }, 50)
+              client.socket.end(() => {
+                clearTimeout(timer)
+                client.socket.destroy()
+                resolve()
+              })
+            }),
+        ),
+      )
+      for (const leftover of clients) {
+        leftover.disconnected = true
+        leftover.socket.destroy()
       }
       clients.clear()
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve())
-      }).catch(() => {})
-      try {
-        const sessions = await runtime.sessions
-          .list({ includeArchived: true })
-          .catch(() => [])
-        await Promise.all(
-          sessions.map(async (session) => {
-            const jobs = await runtime.jobs.list(session.id).catch(() => [])
-            await Promise.all(
-              jobs
-                .filter((job) => job.snapshot.state === 'running')
-                .map((job) =>
-                  runtime.jobs
-                    .stop(session.id, job.snapshot.id)
-                    .catch(() => {}),
-                ),
-            )
-          }),
-        )
-        await larkHost?.stop().catch(() => {})
-        await webhooksHost?.stop().catch(() => {})
-        await runtime.dispose()
-      } finally {
-        const pidInfo = readOwnerRecord(paths.pidPath)
-        const stillOwnsFiles =
-          !pidInfo?.instanceId || pidInfo.instanceId === instanceId
-        if (stillOwnsFiles) {
-          removeStaleSocketFile(paths.socketPath)
-          rmSync(paths.pidPath, { force: true })
+      sessionOverrideOwners.clear()
+      await serverClosed
+      let shutdownTimer: ReturnType<typeof setTimeout> | undefined
+      let timedOut = false
+      const stopServices = (async () => {
+        try {
+          await larkHost?.stop().catch(() => {})
+          await webhooksHost?.stop().catch(() => {})
+          const sessions = await runtime.sessions
+            .list({ includeArchived: true })
+            .catch(() => [])
+          await Promise.all(
+            sessions.map(async (session) => {
+              const jobs = await runtime.jobs.list(session.id).catch(() => [])
+              await Promise.all(
+                jobs
+                  .filter((job) => job.snapshot.state === 'running')
+                  .map((job) =>
+                    runtime.jobs
+                      .stop(session.id, job.snapshot.id)
+                      .catch(() => {}),
+                  ),
+              )
+            }),
+          )
+          await runtime.dispose()
+        } finally {
+          if (signalHandlersAttached) {
+            signalHandlersAttached = false
+            process.off('SIGHUP', onSigHup)
+            process.off('SIGINT', onSigInt)
+            process.off('SIGTERM', onSigTerm)
+          }
+          finalizeOwnership()
         }
-        releaseOwner()
+      })()
+      try {
+        await Promise.race([
+          stopServices,
+          new Promise<never>((_resolve, reject) => {
+            shutdownTimer = setTimeout(() => {
+              timedOut = true
+              logger.warn(
+                `[daemon] Shutdown exceeded ${DAEMON_SHUTDOWN_DEADLINE_MS}ms deadline while runtime disposal continues`,
+              )
+              reject(
+                new Error(
+                  `Timed out waiting for Vela daemon shutdown after ${DAEMON_SHUTDOWN_DEADLINE_MS}ms`,
+                ),
+              )
+            }, DAEMON_SHUTDOWN_DEADLINE_MS)
+            shutdownTimer.unref?.()
+          }),
+        ])
+      } finally {
+        clearTimeout(shutdownTimer)
+      }
+      if (!timedOut) {
         options.onClosed?.(reason)
       }
     })()
@@ -299,246 +449,43 @@ export async function startDaemonServer(
     }
   })
 
-  // biome-ignore lint/suspicious/noExplicitAny: RPC params decoded dynamically from NDJSON
-  type Handler = (p: any, client: ConnectedClient) => Promise<unknown> | unknown
-  const handlers: Record<string, Handler> = {
-    'daemon.hello': () => hello,
-    'daemon.status': async (): Promise<DaemonStatus> => {
-      await configWatcher?.checkNow()
-      return {
-        running: true,
-        agentDir: paths.agentDir,
-        socketPath: paths.socketPath,
-        pid: process.pid,
-        protocolVersion,
-        appVersion,
-        startedAt,
-        uptimeMs: Math.max(0, Date.now() - startedAtMs),
-        channels: await runtime.channels.list(),
-        ...(webhooksHost ? { webhooks: webhooksHost.status() } : {}),
-      }
-    },
-    'daemon.stop': () => {
-      setImmediate(() => {
-        void close('rpc')
-      })
-      return { stopping: true }
-    },
-    'runtime.ready': () => runtime.ready(),
-    'runtime.extensionErrors': () => runtime.extensionErrors(),
-    'runtime.reloadConfig': () => runtime.reloadConfig(),
-    'projects.list': (p) => runtime.projects.list(p),
-    'projects.get': (p) => runtime.projects.get(p.id),
-    'projects.getByCwd': (p) => runtime.projects.getByCwd(p.cwd),
-    'projects.create': (p) => runtime.projects.create(p),
-    'projects.update': (p) => runtime.projects.update(p.id, p.patch),
-    'projects.remove': (p) => runtime.projects.remove(p.id, p.options),
-    'trust.check': (p) => runtime.trust.check(p.location),
-    'trust.approve': (p) => runtime.trust.approve(p.location, p.trusted),
-    'oauthRegistrations.get': (p) => runtime.oauthRegistrations.get(p.provider),
-    'oauthRegistrations.set': (p) =>
-      runtime.oauthRegistrations.set(p.provider, p.registration),
-    'oauthRegistrations.delete': (p) =>
-      runtime.oauthRegistrations.delete(p.provider),
-    'sessions.list': (p) => runtime.sessions.list(p),
-    'sessions.listSummaries': (p) => runtime.sessions.listSummaries(p),
-    'sessions.get': (p) => runtime.sessions.get(p.id),
-    'sessions.create': (p) => runtime.sessions.create(p),
-    'sessions.rename': (p) => runtime.sessions.rename(p.id, p.name),
-    'sessions.delete': (p) => runtime.sessions.delete(p.id),
-    'sessions.reset': (p) => runtime.sessions.reset(p.id),
-    'sessions.status': (p) => runtime.sessions.status(p.id),
-    'sessions.messages': (p) => runtime.sessions.messages(p),
-    'sessions.configure': (p) =>
-      runtime.sessions.configure(p.sessionId, p.override),
-    'sessions.setModel': (p) =>
-      runtime.sessions.setModel(p.sessionId, p.modelRef),
-    'sessions.setThinkingLevel': (p) =>
-      runtime.sessions.setThinkingLevel(p.sessionId, p.level),
-    'sessions.compact': (p) =>
-      runtime.sessions.compact(p.sessionId, p.instructions),
-    'sessions.tree': (p) => runtime.sessions.tree(p.sessionId),
-    'sessions.navigateTree': (p) =>
-      runtime.sessions.navigateTree(p.sessionId, p.targetId, p.options),
-    'sessions.setLabel': (p) =>
-      runtime.sessions.setLabel(p.sessionId, p.entryId, p.label),
-    'sessions.fork': (p) =>
-      runtime.sessions.fork(p.sessionId, p.entryId, p.options),
-    'sessions.clone': (p) => runtime.sessions.clone(p.sessionId, p.options),
-    'sessions.inspect': (p) => runtime.sessions.inspect(p.sessionId, p.options),
-    'sessions.execBash': (p) =>
-      runtime.sessions.execBash(p.sessionId, p.command, p.options),
-    'sessions.abortBash': (p) => runtime.sessions.abortBash(p.sessionId),
-    'sessions.runCommand': (p) =>
-      runtime.sessions.runCommand(p.sessionId, p.input),
-    'sessions.clearQueue': (p) => runtime.sessions.clearQueue(p.sessionId),
-    'sessions.export': (p) =>
-      runtime.sessions.export(p.sessionId, p.format, p.outputPath, p.baseCwd),
-    'runtime.prompt': (p) => runtime.prompt(p.sessionId, p.input),
-    'runtime.steer': (p) => runtime.steer(p.sessionId, p.text, p.images),
-    'runtime.stop': (p) => runtime.stop(p.sessionId, p.reason, p.options),
-    'runtime.waitForIdle': (p) => runtime.waitForIdle(p?.sessionId),
-    'jobs.list': (p) => runtime.jobs.list(p?.sessionId),
-    'jobs.stop': (p) => runtime.jobs.stop(p.sessionId, p.jobId),
-    'jobs.promoteForeground': (p) =>
-      runtime.jobs.promoteForeground(p.sessionId, p.toolCallId),
-    'approvals.list': (p) => runtime.approvals.list(p?.sessionId),
-    'approvals.resolve': (p) => runtime.approvals.resolve(p),
-    'timers.list': (p) => runtime.timers.list(p),
-    'timers.createRoutine': (p) => runtime.timers.createRoutine(p),
-    'timers.createFollowup': (p) => runtime.timers.createFollowup(p),
-    'timers.update': (p) => runtime.timers.update(p.id, p.patch),
-    'timers.delete': (p) => runtime.timers.delete(p.id, p.filter),
-    'subscriptions.list': (p) => runtime.subscriptions.list(p),
-    'subscriptions.create': (p) => runtime.subscriptions.create(p),
-    'subscriptions.remove': (p) => runtime.subscriptions.remove(p.id),
-    'bindings.list': (p) => runtime.bindings.list(p),
-    'bindings.get': (p) => runtime.bindings.get(p.id),
-    'bindings.upsert': (p) => runtime.bindings.upsert(p),
-    'bindings.setEnabled': (p) => runtime.bindings.setEnabled(p.id, p.enabled),
-    'bindings.remove': (p) => runtime.bindings.remove(p.id),
-    'channels.list': () => runtime.channels.list(),
-    'channels.setEnabled': (p) => {
-      const { name, enabled } = parseChannelSetEnabledParams(p)
-      return runtime.channels.setEnabled(name, enabled)
-    },
-    'channels.chats': (p) => {
-      const { channel } = parseChannelChatsParams(p)
-      return runtime.channels.chats(channel)
-    },
-    'channels.submit': (p) => {
-      const { channel, input } = parseChannelSubmitParams(p)
-      return runtime.channels.submit(channel, input)
-    },
-    'channels.subscribe': (_p, c) => {
-      c.subChannels = true
-      return true
-    },
-    'channels.unsubscribe': (_p, c) => {
-      c.subChannels = false
-      return true
-    },
-    'settings.get': () => runtime.settings.get(),
-    'settings.saveModel': (p) => runtime.settings.saveModel(p.input),
-    'settings.saveLark': (p) => runtime.settings.saveLark(p.input),
-    'settings.discoverLarkGroup': async (
-      p: { setupId?: number } | undefined,
-      client: ConnectedClient,
-    ) => {
-      const setupId = p?.setupId
-      const controller = new AbortController()
-      if (typeof setupId === 'number') {
-        if (client.preCancelledDiscoveries.delete(setupId)) {
-          controller.abort(new DOMException('Cancelled', 'AbortError'))
-        }
-        client.activeDiscoveries.set(setupId, controller)
-      }
-      if (controller.signal.aborted) {
-        if (typeof setupId === 'number') {
-          client.activeDiscoveries.delete(setupId)
-        }
-        return undefined
-      }
-      try {
-        const hooks = await resolveSettingsOwnerHooks(runtime)
-        if (hooks) {
-          return await hooks.discoverLarkGroup(client, controller.signal)
-        }
-        return await runtime.settings.discoverLarkGroup({
-          signal: controller.signal,
-        })
-      } finally {
-        if (typeof setupId === 'number') {
-          client.activeDiscoveries.delete(setupId)
-        }
-      }
-    },
-    'settings.confirmLarkGroup': async (p, client: ConnectedClient) => {
-      const hooks = await resolveSettingsOwnerHooks(runtime)
-      return hooks
-        ? hooks.confirmLarkGroup(client, p.chatId)
-        : runtime.settings.confirmLarkGroup(p.chatId)
-    },
-    'settings.cancelLarkSetup': async (_p, client: ConnectedClient) => {
-      for (const ctrl of client.activeDiscoveries.values()) {
-        ctrl.abort(new DOMException('Cancelled', 'AbortError'))
-      }
-      const hooks = await resolveSettingsOwnerHooks(runtime)
-      if (hooks) {
-        await hooks.cancelLarkSetup(client)
-      }
-    },
-    'blobs.get': (p) => runtime.blobs.get(p.id),
-    'blobs.list': (p) => runtime.blobs.list(p.sessionId, p.direction),
-    'blobs.read': (p) => runtime.blobs.read(p.id),
-    'blobs.storeInbound': (p) => runtime.blobs.storeInbound(p),
-    'events.list': (p) => runtime.events.list(p),
-    'events.bufferedDeltas': (p) => runtime.events.bufferedDeltas(p.sessionId),
-    'events.subscribe': (_p, c) => {
-      c.subEvents = true
-      return true
-    },
-    'events.unsubscribe': (_p, c) => {
-      c.subEvents = false
-      return true
-    },
-    'events.subscribeDeltas': (_p, c) => {
-      c.subDeltas = true
-      return true
-    },
-    'events.unsubscribeDeltas': (_p, c) => {
-      c.subDeltas = false
-      return true
-    },
-    'runtime.models': (p) => runtime.models(p),
-    'runtime.loginProviders': () => runtime.loginProviders(),
-    'runtime.logout': async (
-      p: {
-        provider: string
-        logoutId?: number
-        options?: { forget?: boolean }
-      },
-      client: ConnectedClient,
-    ) => {
-      const controller = new AbortController()
-      if (typeof p.logoutId === 'number') {
-        if (client.preCancelledLogouts.delete(p.logoutId)) {
-          controller.abort(new DOMException('Logout cancelled', 'AbortError'))
-        }
-        client.activeLogouts.set(p.logoutId, controller)
-      }
-      try {
-        return await runtime.logout(p.provider, {
-          ...p.options,
-          signal: controller.signal,
-        })
-      } finally {
-        if (typeof p.logoutId === 'number') {
-          client.activeLogouts.delete(p.logoutId)
-        }
-      }
-    },
-    'runtime.recover': () => runtime.recover(),
-    'auth.login': createAuthLoginHandler(runtime, () => nextPromptId++),
-  }
+  const handlers = createDaemonHandlers({
+    runtime,
+    hello,
+    startedAtMs,
+    webhooksHost,
+    getConfigWatcher: () => configWatcher,
+    requestClose: (reason) => void close(reason),
+    nextPromptId: () => nextPromptId++,
+    sessionOverrideOwners,
+    serializeSessionConfigure,
+  })
 
   const server = createServer((socket) => {
+    if (closing) {
+      socket.destroy()
+      return
+    }
     const client: ConnectedClient = {
       socket,
+      disconnected: false,
       subEvents: false,
       subDeltas: false,
       subChannels: false,
+      configuredSessions: new Set(),
       activeLogins: new Map(),
       activeLogouts: new Map(),
       activeDiscoveries: new Map(),
       preCancelledLogins: new Set(),
       preCancelledLogouts: new Set(),
       preCancelledDiscoveries: new Set(),
+      isDisconnected: () => client.disconnected || socket.destroyed,
     }
     clients.add(client)
 
     const parse = createNdjsonParser(
       (msg) => {
+        if (client.isDisconnected() || !clients.has(client)) return
         if (msg.type === 'auth_prompt_reply') {
           const active = client.activeLogins.get(msg.loginId)
           const pending = active?.prompts.get(msg.promptId)
@@ -552,7 +499,7 @@ export async function startDaemonServer(
           if (active) {
             active.controller.abort(new DOMException('Cancelled', 'AbortError'))
           } else {
-            client.preCancelledLogins.add(msg.loginId)
+            addBounded(client.preCancelledLogins, msg.loginId)
           }
           return
         }
@@ -561,7 +508,7 @@ export async function startDaemonServer(
           if (ctrl) {
             ctrl.abort(new DOMException('Logout cancelled', 'AbortError'))
           } else {
-            client.preCancelledLogouts.add(msg.logoutId)
+            addBounded(client.preCancelledLogouts, msg.logoutId)
           }
           return
         }
@@ -570,7 +517,7 @@ export async function startDaemonServer(
           if (ctrl) {
             ctrl.abort(new DOMException('Cancelled', 'AbortError'))
           } else {
-            client.preCancelledDiscoveries.add(msg.setupId)
+            addBounded(client.preCancelledDiscoveries, msg.setupId)
           }
           return
         }
@@ -586,7 +533,12 @@ export async function startDaemonServer(
           return
         }
         Promise.resolve()
-          .then(() => handler(msg.params, client))
+          .then(() => {
+            if (client.isDisconnected() || !clients.has(client)) {
+              throw new DOMException('Client disconnected', 'AbortError')
+            }
+            return handler(msg.params, client)
+          })
           .then(
             (result) => {
               safeWrite(socket, { type: 'res', id: msg.id, ok: true, result })
@@ -620,13 +572,32 @@ export async function startDaemonServer(
           `[daemon] Closing IPC client after frame error: ${error instanceof Error ? error.message : String(error)}`,
         )
         socket.destroy()
+        return false
       },
     )
 
     socket.on('data', parse)
     socket.on('error', () => {})
     socket.on('close', () => {
+      client.disconnected = true
       clients.delete(client)
+      for (const sid of [...client.configuredSessions]) {
+        void serializeSessionConfigure(sid, async () => {
+          if (sessionOverrideOwners.get(sid) === client) {
+            try {
+              await runtime.sessions.configure(sid, {})
+              if (sessionOverrideOwners.get(sid) === client) {
+                sessionOverrideOwners.delete(sid)
+              }
+            } catch (error) {
+              logger.warn(
+                `[daemon] Failed clearing session override on disconnect for ${sid}: ${error instanceof Error ? error.message : String(error)}`,
+              )
+            }
+          }
+        })
+      }
+      client.configuredSessions.clear()
       for (const active of client.activeLogins.values()) {
         active.controller.abort(
           new DOMException('Client disconnected', 'AbortError'),
@@ -651,34 +622,84 @@ export async function startDaemonServer(
     })
   })
 
+  const tmpPidPath = `${paths.pidPath}.${process.pid}.tmp`
   try {
     await new Promise<void>((resolve, reject) => {
       const onErr = (err: Error) => reject(err)
       server.once('error', onErr)
-      server.listen(paths.socketPath, () => {
-        server.off('error', onErr)
-        resolve()
-      })
+      let prevUmask: number | undefined
+      let umaskUnsupported = false
+      if (process.platform !== 'win32') {
+        try {
+          prevUmask = process.umask(0o177)
+        } catch (error) {
+          if (
+            (error as NodeJS.ErrnoException).code ===
+            'ERR_WORKER_UNSUPPORTED_OPERATION'
+          ) {
+            umaskUnsupported = true
+          } else {
+            throw error
+          }
+        }
+      }
+      if (umaskUnsupported) {
+        const parentDir = dirname(paths.socketPath)
+        const parentStat = lstatSync(parentDir)
+        const uid = process.getuid?.()
+        if (
+          parentStat.isSymbolicLink() ||
+          !parentStat.isDirectory() ||
+          (uid !== undefined && parentStat.uid !== uid) ||
+          (parentStat.mode & 0o077) !== 0
+        ) {
+          throw new Error(
+            `Refusing daemon socket in non-private directory without process.umask: ${parentDir}`,
+          )
+        }
+      }
+      try {
+        server.listen(paths.socketPath, () => {
+          didBindSocket = true
+          try {
+            boundSocketIno = lstatSync(paths.socketPath).ino
+          } catch {}
+          server.off('error', onErr)
+          resolve()
+        })
+      } finally {
+        if (prevUmask !== undefined) process.umask(prevUmask)
+      }
     })
+    if (process.platform !== 'win32') {
+      chmodSync(paths.socketPath, 0o600)
+    }
+    writeFileSync(tmpPidPath, `${JSON.stringify(hello, null, 2)}\n`, {
+      mode: 0o600,
+    })
+    renameSync(tmpPidPath, paths.pidPath)
   } catch (error) {
+    rmSync(tmpPidPath, { force: true })
     unsubEvents()
     unsubDeltas()
     unsubChannels()
+    await larkHost?.stop().catch(() => {})
     await webhooksHost?.stop().catch(() => {})
     await runtime.dispose().catch(() => {})
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve())
+    }).catch(() => {})
+    const pidInfo = readOwnerRecord(paths.pidPath)
+    if (
+      didBindSocket &&
+      (!pidInfo?.instanceId || pidInfo.instanceId === instanceId)
+    ) {
+      removeStaleSocketFile(paths.socketPath)
+      rmSync(paths.pidPath, { force: true })
+    }
     releaseOwner()
     throw error
   }
-
-  if (process.platform !== 'win32') {
-    chmodSync(paths.socketPath, 0o600)
-  }
-
-  const tmpPidPath = `${paths.pidPath}.${process.pid}.tmp`
-  writeFileSync(tmpPidPath, `${JSON.stringify(hello, null, 2)}\n`, {
-    mode: 0o600,
-  })
-  renameSync(tmpPidPath, paths.pidPath)
 
   // Start Lark synchronization after the IPC socket is already accepting CLI clients,
   // while gating crash recovery & default-target webhooks until Lark readiness settles (up to 5s).
@@ -702,12 +723,16 @@ export async function startDaemonServer(
     }
     if (!closing) {
       await runtime.recover()
-      if (webhooksHost) {
+      if (webhooksHost && !closing) {
         await webhooksHost.sync(runtime.getWebhookConfig(), false)
       }
     }
   } catch (error) {
     clearTimeout(larkInitTimer)
+    if (closing) {
+      await closing
+      throw error
+    }
     unsubEvents()
     unsubDeltas()
     unsubChannels()
@@ -738,9 +763,11 @@ export async function startDaemonServer(
           `[daemon] Automatic config reload failed: ${err instanceof Error ? err.message : String(err)}`,
         )
       },
+      initialConfigSig,
     )
 
     if (options.registerSignalHandlers !== false) {
+      signalHandlersAttached = true
       process.on('SIGHUP', onSigHup)
       process.on('SIGINT', onSigInt)
       process.on('SIGTERM', onSigTerm)

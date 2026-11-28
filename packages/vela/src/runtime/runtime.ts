@@ -17,6 +17,7 @@ import {
   createChannelStatusTracker,
   getChannelToolsForSessionInDb,
   ingestWebhookEventInRuntime,
+  isChannelAdapterReady,
   isChannelEnabledInDb,
   listChannelStatusesInRuntime,
   listRuntimeOrChannelMessages,
@@ -59,9 +60,10 @@ import {
   type StreamDeltaListener,
 } from './event-bus.ts'
 import type { RuntimeEvent, StreamDeltaEvent } from './events.ts'
-import type { InboxEventRecord } from './inbox.ts'
+import { type InboxEventRecord, listDeferredWakeSessionIds } from './inbox.ts'
 import { OutboxDispatcher } from './outbox.ts'
 import { isSessionInChannels, scheduleRuntimeWakeTimer } from './recovery.ts'
+import type { ActiveWorker, VelaRuntimeEngineOptions } from './runtime-types.ts'
 import { type ControlShortcut, executeControlShortcut } from './shortcuts.ts'
 import { SubscriptionManager } from './subscriptions.ts'
 import { TimerScheduler } from './timers.ts'
@@ -74,22 +76,7 @@ import {
   stopSessionInRuntime,
 } from './worker.ts'
 
-export interface VelaRuntimeEngineOptions {
-  db: VelaDatabase
-  agentDir: string
-  environments?: EnvironmentRegistry
-  drivers?: AgentDriver[]
-  ignoredChannels?: readonly string[]
-  logger?: VelaLogger
-}
-
-interface ActiveWorker {
-  runId: string
-  ownerToken: string
-  controller: AbortController
-  promise: Promise<void>
-  suppressedInterruptedIds?: Set<string>
-}
+export type { VelaRuntimeEngineOptions }
 
 /**
  * Agent-agnostic Runtime control plane over a single `<agentDir>/vela.db`.
@@ -121,6 +108,8 @@ export class VelaRuntimeEngine {
   private readonly inFlightDeliveries = new Set<string>()
   private readonly activeOwners = new Set<string>()
   private readonly transientBlobDir?: string
+  private readonly onRestartSession?: (sid: string) => Promise<void> | void
+  private readonly trySteerInboxEvent?: VelaRuntimeEngineOptions['trySteerInboxEvent']
   private nextWakeTimer: ReturnType<typeof setTimeout> | undefined
   private disposed = false
 
@@ -129,6 +118,8 @@ export class VelaRuntimeEngine {
     this.agentDir = resolve(options.agentDir)
     this.logger = options.logger ?? silentLogger
     this.ignoredChannels = new Set(options.ignoredChannels ?? [])
+    this.onRestartSession = options.onRestartSession
+    this.trySteerInboxEvent = options.trySteerInboxEvent
     if (options.db.path === ':memory:') {
       this.transientBlobDir = mkdtempSync(join(tmpdir(), 'vela-blobs-'))
       this.blobs = new BlobStore(this.db, join(this.transientBlobDir, 'blobs'))
@@ -146,7 +137,7 @@ export class VelaRuntimeEngine {
     this.outbox = new OutboxDispatcher(
       this.db,
       (name) =>
-        this.isChannelEnabled(name) ? this.channels.get(name) : undefined,
+        this.isChannelEnabled(name) ? this.readyChannel(name) : undefined,
       () => this.syncWakeTimer(),
       (sessionId) => this.scheduleSession(sessionId),
       (info) =>
@@ -202,10 +193,11 @@ export class VelaRuntimeEngine {
         },
         trySteerSession: (sid, t, images) =>
           this.steerSession(sid, t, images, true),
+        trySteerInboxEvent: this.trySteerInboxEvent,
       },
       this.channelStatuses,
     )
-    void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
+    void this.wakeDeferredAndFlushOutbox()
   }
 
   async unregisterChannel(name: string): Promise<void> {
@@ -216,12 +208,18 @@ export class VelaRuntimeEngine {
       await existing.stop()
     } finally {
       this.channelStatuses.markStopped(name)
+      this.syncWakeTimer()
     }
     await this.outbox.drainChannel(name).catch(() => {})
   }
 
+  private readyChannel(name: string): ChannelAdapter | undefined {
+    const adapter = this.channels.get(name)
+    return isChannelAdapterReady(adapter) ? adapter : undefined
+  }
+
   channelAdapter(name: string): ChannelAdapter | undefined {
-    return this.channels.get(name)
+    return this.readyChannel(name)
   }
 
   listSessionMessages(input: {
@@ -255,13 +253,13 @@ export class VelaRuntimeEngine {
   setChannelEnabled = (name: string, enabled: boolean): void => {
     setChannelEnabledInDb(this.db, name, enabled)
     if (enabled && !this.disposed) {
-      void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
+      void this.wakeDeferredAndFlushOutbox()
     }
   }
 
   listChannelChats(channel: string): Promise<ChannelChatInfo[]> {
     if (!this.isChannelEnabled(channel)) return Promise.resolve([])
-    return this.channels.get(channel)?.listChats?.() ?? Promise.resolve([])
+    return this.readyChannel(channel)?.listChats?.() ?? Promise.resolve([])
   }
 
   submitChannelHostMessage(
@@ -440,6 +438,7 @@ export class VelaRuntimeEngine {
         )
       }
       this.timers.cancelFollowupsForSession(sessionId)
+      await this.onRestartSession?.(sessionId)
       const resetSession = this.sessions.reset(sessionId)
       this.eventBus.append({
         sessionId,
@@ -602,7 +601,10 @@ export class VelaRuntimeEngine {
     }
     if (this.disposed || !this.db.open) return
     const registeredChannels = [...this.channels.keys()].filter(
-      (name) => this.isChannelEnabled(name) && !this.ignoredChannels.has(name),
+      (name) =>
+        this.readyChannel(name) !== undefined &&
+        this.isChannelEnabled(name) &&
+        !this.ignoredChannels.has(name),
     )
     this.nextWakeTimer = scheduleRuntimeWakeTimer({
       db: this.db,
@@ -610,7 +612,7 @@ export class VelaRuntimeEngine {
       outbox: this.outbox,
       registeredChannels,
       ignoredChannels: this.ignoredChannels,
-      hasChannels: this.channels.size > 0,
+      hasChannels: registeredChannels.length > 0,
       onFire: () => {
         this.nextWakeTimer = undefined
         return !this.disposed && this.db.open
@@ -684,6 +686,15 @@ export class VelaRuntimeEngine {
       .then(() => {})
   }
 
+  private wakeDeferredAndFlushOutbox(): Promise<void> {
+    return this.flushOutboxBestEffort().finally(() => {
+      for (const sid of listDeferredWakeSessionIds(this.db)) {
+        this.scheduleSession(sid)
+      }
+      this.syncWakeTimer()
+    })
+  }
+
   private async runSessionLoop(
     sessionId: string,
     worker: ActiveWorker,
@@ -744,7 +755,7 @@ export class VelaRuntimeEngine {
           flushOutbox: () => {
             if (this.channels.size > 0) void this.flushOutboxBestEffort()
           },
-          getChannelAdapter: (name) => this.channels.get(name),
+          getChannelAdapter: (name) => this.readyChannel(name),
           isChannelEnabled: (name) => this.isChannelEnabled(name),
           logger: this.logger,
         })

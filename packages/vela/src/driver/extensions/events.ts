@@ -4,15 +4,10 @@ import type { ImageContent, ModelMessage, ToolContent } from '../messages.ts'
 import type { BranchSummaryEntry, SessionEntry } from '../session/entries.ts'
 
 /**
- * Where an input came from (pi's sources plus Vela's): the TUI and `-p` send `interactive`, RPC clients `rpc`,
+ * Where an input came from (pi's sources plus Vela's): the TUI and `-p` send `interactive`,
  * `session.sendUserMessage()` `extension`, channels (Lark) `channel`; SDK calls default to `sdk`.
  */
-export type InputSource =
-  | 'interactive'
-  | 'rpc'
-  | 'extension'
-  | 'channel'
-  | 'sdk'
+export type InputSource = 'interactive' | 'extension' | 'channel' | 'sdk'
 
 /**
  * User input arrived (prompt / steer), after extension commands and before `/skill:` and prompt

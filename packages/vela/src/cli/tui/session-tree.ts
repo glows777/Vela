@@ -50,11 +50,22 @@ export async function treeCommand(host: TreeHost): Promise<void> {
   ])
   if (!action) return
   if (action === 'label') {
-    const label = await host.input('Label', 'empty clears the label')
+    const label = await host.input(
+      'Label',
+      'empty clears the label',
+      undefined,
+      false,
+      true,
+    )
+    if (label === undefined) return
+    const nextLabel = label || undefined
     try {
-      await session.runtime.sessions.setLabel(session.id, targetId, label)
+      await session.runtime.sessions.setLabel(session.id, targetId, nextLabel)
       await session.refresh()
-      host.addNotice(label ? `Label set: ${label}` : 'Label cleared', 'dim')
+      host.addNotice(
+        nextLabel ? `Label set: ${nextLabel}` : 'Label cleared',
+        'dim',
+      )
     } catch (error) {
       host.addNotice(errorMessage(error), 'error')
     }

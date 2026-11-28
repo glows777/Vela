@@ -17,6 +17,7 @@ import type { Snapshot } from '../store.ts'
 import {
   createSession,
   loadEarlierLark,
+  reportPageError,
   sendInNewLocalSession,
   sendInProject,
   watchLarkProject,
@@ -136,9 +137,11 @@ export function ProjectPage({
           subtitle="Each one runs in this folder."
           emptyCopy="No sessions yet. Start one below or click +."
           onNewSession={() => {
-            void createSession(project.id).then((created) =>
-              onPanel({ open: panel.open, sessionId: created.sessionId }),
-            )
+            void createSession(project.id)
+              .then((created) =>
+                onPanel({ open: panel.open, sessionId: created.sessionId }),
+              )
+              .catch((cause) => reportPageError(`project:${project.id}`, cause))
           }}
           onSelect={(sessionId) => onPanel({ open: panel.open, sessionId })}
           onClose={() => onPanel({ open: false, sessionId: active?.sessionId })}

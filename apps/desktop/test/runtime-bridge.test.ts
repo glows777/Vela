@@ -397,13 +397,13 @@ test('DesktopClientIdTracker correlates batched inboxEventIds onto user commits 
   expect(tracker.getForMessage('msg-2')).toBe('c-3')
 })
 
-test('removeDesktopProject unlinks without deleting shared sessions', async () => {
+test('removeDesktopProject deletes the project and its owned sessions', async () => {
   const { runtime } = await openTestRuntime()
   const cwd = tempDir('vela-unlink-')
   const proj = await openLocalDesktopProject(runtime, { cwd })
   const sess = await createDesktopSession(runtime, {
     projectId: proj.id,
-    name: 'Keep history',
+    name: 'Delete history',
   })
   await submitDesktopMessage(runtime, false, new DesktopClientIdTracker(), {
     method: 'submit',
@@ -415,10 +415,93 @@ test('removeDesktopProject unlinks without deleting shared sessions', async () =
   const removed = await removeDesktopProject(runtime, { projectId: proj.id })
   expect(removed).toBe(true)
   expect(await runtime.projects.get(proj.id)).toBeUndefined()
-  const surviving = await runtime.sessions.get(sess.sessionId)
-  expect(surviving?.id).toBe(sess.sessionId)
-  const msgs = await runtime.sessions.messages({ sessionId: sess.sessionId })
-  expect(msgs.messages.some((m) => m.text === 'hello')).toBe(true)
+  expect(await runtime.sessions.get(sess.sessionId)).toBeUndefined()
+})
+
+test('projects.remove with deleteSessions closes driver session extensions cleanly before recreating session id', async () => {
+  const cwd = tempDir('vela-unlink-ext-')
+  let shutdownCount = 0
+  let closedTarget: string | undefined
+  const runtime = createRuntime({
+    agentDir: tempDir('vela-unlink-agent-'),
+    defaultModel: createFauxModel(),
+    extensions: [
+      (api) => {
+        api.on('session_shutdown', async (_event, ctx) => {
+          shutdownCount += 1
+          closedTarget = ctx.session.id
+        })
+      },
+    ],
+  })
+  cleanups.push(() => runtime.dispose())
+  await runtime.ready()
+
+  const proj = await runtime.projects.create({
+    name: 'Ext Project',
+    cwd,
+  })
+  const sess = await runtime.sessions.create({
+    id: 'reusable-sess-id',
+    projectId: proj.id,
+    location: { environment: 'local', cwd },
+  })
+  await runtime.prompt(sess.id, { text: 'init extension runner' })
+  await runtime.waitForIdle(sess.id)
+
+  const removed = await runtime.projects.remove(proj.id, {
+    deleteSessions: true,
+  })
+  expect(removed).toBe(true)
+  expect(shutdownCount).toBe(1)
+  expect(closedTarget).toBe('reusable-sess-id')
+
+  // Recreating a session with the same ID starts fresh without reusing deleted runner state.
+  const proj2 = await runtime.projects.create({ name: 'Ext Project 2', cwd })
+  const recreated = await runtime.sessions.create({
+    id: 'reusable-sess-id',
+    projectId: proj2.id,
+    location: { environment: 'local', cwd },
+  })
+  await runtime.prompt(recreated.id, { text: 'fresh session' })
+  await runtime.waitForIdle(recreated.id)
+})
+
+test('deleteDesktopSession stops running work before deleting the session', async () => {
+  const { runtime } = await openTestRuntime()
+  const cwd = tempDir('vela-delete-stop-')
+  const proj = await openLocalDesktopProject(runtime, { cwd })
+  const sess = await createDesktopSession(runtime, {
+    projectId: proj.id,
+    name: 'Active job session',
+  })
+
+  const origStatus = runtime.sessions.status.bind(runtime.sessions)
+  const origStop = runtime.stop.bind(runtime)
+  let stoppedArgs: { sessionId: string; reason?: string } | undefined
+  ;(runtime.sessions as { status: typeof origStatus }).status = async (id) => {
+    const base = await origStatus(id)
+    return { ...base, runningJobs: 1, activeRunId: undefined }
+  }
+  ;(runtime as { stop: typeof origStop }).stop = async (sessionId, reason) => {
+    stoppedArgs = { sessionId, reason }
+    return false
+  }
+
+  try {
+    const deleted = await deleteDesktopSession(runtime, {
+      sessionId: sess.sessionId,
+    })
+    expect(deleted).toBe(true)
+    expect(stoppedArgs).toEqual({
+      sessionId: sess.sessionId,
+      reason: 'Session deleted',
+    })
+    expect(await runtime.sessions.get(sess.sessionId)).toBeUndefined()
+  } finally {
+    ;(runtime.sessions as { status: typeof origStatus }).status = origStatus
+    ;(runtime as { stop: typeof origStop }).stop = origStop
+  }
 })
 
 test('hidden memory custom_message does not consume clientMessageId and session_reset maps cleanly', async () => {

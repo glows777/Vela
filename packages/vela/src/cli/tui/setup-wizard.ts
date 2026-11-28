@@ -32,6 +32,7 @@ interface Host {
     title: string,
     choices: SelectItem[],
     selected?: string,
+    signal?: AbortSignal,
   ): Promise<string | undefined>
   input(
     title: string,
@@ -236,6 +237,8 @@ export async function setupWizard(host: Host): Promise<boolean> {
                     value: o.id,
                     label: o.label,
                   })),
+                  undefined,
+                  prompt.signal,
                 )
               : await host.input(
                   prompt.message,

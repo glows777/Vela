@@ -55,6 +55,8 @@ interface RunnerDeps {
   models: ModelRegistry
   /** Internal project runtime: inherits host registrations, never their ownership. */
   parent?: ExtensionRunner
+  /** True for per-session runners so `--no-extensions -e` cannot mutate host `ModelRegistry`. */
+  sessionScoped?: boolean
 }
 
 export interface LoadedExtension {
@@ -160,7 +162,7 @@ export class ExtensionRunner {
       config: Object.freeze({ ...deps.extensionConfig[name] }),
       logger: deps.logger,
       registerProvider: (providerName, provider) => {
-        if (deps.parent) {
+        if (deps.parent || deps.sessionScoped) {
           deps.logger.warn(
             `[extensions] Project extension "${name}" cannot register provider "${providerName}"; providers are host-only`,
           )

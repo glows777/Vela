@@ -28,7 +28,6 @@ import { submitInteractiveInput } from './tui/command-router.ts'
 import { commandCompletions, HOTKEYS } from './tui/commands.ts'
 import {
   errorMessage,
-  isDeadTerminalError,
   lastAnswer,
   oneLine,
   sanitize,
@@ -52,6 +51,7 @@ import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
 import { prepareInteractiveSession } from './tui/session-open.ts'
 import { setupWizard } from './tui/setup-wizard.ts'
 import { StatusLine } from './tui/status-line.ts'
+import { registerInteractiveSignalHandlers } from './tui/terminal-signals.ts'
 import { editorTheme, theme } from './tui/theme.ts'
 import type { InteractiveOptions, LogLevel } from './tui/types.ts'
 
@@ -192,6 +192,20 @@ export class InteractiveMode {
       )
     })
     this.cleanups.push(unsubEvents, unsubDeltas)
+    if (options.registerDisconnectHandler) {
+      this.cleanups.push(
+        options.registerDisconnectHandler((err) => {
+          if (this.shuttingDown) return
+          this.session?.markDisconnected()
+          this.statusLine.stop()
+          this.addNotice(
+            `Disconnected from Vela daemon: ${errorMessage(err)}`,
+            'error',
+          )
+          this.tui.requestRender()
+        }),
+      )
+    }
 
     let sessionId = options.sessionId
     let resume = options.resume
@@ -232,8 +246,15 @@ export class InteractiveMode {
           session: this.session,
           agentDir: options.agentDir,
           projectSettingsPath: options.projectSettingsPath,
-          select: (title, choices, selected) =>
-            this.select(title, choices, selected, this.setupAbort.signal),
+          select: (title, choices, selected, signal) =>
+            this.select(
+              title,
+              choices,
+              selected,
+              signal
+                ? AbortSignal.any([signal, this.setupAbort.signal])
+                : this.setupAbort.signal,
+            ),
           input: (title, placeholder, signal, secret, allowEmpty) =>
             this.input(
               title,
@@ -500,7 +521,10 @@ export class InteractiveMode {
         cycleModel: this.cycleModel.bind(this),
         requestRender: () => this.tui.requestRender(),
       },
-      (text) => void this.submit(text),
+      (text) =>
+        void this.submit(text).catch((error) => {
+          if (!this.shuttingDown) this.addNotice(errorMessage(error), 'error')
+        }),
     )
   }
 
@@ -652,15 +676,12 @@ export class InteractiveMode {
       updateBorder: this.updateBorder.bind(this),
     }
   }
-
   private selectModel(): Promise<void> {
     return selectModel(this.modelHost())
   }
-
   private cycleModel(direction: 1 | -1): void {
     void cycleModel(this.modelHost(), direction)
   }
-
   private authHost() {
     return {
       runtime: this.runtime,
@@ -731,33 +752,18 @@ export class InteractiveMode {
   }
 
   private registerSignalHandlers(): void {
-    const signals: NodeJS.Signals[] =
-      process.platform === 'win32' ? ['SIGTERM'] : ['SIGTERM', 'SIGHUP']
-    for (const signal of signals) {
-      const handler = () => void this.shutdown({ fromSignal: true })
-      process.prependListener(signal, handler)
-      this.cleanups.push(() => process.off(signal, handler))
-    }
-    if (this.options.terminal) return
-    const terminalError = (error: Error) => {
-      if (isDeadTerminalError(error)) this.emergencyExit()
-      throw error
-    }
-    for (const stream of [process.stdin, process.stdout, process.stderr]) {
-      stream.on('error', terminalError)
-      this.cleanups.push(() => stream.off('error', terminalError))
-    }
-    const crash = (error: Error) => {
-      if (isDeadTerminalError(error)) this.emergencyExit()
-      try {
-        this.tui.stop()
-      } catch {}
-      this.restoreLogs?.()
-      console.error('vela exited due to an uncaught exception:', error)
-      process.exit(1)
-    }
-    process.prependListener('uncaughtException', crash)
-    this.cleanups.push(() => process.off('uncaughtException', crash))
+    registerInteractiveSignalHandlers({
+      hasCustomTerminal: Boolean(this.options.terminal),
+      onShutdown: () => void this.shutdown({ fromSignal: true }),
+      onEmergencyExit: () => this.emergencyExit(),
+      onBeforeCrash: () => {
+        try {
+          this.tui.stop()
+        } catch {}
+        this.restoreLogs?.()
+      },
+      cleanups: this.cleanups,
+    })
   }
 
   async shutdown(options: { fromSignal?: boolean } = {}): Promise<void> {

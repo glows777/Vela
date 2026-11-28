@@ -20,13 +20,13 @@ const TRANSIENT_ENV_KEYS = [
   'OPENROUTER_API_KEY',
   'DEEPSEEK_API_KEY',
   'OPENAI_API_BASE_URL',
-  'OPENAI_API_MODEL_NAME',
   'VELA_OFFLINE',
 ] as const
 
-function readPromptInput(input: string): string {
-  return existsSync(input) && statSync(input).isFile()
-    ? readFileSync(input, 'utf-8')
+function readPromptInput(input: string, cwd: string): string {
+  const resolved = resolve(cwd, input)
+  return existsSync(resolved) && statSync(resolved).isFile()
+    ? readFileSync(resolved, 'utf-8')
     : input
 }
 
@@ -87,22 +87,22 @@ export function buildCliSessionOverride(
   return {
     cwd,
     ...(Object.keys(overlayEnv).length > 0 ? { env: overlayEnv } : {}),
-    ...(explicitModel !== undefined
-      ? { model: explicitModel }
-      : env.OPENAI_API_MODEL_NAME
-        ? { model: `openai/${env.OPENAI_API_MODEL_NAME}` }
-        : {}),
+    ...(explicitModel !== undefined ? { model: explicitModel } : {}),
     ...(args.thinking ? { thinkingLevel: args.thinking } : {}),
     ...(args.tools ? { tools: args.tools } : {}),
     ...(args.noTools ? { noTools: true } : {}),
     ...(args.excludeTools.length ? { excludeTools: args.excludeTools } : {}),
     ...(args.systemPrompt.length
-      ? { systemPrompt: args.systemPrompt.map(readPromptInput).join('\n\n') }
+      ? {
+          systemPrompt: args.systemPrompt
+            .map((p) => readPromptInput(p, cwd))
+            .join('\n\n'),
+        }
       : {}),
     ...(args.appendSystemPrompt.length
       ? {
           appendSystemPrompt: args.appendSystemPrompt
-            .map(readPromptInput)
+            .map((p) => readPromptInput(p, cwd))
             .join('\n\n'),
         }
       : {}),
@@ -124,6 +124,7 @@ export async function openCliRuntime(options: {
   hostEnv: Record<string, string | undefined>
   noSession?: boolean
   logger?: VelaLogger
+  onDisconnect?: (error: Error) => void
 }): Promise<VelaRuntime> {
   if (options.noSession) {
     const { createRuntime } = await import('../runtime-sdk.ts')
@@ -137,6 +138,7 @@ export async function openCliRuntime(options: {
   return connectRuntime({
     agentDir: options.agentDir,
     hostEnv: options.hostEnv,
+    onDisconnect: options.onDisconnect,
   })
 }
 
@@ -345,6 +347,11 @@ export class CliSessionClient {
     } finally {
       this._isBashRunning = false
     }
+  }
+
+  markDisconnected(): void {
+    this._isRunning = false
+    this._isBashRunning = false
   }
 
   dispose(): void {

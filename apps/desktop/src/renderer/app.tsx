@@ -82,6 +82,12 @@ export function App() {
       ? snapshot.projects.find((item) => item.id === view.projectId)
       : undefined
 
+  useEffect(() => {
+    if (snapshot.ready && view.name === 'project' && !project) {
+      navigate({ name: 'home' })
+    }
+  }, [snapshot.ready, view.name, project, navigate])
+
   const openProjectPage = (projectId: string, sessionId?: string) => {
     navigate({ name: 'project', projectId })
     setPanel(sessionId ? { open: true, sessionId } : { open: panel.open })

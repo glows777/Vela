@@ -52,7 +52,12 @@ export interface DriverSharedState {
   specialModels: Map<string, RuntimeSpecialModelHandle>
   specialModelSources: Map<
     string,
-    { envModel?: string; envRecord?: string; defaultModel?: ModelInput }
+    {
+      envModel?: string
+      envRecord?: string
+      baseModelInput?: ModelInput
+      oauthChannel?: string
+    }
   >
   sessionRunners: Map<string, CachedSessionRunner>
   sessionRunnerLocks: Map<string, Promise<void>>
@@ -67,6 +72,7 @@ export interface DriverSharedState {
   >
   activeAbort: Map<string, AbortController>
   activeSteering: Map<string, ModelMessage[]>
+  activeSteeringInboxIds: WeakMap<ModelMessage, string>
   activeRunMeta: Map<string, ActiveRunMeta>
   sessionBackgrounds: Map<string, RuntimeBackgroundController>
   pendingBashBySession: Map<string, BashExecutionEntry[]>

@@ -14,10 +14,9 @@ The CLI uses the first of these that is set:
 2. `VELA_MODEL=mock` or `VELA_MODEL=faux:<file>` (see [Offline models](#offline-models)).
 3. The model saved with a resumed session (`-c`, `-r`, `--session`, `/resume`).
 4. `model` in [settings](settings.md).
-5. `openai/$OPENAI_API_MODEL_NAME`, when that variable is set.
-6. The default model of the first built-in provider that has a credential, in the order `anthropic` (`claude-opus-4-8`), `openai` (`gpt-5.5`), `openrouter` (`moonshotai/kimi-k2.6`), `deepseek` (`deepseek-flash`); else the first available model. The first three retain pi's preference order.
+5. The default model of the first built-in provider that has a credential, in the order `anthropic` (`claude-opus-4-8`), `openai` (`gpt-5.5`), `openrouter` (`moonshotai/kimi-k2.6`), `deepseek` (`deepseek-flash`); else the first available model. The first three retain pi's preference order.
 
-If none applies, interactive Vela starts the setup wizard and leaves the `/model` guidance out while it runs; cancelling it brings the hint back. Print mode exits with code 1 and points to `vela setup`; RPC and serve keep their existing behavior.
+If none applies, interactive Vela starts the setup wizard and leaves the `/model` guidance out while it runs; cancelling it brings the hint back. Print mode exits with code 1 and points to `vela setup`; daemon IPC fails fast with an error.
 
 Inside a session:
 

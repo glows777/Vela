@@ -1,6 +1,6 @@
 import type { ProviderApi, ThinkingLevel } from './provider-types.ts'
 
-interface RuntimeSettingsModel {
+export interface RuntimeSettingsModel {
   id: string
   contextWindow?: number
   reasoning?: boolean

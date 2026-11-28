@@ -61,6 +61,7 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
     { message: string; kind?: string; hint?: string }
   >()
   const bashRunning = new Set<string>()
+  const pendingPromptIds = new Map<string, string[]>()
   const clients = new Map<string, CliSessionClient>()
   let seq = 1
 
@@ -88,10 +89,12 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
           activeRunIds.set(sessionId, nextRunId)
           firstFailure.delete(sessionId)
           abortedSessions.delete(sessionId)
+          const inboxEventIds = pendingPromptIds.get(sessionId)?.splice(0)
           emitEvent(sessionId, {
             type: 'run_started',
             runId: nextRunId,
             trigger: 'user',
+            ...(inboxEventIds?.length ? { inboxEventIds } : {}),
           })
         }
         break
@@ -447,7 +450,7 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
       approve: async () => {},
     },
     oauthRegistrations: {
-      get: async () => internal?.registrations?.get('openai'),
+      get: async (p: string) => internal?.registrations?.get(p),
       set: async (p: string, r: never) => {
         internal?.registrations?.set(p, r)
       },
@@ -646,6 +649,10 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
     },
     prompt: async (id: string, input: { text: string }) => {
       const s = vela.session(id)
+      const eventId = randomUUID()
+      const pending = pendingPromptIds.get(id) ?? []
+      pending.push(eventId)
+      pendingPromptIds.set(id, pending)
       const resumeAndPrompt = async () => {
         await ensureRestored(s)
         await s.prompt(input.text, { source: 'interactive' })
@@ -655,7 +662,7 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
           ? resumeAndPrompt()
           : s.prompt(input.text, { source: 'interactive' })
       void p.catch(() => {})
-      return { eventId: randomUUID(), inserted: true }
+      return { eventId, inserted: true }
     },
     steer: async (id: string, text: string) => {
       vela.session(id).steer(text)
@@ -700,17 +707,17 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
     },
     channels: {
       list: async () => [],
-      enable: async () => {
+      setEnabled: async () => {
         throw new Error(
-          'channels.enable is not supported in legacy test runtime',
+          'channels.setEnabled is not supported in legacy test runtime',
         )
       },
-      disable: async () => {
-        throw new Error(
-          'channels.disable is not supported in legacy test runtime',
-        )
-      },
-      health: async () => [],
+      chats: async () => [],
+      submit: async () => ({
+        outcome: 'not-sent' as const,
+        error: 'channels.submit is not supported in legacy test runtime',
+      }),
+      subscribe: () => () => {},
     },
     blobs: {
       get: async () => undefined,

@@ -8,7 +8,11 @@ import styles from '../project/project-page.module.css'
 import { SessionPanel } from '../session/session-panel.tsx'
 import { SessionView } from '../session/session-view.tsx'
 import type { Snapshot } from '../store.ts'
-import { createSession, sendInNewLocalSession } from '../store.ts'
+import {
+  createSession,
+  reportPageError,
+  sendInNewLocalSession,
+} from '../store.ts'
 
 /** Projectless Quick chat canvas + session switcher. */
 export function QuickChatPage({
@@ -42,6 +46,9 @@ export function QuickChatPage({
           session={active}
           hint="Quick chat runs without linking a project folder."
           emptyCopy="Start a quick conversation with Vela."
+          onSessionCreated={(sessionId) =>
+            onPanel({ open: panel.open, sessionId })
+          }
           onDeleted={() => onPanel({ open: panel.open })}
         />
       ) : (
@@ -76,9 +83,11 @@ export function QuickChatPage({
         subtitle="Chats without a linked folder."
         emptyCopy="No quick chats yet. Start one below or click +."
         onNewSession={() => {
-          void createSession(null).then((created) =>
-            onPanel({ open: panel.open, sessionId: created.sessionId }),
-          )
+          void createSession(null)
+            .then((created) =>
+              onPanel({ open: panel.open, sessionId: created.sessionId }),
+            )
+            .catch((cause) => reportPageError('quick', cause))
         }}
         onSelect={(sessionId) => onPanel({ open: panel.open, sessionId })}
         onClose={() => onPanel({ open: false, sessionId: active?.sessionId })}

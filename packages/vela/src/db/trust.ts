@@ -59,8 +59,8 @@ export function trustLocationKey(
 }
 
 /**
- * Reads an existing SQLite database in read-only mode, falling back to `mustExist`
- * when WAL-mode SQLite databases lack `-wal`/`-shm` sidecars after a clean close.
+ * Reads an existing SQLite database strictly in read-only mode (never falling back to
+ * read-write, preserving single-writer ownership of `vela.db`).
  */
 export function withReadonlyDb<T>(
   dbPath: string,
@@ -75,19 +75,9 @@ export function withReadonlyDb<T>(
       roDb.close()
     }
   } catch (error) {
-    if (!isReadonlyWalOpenError(error)) throw error
-    if (!existsSync(dbPath)) return undefined
-    // WAL-mode SQLite databases fail SQLITE_OPEN_READONLY when -wal/-shm were removed after close.
-  }
-  try {
-    const existingDb = openDatabase({ path: dbPath, mustExist: true })
-    try {
-      return fn(existingDb)
-    } finally {
-      existingDb.close()
+    if (isReadonlyWalOpenError(error) || isMissingFileError(error)) {
+      return undefined
     }
-  } catch (error) {
-    if (isMissingFileError(error)) return undefined
     throw error
   }
 }

@@ -4,6 +4,12 @@ import { vela } from './vela.ts'
 
 const LARK_PAGE_LIMIT = 50
 const larkCursors = new Map<string, string>()
+const exhaustedLarkSessions = new Set<string>()
+
+export function clearLarkCursors(): void {
+  larkCursors.clear()
+  exhaustedLarkSessions.clear()
+}
 
 function orderedMessages(messages: Message[]): Message[] {
   const byId = new Map<string, Message>()
@@ -38,11 +44,16 @@ export async function readLarkGroupHistory(params: {
   older?: boolean
   shown: (sessionId: string) => Message[]
   onPage: (sessionId: string, messages: Message[], hasEarlier?: boolean) => void
+  fetchMessages?: (params: {
+    sessionId: string
+    cursor?: string
+    limit?: number
+  }) => Promise<{ messages: Message[]; nextCursor?: string }>
 }): Promise<string | undefined> {
-  const { project, older = false, shown, onPage } = params
+  const { project, older = false, shown, onPage, fetchMessages } = params
   const sessionId = project.sessionId
   const read = (cursor?: string) =>
-    vela.messages({
+    (fetchMessages ?? vela.messages)({
       sessionId,
       ...(cursor ? { cursor } : {}),
       limit: LARK_PAGE_LIMIT,
@@ -65,8 +76,13 @@ export async function readLarkGroupHistory(params: {
   }
 
   const remember = (next: string | undefined) => {
-    if (next === undefined) larkCursors.delete(sessionId)
-    else larkCursors.set(sessionId, next)
+    if (next === undefined) {
+      larkCursors.delete(sessionId)
+      exhaustedLarkSessions.add(sessionId)
+    } else {
+      exhaustedLarkSessions.delete(sessionId)
+      larkCursors.set(sessionId, next)
+    }
     return next !== undefined
   }
 
@@ -103,7 +119,13 @@ export async function readLarkGroupHistory(params: {
         return shownIds.size === 0 || overlaps
       },
     )
-    if (!walked && (overlaps || larkCursors.has(sessionId))) return undefined
+    if (
+      !walked &&
+      overlaps &&
+      (larkCursors.has(sessionId) || exhaustedLarkSessions.has(sessionId))
+    ) {
+      return undefined
+    }
     onPage(sessionId, shown(sessionId), remember(next))
     return undefined
   } catch (cause) {

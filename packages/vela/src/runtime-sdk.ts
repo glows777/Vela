@@ -8,7 +8,7 @@ import {
   type VelaSettings,
 } from './config/index.ts'
 import { registerRuntimeSettingsHooksResolver } from './daemon/settings-discovery.ts'
-import { openDatabase, withReadonlyDb } from './db/index.ts'
+import { openDatabase } from './db/index.ts'
 import { savedTrust, saveTrust } from './db/trust.ts'
 import { defaultAgentDir } from './driver/config/paths.ts'
 import { createVelaAgentDriver } from './driver/runtime-adapter.ts'
@@ -29,6 +29,7 @@ import {
   isChannelEnabledInDb,
   SqliteOAuthRegistrationStore,
   setChannelEnabledInDb,
+  updateEnvironmentRegistryConfig,
   VelaRuntimeEngine,
 } from './runtime/index.ts'
 import {
@@ -36,6 +37,7 @@ import {
   createSpecialModelResolver,
   isLarkExtensionDisabled,
   mergeExtensionConfig,
+  seedEphemeralDbFromOwner,
 } from './runtime-sdk-helpers.ts'
 import type {
   CreateRuntimeOptions,
@@ -54,6 +56,7 @@ export type {
   RuntimePromptInput,
   RuntimeRecoverySummary,
   RuntimeSettingsLarkState,
+  RuntimeSettingsModel,
   RuntimeSettingsProvider,
   RuntimeSettingsState,
   VelaRuntime,
@@ -87,44 +90,7 @@ export function createRuntime(
       path: isEphemeralDb ? ':memory:' : join(agentDir, 'vela.db'),
     })
   if (isEphemeralDb && !isEphemeral && !options.db) {
-    try {
-      withReadonlyDb(join(agentDir, 'vela.db'), (ownerDb) => {
-        const trustRows = ownerDb.all<{
-          path: string
-          trusted: number
-          updated_at: string
-        }>('SELECT path, trusted, updated_at FROM trusted_paths')
-        for (const r of trustRows) {
-          db.run(
-            'INSERT OR REPLACE INTO trusted_paths (path, trusted, updated_at) VALUES (?, ?, ?)',
-            r.path,
-            r.trusted,
-            r.updated_at,
-          )
-        }
-        const oauthRows = ownerDb.all<{
-          provider: string
-          client_id: string
-          host_id: string | null
-          subject: string | null
-          updated_at: string
-        }>(
-          'SELECT provider, client_id, host_id, subject, updated_at FROM oauth_registrations',
-        )
-        for (const r of oauthRows) {
-          db.run(
-            'INSERT OR REPLACE INTO oauth_registrations (provider, client_id, host_id, subject, updated_at) VALUES (?, ?, ?, ?, ?)',
-            r.provider,
-            r.client_id,
-            r.host_id,
-            r.subject,
-            r.updated_at,
-          )
-        }
-      })
-    } catch {
-      /* ignore unreadable owner db when seeding ephemeral state */
-    }
+    seedEphemeralDbFromOwner(db, agentDir)
   }
 
   try {
@@ -214,12 +180,85 @@ export function createRuntime(
         ? undefined
         : createLazyRuntimeMcpAdapter(hostEnv, logger, isEphemeral)
 
+    let closeDriverSession: ((sid: string) => Promise<void>) | undefined
+    let trySteerDriverInboxEvent:
+      | ((
+          sid: string,
+          inboxEventId: string,
+          text: string,
+          images?: Array<{ data: string; mimeType: string }>,
+        ) => boolean)
+      | undefined
+
     const engine = new VelaRuntimeEngine({
       db,
       agentDir,
       environments,
       drivers: options.drivers,
       ignoredChannels: options.ignoredChannels,
+      onRestartSession: (sid) => closeDriverSession?.(sid),
+      trySteerInboxEvent: async (sid, inboxEventId, text, images) => {
+        const sessionRow = db.get<{ driver: string | null }>(
+          'SELECT driver FROM sessions WHERE id = ?',
+          sid,
+        )
+        const driverName = sessionRow?.driver ?? 'vela'
+        if (driverName !== 'vela') {
+          const reserved = db.run(
+            `UPDATE inbox_events
+             SET status = 'processing'
+             WHERE id = ? AND status = 'pending'`,
+            inboxEventId,
+          )
+          if (reserved.changes === 0) return false
+          let accepted = false
+          try {
+            accepted = await engine.steerSession(sid, text, images, true)
+          } catch (error) {
+            db.run(
+              `UPDATE inbox_events
+               SET status = 'pending'
+               WHERE id = ? AND status = 'processing' AND run_id IS NULL`,
+              inboxEventId,
+            )
+            throw error
+          }
+          if (!accepted) {
+            db.run(
+              `UPDATE inbox_events
+               SET status = 'pending'
+               WHERE id = ? AND status = 'processing' AND run_id IS NULL`,
+              inboxEventId,
+            )
+            return false
+          }
+          const now = new Date().toISOString()
+          db.transaction(() => {
+            db.run(
+              `UPDATE inbox_events
+               SET status = 'done', processed_at = COALESCE(processed_at, ?)
+               WHERE id = ? AND status = 'processing'`,
+              now,
+              inboxEventId,
+            )
+            db.run(
+              'UPDATE sessions SET followup_streak = 0, updated_at = ? WHERE id = ?',
+              now,
+              sid,
+            )
+          })
+          return true
+        }
+        if (!trySteerDriverInboxEvent?.(sid, inboxEventId, text, images)) {
+          return false
+        }
+        db.run(
+          'UPDATE sessions SET followup_streak = 0, updated_at = ? WHERE id = ?',
+          new Date().toISOString(),
+          sid,
+        )
+        return true
+      },
       logger,
     })
 
@@ -294,6 +333,9 @@ export function createRuntime(
       logger,
     })
     engine.registerDriver(velaDriver)
+    closeDriverSession = (sid) => velaDriver.control.closeSession(sid)
+    trySteerDriverInboxEvent = (sid, inboxEventId, text, images) =>
+      velaDriver.control.steerInboxEvent(sid, inboxEventId, text, images)
 
     let currentWebhookConfig: {
       webhooks?: Record<string, unknown>
@@ -321,15 +363,26 @@ export function createRuntime(
         if (disposing) return
         const nextConfigSig = statSignature(configPath)
         const nextAuthSig = statSignature(authPath)
-        if (
-          !force &&
-          nextConfigSig === lastConfigSig &&
-          nextAuthSig === lastAuthSig
-        ) {
+        const configChanged = force || nextConfigSig !== lastConfigSig
+        const authChanged = nextAuthSig !== lastAuthSig
+        if (!configChanged && !authChanged) {
+          return
+        }
+        if (!configChanged) {
+          lastAuthSig = nextAuthSig
           return
         }
         const updated = computeConfigState()
         if (disposing) return
+        if (
+          !(options.environments instanceof EnvironmentRegistry) &&
+          options.environments === undefined
+        ) {
+          updateEnvironmentRegistryConfig(
+            environments,
+            updated.ownerConfig.environments,
+          )
+        }
         currentWebhookConfig = {
           webhooks: updated.ownerConfig.webhooks,
           eventDefaultTarget: updated.ownerConfig.eventDefaultTarget,
@@ -375,7 +428,8 @@ export function createRuntime(
       if (isEphemeral) return Promise.resolve()
       const nextConfigSig = statSignature(configPath)
       const nextAuthSig = statSignature(authPath)
-      if (nextConfigSig === lastConfigSig && nextAuthSig === lastAuthSig) {
+      if (nextConfigSig === lastConfigSig) {
+        lastAuthSig = nextAuthSig
         return reloadQueue
       }
       return reloadConfigInternal(false)
@@ -441,7 +495,10 @@ export function createRuntime(
     const runtimeHandle: LocalVelaRuntime = {
       agentDir: engine.agentDir,
       ready: () => velaDriver.control.ready(),
-      extensionErrors: async () => velaDriver.control.extensionErrors(),
+      extensionErrors: async () => {
+        await maybeRefreshConfig()
+        return velaDriver.control.extensionErrors()
+      },
       reloadConfig: () => reloadConfigInternal(true),
       projects: {
         list: async (opts) => engine.projects.list(opts),
@@ -449,7 +506,20 @@ export function createRuntime(
         getByCwd: async (cwd) => engine.projects.getByCwd(cwd),
         create: async (input) => engine.projects.create(input),
         update: async (id, patch) => engine.projects.update(id, patch),
-        remove: async (id, opts) => engine.projects.remove(id, opts),
+        remove: async (id, opts) => {
+          const ownedIds = opts?.deleteSessions
+            ? engine.sessions
+                .list({ projectId: id, includeArchived: true })
+                .map((s) => s.id)
+            : []
+          if (ownedIds.length > 0) {
+            for (const sid of ownedIds) {
+              await engine.stopSession(sid, 'project_removed').catch(() => {})
+              await velaDriver.control.closeSession(sid).catch(() => {})
+            }
+          }
+          return engine.projects.remove(id, opts)
+        },
       },
       trust: {
         check: async (location) =>
@@ -487,15 +557,24 @@ export function createRuntime(
         status: async (id) => engine.sessions.status(id),
         messages: (input) => engine.listSessionMessages(input),
         configure: async (sessionId, override) => {
-          await maybeRefreshConfig()
+          const isClearing = !override || Object.keys(override).length === 0
+          if (!isClearing) {
+            await maybeRefreshConfig()
+          }
           await velaDriver.control.configure(sessionId, override)
         },
-        setModel: (sessionId, modelRef) =>
-          velaDriver.control.setModel(sessionId, modelRef),
-        setThinkingLevel: (sessionId, level) =>
-          velaDriver.control.setThinkingLevel(sessionId, level),
-        compact: (sessionId, instructions) =>
-          velaDriver.control.compact(sessionId, instructions),
+        setModel: async (sessionId, modelRef) => {
+          await maybeRefreshConfig()
+          return velaDriver.control.setModel(sessionId, modelRef)
+        },
+        setThinkingLevel: async (sessionId, level) => {
+          await maybeRefreshConfig()
+          return velaDriver.control.setThinkingLevel(sessionId, level)
+        },
+        compact: async (sessionId, instructions) => {
+          await maybeRefreshConfig()
+          return velaDriver.control.compact(sessionId, instructions)
+        },
         tree: (sessionId) => velaDriver.control.tree(sessionId),
         navigateTree: (sessionId, targetId, opts) =>
           velaDriver.control.navigateTree(sessionId, targetId, opts),
@@ -508,13 +587,17 @@ export function createRuntime(
           await maybeRefreshConfig()
           return velaDriver.control.inspect(sessionId, opts)
         },
-        execBash: (sessionId, command, opts) =>
-          velaDriver.control.execBash(sessionId, command, opts),
+        execBash: async (sessionId, command, opts) => {
+          await maybeRefreshConfig()
+          return velaDriver.control.execBash(sessionId, command, opts)
+        },
         abortBash: async (sessionId) => {
           velaDriver.control.abortBash(sessionId)
         },
-        runCommand: (sessionId, input) =>
-          velaDriver.control.runCommand(sessionId, input),
+        runCommand: async (sessionId, input) => {
+          await maybeRefreshConfig()
+          return velaDriver.control.runCommand(sessionId, input)
+        },
         clearQueue: async (sessionId) =>
           velaDriver.control.clearQueue(sessionId),
         export: (sessionId, format, outputPath, baseCwd) =>

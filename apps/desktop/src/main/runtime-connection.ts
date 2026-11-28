@@ -10,6 +10,8 @@ import {
 import { app, BrowserWindow, dialog } from 'electron'
 import type { Event, Request } from '../shared/bridge.ts'
 
+export { isDisconnectError } from './disconnect-error.ts'
+
 export const MUTATING_REQUEST_METHODS = new Set<Request['method']>([
   'submit',
   'createSession',
@@ -68,18 +70,11 @@ export function safeUserDataDir(agentDir: string): string {
   }
 }
 
-export function isDisconnectError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error ?? '')
-  return /Daemon (?:client|runtime client)|Disconnected from Vela daemon|ECONNRESET|EPIPE|ECONNREFUSED|ENOENT/i.test(
-    msg,
-  )
-}
-
 export interface ManagedDaemonClient {
   runtime(): VelaRuntime
   readonly agentDir: string
   readonly disconnected: boolean
-  reconnect(): Promise<VelaRuntime>
+  reconnect(options?: { force?: boolean }): Promise<VelaRuntime>
   setSubscriptionBinder(binder: (rt: VelaRuntime) => () => void): void
   dispose(): Promise<void>
   confirmAndStopBeforeQuit(stopDaemonOnQuit: boolean): Promise<boolean>
@@ -106,8 +101,9 @@ export async function createManagedDaemonClient(
         env: buildDaemonEnv(),
       },
       onDisconnect: () => {
-        if (disposed || disconnected || stoppingForQuit) return
+        if (disposed || disconnected) return
         disconnected = true
+        if (stoppingForQuit) return
         publish({
           type: 'channel',
           channel: 'local',
@@ -136,11 +132,11 @@ export async function createManagedDaemonClient(
     }
   }
 
-  const reconnect = (): Promise<VelaRuntime> => {
+  const reconnect = (options?: { force?: boolean }): Promise<VelaRuntime> => {
     if (disposed || stoppingForQuit) {
       return Promise.reject(new Error('Desktop host is disposed'))
     }
-    if (!disconnected) return Promise.resolve(current)
+    if (!options?.force && !disconnected) return Promise.resolve(current)
     reconnecting ??= (async () => {
       const delays = [0, 300, 800, 1500]
       let lastError: unknown
@@ -173,6 +169,17 @@ export async function createManagedDaemonClient(
         } catch (error) {
           lastError = error
         }
+      }
+      if (!disposed && !stoppingForQuit) {
+        publish({
+          type: 'channel',
+          channel: 'local',
+          value: {
+            type: 'channel_status',
+            connected: false,
+            error: 'Background service disconnected.',
+          },
+        })
       }
       throw lastError instanceof Error
         ? lastError

@@ -11,6 +11,7 @@ import type { Snapshot } from '../store.ts'
 import {
   deleteSession,
   dismissPageError,
+  errorMessage,
   loadSession,
   openLarkChat,
   renameSession,
@@ -81,7 +82,7 @@ export function SessionView({
     try {
       await renameSession(session.sessionId, trimmed)
     } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : String(cause))
+      setNotice(errorMessage(cause))
     }
   }
 
@@ -185,7 +186,6 @@ export function SessionView({
         place={`session:${session.sessionId}`}
         centered
       >
-        {failure ? <ErrorCard message={failure.message} /> : null}
         {messages.length === 0 ? (
           <p className={styles.empty}>
             {emptyCopy ??
@@ -196,6 +196,7 @@ export function SessionView({
             <MessageView key={message.id} message={message} group={lark} />
           ))
         )}
+        {failure ? <ErrorCard message={failure.message} /> : null}
       </Conversation>
       <div className={styles.composerDock}>
         <Composer

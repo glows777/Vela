@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto'
-import { lstatSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  rmSync,
+} from 'node:fs'
+import { dirname, join } from 'node:path'
 import { canonicalLocalPath } from '../db/trust.ts'
 
 export interface DaemonPaths {
@@ -28,11 +36,71 @@ function assertSocketByteLimit(socketPath: string): void {
   }
 }
 
+function currentPosixUid(): number | undefined {
+  return typeof process.getuid === 'function' ? process.getuid() : undefined
+}
+
+function privateFallbackSocketDir(): string {
+  const uid = currentPosixUid()
+  return join('/tmp', uid !== undefined ? `vela-${uid}` : 'vela-user')
+}
+
+/**
+ * Ensures the parent directory for a fallback POSIX socket under `/tmp/vela-<uid>`
+ * is a real directory owned by the current user with `0700` permissions.
+ */
+export function ensurePrivateSocketDir(socketPath: string): void {
+  if (process.platform === 'win32') return
+  const dir = dirname(socketPath)
+  const fallbackDir = privateFallbackSocketDir()
+  if (dir !== fallbackDir) {
+    mkdirSync(dir, { recursive: true })
+    return
+  }
+  const uid = currentPosixUid()
+  try {
+    mkdirSync(dir, { mode: 0o700 })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
+  const st = lstatSync(dir)
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw new Error(`Refusing to use non-directory fallback socket dir: ${dir}`)
+  }
+  if (uid !== undefined && st.uid !== uid) {
+    throw new Error(
+      `Refusing to use fallback socket dir ${dir} owned by uid ${st.uid}`,
+    )
+  }
+  if ((st.mode & 0o777) !== 0o700) {
+    const flags =
+      constants.O_RDONLY |
+      (constants.O_NOFOLLOW ?? 0) |
+      (constants.O_DIRECTORY ?? 0)
+    const fd = openSync(dir, flags)
+    try {
+      fchmodSync(fd, 0o700)
+    } finally {
+      closeSync(fd)
+    }
+  }
+}
+
+export function legacyFallbackSocketPath(agentDir: string): string | undefined {
+  if (process.platform === 'win32') return undefined
+  const dir = canonicalLocalPath(agentDir)
+  const preferred = join(dir, 'vela.sock')
+  if (Buffer.byteLength(preferred) <= POSIX_SOCKET_MAX_BYTES) {
+    return undefined
+  }
+  return join('/tmp', `vela-${shortDirHash(dir)}.sock`)
+}
+
 export function daemonOwnerLockPath(agentDir: string): string {
   return join(canonicalLocalPath(agentDir), 'daemon.owner')
 }
 
-export function assertSocketOrMissing(socketPath: string): void {
+export function assertSocketOwnership(socketPath: string): void {
   if (process.platform === 'win32') return
   let st: ReturnType<typeof lstatSync>
   try {
@@ -46,6 +114,16 @@ export function assertSocketOrMissing(socketPath: string): void {
       `Refusing to use or remove non-socket path at ${socketPath}`,
     )
   }
+  const uid = currentPosixUid()
+  if (uid !== undefined && st.uid !== uid) {
+    throw new Error(
+      `Refusing to use daemon socket ${socketPath} owned by uid ${st.uid}`,
+    )
+  }
+}
+
+export function assertSocketOrMissing(socketPath: string): void {
+  assertSocketOwnership(socketPath)
 }
 
 export function removeStaleSocketFile(socketPath: string): void {
@@ -77,7 +155,7 @@ export function resolveDaemonPaths(
       socketPath = preferred
     } else {
       const hashName = `vela-${shortDirHash(dir)}.sock`
-      socketPath = join('/tmp', hashName)
+      socketPath = join(privateFallbackSocketDir(), hashName)
       assertSocketByteLimit(socketPath)
     }
   }

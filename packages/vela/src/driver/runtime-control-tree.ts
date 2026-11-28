@@ -93,12 +93,16 @@ export function createTreeControl(deps: TreeControlDeps) {
           eventBus: state.options.eventBus,
           projectId: row.project_id,
           signal: controller.signal,
-          buildSystem: (sections) =>
+          buildSystem: (sections, override) =>
+            override ??
             prepared!.builder.build({
               sessionId,
               activeTools: prepared!.registry.getActiveTools(),
               deferredToolSummary: prepared!.registry.getDeferredToolSummary(),
-              extensionSections: sections ?? prepared!.runtimeSections,
+              extensionSections: {
+                ...prepared!.runtimeSections,
+                ...(sections ?? {}),
+              },
             }),
         })
         if (
@@ -114,18 +118,10 @@ export function createTreeControl(deps: TreeControlDeps) {
           location: prepared.location,
           logger: state.logger,
         })
-        const parentSpillDir = join(
-          state.options.agentDir,
-          'sessions',
-          sessionId,
-          'tool-results',
-        )
-        const targetSpillDir = join(
-          state.options.agentDir,
-          'sessions',
-          targetId,
-          'tool-results',
-        )
+        const spillBase =
+          state.options.spillRoot ?? join(state.options.agentDir, 'sessions')
+        const parentSpillDir = join(spillBase, sessionId, 'tool-results')
+        const targetSpillDir = join(spillBase, targetId, 'tool-results')
         await targetStore.seedFrom(
           branch,
           { id: sessionId, store, location: prepared.location },
@@ -261,13 +257,17 @@ export function createTreeControl(deps: TreeControlDeps) {
             eventBus: state.options.eventBus,
             projectId: row.project_id,
             signal: controller.signal,
-            buildSystem: (sections) =>
+            buildSystem: (sections, override) =>
+              override ??
               prepared!.builder.build({
                 sessionId,
                 activeTools: prepared!.registry.getActiveTools(),
                 deferredToolSummary:
                   prepared!.registry.getDeferredToolSummary(),
-                extensionSections: sections ?? prepared!.runtimeSections,
+                extensionSections: {
+                  ...prepared!.runtimeSections,
+                  ...(sections ?? {}),
+                },
               }),
           })
           const result = await executeTreeNavigation({
