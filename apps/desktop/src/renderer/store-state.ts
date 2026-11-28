@@ -83,7 +83,7 @@ const larkNotice = (result: SubmitReceipt, place: string) => {
   return `It may have been posted.${reason} Vela did not send it again; check the ${place} before sending.`
 }
 
-export const byTime = (messages: Message[]) =>
+const byTime = (messages: Message[]) =>
   messages.toSorted((one, other) =>
     one.createdAt.localeCompare(other.createdAt),
   )
@@ -162,7 +162,7 @@ export async function submitLarkFlow(params: {
   }
 }
 
-export function reloadAfterChannelReset(params: {
+function reloadAfterChannelReset(params: {
   snapshot: Snapshot
   visibleLocal?: { place: string; sessionId: string }
   visibleGroup?: Extract<Project, { channel: 'lark' }>
@@ -261,6 +261,36 @@ export function mergeSessionMessages(
     merged.set(message.id, message)
   }
   return byTime([...merged.values()])
+}
+
+export function reconcileLocalMessages(
+  existingList: Message[],
+  incoming: Message[],
+): Message[] {
+  if (incoming.length === 0) {
+    return existingList.filter((m) => m.id.startsWith('pending:'))
+  }
+  const incomingClientIds = new Set(
+    incoming
+      .map((m) => m.clientMessageId)
+      .filter((id): id is string => Boolean(id)),
+  )
+  const pendingUnmatched = existingList.filter(
+    (m) =>
+      m.id.startsWith('pending:') &&
+      (!m.clientMessageId || !incomingClientIds.has(m.clientMessageId)),
+  )
+  const latestIncomingTime = incoming.at(-1)?.createdAt
+  const incomingIds = new Set(incoming.map((m) => m.id))
+  const newerLive = latestIncomingTime
+    ? existingList.filter(
+        (m) =>
+          !m.id.startsWith('pending:') &&
+          m.createdAt > latestIncomingTime &&
+          !incomingIds.has(m.id),
+      )
+    : []
+  return byTime([...incoming, ...pendingUnmatched, ...newerLive])
 }
 
 export function applyLocalEventState(params: {
@@ -409,5 +439,146 @@ export async function submitLocalFlow(params: {
     })
     params.report(params.formatError(cause))
     return 'rejected'
+  }
+}
+
+export function syncVisibleLarkState(params: {
+  visibleGroup?: Extract<Project, { channel: 'lark' }>
+  visibleTopic?: {
+    projectId: string
+    session: Session
+    report: (notice: string) => void
+  }
+  fetchLarkSessions: (chatId: string) => Promise<Session[]>
+  loadGroupPage: (
+    project: Extract<Project, { channel: 'lark' }>,
+  ) => Promise<string | undefined>
+  loadTopicMessages: (sessionId: string) => Promise<string | undefined>
+  mergeSessions: (sessions: Session[]) => void
+  pageError: (view?: string) => (notice: string) => void
+  isCurrentGroup: (id: string) => boolean
+  isCurrentTopic: (topic: {
+    projectId: string
+    session: Session
+    report: (notice: string) => void
+  }) => boolean
+}): void {
+  const { visibleGroup, visibleTopic } = params
+  if (visibleGroup) {
+    const report = params.pageError(`project:${visibleGroup.id}`)
+    void params
+      .fetchLarkSessions(visibleGroup.id)
+      .then((sessions) => params.mergeSessions(sessions))
+      .catch(() => {})
+    void params.loadGroupPage(visibleGroup).then((error) => {
+      if (error && params.isCurrentGroup(visibleGroup.id)) report(error)
+    })
+  }
+  if (visibleTopic) {
+    void params
+      .loadTopicMessages(visibleTopic.session.sessionId)
+      .then((error) => {
+        if (error && params.isCurrentTopic(visibleTopic)) {
+          visibleTopic.report(error)
+        }
+      })
+  }
+}
+
+export function applyChannelEventState(params: {
+  channel: string
+  value: Extract<Event, { type: 'channel' }>['value']
+  getSnapshot: () => Snapshot
+  publish: (change: Partial<Snapshot>) => void
+  invalidateAllLocalHistory: () => void
+  clearLarkCursors: () => void
+  refresh: () => Promise<void>
+  visibleLocal?: { place: string; sessionId: string }
+  visibleGroup?: Extract<Project, { channel: 'lark' }>
+  visibleTopic?: {
+    projectId: string
+    session: Session
+    report: (notice: string) => void
+  }
+  loadLocal: (place: string, sessionId: string) => Promise<unknown>
+  loadGroupPage: (
+    project: Extract<Project, { channel: 'lark' }>,
+  ) => Promise<string | undefined>
+  loadTopicMessages: (sessionId: string) => Promise<string | undefined>
+  fetchLarkSessions: (chatId: string) => Promise<Session[]>
+  mergeSessions: (sessions: Session[]) => void
+  pageError: (view?: string) => (notice: string) => void
+  isCurrentGroup: (id: string) => boolean
+  isCurrentTopic: (topic: {
+    projectId: string
+    session: Session
+    report: (notice: string) => void
+  }) => boolean
+}): void {
+  const { channel, value } = params
+  const snapshot = params.getSnapshot()
+  if (channel === 'local' && value.type === 'channel_status') {
+    const prevConnected = snapshot.connections.local?.connected
+    params.publish({
+      connections: {
+        ...snapshot.connections,
+        local: {
+          connected: value.connected,
+          ...(value.error ? { error: value.error } : {}),
+        },
+      },
+    })
+    if (!value.connected && value.error) {
+      params.publish({ error: value.error })
+    } else if (value.connected && prevConnected === false && snapshot.error) {
+      params.publish({ error: '' })
+    }
+  }
+  const reset = value.type === 'channel_status' && value.reset === true
+  if (reset) {
+    params.invalidateAllLocalHistory()
+    params.clearLarkCursors()
+    const { visibleLocal, visibleGroup, visibleTopic } = params
+    void params.refresh().then(() => {
+      reloadAfterChannelReset({
+        snapshot: params.getSnapshot(),
+        visibleLocal,
+        visibleGroup,
+        visibleTopic,
+        loadLocal: params.loadLocal,
+        loadGroupPage: params.loadGroupPage,
+        loadTopicMessages: params.loadTopicMessages,
+        pageError: params.pageError,
+        isCurrentGroup: params.isCurrentGroup,
+        isCurrentTopic: () =>
+          visibleTopic !== undefined && params.isCurrentTopic(visibleTopic),
+      })
+    })
+    return
+  }
+  if (channel !== 'lark' || value.type === 'channel_status') return
+
+  const chatId =
+    value.type === 'channel_history_changed' ? value.chatId : undefined
+  const targetSessionId =
+    value.type === 'channel_history_changed' ? value.sessionId : undefined
+
+  const group = params.visibleGroup
+  if (group && chatId === group.id) {
+    const report = params.pageError(`project:${group.id}`)
+    void params.loadGroupPage(group).then((error) => {
+      if (error && params.isCurrentGroup(group.id)) report(error)
+    })
+  }
+
+  const topic = params.visibleTopic
+  if (
+    topic &&
+    chatId === topic.projectId &&
+    targetSessionId === topic.session.sessionId
+  ) {
+    void params.loadTopicMessages(topic.session.sessionId).then((error) => {
+      if (error && params.isCurrentTopic(topic)) topic.report(error)
+    })
   }
 }

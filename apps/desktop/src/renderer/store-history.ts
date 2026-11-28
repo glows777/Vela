@@ -5,6 +5,10 @@ import { vela } from './vela.ts'
 const LARK_PAGE_LIMIT = 50
 const larkCursors = new Map<string, string>()
 
+export function clearLarkCursors(): void {
+  larkCursors.clear()
+}
+
 function orderedMessages(messages: Message[]): Message[] {
   const byId = new Map<string, Message>()
   for (const message of messages) byId.set(message.id, message)

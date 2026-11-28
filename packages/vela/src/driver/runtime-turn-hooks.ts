@@ -1,5 +1,6 @@
 import { withProviderHooks } from '../providers/index.ts'
-import { resolveModel } from '../providers/models/index.ts'
+import { resolveModelInput } from '../providers/models/index.ts'
+import { getBoundChannelForSession } from '../runtime/control-ops.ts'
 import type { DriverInboxItem, DriverTurnRequest } from '../runtime/driver.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import type {
@@ -150,11 +151,13 @@ export async function applyBeforeAgentStartHooks(params: {
   messages: ModelMessage[]
   tracker: TokenTracker
   alreadyHasRunMessages: boolean
-}): Promise<string | undefined> {
+}): Promise<{
+  systemPrompt?: string
+  sections?: Record<string, string>
+}> {
   const {
     extensionRunner,
     extView,
-    prepared,
     request,
     activeStore,
     messages,
@@ -162,14 +165,13 @@ export async function applyBeforeAgentStartHooks(params: {
     alreadyHasRunMessages,
   } = params
   if (!extensionRunner.hasHandlers('before_agent_start')) {
-    return undefined
+    return {}
   }
   const hookInputText = request.inputs
     .map((i) => (typeof i.payload.text === 'string' ? i.payload.text : ''))
     .filter(Boolean)
     .join('\n\n')
   const started = await extensionRunner.beforeAgentStart(extView, hookInputText)
-  Object.assign(prepared.runtimeSections, started.sections)
   if (!alreadyHasRunMessages && started.messages.length > 0) {
     for (const cm of started.messages) {
       const msg = (await normalizeUserMessage({
@@ -195,7 +197,14 @@ export async function applyBeforeAgentStartHooks(params: {
       tracker.addMessage(msg)
     }
   }
-  return started.systemPrompt
+  return {
+    ...(started.systemPrompt !== undefined
+      ? { systemPrompt: started.systemPrompt }
+      : {}),
+    ...(Object.keys(started.sections).length > 0
+      ? { sections: started.sections }
+      : {}),
+  }
 }
 
 /** Wraps the resolved model with `before_provider_request`/`after_provider_response`/`provider_stream_event` hooks when needed. */
@@ -266,12 +275,12 @@ export async function maybeResolveImplicitSpecialModel(
   let fallbackModel: ModelInput | undefined
   if (envRecord && envModel !== 'mock' && !envModel?.startsWith('faux:')) {
     const activeModels = resolveSessionModels(state, override)
+    const oauthChannel = getBoundChannelForSession(state.db, sessionId)
     const candidate =
       override?.model ?? savedModel ?? state.reloadable.defaultModel
-    fallbackModel = resolveModel(candidate, {
-      providers: activeModels.providerDefinitions(),
-      credentials: activeModels.credentials,
-    })
+    fallbackModel = candidate
+      ? resolveModelInput(activeModels, candidate, () => oauthChannel).model
+      : undefined
   }
   const special = await state.options.resolveSpecialModel({
     modelRef: envModel,

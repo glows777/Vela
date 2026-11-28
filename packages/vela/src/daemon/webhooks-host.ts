@@ -17,16 +17,16 @@ function ownerStatSig(file: string): string {
   }
 }
 
-/** Polls owner `config.json` / `auth.json` stat signatures so an idle daemon reloads automatically. */
+/** Polls owner `config.json` stat signatures so an idle daemon reloads automatically. */
 export function startDaemonConfigWatcher(
   agentDir: string,
   reload: () => Promise<void>,
   intervalMs = 1000,
   onError?: (error: unknown) => void,
+  initialSig?: string,
 ): { checkNow: () => Promise<void>; stop: () => void } {
-  const sig = () =>
-    `${ownerStatSig(join(agentDir, 'config.json'))}|${ownerStatSig(join(agentDir, 'auth.json'))}`
-  let lastSig = sig()
+  const sig = () => ownerStatSig(join(agentDir, 'config.json'))
+  let lastSig = initialSig ?? sig()
   let inflight: Promise<void> | undefined
   let stopped = false
   const checkNow = (): Promise<void> => {

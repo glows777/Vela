@@ -727,10 +727,10 @@ export async function startHost(): Promise<DesktopHostController> {
       } catch (error) {
         if (!isDisconnectError(error) || disposed) throw error
         if (mutating) {
-          void conn.reconnect().catch(() => {})
+          void conn.reconnect({ force: true }).catch(() => {})
           throw error
         }
-        const recovered = await conn.reconnect()
+        const recovered = await conn.reconnect({ force: true })
         return executeRequest(recovered, request)
       }
     }

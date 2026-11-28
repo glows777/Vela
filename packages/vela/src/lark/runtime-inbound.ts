@@ -5,6 +5,7 @@ import type {
   ChannelIngestReceipt,
   ChannelOutboundMessage,
 } from '../runtime/channels.ts'
+import { parseControlShortcut } from '../runtime/shortcuts.ts'
 import type { VelaLogger } from '../shared/logger.ts'
 import { FileTooLarge } from './attachments.ts'
 import {
@@ -256,6 +257,8 @@ export async function processLarkInboundEvent(params: {
   if (isStopped() || signal?.aborted) return false
 
   const isSlash = !meta.passive && baseText.startsWith('/')
+  const isControlShortcut =
+    !meta.passive && parseControlShortcut(baseText) !== undefined
   let formattedText = baseText
   const historyRefs = new Map<string, ChannelInboundAttachment>()
   const historyImageOrder: ChannelInboundAttachment[] = []
@@ -285,7 +288,7 @@ export async function processLarkInboundEvent(params: {
     meta.topic && !meta.requireExistingSession && !existingTopicBinding,
   )
 
-  if (!isSlash) {
+  if (!isSlash && !isControlShortcut) {
     const question = {
       name,
       text: baseText,
@@ -445,7 +448,12 @@ export async function processLarkInboundEvent(params: {
         passive: meta.passive,
       })
     }
-    if (!meta.passive && message.message_id && message.create_time) {
+    if (
+      !meta.passive &&
+      !receipt?.shortcut &&
+      message.message_id &&
+      message.create_time
+    ) {
       noteHandled(message.chat_id, message.message_id, message.create_time)
     }
     return true

@@ -17,6 +17,7 @@ import {
   createChannelStatusTracker,
   getChannelToolsForSessionInDb,
   ingestWebhookEventInRuntime,
+  isChannelAdapterReady,
   isChannelEnabledInDb,
   listChannelStatusesInRuntime,
   listRuntimeOrChannelMessages,
@@ -80,6 +81,13 @@ export interface VelaRuntimeEngineOptions {
   environments?: EnvironmentRegistry
   drivers?: AgentDriver[]
   ignoredChannels?: readonly string[]
+  onRestartSession?: (sessionId: string) => Promise<void> | void
+  trySteerInboxEvent?: (
+    sessionId: string,
+    inboxEventId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType: string }>,
+  ) => Promise<boolean> | boolean
   logger?: VelaLogger
 }
 
@@ -121,6 +129,8 @@ export class VelaRuntimeEngine {
   private readonly inFlightDeliveries = new Set<string>()
   private readonly activeOwners = new Set<string>()
   private readonly transientBlobDir?: string
+  private readonly onRestartSession?: (sid: string) => Promise<void> | void
+  private readonly trySteerInboxEvent?: VelaRuntimeEngineOptions['trySteerInboxEvent']
   private nextWakeTimer: ReturnType<typeof setTimeout> | undefined
   private disposed = false
 
@@ -129,6 +139,8 @@ export class VelaRuntimeEngine {
     this.agentDir = resolve(options.agentDir)
     this.logger = options.logger ?? silentLogger
     this.ignoredChannels = new Set(options.ignoredChannels ?? [])
+    this.onRestartSession = options.onRestartSession
+    this.trySteerInboxEvent = options.trySteerInboxEvent
     if (options.db.path === ':memory:') {
       this.transientBlobDir = mkdtempSync(join(tmpdir(), 'vela-blobs-'))
       this.blobs = new BlobStore(this.db, join(this.transientBlobDir, 'blobs'))
@@ -146,7 +158,7 @@ export class VelaRuntimeEngine {
     this.outbox = new OutboxDispatcher(
       this.db,
       (name) =>
-        this.isChannelEnabled(name) ? this.channels.get(name) : undefined,
+        this.isChannelEnabled(name) ? this.readyChannel(name) : undefined,
       () => this.syncWakeTimer(),
       (sessionId) => this.scheduleSession(sessionId),
       (info) =>
@@ -202,6 +214,7 @@ export class VelaRuntimeEngine {
         },
         trySteerSession: (sid, t, images) =>
           this.steerSession(sid, t, images, true),
+        trySteerInboxEvent: this.trySteerInboxEvent,
       },
       this.channelStatuses,
     )
@@ -220,8 +233,13 @@ export class VelaRuntimeEngine {
     await this.outbox.drainChannel(name).catch(() => {})
   }
 
+  private readyChannel(name: string): ChannelAdapter | undefined {
+    const adapter = this.channels.get(name)
+    return isChannelAdapterReady(adapter) ? adapter : undefined
+  }
+
   channelAdapter(name: string): ChannelAdapter | undefined {
-    return this.channels.get(name)
+    return this.readyChannel(name)
   }
 
   listSessionMessages(input: {
@@ -261,7 +279,7 @@ export class VelaRuntimeEngine {
 
   listChannelChats(channel: string): Promise<ChannelChatInfo[]> {
     if (!this.isChannelEnabled(channel)) return Promise.resolve([])
-    return this.channels.get(channel)?.listChats?.() ?? Promise.resolve([])
+    return this.readyChannel(channel)?.listChats?.() ?? Promise.resolve([])
   }
 
   submitChannelHostMessage(
@@ -440,6 +458,7 @@ export class VelaRuntimeEngine {
         )
       }
       this.timers.cancelFollowupsForSession(sessionId)
+      await this.onRestartSession?.(sessionId)
       const resetSession = this.sessions.reset(sessionId)
       this.eventBus.append({
         sessionId,
@@ -744,7 +763,7 @@ export class VelaRuntimeEngine {
           flushOutbox: () => {
             if (this.channels.size > 0) void this.flushOutboxBestEffort()
           },
-          getChannelAdapter: (name) => this.channels.get(name),
+          getChannelAdapter: (name) => this.readyChannel(name),
           isChannelEnabled: (name) => this.isChannelEnabled(name),
           logger: this.logger,
         })

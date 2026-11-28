@@ -12,6 +12,7 @@ export async function backgroundRunning(
   try {
     const ids = await session.runtime.jobs.promoteForeground(session.id)
     if (!ids.length) notice('No foreground command to background', 'dim')
+    else await session.refresh().catch(() => {})
   } catch (error) {
     notice(errorMessage(error), 'error')
   }

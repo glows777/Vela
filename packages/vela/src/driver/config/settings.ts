@@ -33,7 +33,6 @@ import {
 } from './runtime-resources.ts'
 
 export type { ExtensionEntry } from './extension-discovery.ts'
-export { extensionName } from './extension-discovery.ts'
 
 export interface LoadConfigOptions {
   /** @internal Vela frontends select these files when preparing each session. */

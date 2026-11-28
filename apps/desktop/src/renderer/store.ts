@@ -12,22 +12,24 @@ import type {
 import { errorMessage } from './errors.ts'
 import { sessionProjectId } from './format.ts'
 import {
+  clearLarkCursors,
   readLarkGroupHistory,
   readLarkTopicHistory,
   readLocalHistoryPages,
 } from './store-history.ts'
 import {
+  applyChannelEventState,
   applyLocalEventState,
-  byTime,
   initialSnapshot,
   type LocalSendOutcome,
   mergeSessionMessages,
   readDesktopFrame,
-  reloadAfterChannelReset,
+  reconcileLocalMessages,
   type Snapshot,
   sessionMap,
   submitLarkFlow,
   submitLocalFlow,
+  syncVisibleLarkState,
   topicTitle,
   withoutKey,
 } from './store-state.ts'
@@ -60,6 +62,10 @@ const pageError = (view = errorView) => {
 
 export function dismissPageError() {
   publish({ error: '' })
+}
+
+export function reportPageError(view: string, cause: unknown) {
+  pageError(view)(errorMessage(cause))
 }
 
 export function setErrorView(view: string) {
@@ -103,7 +109,10 @@ function replaceMessages(sessionId: string, incoming: Message[]) {
   publish({
     messages: {
       ...snapshot.messages,
-      [sessionId]: byTime(incoming),
+      [sessionId]: reconcileLocalMessages(
+        snapshot.messages[sessionId] ?? [],
+        incoming,
+      ),
     },
   })
 }
@@ -662,57 +671,44 @@ function apply(value: Extract<Event, { type: 'local' }>['value']) {
 }
 
 /** Re-reads Local/Lark history or frame state after a channel event arrives. */
+function syncVisibleLarkViews() {
+  syncVisibleLarkState({
+    visibleGroup: visibleLarkGroup,
+    visibleTopic: visibleLarkTopic,
+    fetchLarkSessions: (chatId) => vela.sessions('lark', chatId),
+    loadGroupPage: loadLarkGroupPage,
+    loadTopicMessages: loadLarkTopicMessages,
+    mergeSessions,
+    pageError,
+    isCurrentGroup: (id) => visibleLarkGroup?.id === id,
+    isCurrentTopic: (topic) => visibleLarkTopic === topic,
+  })
+}
+
 function applyChannel(
   channel: string,
   value: Extract<Event, { type: 'channel' }>['value'],
 ) {
-  const reset = value.type === 'channel_status' && value.reset === true
-  if (reset) {
-    invalidateAllLocalHistory()
-    const visibleLocal = visibleLocalSession
-    const visibleGroup = visibleLarkGroup
-    const visibleTopic = visibleLarkTopic
-    void refresh().then(() =>
-      reloadAfterChannelReset({
-        snapshot,
-        visibleLocal,
-        visibleGroup,
-        visibleTopic,
-        loadLocal: loadLocalMessages,
-        loadGroupPage: loadLarkGroupPage,
-        loadTopicMessages: loadLarkTopicMessages,
-        pageError,
-        isCurrentGroup: (id) => visibleLarkGroup?.id === id,
-        isCurrentTopic: () => visibleLarkTopic === visibleTopic,
-      }),
-    )
-    return
-  }
-  if (channel !== 'lark') return
-
-  const chatId =
-    value.type === 'channel_history_changed' ? value.chatId : undefined
-  const targetSessionId =
-    value.type === 'channel_history_changed' ? value.sessionId : undefined
-
-  const group = visibleLarkGroup
-  if (group && chatId === group.id) {
-    const report = pageError(`project:${group.id}`)
-    void loadLarkGroupPage(group).then((error) => {
-      if (error && visibleLarkGroup === group) report(error)
-    })
-  }
-
-  const topic = visibleLarkTopic
-  if (
-    topic &&
-    chatId === topic.projectId &&
-    targetSessionId === topic.session.sessionId
-  ) {
-    void loadLarkTopicMessages(topic.session.sessionId).then((error) => {
-      if (error && visibleLarkTopic === topic) topic.report(error)
-    })
-  }
+  applyChannelEventState({
+    channel,
+    value,
+    getSnapshot: () => snapshot,
+    publish,
+    invalidateAllLocalHistory,
+    clearLarkCursors,
+    refresh,
+    visibleLocal: visibleLocalSession,
+    visibleGroup: visibleLarkGroup,
+    visibleTopic: visibleLarkTopic,
+    loadLocal: loadLocalMessages,
+    loadGroupPage: loadLarkGroupPage,
+    loadTopicMessages: loadLarkTopicMessages,
+    fetchLarkSessions: (chatId) => vela.sessions('lark', chatId),
+    mergeSessions,
+    pageError,
+    isCurrentGroup: (id) => visibleLarkGroup?.id === id,
+    isCurrentTopic: (topic) => visibleLarkTopic === topic,
+  })
 }
 
 /** Stops the run this session is in, if it still has one. */
@@ -752,12 +748,20 @@ export async function start() {
           },
         })
       } else if (event.type === 'connection') {
+        const wasConnected = snapshot.connections[event.channel]?.connected
         publish({
           connections: {
             ...snapshot.connections,
             [event.channel]: event.value,
           },
         })
+        if (
+          event.channel === 'lark' &&
+          wasConnected !== true &&
+          event.value.connected
+        ) {
+          void refresh().then(() => syncVisibleLarkViews())
+        }
       } else if (event.type === 'channel') {
         applyChannel(event.channel, event.value)
       }

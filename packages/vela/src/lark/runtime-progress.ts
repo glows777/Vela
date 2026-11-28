@@ -534,6 +534,15 @@ export class LarkRuntimeProgressManager {
         sawSkipReply: false,
         controlTokens: new Set(),
       }
+      const previous = this.activeRuns.get(event.sessionId)
+      if (previous) {
+        this.activeRuns.delete(event.sessionId)
+        for (const token of previous.controlTokens) {
+          this.controls.delete(token)
+        }
+        previous.controlTokens.clear()
+        void this.cancelActiveFeedback(previous)
+      }
       this.activeRuns.set(event.sessionId, active)
 
       if (!isPassive && binding.kind === 'group' && active.messageId) {
@@ -620,7 +629,7 @@ export class LarkRuntimeProgressManager {
         const waitPromise = new Promise<void>((resolve) => {
           const timer = setTimeout(() => {
             if (this.awaitingOutbox.delete(event.runId)) {
-              void this.cancelActiveFeedback(active).finally(resolve)
+              void finalize('failed').finally(resolve)
             } else {
               resolve()
             }

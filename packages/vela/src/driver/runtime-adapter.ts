@@ -41,8 +41,12 @@ import {
   prepareSessionSetup,
 } from './runtime-session-setup.ts'
 import {
+  buildSteeringMessage,
+  flushSessionSteering,
+  takeSessionSteering,
+} from './runtime-steering.ts'
+import {
   assistantText,
-  flushUnconsumedSteering,
   prepareRuntimeTurnMessages,
   resolveRunInputMeta,
   resolveRunSilenceAndDepth,
@@ -132,6 +136,7 @@ export function createVelaAgentDriver(
     sessionResourceSnapshots: new Map(),
     activeAbort: new Map(),
     activeSteering: new Map(),
+    activeSteeringInboxIds: new WeakMap(),
     activeRunMeta: new Map(),
     sessionBackgrounds: new Map(),
     pendingBashBySession: new Map(),
@@ -165,19 +170,7 @@ export function createVelaAgentDriver(
     steer(sessionId, text, images) {
       const list = state.activeSteering.get(sessionId)
       if (!list) return false
-      if (images && images.length > 0) {
-        const parts: Array<
-          | { type: 'text'; text: string }
-          | { type: 'image'; data: string; mimeType: string }
-        > = []
-        if (text) parts.push({ type: 'text', text })
-        for (const img of images) {
-          parts.push({ type: 'image', data: img.data, mimeType: img.mimeType })
-        }
-        list.push({ role: 'user', content: parts })
-      } else {
-        list.push({ role: 'user', content: text })
-      }
+      list.push(buildSteeringMessage(text, images))
       return true
     },
     abort(sessionId) {
@@ -224,19 +217,19 @@ export function createVelaAgentDriver(
     state.activeSteering.set(request.sessionId, [])
     const deferredSteering: ModelMessage[] = []
     let waitingHuman = false
-    const flushSteering = (wake: boolean): void => {
-      const live = state.activeSteering.get(request.sessionId)
-      state.activeSteering.delete(request.sessionId)
-      flushUnconsumedSteering({
+    const flushSteering = (wake: boolean): Promise<void> =>
+      flushSessionSteering({
         db: options.db,
+        blobs: options.blobs,
         sessionId: request.sessionId,
         projectId: request.projectId,
-        unconsumed: [...deferredSteering.splice(0), ...(live ?? [])],
+        activeSteering: state.activeSteering,
+        activeSteeringInboxIds: state.activeSteeringInboxIds,
+        deferredSteering,
         wake,
         shouldWakeSession: !waitingHuman && !state.disposed,
         wakeSession: request.wakeSession ?? options.wakeSession,
       })
-    }
 
     let releasedClaim = false
     let claim:
@@ -253,6 +246,7 @@ export function createVelaAgentDriver(
     let committedInTx = false
     let isSilent = false
     let systemPromptOverride: string | undefined
+    let turnSections: Record<string, string> | undefined
 
     try {
       const activeStore = new SessionStore(request.sessionId, options.db, {
@@ -297,7 +291,9 @@ export function createVelaAgentDriver(
               sessionId: request.sessionId,
               activeTools: prepared.registry.getActiveTools(),
               deferredToolSummary: prepared.registry.getDeferredToolSummary(),
-              extensionSections: prepared.runtimeSections,
+              extensionSections: turnSections
+                ? { ...prepared.runtimeSections, ...turnSections }
+                : prepared.runtimeSections,
             })
           : '')
 
@@ -363,13 +359,17 @@ export function createVelaAgentDriver(
             request.sessionId,
             names ? [...names] : undefined,
           ),
-        buildSystem: (sections) =>
-          systemPromptOverride ??
+        buildSystem: (sections, override) =>
+          (override === undefined ? systemPromptOverride : override) ??
           prepared!.builder.build({
             sessionId: request.sessionId,
             activeTools: registry.getActiveTools(),
             deferredToolSummary: registry.getDeferredToolSummary(),
-            extensionSections: sections ?? prepared!.runtimeSections,
+            extensionSections: {
+              ...prepared!.runtimeSections,
+              ...(turnSections ?? {}),
+              ...(sections ?? {}),
+            },
           }),
       })
       await prepared.ensureSessionStarted(extView)
@@ -474,7 +474,7 @@ export function createVelaAgentDriver(
         }
       }
 
-      systemPromptOverride = await applyBeforeAgentStartHooks({
+      const beforeAgentStartResult = await applyBeforeAgentStartHooks({
         extensionRunner,
         extView,
         prepared,
@@ -484,6 +484,8 @@ export function createVelaAgentDriver(
         tracker,
         alreadyHasRunMessages,
       })
+      systemPromptOverride = beforeAgentStartResult.systemPrompt
+      turnSections = beforeAgentStartResult.sections
 
       const deferWaitForInput =
         alreadyHasRunMessages && pendingToolCalls(messages).length > 0
@@ -606,11 +608,14 @@ export function createVelaAgentDriver(
           : undefined,
         hasSteering: () =>
           (state.activeSteering.get(request.sessionId)?.length ?? 0) > 0,
-        takeSteering: () => {
-          const list = state.activeSteering.get(request.sessionId) ?? []
-          state.activeSteering.set(request.sessionId, [])
-          return list
-        },
+        takeSteering: () =>
+          takeSessionSteering({
+            db: options.db,
+            sessionId: request.sessionId,
+            runId: request.runId,
+            activeSteering: state.activeSteering,
+            activeSteeringInboxIds: state.activeSteeringInboxIds,
+          }),
         onMessageCommittedInTx: (messageId, message) => {
           request.onEvent({
             type: 'message_committed',
@@ -728,7 +733,7 @@ export function createVelaAgentDriver(
       }
     } finally {
       try {
-        flushSteering(!controller.signal.aborted)
+        await flushSteering(!controller.signal.aborted)
       } catch (error) {
         logger.warn(
           `[runtime] failed preserving unconsumed steer inputs for ${request.sessionId}: ${errorMessage(error)}`,

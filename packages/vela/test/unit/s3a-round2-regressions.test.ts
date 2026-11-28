@@ -11,7 +11,6 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import z from 'zod'
-import { cliWorkspaceModeAt } from '../../../../test/support/legacy-cli-helpers.ts'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -25,6 +24,7 @@ import {
   canonicalEnvironmentPath,
   ProjectConfig,
 } from '../../src/driver/session/project-config.ts'
+import { createRuntime } from '../../src/index.ts'
 import { parseServers } from '../../src/mcp/config.ts'
 import { McpPool, mcp } from '../../src/mcp/index.ts'
 import { dockerContainerId } from '../../src/runtime/docker/container.ts'
@@ -42,7 +42,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) dir.cleanup()
 })
 
-test('R2-P0-1: non-local trust is isolated per owner dataDir', () => {
+test('R2-P0-1: non-local trust is isolated per owner dataDir', async () => {
   const dir = tempDir('vela-r2-scope-')
   dirs.push(dir)
   const agentDir = join(dir.path, 'agent')
@@ -54,23 +54,37 @@ test('R2-P0-1: non-local trust is isolated per owner dataDir', () => {
 
   saveTrust(agentDir, { environment: 'dev', cwd: '/workspace' }, true, dataA)
   expect(
-    cliWorkspaceModeAt({
-      agentDir,
-      dataDir: dataA,
-      startupCwd: dir.path,
-      location: '/workspace/sub',
-      environment: 'dev',
-    }),
-  ).toBe('all')
+    savedTrust(agentDir, { environment: 'dev', cwd: '/workspace/sub' }, dataA),
+  ).toBe(true)
   expect(
-    cliWorkspaceModeAt({
-      agentDir,
-      dataDir: dataB,
-      startupCwd: dir.path,
-      location: '/workspace/sub',
-      environment: 'dev',
-    }),
-  ).toBe('none')
+    savedTrust(agentDir, { environment: 'dev', cwd: '/workspace/sub' }, dataB),
+  ).toBeUndefined()
+
+  const envA = createEnvironmentRegistryForTest({
+    dataDir: dataA,
+    environments: new Map(),
+  })
+  const rtA = createRuntime({ agentDir, environments: envA, mcp: false })
+  try {
+    expect(
+      await rtA.trust.check({ environment: 'dev', cwd: '/workspace/sub' }),
+    ).toBe(true)
+  } finally {
+    await rtA.dispose()
+  }
+
+  const envB = createEnvironmentRegistryForTest({
+    dataDir: dataB,
+    environments: new Map(),
+  })
+  const rtB = createRuntime({ agentDir, environments: envB, mcp: false })
+  try {
+    expect(
+      await rtB.trust.check({ environment: 'dev', cwd: '/workspace/sub' }),
+    ).toBeUndefined()
+  } finally {
+    await rtB.dispose()
+  }
 })
 
 test('R2-P0-2: symlinks cannot transfer local trust or bypass remote child denials', async () => {

@@ -84,6 +84,7 @@ export type {
   RuntimeLarkSetupInput,
   RuntimeModelSetupInput,
   RuntimeSettingsLarkState,
+  RuntimeSettingsModel,
   RuntimeSettingsProvider,
   RuntimeSettingsState,
 } from './shared/settings-types.ts'

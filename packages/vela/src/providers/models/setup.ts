@@ -2,7 +2,7 @@ import { generateText, type LanguageModel } from 'ai'
 import { updateConfigFile } from '../../config/index.ts'
 import type { ProviderConfig } from '../../shared/provider-types.ts'
 import type { CredentialStore } from '../auth/types.ts'
-import { type ProviderDefinition, resolveModel } from './index.ts'
+import { ModelRegistry, type ProviderDefinition } from './index.ts'
 
 /** Verify the selected provider and model with one small request. This may incur a charge. */
 export async function verifyProviderModel(
@@ -10,9 +10,13 @@ export async function verifyProviderModel(
   providers: Record<string, ProviderDefinition>,
   credentials: CredentialStore,
   signal?: AbortSignal,
+  options?: { blockLocalOnlyOAuth?: boolean },
 ): Promise<void> {
+  const model = new ModelRegistry(providers, credentials, undefined, {
+    blockLocalOnlyOAuth: options?.blockLocalOnlyOAuth,
+  }).resolve(ref).model
   await generateText({
-    model: resolveModel(ref, { providers, credentials }) as LanguageModel,
+    model: model as LanguageModel,
     prompt: 'Reply OK.',
     maxOutputTokens: 16,
     maxRetries: 0,

@@ -11,15 +11,13 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { cliProjectExtensions } from '../../../../test/support/legacy-cli-helpers.ts'
-import { parseArgs } from '../../src/cli/setup.ts'
 import {
   assertNoLegacyConfigFiles,
   parseConfig,
 } from '../../src/config/index.ts'
 import { savedTrust, saveTrust } from '../../src/db/index.ts'
 import { SessionDefaultState } from '../../src/driver/session/defaults.ts'
-import { loadConfig } from '../../src/load-config.ts'
+import { createRuntime } from '../../src/index.ts'
 import { loadMcpServers } from '../../src/mcp/config.ts'
 import {
   fileCredentialStore,
@@ -28,6 +26,7 @@ import {
 import { ModelRegistry } from '../../src/providers/models/index.ts'
 import { loadModels } from '../../src/providers/models-config.ts'
 import { createMockModel } from '../../src/testing/core/demo-model.ts'
+import { createFauxModel, fauxText } from '../../src/testing/core/index.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -41,7 +40,7 @@ function tempDir(prefix: string): string {
   return dir
 }
 
-test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag), and mcp loading', async () => {
+test('config schema, legacy migration, trust, createRuntime (-builtin:rag), and mcp loading', async () => {
   expect(() =>
     parseConfig(
       JSON.stringify({ providers: { 'bad provider!': {} } }),
@@ -95,31 +94,29 @@ test('config schema, legacy migration, trust, cliProjectExtensions (-builtin:rag
   expect(savedTrust(sharedAgentDir, deniedLink)).toBe(false)
   expect(savedTrust(sharedAgentDir, deniedReal)).toBe(false)
 
-  // cliProjectExtensions allows -builtin:rag without warning or error
+  // createRuntime allows -builtin:rag without warning or error
   writeFileSync(
     join(agentDir, 'config.json'),
     JSON.stringify({ extensions: ['-builtin:rag'] }),
   )
-  const config = loadConfig({
-    cwd: projDir,
+  const runtime = createRuntime({
     agentDir,
-    trusted: true,
-    builtins: ['mcp', 'memory'],
-    env: {},
+    defaultModel: createFauxModel({ responses: [fauxText('ok')] }),
+    mcp: false,
   })
-  const diags: string[] = []
-  const loader = cliProjectExtensions(config, parseArgs([]), (m) =>
-    diags.push(m),
-  )
-  await loader({
-    cwd: projDir,
-    environmentId: 'node:local',
-    trusted: true,
-    settings: {},
-    projectSettings: {},
-    entries: [],
-  })
-  expect(diags).toEqual([])
+  try {
+    await runtime.ready()
+    await runtime.trust.approve(projDir, true)
+    const session = await runtime.sessions.create({
+      location: { environment: 'local', cwd: projDir },
+    })
+    const inspected = await runtime.sessions.inspect(session.id)
+    expect(inspected.extensionErrors.filter((e) => e.includes('rag'))).toEqual(
+      [],
+    )
+  } finally {
+    await runtime.dispose()
+  }
 
   // MCP config skips disabled servers with missing env, re-interpolates on trusted enable (#7), and skips spurious error
   const envRef = (name: string) => `$${'{'}${name}}`

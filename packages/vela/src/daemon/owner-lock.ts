@@ -99,7 +99,7 @@ export function acquireOwnerLock(
   instanceId: string,
   socketPath: string,
 ): () => void {
-  mkdirSync(dirname(lockPath), { recursive: true })
+  mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 })
   for (let attempt = 0; attempt < 2; attempt++) {
     const tmpPath = `${lockPath}.${process.pid}.${instanceId}.tmp`
     try {

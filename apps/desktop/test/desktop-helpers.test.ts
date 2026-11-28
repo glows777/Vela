@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isDisconnectError } from '../src/main/disconnect-error.ts'
 import { loadPreferences, savePreferences } from '../src/main/preferences.ts'
 import {
   localRoutineInstant,
@@ -10,6 +11,7 @@ import {
   routineTimezone,
 } from '../src/main/routine-time.ts'
 import {
+  applyChannelEventState,
   initialSnapshot,
   submitLocalFlow,
 } from '../src/renderer/store-state.ts'
@@ -119,4 +121,124 @@ test('submitLocalFlow rejects disconnected preflight errors and preserves mid-fl
   expect(midflightUnknown).toBe(true)
   expect(snapshot.messages['s-midflight']).toHaveLength(1)
   expect(snapshot.messages['s-midflight']?.[0]?.text).toBe('may have landed')
+})
+
+test('isDisconnectError distinguishes socket disconnects from bare ENOENT errors', () => {
+  const enoent = Object.assign(new Error('ENOENT: missing project file'), {
+    code: 'ENOENT',
+  })
+  expect(isDisconnectError(enoent)).toBe(false)
+
+  for (const code of [
+    'ECONNRESET',
+    'EPIPE',
+    'ECONNREFUSED',
+    'ERR_IPC_CHANNEL_CLOSED',
+  ]) {
+    const err = Object.assign(new Error(`failed ${code}`), { code })
+    expect(isDisconnectError(err)).toBe(true)
+  }
+  expect(isDisconnectError(new Error('Daemon runtime client is closed'))).toBe(
+    true,
+  )
+})
+
+test('applyChannelEventState resets local and Lark cursors cleanly and refreshes visible views', async () => {
+  let snapshot: typeof initialSnapshot = {
+    ...initialSnapshot,
+    connections: { local: { connected: false, error: 'Daemon offline' } },
+    error: 'Daemon offline',
+    sessions: {
+      'loc-1': {
+        sessionId: 'loc-1',
+        projectId: 'proj-1',
+        channel: 'local',
+        name: 'Local',
+        running: false,
+        isHub: false,
+        topic: false,
+        createdAt: '2026-11-28T00:00:00.000Z',
+        updatedAt: '2026-11-28T00:00:00.000Z',
+      },
+    },
+  }
+  const publish = (change: Partial<typeof snapshot>) => {
+    snapshot = { ...snapshot, ...change }
+  }
+  let invalidated = 0
+  let clearedCursors = 0
+  let refreshed = 0
+  const loadedLocal: string[] = []
+  const loadedTopics: string[] = []
+  const loadedGroups: string[] = []
+
+  const common = {
+    getSnapshot: () => snapshot,
+    publish,
+    invalidateAllLocalHistory: () => {
+      invalidated += 1
+    },
+    clearLarkCursors: () => {
+      clearedCursors += 1
+    },
+    refresh: async () => {
+      refreshed += 1
+    },
+    loadLocal: async (place: string, sessionId: string) => {
+      loadedLocal.push(`${place}:${sessionId}`)
+    },
+    loadGroupPage: async (project: { id: string }) => {
+      loadedGroups.push(project.id)
+      return undefined
+    },
+    loadTopicMessages: async (sessionId: string) => {
+      loadedTopics.push(sessionId)
+      return undefined
+    },
+    fetchLarkSessions: async () => [],
+    mergeSessions: () => {},
+    pageError: () => () => {},
+    isCurrentGroup: () => true,
+    isCurrentTopic: () => true,
+  }
+
+  applyChannelEventState({
+    ...common,
+    channel: 'local',
+    value: { type: 'channel_status', connected: true, reset: true },
+    visibleLocal: { place: 'session:loc-1', sessionId: 'loc-1' },
+  })
+  await new Promise((r) => setTimeout(r, 10))
+  expect(snapshot.connections.local).toEqual({ connected: true })
+  expect(snapshot.error).toBe('')
+  expect(invalidated).toBe(1)
+  expect(clearedCursors).toBe(1)
+  expect(refreshed).toBe(1)
+  expect(loadedLocal).toEqual(['session:loc-1:loc-1'])
+
+  applyChannelEventState({
+    ...common,
+    channel: 'lark',
+    value: {
+      type: 'channel_history_changed',
+      chatId: 'oc_1',
+      sessionId: 'topic-1',
+    },
+    visibleTopic: {
+      projectId: 'oc_1',
+      session: {
+        sessionId: 'topic-1',
+        projectId: 'oc_1',
+        channel: 'lark',
+        name: 'Topic 1',
+        running: false,
+        isHub: false,
+        topic: true,
+        createdAt: '2026-11-28T00:00:00.000Z',
+        updatedAt: '2026-11-28T00:00:00.000Z',
+      },
+      report: () => {},
+    },
+  })
+  expect(loadedTopics).toEqual(['topic-1'])
 })

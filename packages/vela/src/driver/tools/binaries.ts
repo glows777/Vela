@@ -110,7 +110,7 @@ async function resolveBinary(
   const missing = `${spec.name} (${spec.binaryName}) is not installed`
   if (!options.binDir)
     throw new Error(
-      `${missing}. Install it (${spec.install}) or pass binDir to createVela() to download it automatically`,
+      `${missing}. Install it (${spec.install}) or ensure ${spec.binaryName} is on PATH`,
     )
   if (options.offline)
     throw new Error(

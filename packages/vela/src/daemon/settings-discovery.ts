@@ -271,7 +271,7 @@ export function createRuntimeSettingsApi(params: {
       })
       if (found?.chatId && !controller.signal.aborted) {
         const endingKey = await currentCredentialKey()
-        if (endingKey === startingKey) {
+        if (!controller.signal.aborted && endingKey === startingKey) {
           pendingApproval = {
             chatId: found.chatId,
             credentialKey: endingKey,
@@ -368,18 +368,24 @@ export function createRuntimeSettingsApi(params: {
       if (params.ephemeral) {
         throw new Error('Settings cannot be modified on an ephemeral runtime')
       }
+      const abortActiveDiscovery = async () => {
+        pendingApproval = undefined
+        const current = activeDiscovery
+        if (current) {
+          current.controller.abort(
+            new DOMException('Lark settings updated', 'AbortError'),
+          )
+          await current.done
+        }
+      }
       if ('enabled' in input && input.enabled === false) {
-        pendingApproval = undefined
-      } else if (!('enabled' in input) && !('removeChat' in input)) {
-        pendingApproval = undefined
+        await abortActiveDiscovery()
       }
       return saveRuntimeLarkSetup({
         ...params,
         input,
         serializeWrite: serializeLarkWrite,
-        onBeforeCredentialWrite: () => {
-          pendingApproval = undefined
-        },
+        onBeforeCredentialWrite: abortActiveDiscovery,
       })
     },
     discoverLarkGroup: (opts) =>

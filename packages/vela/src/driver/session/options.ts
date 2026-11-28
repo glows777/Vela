@@ -80,7 +80,7 @@ export interface SessionOptions {
   model?: ModelInput
   /** Thinking level, default Vela's (Vela defaults to medium, like pi). Like `model`, wins over a resumed session's saved level. */
   thinkingLevel?: ThinkingLevel
-  /** Automatic compaction, default Vela's (on unless createVela({ autoCompaction: false })) */
+  /** Automatic compaction, default Vela's (on unless `createRuntime({ autoCompaction: false })`) */
   autoCompaction?: boolean
   /** Opt into background command deadlines for an unattended run. Defaults to false. */
   unattended?: boolean

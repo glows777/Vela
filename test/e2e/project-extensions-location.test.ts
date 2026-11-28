@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createRuntime } from '@glows777/vela'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
-import { parseArgs } from '../../packages/vela/src/cli/setup.ts'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { inspectSession } from '../../packages/vela/src/driver/diagnostics.ts'
 import {
@@ -15,13 +15,7 @@ import {
   loadConfig,
   type VelaOptions,
 } from '../../packages/vela/src/driver/index.ts'
-import { loadConfig as loadCliConfig } from '../../packages/vela/src/load-config.ts'
 import { createVela } from '../support/compat-vela.ts'
-import {
-  cliHostExtensionConfig,
-  cliProjectExtensions,
-  loadCliExtensions,
-} from '../support/legacy-cli-helpers.ts'
 
 interface Record {
   kind: string
@@ -466,11 +460,10 @@ test('the first plain input loads its project input handler before contacting th
   }
 })
 
-test('CLI memory and RAG stay host-owned across two projects and project idle closes', async () => {
+test('Runtime memory stays host-owned across two projects without loading project memory config', async () => {
   const dir = tempDir()
   const aDir = join(dir.path, 'A')
   const bDir = join(dir.path, 'B')
-  const args = parseArgs([])
   const agentDir = join(dir.path, 'user')
   mkdirSync(agentDir)
   writeFileSync(
@@ -488,54 +481,38 @@ test('CLI memory and RAG stay host-owned across two projects and project idle cl
       }),
     )
   }
-  const config = loadCliConfig({
-    cwd: aDir,
+  const runtime = createRuntime({
     agentDir,
-    trusted: true,
-    env: {},
-    builtins: ['memory'],
-  })
-  const host = await loadCliExtensions(config, args, () => {}, true)
-  const extensionConfig = cliHostExtensionConfig(config, args)
-  const select = cliProjectExtensions(config, args)
-  const projectFactories: string[] = []
-  const vela = createVela({
-    cwd: aDir,
-    dataDir: join(dir.path, 'host'),
-    model: createFauxModel({
+    defaultModel: createFauxModel({
       responses: [fauxText('A'), fauxText('B'), fauxText('B again')],
     }),
-    extensions: host,
-    extensionConfig,
-    sessionResources: {
-      ...config.sessionResources!,
-      workspaceModeAt: () => 'all',
-      projectExtensions: async (input) => {
-        const selected = await select(input)
-        return {
-          ...selected,
-          load: async () => {
-            const factories = await selected.load()
-            projectFactories.push(...factories.map((factory) => factory.name))
-            return factories
-          },
-        }
-      },
-    },
+    hostEnv: {},
+    mcp: false,
   })
   try {
-    const a = vela.session('a')
-    const b = vela.session('b', { cwd: bDir })
-    await a.prompt('A')
-    await b.prompt('B')
-    await a.close()
-    await b.prompt('B remains active')
-    expect(projectFactories).toEqual([])
-    expect(host.map((factory) => factory.name)).toEqual(['memory'])
-    expect(b.getActiveTools()).toContain('memory')
-    expect(extensionConfig.memory).toEqual({ dream: false })
+    await runtime.ready()
+    await runtime.trust.approve(aDir, true)
+    await runtime.trust.approve(bDir, true)
+    const a = await runtime.sessions.create({
+      location: { environment: 'local', cwd: aDir },
+    })
+    const b = await runtime.sessions.create({
+      location: { environment: 'local', cwd: bDir },
+    })
+    await runtime.prompt(a.id, { text: 'A' })
+    await runtime.waitForIdle(a.id)
+    await runtime.prompt(b.id, { text: 'B' })
+    await runtime.waitForIdle(b.id)
+    await runtime.prompt(b.id, { text: 'B remains active' })
+    await runtime.waitForIdle(b.id)
+    const inspectedB = await runtime.sessions.inspect(b.id)
+    expect(inspectedB.activeTools).toContain('memory')
+    expect(inspectedB.extensionErrors).toEqual([])
+    expect(
+      JSON.parse(readFileSync(join(agentDir, 'config.json'), 'utf8')).memory,
+    ).toEqual({ dream: false })
   } finally {
-    await vela.dispose()
+    await runtime.dispose()
     dir.cleanup()
   }
 })

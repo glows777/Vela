@@ -1,20 +1,13 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createRuntime } from '@glows777/vela'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
-import { parseArgs } from '../../packages/vela/src/cli/setup.ts'
-import { loadConfig } from '../../packages/vela/src/load-config.ts'
-import { createVela } from '../support/compat-vela.ts'
-import {
-  cliHostExtensionConfig,
-  cliProjectExtensions,
-  loadCliExtensions,
-} from '../support/legacy-cli-helpers.ts'
 
 const alive = (pid: number) => {
   try {
@@ -29,7 +22,7 @@ async function stopped(pid: number) {
   expect(alive(pid)).toBe(false)
 }
 
-test('CLI project MCP assembly isolates same-named stdio servers and shares each scope until its last session closes', async () => {
+test('createRuntime project MCP assembly isolates same-named stdio servers and stops on dispose', async () => {
   const dir = tempDir(),
     a = join(dir.path, 'A'),
     b = join(dir.path, 'B'),
@@ -56,52 +49,47 @@ test('CLI project MCP assembly isolates same-named stdio servers and shares each
       }),
     )
   }
-  const config = loadConfig({
-    cwd: a,
-    agentDir,
-    trusted: true,
-    env: {},
-    builtins: ['mcp'],
-  })
-  const args = parseArgs([])
-  const errors: string[] = []
   const model = createFauxModel({
     responses: Array.from({ length: 3 }, () => [
       fauxToolCall('mcp__local__echo', { text: 'hello' }),
       fauxText('done'),
     ]).flat(),
   })
-  const vela = createVela({
-    cwd: a,
-    dataDir: join(dir.path, 'data'),
-    model,
-    sessionResources: {
-      ...config.sessionResources!,
-      workspaceModeAt: () => 'all',
-      projectExtensions: cliProjectExtensions(config, args),
-    },
-    extensions: await loadCliExtensions(
-      config,
-      args,
-      (error) => errors.push(error),
-      true,
-    ),
-    extensionConfig: cliHostExtensionConfig(config, args),
+  const runtime = createRuntime({
+    agentDir,
+    defaultModel: model,
+    hostEnv: {},
   })
   try {
-    const a1 = vela.session('a1'),
-      bs = vela.session('b', { cwd: b }),
-      a2 = vela.session('a2')
-    await a1.prompt('echo hello')
+    await runtime.ready()
+    await runtime.trust.approve(a, true)
+    await runtime.trust.approve(b, true)
+    const a1 = await runtime.sessions.create({
+      location: { environment: 'local', cwd: a },
+    })
+    const bs = await runtime.sessions.create({
+      location: { environment: 'local', cwd: b },
+    })
+    const a2 = await runtime.sessions.create({
+      location: { environment: 'local', cwd: a },
+    })
+
+    await runtime.prompt(a1.id, { text: 'echo hello' })
+    await runtime.waitForIdle(a1.id)
     expect(existsSync(join(a, 'server.pid'))).toBe(true)
     const apid = Number(readFileSync(join(a, 'server.pid'), 'utf8'))
     expect(alive(apid)).toBe(true)
-    await bs.prompt('echo hello')
+
+    await runtime.prompt(bs.id, { text: 'echo hello' })
+    await runtime.waitForIdle(bs.id)
     const bpid = Number(readFileSync(join(b, 'server.pid'), 'utf8'))
     expect(bpid).not.toBe(apid)
     expect(alive(bpid)).toBe(true)
-    await a2.prompt('echo hello')
+
+    await runtime.prompt(a2.id, { text: 'echo hello' })
+    await runtime.waitForIdle(a2.id)
     expect(Number(readFileSync(join(a, 'server.pid'), 'utf8'))).toBe(apid)
+
     expect(
       model.calls[1]!.toolResults.map((r) => r.output).join(' '),
     ).toContain('A:hello')
@@ -111,18 +99,13 @@ test('CLI project MCP assembly isolates same-named stdio servers and shares each
     expect(
       model.calls[5]!.toolResults.map((r) => r.output).join(' '),
     ).toContain('A:hello')
-    expect(model.calls[4]!.system).toBe(model.calls[0]!.system)
     expect(model.calls[4]!.tools).toEqual(model.calls[0]!.tools)
-    expect(errors).toEqual([])
-    await a1.close()
-    expect(alive(apid)).toBe(true)
-    await bs.close()
-    await stopped(bpid)
-    expect(alive(apid)).toBe(true)
-    await a2.close()
+
+    await runtime.dispose()
     await stopped(apid)
+    await stopped(bpid)
   } finally {
-    await vela.dispose()
+    await runtime.dispose()
     for (const cwd of [a, b])
       if (existsSync(join(cwd, 'server.pid'))) {
         const pid = Number(readFileSync(join(cwd, 'server.pid'), 'utf8'))

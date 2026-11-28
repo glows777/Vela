@@ -3,28 +3,24 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildDockerGuest } from '../../../../scripts/build-docker-guest.ts'
-import {
-  cliProjectExtensions,
-  cliWorkspaceModeAt,
-} from '../../../../test/support/legacy-cli-helpers.ts'
 import { tempDir } from '../../../../test/support/vela.ts'
-import { parseArgs } from '../../src/cli/setup.ts'
 import { saveTrust } from '../../src/db/index.ts'
 import { createLocalExecutionEnv } from '../../src/driver/execution/local.ts'
 import { loadConfig } from '../../src/driver/index.ts'
 import { ProjectConfig } from '../../src/driver/session/project-config.ts'
 import { loadWorkspaceInventory } from '../../src/driver/session/workspace.ts'
-import { mcpConfig } from '../../src/mcp/config.ts'
-import { McpPool } from '../../src/mcp/pool.ts'
+import { createRuntime } from '../../src/index.ts'
 import { dockerOperations } from '../../src/runtime/docker/operations.ts'
+import { createEnvironmentRegistryForTest } from '../../src/runtime/environments.ts'
 import { silentLogger } from '../../src/shared/logger.ts'
+import { createFauxModel, fauxText } from '../../src/testing/core/index.ts'
 
 const dirs: { cleanup(): void }[] = []
 afterEach(() => {
   for (const dir of dirs.splice(0)) dir.cleanup()
 })
 
-test('cliWorkspaceModeAt scopes --approve to startup local cwd only', () => {
+test('createRuntime approveLocation scopes --approve to startup local cwd only', async () => {
   const dir = tempDir('vela-approve-scope-')
   dirs.push(dir)
   const agentDir = join(dir.path, 'agent')
@@ -36,31 +32,56 @@ test('cliWorkspaceModeAt scopes --approve to startup local cwd only', () => {
   saveTrust(agentDir, projectB, false)
   saveTrust(agentDir, { environment: 'dev', cwd: '/workspace' }, false)
 
-  expect(
-    cliWorkspaceModeAt({
-      agentDir,
-      startupCwd: projectA,
+  const envRegistry = createEnvironmentRegistryForTest({
+    dataDir: agentDir,
+    environments: { dev: { image: 'alpine', network: 'on' } },
+    openDocker: async () =>
+      Object.assign(createLocalExecutionEnv({ cwd: projectA }), {
+        canonicalPath: async (target: string) => ({
+          ok: true as const,
+          value: target,
+        }),
+      }),
+  })
+  const runtime = createRuntime({
+    agentDir,
+    defaultModel: createFauxModel({ responses: [fauxText('ok')] }),
+    environments: envRegistry,
+    mcp: false,
+  })
+  try {
+    await runtime.ready()
+    const sA = await runtime.sessions.create({
+      location: { environment: 'local', cwd: projectA },
+    })
+    const sB = await runtime.sessions.create({
+      location: { environment: 'local', cwd: projectB },
+    })
+    const sRemote = await runtime.sessions.create({
+      location: { environment: 'dev', cwd: '/workspace' },
+    })
+    await runtime.sessions.configure(sA.id, {
       approve: true,
-      location: projectA,
-    }),
-  ).toBe('all')
-  expect(
-    cliWorkspaceModeAt({
-      agentDir,
-      startupCwd: projectA,
+      approveLocation: projectA,
+    })
+    await runtime.sessions.configure(sB.id, {
       approve: true,
-      location: projectB,
-    }),
-  ).toBe('none')
-  expect(
-    cliWorkspaceModeAt({
-      agentDir,
-      startupCwd: projectA,
+      approveLocation: projectA,
+    })
+    await runtime.sessions.configure(sRemote.id, {
       approve: true,
-      location: '/workspace',
-      environment: 'dev',
-    }),
-  ).toBe('none')
+      approveLocation: projectA,
+    })
+    expect((await runtime.sessions.inspect(sA.id)).resources.trusted).toBe(true)
+    expect((await runtime.sessions.inspect(sB.id)).resources.trusted).toBe(
+      false,
+    )
+    expect((await runtime.sessions.inspect(sRemote.id)).resources.trusted).toBe(
+      false,
+    )
+  } finally {
+    await runtime.dispose()
+  }
 })
 
 test('trusted non-local ProjectConfig does not interpolate host env secrets', async () => {
@@ -104,83 +125,58 @@ test('trusted non-local ProjectConfig does not interpolate host env secrets', as
   }
 })
 
-test('cliProjectExtensions reuses the shared host McpPool across loads', async () => {
+test('createRuntime reuses the shared host McpPool across session loads', async () => {
   const dir = tempDir('vela-cli-mcp-pool-')
   dirs.push(dir)
   const agentDir = join(dir.path, 'agent')
   const projDir = join(dir.path, 'project')
+  const pidFile = join(projDir, 'server.pid')
+  const server = new URL(
+    '../../../../test/fixtures/mcp-echo-server.ts',
+    import.meta.url,
+  ).pathname
   mkdirSync(agentDir, { recursive: true })
   mkdirSync(join(projDir, '.vela'), { recursive: true })
   writeFileSync(
     join(projDir, '.vela/config.json'),
     JSON.stringify({
-      mcpServers: { docs: { command: 'node', args: ['-e', ''] } },
+      mcpServers: {
+        docs: {
+          command: process.execPath,
+          args: [server],
+          env: { PID_FILE: pidFile },
+          exposure: 'direct',
+        },
+      },
     }),
   )
-  const config = loadConfig({
-    cwd: projDir,
+  const runtime = createRuntime({
     agentDir,
-    extensionConfigs: [mcpConfig],
+    defaultModel: createFauxModel({
+      responses: [fauxText('first'), fauxText('second')],
+    }),
+    hostEnv: {},
   })
-  const pool = new McpPool({ idleTtlMs: 60_000 })
-  const originalAcquire = pool.acquire.bind(pool)
-  let acquireCount = 0
-  pool.acquire = (opts) => {
-    acquireCount++
-    return originalAcquire(opts)
+  try {
+    await runtime.ready()
+    await runtime.trust.approve(projDir, true)
+    const s1 = await runtime.sessions.create({
+      location: { environment: 'local', cwd: projDir },
+    })
+    const s2 = await runtime.sessions.create({
+      location: { environment: 'local', cwd: projDir },
+    })
+    await runtime.prompt(s1.id, { text: 'first' })
+    await runtime.waitForIdle(s1.id)
+    const pid1 = readFileSync(pidFile, 'utf8').trim()
+    expect(Number(pid1)).toBeGreaterThan(0)
+    await runtime.prompt(s2.id, { text: 'second' })
+    await runtime.waitForIdle(s2.id)
+    const pid2 = readFileSync(pidFile, 'utf8').trim()
+    expect(pid2).toBe(pid1)
+  } finally {
+    await runtime.dispose()
   }
-  const loader = cliProjectExtensions(
-    {
-      ...config,
-      mcp: { servers: {}, sources: {}, errors: [] },
-      sessionResources: {
-        ...config.sessionResources!,
-        extensionBuiltins: { names: ['mcp'], defaultOff: [] },
-      },
-    },
-    parseArgs([]),
-    () => {},
-    pool,
-  )
-  const scope1 = await loader({
-    cwd: projDir,
-    environmentId: 'node:local',
-    trusted: true,
-    settings: { mcpServers: { docs: { command: 'node', args: ['-e', ''] } } },
-    projectSettings: {},
-    entries: [],
-  })
-  const scope2 = await loader({
-    cwd: projDir,
-    environmentId: 'node:local',
-    trusted: true,
-    settings: {
-      model: 'other/model',
-      mcpServers: { docs: { command: 'node', args: ['-e', ''] } },
-    },
-    projectSettings: {},
-    entries: [],
-  })
-  const exts1 = await scope1.load()
-  const exts2 = await scope2.load()
-  const noopApi = {
-    cwd: projDir,
-    dataDir: dir.path,
-    config: scope1.extensionConfig.mcp ?? {},
-    logger: silentLogger,
-    registerTool: () => '',
-    unregisterTool: () => false,
-    onShutdown: () => {},
-    registerProvider: () => {},
-    registerCommand: () => {},
-    registerChannel: () => {},
-    on: () => () => {},
-  }
-  await exts1[0]!(noopApi)
-  await exts2[0]!(noopApi)
-  expect(acquireCount).toBe(2)
-  expect(pool.size).toBe(1)
-  await pool.dispose()
 })
 
 test('trusted non-local workspace discovers explicitly declared settings.skills and settings.prompts in both batched and fallback loaders', async () => {

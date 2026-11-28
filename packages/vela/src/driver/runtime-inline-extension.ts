@@ -256,7 +256,10 @@ export function createExtensionSessionView(params: {
   runId?: string
   projectId: string | null
   signal?: AbortSignal
-  buildSystem?: (sections?: Record<string, string>) => string
+  buildSystem?: (
+    sections?: Record<string, string>,
+    override?: string | null,
+  ) => string
   onNotify?: (message: string, level: 'info' | 'warning' | 'error') => void
   onSetActiveTools?: (names: string[] | undefined) => void
 }): ExtensionSession & {
@@ -296,8 +299,10 @@ export function createExtensionSessionView(params: {
         ...(entry.details === undefined ? {} : { details: entry.details }),
       }
     },
-    buildSystem: (sections?: Record<string, string>) =>
-      params.buildSystem?.(sections) ?? '',
+    buildSystem: (
+      sections?: Record<string, string>,
+      override?: string | null,
+    ) => params.buildSystem?.(sections, override) ?? '',
     notify: (message: string, level: 'info' | 'warning' | 'error' = 'info') => {
       if (params.onNotify) {
         params.onNotify(message, level)

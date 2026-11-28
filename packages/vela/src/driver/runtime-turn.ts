@@ -1,6 +1,5 @@
 import type { VelaDatabase } from '../db/index.ts'
 import type { DriverInboxItem, DriverTurnRequest } from '../runtime/driver.ts'
-import { enqueueInboxEvent } from '../runtime/inbox.ts'
 import type { BlobStore } from '../runtime/index.ts'
 import type { MemoryStore } from '../runtime/memory/index.ts'
 import type { ImageContent, UserContentPart } from '../shared/messages.ts'
@@ -24,7 +23,6 @@ import {
   lastActiveCustomMessageText,
 } from './runtime-resources.ts'
 import type { SessionStore } from './session/index.ts'
-import { messageText } from './session/message-queue.ts'
 import { expandEnvironmentSkill } from './skills/environment-skills.ts'
 import type { SkillDefinition } from './skills/loader.ts'
 import type { TokenTracker } from './usage/tracker.ts'
@@ -682,40 +680,6 @@ export async function prepareRuntimeTurnMessages(options: {
   messages.push(userMsg)
   tracker.addMessage(userMsg)
   return { userEntryId, hasHumanText: Boolean(dreamHumanText) }
-}
-
-/** Re-enqueues unconsumed in-memory `steer()` inputs into durable `inbox_events` when a turn exits before consuming them. */
-export function flushUnconsumedSteering(options: {
-  db: VelaDatabase
-  sessionId: string
-  projectId: string | null
-  unconsumed: readonly ModelMessage[]
-  wake: boolean
-  shouldWakeSession: boolean
-  wakeSession?: (sessionId: string) => void
-}): void {
-  if (options.unconsumed.length === 0) return
-  let insertedAny = false
-  for (const msg of options.unconsumed) {
-    const rawText = messageText(msg).trim()
-    const hasImages =
-      Array.isArray(msg.content) &&
-      msg.content.some((part) => part.type === 'image')
-    const text = rawText || (hasImages ? '[Image attachment]' : '')
-    if (!text) continue
-    const res = enqueueInboxEvent(options.db, {
-      sessionId: options.sessionId,
-      projectId: options.projectId,
-      source: 'user',
-      wake: options.wake,
-      passive: false,
-      payload: { type: 'user', text },
-    })
-    if (res.inserted) insertedAny = true
-  }
-  if (insertedAny && options.wake && options.shouldWakeSession) {
-    options.wakeSession?.(options.sessionId)
-  }
 }
 
 /** Reads persisted human-turn metadata for an already-started run during recovery/resume. */

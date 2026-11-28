@@ -88,8 +88,8 @@ export interface ExtensionAPI {
   /** Vela's data directory; an extension keeps its own data in `<dataDir>/<extension name>/` */
   readonly dataDir: string
   /**
-   * This extension's config section, looked up by extension name in `createVela({ extensionConfig })`
-   * (in the CLI, from `extensionConfig.<extension name>` in settings.json, with `$VAR` already
+   * This extension's config section, looked up by extension name in `createRuntime({ extensionConfig })`
+   * (in the CLI/daemon, from top-level sections or `extensionConfig.<extension name>` in `config.json`, with `$VAR` already
    * interpolated in strings). `{}` when there is no config.
    */
   readonly config: Readonly<Record<string, unknown>>

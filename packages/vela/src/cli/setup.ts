@@ -76,7 +76,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json] [-c | -r | --session <id> | --fork <id>] [--export <id> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--system-prompt <text|file>]... [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela daemon [start | stop | status | run]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
+  'Usage: vela [prompt...] [-p | --mode text|json] [-c | -r | --session <id> | --fork <id>] [--export <id> [output]] [--agent-dir <dir>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--system-prompt <text|file>]... [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela daemon [start | stop | status | run]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
 
 export const DAEMON_HELP = `vela daemon - manage the local single-writer Vela background daemon
 
@@ -193,7 +193,6 @@ Examples:
 Environment variables:
   OPENAI_API_KEY                API key for the built-in openai provider
   OPENAI_API_BASE_URL           Base URL for the built-in openai provider
-  OPENAI_API_MODEL_NAME         Default model id for openai when no --model / model is set
   ANTHROPIC_API_KEY             API key for the built-in anthropic provider
   OPENROUTER_API_KEY            API key for the built-in openrouter provider
   DEEPSEEK_API_KEY              API key for the built-in deepseek provider
@@ -478,6 +477,7 @@ export async function resolveTrust(options: {
   agentDir: string
   approve?: boolean
   interactive: boolean
+  noSession?: boolean
   trust?: VelaRuntime['trust']
 }): Promise<{ trusted: boolean; warning?: string }> {
   const { cwd, agentDir } = options
@@ -511,7 +511,16 @@ export async function resolveTrust(options: {
   if (options.trust) await options.trust.approve(cwd, trusted)
   return trusted
     ? { trusted }
-    : { trusted, warning: notTrusted(cwd, agentDir, 'this choice was saved') }
+    : {
+        trusted,
+        warning: notTrusted(
+          cwd,
+          agentDir,
+          options.noSession
+            ? 'not saved under --no-session'
+            : 'this choice was saved',
+        ),
+      }
 }
 
 function notTrusted(cwd: string, agentDir: string, reason: string): string {

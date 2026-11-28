@@ -271,7 +271,6 @@ Set `VELA_DEBUG=1` to see debug logs. In interactive mode they are appended to `
 | `VELA_OFFLINE` | `1`, `true` or `yes`: never download `rg` / `fd` for the search tools. See [Tools](tools.md). |
 | `OPENAI_API_KEY` | API key of the built-in `openai` provider. |
 | `OPENAI_API_BASE_URL` | Base URL of the built-in `openai` provider, for proxies and OpenAI-compatible services. |
-| `OPENAI_API_MODEL_NAME` | Fallback model: used as `openai/<name>` when neither `--model` nor `model` is set. |
 | `ANTHROPIC_API_KEY` | API key of the built-in `anthropic` provider. |
 | `OPENROUTER_API_KEY` | API key of the built-in `openrouter` provider. |
 | `DEEPSEEK_API_KEY` | API key of the built-in `deepseek` provider. |

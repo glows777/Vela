@@ -447,7 +447,7 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
       approve: async () => {},
     },
     oauthRegistrations: {
-      get: async () => internal?.registrations?.get('openai'),
+      get: async (p: string) => internal?.registrations?.get(p),
       set: async (p: string, r: never) => {
         internal?.registrations?.set(p, r)
       },
@@ -700,17 +700,17 @@ export function legacyVelaAsRuntime(velaInput: Vela | CoreVela): {
     },
     channels: {
       list: async () => [],
-      enable: async () => {
+      setEnabled: async () => {
         throw new Error(
-          'channels.enable is not supported in legacy test runtime',
+          'channels.setEnabled is not supported in legacy test runtime',
         )
       },
-      disable: async () => {
-        throw new Error(
-          'channels.disable is not supported in legacy test runtime',
-        )
-      },
-      health: async () => [],
+      chats: async () => [],
+      submit: async () => ({
+        outcome: 'not-sent' as const,
+        error: 'channels.submit is not supported in legacy test runtime',
+      }),
+      subscribe: () => () => {},
     },
     blobs: {
       get: async () => undefined,

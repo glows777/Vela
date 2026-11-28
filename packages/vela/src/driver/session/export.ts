@@ -112,7 +112,7 @@ function canonicalPath(path: string): string {
   return join(realpathSync(cur), ...suffix)
 }
 
-function assertSafeExportTarget(
+export function assertSafeExportTarget(
   dbPath: string,
   baseCwd: string,
   outputPath: string | undefined,

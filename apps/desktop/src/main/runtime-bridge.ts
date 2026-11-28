@@ -341,10 +341,12 @@ export async function deleteDesktopSession(
   const status = await runtime.sessions
     .status(session.id)
     .catch(() => undefined)
-  if (status?.activeRunId) {
-    await runtime.stop(session.id, 'Session deleted', {
-      expectedRunId: status.activeRunId,
-    })
+  if (status?.activeRunId || (status?.runningJobs ?? 0) > 0) {
+    await runtime.stop(
+      session.id,
+      'Session deleted',
+      status?.activeRunId ? { expectedRunId: status.activeRunId } : undefined,
+    )
   }
   return runtime.sessions.delete(session.id)
 }
@@ -359,7 +361,7 @@ export async function removeDesktopProject(
   if (!project || project.archived || larkProjectIds.has(project.id)) {
     throw new Error(`Unknown project ${input.projectId}`)
   }
-  return runtime.projects.remove(project.id)
+  return runtime.projects.remove(project.id, { deleteSessions: true })
 }
 
 export async function submitDesktopMessage(

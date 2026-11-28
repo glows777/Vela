@@ -75,13 +75,26 @@ function parseDockerDefinition(
   } as const
 }
 
+const envRegistryUpdaters = new WeakMap<
+  EnvironmentRegistry,
+  (next: unknown) => void
+>()
+
+/** Internal-only helper to hot-reload owner `environments` config for subsequent resolves without tearing down active sessions. */
+export function updateEnvironmentRegistryConfig(
+  registry: EnvironmentRegistry,
+  environments: unknown,
+): void {
+  envRegistryUpdaters.get(registry)?.(environments)
+}
+
 /**
  * Owns runtime execution environments (local metadata + Docker container lifecycle,
  * credential proxy bindings, and dead-container cache invalidation/re-probing).
  */
 export class EnvironmentRegistry {
   readonly dataDir: string
-  private readonly definitions: Record<string, unknown>
+  private definitions: Record<string, unknown>
   private readonly hostEnv: Record<string, string | undefined>
   private readonly guestPath?: string
   private readonly dockerHost?: string
@@ -91,6 +104,7 @@ export class EnvironmentRegistry {
     env: ExecutionEnv,
   ) => Promise<boolean>
   private readonly opened = new Map<string, Promise<ExecutionEnv>>()
+  private readonly retired = new Set<Promise<ExecutionEnv>>()
   private readonly locks = new Map<string, Promise<unknown>>()
   private readonly cleanups = new Set<Promise<void>>()
   private readonly cleanupErrors: unknown[] = []
@@ -130,8 +144,33 @@ export class EnvironmentRegistry {
     } else {
       if (!isRecord(options.environments))
         throw Error('Owner environments must be an object')
-      this.definitions = options.environments
+      this.definitions = { ...options.environments }
     }
+    envRegistryUpdaters.set(this, (nextEnvironments) => {
+      if (this.disposed) return
+      const nextDefs =
+        nextEnvironments === undefined
+          ? {}
+          : isRecord(nextEnvironments)
+            ? { ...nextEnvironments }
+            : undefined
+      if (!nextDefs) {
+        throw Error('Owner environments must be an object')
+      }
+      const prevDefs = this.definitions
+      const keys = new Set([...Object.keys(prevDefs), ...Object.keys(nextDefs)])
+      this.definitions = nextDefs
+      for (const name of keys) {
+        const prevRaw = JSON.stringify(prevDefs[name])
+        const nextRaw = JSON.stringify(nextDefs[name])
+        if (prevRaw === nextRaw) continue
+        const existing = this.opened.get(name)
+        if (existing) {
+          this.opened.delete(name)
+          this.retired.add(existing)
+        }
+      }
+    })
   }
 
   hasDockerEnvironments(): boolean {
@@ -261,8 +300,9 @@ export class EnvironmentRegistry {
     this.disposed = true
     this.disposing ??= (async () => {
       await Promise.allSettled([...this.locks.values()])
-      const pending = [...this.opened.values()]
+      const pending = [...this.opened.values(), ...this.retired.values()]
       this.opened.clear()
+      this.retired.clear()
       const results = await Promise.allSettled(pending)
       for (const result of results) {
         if (result.status === 'fulfilled') {

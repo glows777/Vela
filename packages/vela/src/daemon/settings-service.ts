@@ -468,6 +468,7 @@ export async function saveRuntimeModelSetup(params: {
       providers,
       memory,
       AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+      { blockLocalOnlyOAuth: params.blockLocalOnlyOAuth },
     )
   } catch (error) {
     const kept =

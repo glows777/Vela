@@ -418,7 +418,9 @@ test('protocol NDJSON parser decodes split multi-byte UTF-8 and rejects oversize
   const parseErrors: string[] = []
   const bounded = createNdjsonParser(
     () => {},
-    (err) => parseErrors.push(err instanceof Error ? err.message : String(err)),
+    (err) => {
+      parseErrors.push(err instanceof Error ? err.message : String(err))
+    },
     32,
   )
   bounded(Buffer.from(`${'x'.repeat(40)}\n`))

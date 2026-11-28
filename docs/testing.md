@@ -129,7 +129,7 @@ The built-in memory extension is always loaded, like in the CLI. Web and Lark ar
 
 Call `cleanupTestVelas()` in `afterEach`. It cleans up every handle not cleaned up yet, and fails the test if a faux script still has unused responses, so a test can't silently stop before the step it meant to reach. Use `tempDir()` for a directory shared by several Velas.
 
-An extension's `ui.notify()` with no UI becomes a `notify` event: `t.eventsOf('notify')`. Without `session.ui`, `confirm` returns `false` and `select` / `input` return `undefined`.
+An extension's `ui.notify()` without an interactive UI becomes a `notify` event: `t.eventsOf('notify')`.
 
 The slash-command dispatcher of the interactive CLI (`/context`, `/model`, ...) is not part of the package. Vela's own repository wraps `createTestVela()` with it in `test/support/vela.ts`.
 

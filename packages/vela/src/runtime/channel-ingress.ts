@@ -481,16 +481,19 @@ export async function ingestChannelMessageInRuntime(params: {
             ...(attachments.length ? { attachments } : {}),
           },
         })
+        const hostMessageId =
+          (msg.raw as { message?: { message_id?: string } } | undefined)
+            ?.message?.message_id ?? msg.messageId
         if (
           enqueued.inserted &&
           msg.senderId.startsWith('sdk:') &&
-          msg.messageId &&
+          hostMessageId &&
           msg.senderName
         ) {
           persistHostPostAuthorInTx(
             db,
             msg.channel,
-            msg.messageId,
+            hostMessageId,
             msg.senderName,
           )
         }

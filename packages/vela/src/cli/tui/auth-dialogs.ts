@@ -103,6 +103,8 @@ async function authPrompt(
     answer = await host.select(
       prompt.message,
       prompt.options.map((o) => ({ value: o.id, label: o.label })),
+      undefined,
+      prompt.signal,
     )
   else
     answer = await host.input(

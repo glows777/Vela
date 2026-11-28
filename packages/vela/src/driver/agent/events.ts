@@ -215,34 +215,6 @@ export type VelaEvent =
   | { type: 'audit'; toolName: string; path: string }
   /** An extension called ui.notify() in a session without a UI */
   | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
-  /** A channel received a message (channel session) */
-  | {
-      type: 'channel_message'
-      channel: string
-      senderId: string
-      senderName: string
-      text: string
-    }
-  /** A channel sent a reply */
-  | {
-      type: 'channel_reply'
-      channel: string
-      recipientId: string
-      text: string
-    }
-  /** A channel turn failed (including aborts); `feedback` marks a failed progress update instead */
-  | {
-      type: 'channel_error'
-      channel: string
-      senderId: string
-      error: unknown
-      aborted: boolean
-      /**
-       * `feedback`: updating the user-visible progress (card, acknowledgement) failed. The turn may
-       * still be running and delivering its answer, so this is not a turn failure.
-       */
-      source?: 'feedback'
-    }
 
 export type VelaEventListener = (event: VelaEvent) => void
 

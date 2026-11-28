@@ -60,7 +60,7 @@ export interface TestVelaOptions {
   cwd?: string
   /** Data directory relative to cwd, default `.vela-data` (persistent: a new TestVela on the same cwd resumes sessions) */
   dataDir?: string
-  /** Optional pre-opened SQLite database to share */
+  /** @internal Optional pre-opened SQLite database to share */
   db?: VelaDatabase
   /** Force in-memory SQLite persistence (`--no-session`) */
   ephemeralSessions?: boolean

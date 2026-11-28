@@ -1,5 +1,5 @@
 /**
- * Runtime limits and thresholds. The defaults are what the CLI has always used; createVela({ limits })
+ * Runtime limits and thresholds. The defaults are what the CLI has always used; `createRuntime({ limits })`
  * can override some of them. Tests use this to drop retry backoff to 0 and shrink compaction
  * thresholds instead of building inputs of over 100k tokens.
  */

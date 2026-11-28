@@ -67,6 +67,7 @@ export interface DriverSharedState {
   >
   activeAbort: Map<string, AbortController>
   activeSteering: Map<string, ModelMessage[]>
+  activeSteeringInboxIds: WeakMap<ModelMessage, string>
   activeRunMeta: Map<string, ActiveRunMeta>
   sessionBackgrounds: Map<string, RuntimeBackgroundController>
   pendingBashBySession: Map<string, BashExecutionEntry[]>

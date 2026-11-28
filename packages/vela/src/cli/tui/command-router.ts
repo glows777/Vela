@@ -94,7 +94,13 @@ export async function submitInteractiveInput(
       return
     case '/resume': {
       if (host.busyNotice()) return
-      const id = await host.pickSession()
+      let id: string | undefined
+      try {
+        id = await host.pickSession()
+      } catch (error) {
+        host.addNotice(errorMessage(error), 'error')
+        return
+      }
       if (id)
         await host
           .switchSession(id, true)
@@ -106,21 +112,31 @@ export async function submitInteractiveInput(
         host.addNotice(`Session name: ${session.name ?? '(unnamed)'}`)
         return
       }
-      await session.rename(args)
-      host.addNotice(`Session name: ${args}`, 'dim')
-      host.requestRender()
+      try {
+        await session.rename(args)
+        host.addNotice(`Session name: ${args}`, 'dim')
+        host.requestRender()
+      } catch (error) {
+        host.addNotice(errorMessage(error), 'error')
+      }
       return
     case '/model':
       if (!args) {
-        await host.selectModel()
+        await host
+          .selectModel()
+          .catch((error) => host.addNotice(errorMessage(error), 'error'))
         return
       }
       break
     case '/login':
-      await loginCommand(host.authHost(), args)
+      await loginCommand(host.authHost(), args).catch((error) =>
+        host.addNotice(errorMessage(error), 'error'),
+      )
       return
     case '/logout':
-      await logoutCommand(host.authHost(), args)
+      await logoutCommand(host.authHost(), args).catch((error) =>
+        host.addNotice(errorMessage(error), 'error'),
+      )
       return
     case '/thinking':
       if (!args) {
@@ -137,13 +153,19 @@ export async function submitInteractiveInput(
       }
       break
     case '/tree':
-      await treeCommand(host.treeHost())
+      await treeCommand(host.treeHost()).catch((error) =>
+        host.addNotice(errorMessage(error), 'error'),
+      )
       return
     case '/fork':
-      await forkCommand(host.treeHost())
+      await forkCommand(host.treeHost()).catch((error) =>
+        host.addNotice(errorMessage(error), 'error'),
+      )
       return
     case '/clone':
-      await forkCommand(host.treeHost(), true)
+      await forkCommand(host.treeHost(), true).catch((error) =>
+        host.addNotice(errorMessage(error), 'error'),
+      )
       return
     case '/export':
       try {

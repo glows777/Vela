@@ -90,6 +90,9 @@ function resolveDaemonDocs() {
 }
 
 async function main(): Promise<void> {
+  delete process.env.ELECTRON_RUN_AS_NODE
+  const hostEnv: Record<string, string | undefined> = { ...process.env }
+  delete hostEnv.ELECTRON_RUN_AS_NODE
   const { agentDir, socketPath } = parseCliArgs(process.argv.slice(2))
   const defaultModel = await resolveDefaultModel()
   const docs = resolveDaemonDocs()
@@ -102,7 +105,7 @@ async function main(): Promise<void> {
     void startDaemonServer({
       ...(agentDir ? { agentDir } : {}),
       ...(socketPath ? { socketPath } : {}),
-      hostEnv: process.env,
+      hostEnv,
       registerSignalHandlers: true,
       onClosed: () => resolve(),
       ...(defaultModel ? { defaultModel } : {}),

@@ -5,7 +5,10 @@ import {
   resolveModelInput,
 } from '../providers/models/index.ts'
 import { loadModels } from '../providers/models-config.ts'
-import { getActiveChannelForSession } from '../runtime/control-ops.ts'
+import {
+  getActiveChannelForSession,
+  getBoundChannelForSession,
+} from '../runtime/control-ops.ts'
 import type { SessionRecord } from '../runtime/domain.ts'
 import {
   MEMORY_RULES,
@@ -170,6 +173,8 @@ export async function prepareSessionSetup(params: {
     resolvedChannelTools?.binding.channel ??
     getActiveChannelForSession(state.db, sessionId, runId) ??
     saved?.channel
+  const oauthChannel =
+    getBoundChannelForSession(state.db, sessionId, runId) ?? boundChannel
   const hasChannelBinding = Boolean(boundChannel)
   const effectiveEnv = resolveEffectiveEnv(state.options.hostEnv, override)
   const effectiveOffline =
@@ -324,7 +329,7 @@ export async function prepareSessionSetup(params: {
     saved?.model ??
     projectSettings?.settings.model ??
     state.reloadable.defaultModel ??
-    activeModels.defaultRef(boundChannel)
+    activeModels.defaultRef(oauthChannel)
 
   let resolved: ResolvedModel | undefined
   let modelError: string | undefined
@@ -335,7 +340,7 @@ export async function prepareSessionSetup(params: {
     modelError = `No model configured for session ${sessionId}`
   } else {
     try {
-      resolved = resolveModelInput(activeModels, modelInput, () => boundChannel)
+      resolved = resolveModelInput(activeModels, modelInput, () => oauthChannel)
     } catch (error) {
       if (!allowNoModel) throw error
       modelError = error instanceof Error ? error.message : String(error)

@@ -349,6 +349,11 @@ export class DaemonLarkHost {
       this.configured = false
       this.lastConfigError = undefined
       this.lastStartError = undefined
+      await this.syncProjectAndBindings([]).catch((error) => {
+        logger.warn(
+          `[daemon] Failed clearing Lark bindings after config removal: ${errorMessage(error)}`,
+        )
+      })
       await this.unregisterIfRegistered()
       return
     }

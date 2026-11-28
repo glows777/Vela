@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { formatJsonParseError } from '../../config/index.ts'
 import { connectLarkSetup } from '../../lark/index.ts'
+import type { VelaRuntime } from '../../runtime-sdk-types.ts'
 import { saveLarkSection } from '../../settings.ts'
 
 interface Connection {
@@ -10,6 +11,7 @@ interface Connection {
   stop(): void
 }
 interface Host {
+  runtime?: VelaRuntime
   agentDir: string
   projectSettingsPath?: string
   input(
@@ -89,7 +91,16 @@ export async function larkSetup(host: Host): Promise<boolean> {
     return false
   }
   let connection: Connection | undefined
+  let pausedDaemonLark = false
   try {
+    if (host.runtime && !host.connect) {
+      const statuses = await host.runtime.channels.list().catch(() => [])
+      const lark = statuses.find((s) => s.name === 'lark')
+      if (lark?.enabled) {
+        await host.runtime.channels.setEnabled('lark', false).catch(() => {})
+        pausedDaemonLark = true
+      }
+    }
     connection = await (host.connect ?? connectLarkSetup)(
       id,
       secret,
@@ -116,6 +127,7 @@ export async function larkSetup(host: Host): Promise<boolean> {
         addChat: group.chatId,
         env: process.env,
       })
+      await host.runtime?.reloadConfig().catch(() => {})
     } catch (error) {
       host.addNotice(
         (error instanceof Error ? error.message : String(error)).replaceAll(
@@ -170,5 +182,9 @@ export async function larkSetup(host: Host): Promise<boolean> {
     return false
   } finally {
     connection?.stop()
+    if (pausedDaemonLark && host.runtime) {
+      await host.runtime.channels.setEnabled('lark', true).catch(() => {})
+      await host.runtime.reloadConfig().catch(() => {})
+    }
   }
 }

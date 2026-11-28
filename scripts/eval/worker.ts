@@ -582,10 +582,16 @@ export async function runAttempt(
           )
       }
     }
+    const rawEvent = event as unknown as {
+      type: string
+      source?: string
+      error?: unknown
+      text?: string
+    }
     // A failed progress update is not a failed scenario
-    if (event.type === 'channel_error' && event.source !== 'feedback')
-      channelError = event.error
-    if (exitScenario && event.type === 'channel_reply') {
+    if (rawEvent.type === 'channel_error' && rawEvent.source !== 'feedback')
+      channelError = rawEvent.error
+    if (exitScenario && rawEvent.type === 'channel_reply') {
       const topicRootId = topicRoots.find(
         (root) =>
           channelSessionId(paths.channelName, 'oc_group', root) === sessionId,
@@ -593,7 +599,7 @@ export async function runAttempt(
       evidence.deliveries.push({
         scope: topicRootId ? 'topic' : 'group',
         topicRootId,
-        text: event.text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
+        text: (rawEvent.text ?? '').replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
       })
     }
     if (event.type === 'compaction_end' && event.result && !event.aborted)

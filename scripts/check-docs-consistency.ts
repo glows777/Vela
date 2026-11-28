@@ -29,6 +29,16 @@ const RETIRED_OPERATIONAL_PATTERNS = [
     label: '@glows777/vela/legacy-desktop',
     pattern: /@glows777\/vela\/legacy-desktop|\blegacy-desktop\b/,
   },
+  {
+    label: 'retired channel_* tool',
+    pattern:
+      /\bchannel_(?:start_topic|list_topics|read_topic|message_topic|message_group|forward_to_topic|skip_reply|wait_for_input|send_file|subscriptions|routines|followups)\b/,
+  },
+  { label: 'session.ui', pattern: /\bsession\.ui\b/ },
+  {
+    label: 'top-level "local" config',
+    pattern: /top-level\s+["'`]local["'`]/i,
+  },
 ] as const
 
 const RETIREMENT_NOTICE_RE =
@@ -92,11 +102,18 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
   const userFacingFiles = new Set<string>(docFiles)
   for (const extra of [
     'README.md',
+    'packages/vela/README.md',
+    '.skills/verify-vela/SKILL.md',
     '.skills/verify-vela/core.md',
     '.skills/verify-vela/journeys.md',
   ]) {
     const abs = join(root, extra)
     if (existsSync(abs)) userFacingFiles.add(abs)
+  }
+  for await (const rel of new Glob('.skills/verify-vela/scripts/*.ts').scan(
+    root,
+  )) {
+    userFacingFiles.add(join(root, rel))
   }
   for await (const rel of new Glob('examples/**/*').scan(root)) {
     userFacingFiles.add(join(root, rel))

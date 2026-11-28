@@ -34,8 +34,8 @@ export async function runPrintMode(options: {
   const { runtime, session, messages, mode } = options
   let writing = Promise.resolve()
   let lastReply = ''
-  let lastUserRunId: string | undefined
-  let userRunFailed = false
+  let activeRunId: string | undefined
+  let activeRunFailed = false
   let failure:
     | {
         message: string
@@ -59,11 +59,12 @@ export async function runPrintMode(options: {
     if (mode === 'json') {
       enqueueJsonLine(jsonEvent(event))
     }
-    if (event.type === 'run_started' && event.trigger === 'user') {
-      lastUserRunId = event.runId
+    if (event.type === 'run_started') {
+      activeRunId = event.runId
+      activeRunFailed = false
     } else if (event.type === 'message_committed') {
       const msg = event.message as { role?: unknown; content?: unknown }
-      if (msg.role === 'assistant' && event.runId === lastUserRunId) {
+      if (msg.role === 'assistant' && event.runId === activeRunId) {
         lastReply = extractMessageText(msg.content)
       }
     } else if (event.type === 'notify' && mode === 'text') {
@@ -74,17 +75,17 @@ export async function runPrintMode(options: {
       )
     } else if (event.type === 'run_finished') {
       if (event.status === 'failed') {
-        if (event.runId === lastUserRunId) userRunFailed = true
+        if (event.runId === activeRunId) activeRunFailed = true
         failure ??= {
           message: event.error ?? 'Turn failed',
           kind: event.errorKind,
           errorHint: event.errorHint,
         }
       } else if (event.status === 'stopped') {
-        if (event.runId === lastUserRunId) userRunFailed = true
+        if (event.runId === activeRunId) activeRunFailed = true
         failure ??= { message: 'Stopped', kind: undefined }
       } else if (event.status === 'waiting_human') {
-        if (event.runId === lastUserRunId) userRunFailed = true
+        if (event.runId === activeRunId) activeRunFailed = true
         failure ??= {
           message: 'Waiting for human approval or input',
           kind: undefined,
@@ -134,7 +135,7 @@ export async function runPrintMode(options: {
       }
       if (failure) break
     }
-    if (mode === 'text' && lastReply && !userRunFailed) {
+    if (mode === 'text' && lastReply && !activeRunFailed && !failure) {
       await writeStdout(`${lastReply}\n`)
     }
     if (failure) {

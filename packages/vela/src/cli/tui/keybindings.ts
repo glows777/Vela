@@ -59,15 +59,20 @@ export function wireInteractiveKeys(
     if (session.isBashRunning) {
       void host.runtime.sessions.abortBash(session.id).catch(() => {})
     } else if (session.isRunning) {
-      void host.restoreQueue({ abort: true })
+      void host
+        .restoreQueue({ abort: true })
+        .catch((error) => host.addNotice(errorMessage(error), 'error'))
     } else if (editor.getText().trimStart().startsWith('!')) {
       editor.setText('')
     }
   })
   actions.set('dequeue', () => {
-    void host.restoreQueue().then((moved) => {
-      if (!moved) host.addNotice('No queued messages', 'dim')
-    })
+    void host
+      .restoreQueue()
+      .then((moved) => {
+        if (!moved) host.addNotice('No queued messages', 'dim')
+      })
+      .catch((error) => host.addNotice(errorMessage(error), 'error'))
   })
   actions.set('clear', () => {
     const now = Date.now()
@@ -96,9 +101,15 @@ export function wireInteractiveKeys(
     }
     const next =
       levels[(levels.indexOf(session.thinkingLevel) + 1) % levels.length]!
-    void host.setThinking(next)
+    void host
+      .setThinking(next)
+      .catch((error) => host.addNotice(errorMessage(error), 'error'))
   })
-  actions.set('selectModel', () => void host.selectModel())
+  actions.set('selectModel', () => {
+    void host
+      .selectModel()
+      .catch((error) => host.addNotice(errorMessage(error), 'error'))
+  })
   actions.set('cycleModelForward', () => host.cycleModel(1))
   actions.set('cycleModelBackward', () => host.cycleModel(-1))
   actions.set('expandTools', () => host.log.toggleExpanded())

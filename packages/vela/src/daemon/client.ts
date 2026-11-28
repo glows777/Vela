@@ -12,7 +12,7 @@ import {
   ensureDaemonRunning,
   stripTransientDaemonEnv,
 } from './launcher.ts'
-import { resolveDaemonPaths } from './paths.ts'
+import { assertSocketOwnership, resolveDaemonPaths } from './paths.ts'
 import {
   createNdjsonParser,
   DAEMON_PROTOCOL_VERSION,
@@ -62,9 +62,10 @@ interface ActiveClientLogin {
 export async function connectRuntime(
   options: ConnectRuntimeOptions = {},
 ): Promise<VelaRuntime> {
-  const hostEnv = options.hostEnv ?? {}
+  const hostEnv = options.hostEnv ?? process.env
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
   const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
+  const timeoutMs = options.timeoutMs ?? 15_000
 
   if (options.autoStart !== false) {
     await ensureDaemonRunning({
@@ -76,19 +77,31 @@ export async function connectRuntime(
         : {}),
       appVersion: options.appVersion,
       protocolVersion: options.protocolVersion,
-      timeoutMs: options.timeoutMs,
+      timeoutMs,
     })
   }
 
   const expectedProto = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION
-  const socket = await openSocket(paths.socketPath, options.timeoutMs ?? 15_000)
+  const socket = await openSocket(paths.socketPath, timeoutMs)
   const { runtime, verifyHello } = createSocketRuntimeClient(
     paths.agentDir,
     socket,
     options.onDisconnect,
   )
+  let helloTimer: ReturnType<typeof setTimeout> | undefined
   try {
-    const hello = await verifyHello()
+    const hello = await Promise.race([
+      verifyHello(),
+      new Promise<never>((_resolve, reject) => {
+        helloTimer = setTimeout(() => {
+          reject(
+            new Error(
+              `Timed out waiting for Vela daemon handshake at ${paths.socketPath}`,
+            ),
+          )
+        }, timeoutMs)
+      }),
+    ])
     if (hello.agentDir !== paths.agentDir) {
       throw new Error(
         `Socket ${paths.socketPath} belongs to ${hello.agentDir}, expected ${paths.agentDir}`,
@@ -99,10 +112,20 @@ export async function connectRuntime(
         `Daemon protocol version mismatch at ${paths.socketPath}: expected ${expectedProto}, got ${hello.protocolVersion}`,
       )
     }
+    if (
+      options.appVersion !== undefined &&
+      hello.appVersion !== options.appVersion
+    ) {
+      throw new Error(
+        `Daemon app version mismatch at ${paths.socketPath}: expected ${options.appVersion}, got ${hello.appVersion}`,
+      )
+    }
     return runtime
   } catch (error) {
     await runtime.dispose().catch(() => {})
     throw error
+  } finally {
+    clearTimeout(helloTimer)
   }
 }
 
@@ -110,6 +133,7 @@ async function openSocket(
   socketPath: string,
   timeoutMs: number,
 ): Promise<Socket> {
+  assertSocketOwnership(socketPath)
   return new Promise<Socket>((resolve, reject) => {
     const socket = createConnection(socketPath)
     let settled = false
@@ -266,12 +290,13 @@ function createSocketRuntimeClient(
         else
           login.signal?.addEventListener('abort', onLoginAbort, { once: true })
         login.prompts.set(msg.promptId, promptCtrl)
-        Promise.resolve(
-          login.interaction.prompt({
-            ...msg.prompt,
-            signal: promptCtrl.signal,
-          }),
-        )
+        Promise.resolve()
+          .then(() =>
+            login.interaction.prompt({
+              ...msg.prompt,
+              signal: promptCtrl.signal,
+            }),
+          )
           .then(
             (value) => {
               try {

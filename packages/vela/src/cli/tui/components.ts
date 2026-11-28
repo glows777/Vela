@@ -22,12 +22,14 @@ export interface DialogHost {
     title: string,
     items: SelectItem[],
     selected?: string,
+    signal?: AbortSignal,
   ): Promise<string | undefined>
   input(
     title: string,
     placeholder?: string,
     signal?: AbortSignal,
     secret?: boolean,
+    allowEmpty?: boolean,
   ): Promise<string | undefined>
 }
 

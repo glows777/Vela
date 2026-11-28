@@ -205,14 +205,6 @@ writeFileSync(join(evidence, 'config-serve.json'), readFileSync(settingsPath), {
 })
 
 const replyFile = join(evidence, 'replies.txt')
-const extension = join(work, 'fixture-channel.ts')
-writeFileSync(
-  extension,
-  `import { appendFileSync } from 'node:fs';
-export default vela => { let handler; vela.registerChannel({ name: 'fixture', description: 'offline fixture',
-start() { setTimeout(() => handler({ channelId: 'chat', senderId: 'human', senderName: 'Fixture', text: 'Subscribe' }), 0) },
-stop() {}, onMessage(next) { handler = next }, async send(message) { appendFileSync(${JSON.stringify(replyFile)}, message.text + '\\n') } }); }`,
-)
 const scenario = join(work, 'scenario.json')
 writeFileSync(
   scenario,
@@ -221,7 +213,7 @@ writeFileSync(
       {
         toolCalls: [
           {
-            name: 'channel_subscriptions',
+            name: 'subscriptions',
             input: {
               action: 'create',
               source: 'github',
@@ -235,9 +227,67 @@ writeFileSync(
     ],
   }),
 )
-const proc = Bun.spawn([...cli, 'serve', '--no-extensions', '-e', extension], {
+const daemonRunner = join(work, 'daemon-fixture.mjs')
+writeFileSync(
+  daemonRunner,
+  `import { appendFileSync, readFileSync } from 'node:fs'
+import { startDaemonServer } from '@glows777/vela'
+import { createFauxModel } from '@glows777/vela/testing'
+
+const url = ${JSON.stringify(`http://127.0.0.1:${port}/events/github`)}
+const scenario = JSON.parse(readFileSync(${JSON.stringify(scenario)}, 'utf8'))
+const handle = await startDaemonServer({
+  agentDir: process.env.VELA_DIR,
+  hostEnv: process.env,
+  defaultModel: createFauxModel(scenario),
+  enableLark: false,
+  enableWebhooks: true,
+  registerSignalHandlers: true,
+  onClosed: () => process.exit(0),
+})
+const project = await handle.runtime.projects.create({
+  name: 'Fixture',
+  location: { environment: 'local', cwd: ${JSON.stringify(work)} },
+  hubSessionId: true,
+})
+await handle.runtime.bindings.upsert({
+  channel: 'fixture',
+  externalId: 'chat',
+  kind: 'group',
+  projectId: project.id,
+  sessionId: project.hubSessionId,
+  enabled: true,
+})
+await handle.runtime.registerChannel({
+  name: 'fixture',
+  async start(ctx) {
+    setTimeout(() => {
+      void ctx.ingest({
+        channel: 'fixture',
+        dedupeKey: 'fixture-msg-1',
+        externalChatId: 'chat',
+        kind: 'group',
+        senderId: 'human',
+        senderName: 'Fixture',
+        text: 'Subscribe',
+        mentioned: true,
+        wake: true,
+        timestamp: new Date().toISOString(),
+      })
+    }, 0)
+  },
+  async stop() {},
+  async deliver(message) {
+    appendFileSync(${JSON.stringify(replyFile)}, message.text + '\\n')
+    return { externalMessageId: 'out-' + Date.now() }
+  },
+})
+process.stderr.write(url + '\\n')
+`,
+)
+const proc = Bun.spawn([process.execPath, '--no-env-file', daemonRunner], {
   cwd: work,
-  env: { ...env, VELA_MODEL: `faux:${scenario}` },
+  env,
   stdin: 'ignore',
   stdout: 'pipe',
   stderr: 'pipe',
@@ -292,18 +342,18 @@ try {
   await proc.exited
   clearTimeout(timeout)
   await reading
-  writeFileSync(join(evidence, 'serve.stderr'), stderr)
+  writeFileSync(join(evidence, 'daemon.stderr'), stderr)
   writeFileSync(
-    join(evidence, 'serve.stdout'),
+    join(evidence, 'daemon.stdout'),
     await new Response(proc.stdout).text(),
   )
-  writeFileSync(join(evidence, 'serve.exit'), String(proc.exitCode))
+  writeFileSync(join(evidence, 'daemon.exit'), String(proc.exitCode))
 }
 assert.equal(proc.exitCode, 0)
-assert.equal(readFileSync(join(evidence, 'serve.stdout'), 'utf8'), '')
+assert.equal(readFileSync(join(evidence, 'daemon.stdout'), 'utf8'), '')
 assert.equal(await fetch(url).catch(() => undefined), undefined)
 console.log(
-  'PASS packed serve: saved receiver settings, signed HTTP, subscribed reply, SIGTERM and closed port',
+  'PASS packed webhook daemon: saved receiver settings, signed HTTP, subscribed reply, SIGTERM and closed port',
 )
 console.log(
   'LIMITS: gh API, channel transport and model are simulated; no live GitHub permissions, tunnel, delivery or model behavior verified.',
