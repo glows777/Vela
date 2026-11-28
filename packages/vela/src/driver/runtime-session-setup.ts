@@ -322,30 +322,129 @@ export async function prepareSessionSetup(params: {
         }
       : undefined
 
-  const specialModel = state.specialModels.get(sessionId)
-  const modelInput: ModelInput | undefined =
-    specialModel?.model ??
+  const explicitDefaultModel = state.reloadable.defaultModel !== undefined
+  const envRecord = override?.recordPath ?? state.options.hostEnv?.VELA_RECORD
+  const baseModelInput: ModelInput | undefined =
     override?.model ??
     saved?.model ??
     projectSettings?.settings.model ??
     state.reloadable.defaultModel ??
+    (!explicitDefaultModel ? state.options.hostEnv?.VELA_MODEL : undefined) ??
     activeModels.defaultRef(oauthChannel)
 
+  const isSpecialRef =
+    typeof baseModelInput === 'string' &&
+    (baseModelInput === 'mock' || baseModelInput.startsWith('faux:'))
+
+  let specialModel: RuntimeSpecialModelHandle | undefined
   let resolved: ResolvedModel | undefined
   let modelError: string | undefined
-  if (!modelInput) {
+
+  if (isSpecialRef) {
+    const envModel = baseModelInput as string
+    if (state.specialModels.has(sessionId)) {
+      const prev = state.specialModelSources.get(sessionId)
+      if (
+        prev &&
+        prev.envModel === envModel &&
+        prev.envRecord === envRecord &&
+        prev.oauthChannel === oauthChannel
+      ) {
+        specialModel = state.specialModels.get(sessionId)
+      } else {
+        const stale = state.specialModels.get(sessionId)
+        state.specialModels.delete(sessionId)
+        state.specialModelSources.delete(sessionId)
+        await stale?.flush?.().catch(() => {})
+      }
+    }
+    if (!specialModel && state.options.resolveSpecialModel) {
+      specialModel = await state.options.resolveSpecialModel({
+        modelRef: envModel,
+        recordPath: envRecord,
+      })
+      if (specialModel) {
+        state.specialModels.set(sessionId, specialModel)
+        state.specialModelSources.set(sessionId, {
+          envModel,
+          envRecord,
+          oauthChannel,
+        })
+      }
+    }
+  }
+
+  const initialModelInput = specialModel?.model ?? baseModelInput
+  if (!initialModelInput) {
     if (!allowNoModel) {
       throw new Error(`No model configured for session ${sessionId}`)
     }
     modelError = `No model configured for session ${sessionId}`
   } else {
     try {
-      resolved = resolveModelInput(activeModels, modelInput, () => oauthChannel)
+      resolved = resolveModelInput(
+        activeModels,
+        initialModelInput,
+        () => oauthChannel,
+      )
     } catch (error) {
       if (!allowNoModel) throw error
       modelError = error instanceof Error ? error.message : String(error)
     }
   }
+
+  if (
+    !isSpecialRef &&
+    resolved &&
+    envRecord &&
+    state.options.resolveSpecialModel
+  ) {
+    const prev = state.specialModelSources.get(sessionId)
+    if (
+      state.specialModels.has(sessionId) &&
+      prev &&
+      prev.envModel === undefined &&
+      prev.envRecord === envRecord &&
+      prev.baseModelInput === baseModelInput &&
+      prev.oauthChannel === oauthChannel
+    ) {
+      specialModel = state.specialModels.get(sessionId)
+    } else {
+      const stale = state.specialModels.get(sessionId)
+      if (stale) {
+        state.specialModels.delete(sessionId)
+        state.specialModelSources.delete(sessionId)
+        await stale.flush?.().catch(() => {})
+      }
+      specialModel = await state.options.resolveSpecialModel({
+        modelRef: override?.model,
+        recordPath: envRecord,
+        fallbackModel: resolved.model,
+      })
+      if (specialModel) {
+        state.specialModels.set(sessionId, specialModel)
+        state.specialModelSources.set(sessionId, {
+          envModel: undefined,
+          envRecord,
+          baseModelInput,
+          oauthChannel,
+        })
+      }
+    }
+    if (specialModel) {
+      resolved = { ...resolved, model: specialModel.model }
+    }
+  } else if (
+    !isSpecialRef &&
+    !envRecord &&
+    state.specialModels.has(sessionId)
+  ) {
+    const stale = state.specialModels.get(sessionId)
+    state.specialModels.delete(sessionId)
+    state.specialModelSources.delete(sessionId)
+    await stale?.flush?.().catch(() => {})
+  }
+  const modelInput = specialModel?.model ?? initialModelInput
 
   const thinkingLevel =
     override?.thinkingLevel ??

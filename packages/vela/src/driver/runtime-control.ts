@@ -1,9 +1,9 @@
+import { join } from 'node:path'
 import { canonicalLocalPath } from '../db/trust.ts'
 import { supportedThinkingLevels } from '../providers/models/catalog.ts'
 import {
   limitsForModel,
   type ModelInfo,
-  resolveModelInput,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../providers/models/index.ts'
@@ -399,6 +399,12 @@ export function createRuntimeControl(
         await store.flush()
       }
 
+      const existingSpecial = state.specialModels.get(sessionId)
+      if (existingSpecial) {
+        state.specialModels.delete(sessionId)
+        state.specialModelSources.delete(sessionId)
+        await existingSpecial.flush?.().catch(() => {})
+      }
       if (
         override.model === 'mock' ||
         override.model?.startsWith('faux:') ||
@@ -407,51 +413,18 @@ export function createRuntimeControl(
         if (!state.options.resolveSpecialModel) {
           throw new Error('Special test/record models are unavailable here')
         }
-        const existingSpecial = state.specialModels.get(sessionId)
-        if (existingSpecial) {
-          state.specialModels.delete(sessionId)
-          await existingSpecial.flush?.().catch(() => {})
-        }
-        const activeModels = resolveSessionModels(state, override)
-        let fallbackModel:
-          | ReturnType<typeof resolveModelInput>['model']
-          | undefined
-        if (
-          override.recordPath &&
-          override.model !== 'mock' &&
-          !override.model?.startsWith('faux:')
-        ) {
-          const candidateRef =
-            override.model ??
-            saved?.model ??
-            (typeof state.reloadable.defaultModel === 'string'
-              ? state.reloadable.defaultModel
-              : undefined)
-          const oauthChannel =
-            getBoundChannelForSession(state.db, sessionId) ?? saved?.channel
-          const fallbackCandidate =
-            candidateRef ?? activeModels.defaultRef(oauthChannel)
-          fallbackModel = fallbackCandidate
-            ? resolveModelInput(
-                activeModels,
-                fallbackCandidate,
-                () => oauthChannel,
-              ).model
-            : undefined
-        }
-        const special = await state.options.resolveSpecialModel({
-          modelRef: override.model,
-          recordPath: override.recordPath,
-          fallbackModel,
-        })
-        if (special) {
-          state.specialModels.set(sessionId, special)
-        }
-      } else {
-        const existingSpecial = state.specialModels.get(sessionId)
-        if (existingSpecial) {
-          state.specialModels.delete(sessionId)
-          await existingSpecial.flush?.().catch(() => {})
+        if (override.model === 'mock' || override.model?.startsWith('faux:')) {
+          const special = await state.options.resolveSpecialModel({
+            modelRef: override.model,
+            recordPath: override.recordPath,
+          })
+          if (special) {
+            state.specialModels.set(sessionId, special)
+            state.specialModelSources.set(sessionId, {
+              envModel: override.model,
+              envRecord: override.recordPath,
+            })
+          }
         }
       }
 
@@ -495,6 +468,7 @@ export function createRuntimeControl(
       const existingSpecial = state.specialModels.get(sessionId)
       if (existingSpecial) {
         state.specialModels.delete(sessionId)
+        state.specialModelSources.delete(sessionId)
         await existingSpecial.flush?.().catch(() => {})
       }
       if (override) {
@@ -719,7 +693,14 @@ export function createRuntimeControl(
       )
       const override = state.sessionOverrides.get(sessionId)
       const resolvedBaseCwd = baseCwd ?? override?.cwd ?? process.cwd()
-      assertSafeExportTarget(state.db.path, resolvedBaseCwd, outputPath)
+      assertSafeExportTarget(
+        join(state.options.agentDir, 'vela.db'),
+        resolvedBaseCwd,
+        outputPath,
+      )
+      if (state.db.path && state.db.path !== ':memory:') {
+        assertSafeExportTarget(state.db.path, resolvedBaseCwd, outputPath)
+      }
       const location = saved?.location ?? {
         environment: 'local' as const,
         cwd: resolvedBaseCwd,

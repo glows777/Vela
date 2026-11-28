@@ -309,14 +309,12 @@ export function reconcileLocalMessages(
     }
     pendingUnmatched.push(m)
   }
-  const latestIncomingTime = incoming.at(-1)?.createdAt
   const incomingIds = new Set(incoming.map((m) => m.id))
   const newerLive = existingList.filter(
     (m) =>
       !m.id.startsWith('pending:') &&
       !incomingIds.has(m.id) &&
-      (liveSinceReadStart?.has(m.id) ||
-        (latestIncomingTime !== undefined && m.createdAt > latestIncomingTime)),
+      Boolean(liveSinceReadStart?.has(m.id)),
   )
   return byTime([...incoming, ...pendingUnmatched, ...newerLive])
 }

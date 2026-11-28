@@ -414,13 +414,15 @@ export async function ensureDaemonRunning(
           `Timed out stopping mismatched Vela daemon (pid ${target.pid ?? 'unknown'})`,
         )
       }
-      if (targetSocketPath !== paths.socketPath) {
-        removeStaleSocketFile(targetSocketPath)
-      }
       if (outcome === 'replaced') {
         const replacement = await probeDaemonHello(paths.socketPath, 500)
         assertMatchingAgentDir(replacement)
-        if (replacement && matches(replacement)) return replacement
+        if (replacement && matches(replacement)) {
+          if (targetSocketPath !== paths.socketPath) {
+            removeStaleSocketFile(targetSocketPath)
+          }
+          return replacement
+        }
         const liveOwner = readOwnerRecord(ownerPath)
         if (
           liveOwner?.pid &&
@@ -431,6 +433,9 @@ export async function ensureDaemonRunning(
             `Vela daemon was replaced concurrently by pid ${liveOwner.pid} with incompatible version/state`,
           )
         }
+      }
+      if (targetSocketPath !== paths.socketPath) {
+        removeStaleSocketFile(targetSocketPath)
       }
     }
 

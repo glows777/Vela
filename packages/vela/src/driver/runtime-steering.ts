@@ -152,7 +152,7 @@ export async function flushSessionSteering(params: {
     }
     standalone.push(msg)
   }
-  await flushUnconsumedSteering({
+  const residual = await flushUnconsumedSteering({
     db,
     blobs,
     sessionId,
@@ -162,6 +162,10 @@ export async function flushSessionSteering(params: {
     shouldWakeSession,
     wakeSession,
   })
+  if (residual.remaining.length > 0) {
+    deferredSteering.push(...residual.remaining)
+    throw residual.error
+  }
   if (
     standalone.length === 0 &&
     hasPreservedInbox &&
@@ -182,62 +186,72 @@ async function flushUnconsumedSteering(options: {
   wake: boolean
   shouldWakeSession: boolean
   wakeSession?: (sessionId: string) => void
-}): Promise<void> {
-  if (options.unconsumed.length === 0) return
+}): Promise<{ remaining: ModelMessage[]; error?: unknown }> {
+  if (options.unconsumed.length === 0) return { remaining: [] }
   let insertedAny = false
-  for (const msg of options.unconsumed) {
-    const rawText = messageText(msg).trim()
-    const imageParts = Array.isArray(msg.content)
-      ? msg.content.filter(
-          (part): part is { type: 'image'; data: string; mimeType: string } =>
-            part.type === 'image' && typeof part.data === 'string',
-        )
-      : []
-    const attachments: Array<{
-      kind: 'image'
-      blobId: string
-      name: string
-      mimeType: string
-      inlineOnly: boolean
-    }> = []
-    if (options.blobs && imageParts.length > 0) {
-      for (let i = 0; i < imageParts.length; i++) {
-        const img = imageParts[i]!
-        const mimeType = img.mimeType || 'image/png'
-        const ext = mimeType.split('/')[1] || 'png'
-        const blob = await options.blobs.storeInbound({
-          sessionId: options.sessionId,
-          ...(options.projectId ? { projectId: options.projectId } : {}),
-          filename: `steer-image-${i + 1}.${ext}`,
-          mimeType,
-          bytes: Buffer.from(img.data, 'base64'),
-        })
-        attachments.push({
-          kind: 'image',
-          blobId: blob.id,
-          name: blob.filename,
-          mimeType,
-          inlineOnly: true,
-        })
+  for (let idx = 0; idx < options.unconsumed.length; idx++) {
+    const msg = options.unconsumed[idx]!
+    try {
+      const rawText = messageText(msg).trim()
+      const imageParts = Array.isArray(msg.content)
+        ? msg.content.filter(
+            (part): part is { type: 'image'; data: string; mimeType: string } =>
+              part.type === 'image' && typeof part.data === 'string',
+          )
+        : []
+      const attachments: Array<{
+        kind: 'image'
+        blobId: string
+        name: string
+        mimeType: string
+        inlineOnly: boolean
+      }> = []
+      if (options.blobs && imageParts.length > 0) {
+        for (let i = 0; i < imageParts.length; i++) {
+          const img = imageParts[i]!
+          const mimeType = img.mimeType || 'image/png'
+          const ext = mimeType.split('/')[1] || 'png'
+          const blob = await options.blobs.storeInbound({
+            sessionId: options.sessionId,
+            ...(options.projectId ? { projectId: options.projectId } : {}),
+            filename: `steer-image-${i + 1}.${ext}`,
+            mimeType,
+            bytes: Buffer.from(img.data, 'base64'),
+          })
+          attachments.push({
+            kind: 'image',
+            blobId: blob.id,
+            name: blob.filename,
+            mimeType,
+            inlineOnly: true,
+          })
+        }
       }
+      const text =
+        rawText || (imageParts.length > 0 ? '[Image attachment]' : '')
+      if (!text) continue
+      const res = enqueueInboxEvent(options.db, {
+        sessionId: options.sessionId,
+        projectId: options.projectId,
+        source: 'user',
+        wake: options.wake,
+        passive: false,
+        payload: {
+          type: 'user',
+          text,
+          ...(attachments.length > 0 ? { attachments } : {}),
+        },
+      })
+      if (res.inserted) insertedAny = true
+    } catch (error) {
+      if (insertedAny && options.wake && options.shouldWakeSession) {
+        options.wakeSession?.(options.sessionId)
+      }
+      return { remaining: options.unconsumed.slice(idx), error }
     }
-    const text = rawText || (imageParts.length > 0 ? '[Image attachment]' : '')
-    if (!text) continue
-    const res = enqueueInboxEvent(options.db, {
-      sessionId: options.sessionId,
-      projectId: options.projectId,
-      source: 'user',
-      wake: options.wake,
-      passive: false,
-      payload: {
-        type: 'user',
-        text,
-        ...(attachments.length > 0 ? { attachments } : {}),
-      },
-    })
-    if (res.inserted) insertedAny = true
   }
   if (insertedAny && options.wake && options.shouldWakeSession) {
     options.wakeSession?.(options.sessionId)
   }
+  return { remaining: [] }
 }

@@ -125,6 +125,7 @@ export function claimNextTurnInDb(params: {
           type: 'run_started',
           runId: orphaned.id,
           trigger: orphaned.trigger,
+          inboxEventIds: existingInputs.map((item) => item.id),
         },
       })
       return {
@@ -206,6 +207,7 @@ export function claimNextTurnInDb(params: {
           type: 'run_started',
           runId: waitingRun.id,
           trigger: 'approval',
+          inboxEventIds: inputs.map((item) => item.id),
         },
       })
       return {

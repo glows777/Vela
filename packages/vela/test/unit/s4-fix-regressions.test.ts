@@ -1324,3 +1324,357 @@ test('waiting_human turn awaits image steer blob flush and VELA_RECORD records a
   expect(existsSync(recordPath)).toBe(true)
   expect(readFileSync(recordPath, 'utf8').length).toBeGreaterThan(0)
 })
+
+test('Round 2 regressions: export guard, steering preservation, slow adapter wake, docker key-order, print-mode, project remove teardown, and outbox eviction', async () => {
+  const agentDir = tempDir('vela-r2-all-')
+
+  // #6: flushSessionSteering preserves failing item AND trailing messages on blob write error
+  const dbPath = join(agentDir, 'steer.db')
+  const steerDb = openDatabase({ path: dbPath })
+  cleanups.push(() => steerDb.close())
+  const now = new Date().toISOString()
+  new SessionStoreControl(steerDb).create({
+    id: 's-fail',
+    location: { environment: 'local', cwd: agentDir },
+  })
+  const deferred: ReturnType<typeof buildSteeringMessage>[] = [
+    buildSteeringMessage('img-msg', [{ data: 'AA==', mimeType: 'image/png' }]),
+    buildSteeringMessage('trailing-text'),
+  ]
+  const failingBlobs = {
+    storeInbound: async () => {
+      throw new Error('disk full')
+    },
+  } as unknown as BlobStore
+  await expect(
+    flushSessionSteering({
+      db: steerDb,
+      blobs: failingBlobs,
+      sessionId: 's-fail',
+      projectId: null,
+      activeSteering: new Map(),
+      activeSteeringInboxIds: new WeakMap(),
+      deferredSteering: deferred,
+      wake: true,
+      shouldWakeSession: true,
+    }),
+  ).rejects.toThrow('disk full')
+  expect(deferred.length).toBe(2)
+
+  // #16: updateEnvironmentRegistryConfig ignores Docker definition key ordering
+  const envReg = createEnvironmentRegistryForTest({
+    dataDir: agentDir,
+    environments: { box: { image: 'alpine:3', network: 'none' } },
+    probeAlive: async () => true,
+  })
+  // Simulate opened definition in registry map cleanly via update without key diff throwing
+  expect(() =>
+    updateEnvironmentRegistryConfig(envReg, {
+      box: { network: 'none', image: 'alpine:3' },
+    }),
+  ).not.toThrow()
+
+  // #14: runPrintMode fails cleanly when accepted prompt does not start a run (waiting_human)
+  const printRt = createRuntime({
+    agentDir: tempDir('vela-r2-print-'),
+    defaultModel: createFauxModel({
+      responses: [
+        fauxToolCall('bash', { command: 'echo wait' }),
+        fauxText('done'),
+      ],
+    }),
+    toolApprovalCheck: async () => ({
+      requireApproval: true,
+      summary: 'Need approval',
+    }),
+  })
+  cleanups.push(() => printRt.dispose())
+  const waitSess = await printRt.sessions.create({
+    location: { environment: 'local', cwd: agentDir },
+  })
+  await printRt.prompt(waitSess.id, { text: 'trigger approval' })
+  await printRt.waitForIdle(waitSess.id)
+  const printExit = await runPrintMode({
+    runtime: printRt,
+    session: {
+      id: waitSess.id,
+      prompt: async (text: string) => printRt.prompt(waitSess.id, { text }),
+      waitForSettled: async () => printRt.waitForIdle(waitSess.id),
+      refresh: async () => {
+        throw new Error('unused')
+      },
+    } as never,
+    messages: ['second message while waiting_human'],
+    mode: 'text',
+  })
+  expect(printExit).toBe(1)
+
+  // #5: ephemeralSessions (--no-session) still blocks exporting over owner <agentDir>/vela.db
+  const noSessDir = tempDir('vela-r2-nosess-')
+  const persistRt = createRuntime({
+    agentDir: noSessDir,
+    defaultModel: createFauxModel({ responses: [fauxText('ok')] }),
+  })
+  await persistRt.ready()
+  await persistRt.dispose()
+  const ephemRt = createRuntime({
+    agentDir: noSessDir,
+    ephemeralSessions: true,
+    defaultModel: createFauxModel({ responses: [fauxText('ephem')] }),
+  })
+  cleanups.push(() => ephemRt.dispose())
+  const ephemSess = await ephemRt.sessions.create({
+    location: { environment: 'local', cwd: noSessDir },
+  })
+  await ephemRt.prompt(ephemSess.id, { text: 'hi' })
+  await ephemRt.waitForIdle(ephemSess.id)
+  await expect(
+    ephemRt.sessions.export(ephemSess.id, 'jsonl', join(noSessDir, 'vela.db')),
+  ).rejects.toThrow(/vela\.db|database/i)
+
+  // #7: channel registration wakes deferred pending wakeable inbox rows
+  const slowDir = tempDir('vela-r2-slow-')
+  const slowRt = createRuntime({
+    agentDir: slowDir,
+    defaultModel: createFauxModel({
+      responses: [fauxText('woken-after-ready')],
+    }),
+  })
+  cleanups.push(() => slowRt.dispose())
+  const slowProj = await slowRt.projects.create({ name: 'Slow', cwd: slowDir })
+  const slowSess = await slowRt.sessions.create({
+    projectId: slowProj.id,
+    location: { environment: 'local', cwd: slowDir },
+  })
+  await slowRt.bindings.upsert({
+    projectId: slowProj.id,
+    sessionId: slowSess.id,
+    channel: 'deferred-ch',
+    externalId: 'chat-def',
+    kind: 'direct',
+    enabled: true,
+  })
+  const slowDb = openDatabase({ path: join(slowDir, 'vela.db') })
+  cleanups.push(() => slowDb.close())
+  enqueueInboxEvent(slowDb, {
+    sessionId: slowSess.id,
+    projectId: slowProj.id,
+    source: 'webhook',
+    wake: true,
+    passive: false,
+    payload: { type: 'webhook', text: 'deferred hook' },
+  })
+  await slowRt.registerChannel({
+    name: 'deferred-ch',
+    async start() {},
+    async stop() {},
+    async deliver() {
+      return { externalMessageId: 'ok' }
+    },
+  })
+  await slowRt.waitForIdle(slowSess.id)
+  const slowMsgs = await slowRt.sessions.messages({ sessionId: slowSess.id })
+  expect(
+    slowMsgs.messages.some((m) =>
+      JSON.stringify(m.content).includes('woken-after-ready'),
+    ),
+  ).toBe(true)
+
+  // #15: recordPath preserves object-valued defaultModel even when an eligible registry default exists
+  const recObjDir = tempDir('vela-r2-rec-obj-')
+  const recObjPath = join(recObjDir, 'obj-recorded.jsonl')
+  writeFileSync(
+    join(recObjDir, 'auth.json'),
+    JSON.stringify({ custom: { type: 'api_key', key: 'k' } }),
+    { mode: 0o600 },
+  )
+  const recObjRt = createRuntime({
+    agentDir: recObjDir,
+    defaultModel: createFauxModel({
+      responses: [fauxText('from-object-default')],
+    }),
+    providers: {
+      custom: {
+        models: [{ id: 'other-m', name: 'other-m' }],
+        authSource: (c) => (c ? 'api_key' : undefined),
+        createModel: () =>
+          createFauxModel({ responses: [fauxText('wrong-registry-default')] }),
+      },
+    },
+  })
+  cleanups.push(() => recObjRt.dispose())
+  const recObjSess = await recObjRt.sessions.create({
+    location: { environment: 'local', cwd: recObjDir },
+  })
+  await recObjRt.sessions.configure(recObjSess.id, { recordPath: recObjPath })
+  await recObjRt.prompt(recObjSess.id, { text: 'hello' })
+  await recObjRt.waitForIdle(recObjSess.id)
+  const recObjMsgs = await recObjRt.sessions.messages({
+    sessionId: recObjSess.id,
+  })
+  expect(JSON.stringify(recObjMsgs.messages)).toContain('from-object-default')
+  expect(JSON.stringify(recObjMsgs.messages)).not.toContain(
+    'wrong-registry-default',
+  )
+  expect(existsSync(recObjPath)).toBe(true)
+
+  // #20: LarkRuntimeProgressManager cancels evicted feedback when >512 awaitingOutbox entries accumulate
+  let deletedReactions = 0
+  let evictSub:
+    | ((
+        event: Parameters<
+          Parameters<NonNullable<ChannelAdapterContext['subscribeEvents']>>[0]
+        >[0],
+      ) => void)
+    | undefined
+  const evictTransport = makeMockLarkTransport({
+    async addReaction() {
+      return 'rx-1'
+    },
+    async removeReaction() {
+      deletedReactions += 1
+    },
+  })
+  const evictCtx: ChannelAdapterContext = {
+    async ingest() {},
+    subscribeEvents(fn) {
+      evictSub = fn
+      return () => {}
+    },
+    subscribeDeltas() {
+      return () => {}
+    },
+    listBindings: () => [
+      {
+        id: 'b-ev',
+        channel: 'lark',
+        externalId: 'oc_ev',
+        threadId: null,
+        kind: 'group',
+        projectId: 'p-ev',
+        sessionId: 's-ev-0',
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+  }
+  const evictMgr = new LarkRuntimeProgressManager(evictCtx, evictTransport, {
+    isChatEnabled: () => true,
+    isOwner: () => true,
+    logger: silentLogger,
+  })
+  evictMgr.start()
+  cleanups.push(() => evictMgr.stop())
+  for (let i = 0; i < 513; i++) {
+    const sid = 's-ev-0'
+    const rid = `r-ev-${i}`
+    evictMgr.noteAdmittedInbound({
+      inboxEventId: `in-${i}`,
+      externalChatId: 'oc_ev',
+      messageId: `om-user-${i}`,
+      text: 'hi',
+      isDirect: false,
+    })
+    evictSub?.({
+      seq: i * 2 + 1,
+      timestamp: now,
+      sessionId: sid,
+      projectId: 'p-ev',
+      runId: rid,
+      type: 'run_started',
+      trigger: 'channel',
+      inboxEventIds: [`in-${i}`],
+    })
+    evictSub?.({
+      seq: i * 2 + 2,
+      timestamp: now,
+      sessionId: sid,
+      runId: rid,
+      projectId: 'p-ev',
+      type: 'run_finished',
+      status: 'completed',
+      replyPending: true,
+    })
+  }
+  await new Promise((r) => setTimeout(r, 20))
+  expect(deletedReactions).toBeGreaterThanOrEqual(1)
+  await evictMgr.stop()
+
+  // #9: async custom driver trySteerInboxEvent reserves 'processing' and restores 'pending' on refusal
+  let resolveSteer!: (accepted: boolean) => void
+  const steerGate = new Promise<boolean>((r) => {
+    resolveSteer = r
+  })
+  let resolveTurn1!: () => void
+  const turn1Gate = new Promise<void>((r) => {
+    resolveTurn1 = r
+  })
+  cleanups.push(() => {
+    resolveTurn1?.()
+    resolveSteer?.(false)
+  })
+  const ranBatches: Array<Array<unknown>> = []
+  const asyncDrvDir = tempDir('vela-r2-drv-')
+  const asyncDrvRt = createRuntime({
+    agentDir: asyncDrvDir,
+    drivers: [
+      {
+        name: 'slow-steer-drv',
+        capabilities: {
+          recovery: 'turn',
+          executionEnv: 'managed',
+          steer: true,
+          approval: false,
+        },
+        async runTurn(req) {
+          ranBatches.push(req.inputs.map((i) => i.payload.text))
+          if (ranBatches.length === 1) await turn1Gate
+          return { status: 'completed', replyText: 'turn-done' }
+        },
+        steer() {
+          return steerGate
+        },
+      },
+    ],
+  })
+  cleanups.push(() => asyncDrvRt.dispose())
+  let slowCtx!: ChannelAdapterContext
+  await asyncDrvRt.registerChannel({
+    name: 'slowmock',
+    async start(ctx) {
+      slowCtx = ctx
+    },
+    async stop() {},
+    async deliver() {
+      return { externalMessageId: 'out' }
+    },
+  })
+  const slowDrvSess = await asyncDrvRt.sessions.create({
+    driver: 'slow-steer-drv',
+    location: { environment: 'local', cwd: agentDir },
+  })
+  await asyncDrvRt.prompt(slowDrvSess.id, { text: 'turn1' })
+  await new Promise((r) => setTimeout(r, 15))
+  const secondEv = await asyncDrvRt.prompt(slowDrvSess.id, {
+    text: 'steer-later',
+    wake: false,
+  })
+  const steerPromise = slowCtx.steerInboxEvent!(
+    slowDrvSess.id,
+    secondEv.eventId,
+    'steer-later',
+  )
+  resolveTurn1()
+  await asyncDrvRt.waitForIdle(slowDrvSess.id)
+  expect(ranBatches).toEqual([['turn1']])
+  resolveSteer(false)
+  expect(await steerPromise).toBe(false)
+  const checkDrvDb = openDatabase({ path: join(asyncDrvDir, 'vela.db') })
+  cleanups.push(() => checkDrvDb.close())
+  const rowAfterRefusal = checkDrvDb.get<{ status: string }>(
+    'SELECT status FROM inbox_events WHERE id = ?',
+    secondEv.eventId,
+  )
+  expect(rowAfterRefusal?.status).toBe('pending')
+})

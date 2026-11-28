@@ -81,6 +81,7 @@ if (args.daemon) {
       '../daemon/server.ts'
     )
     let resolveClosed!: () => void
+    let closedReason = 'dispose'
     const closed = new Promise<void>((resolvePromise) => {
       resolveClosed = resolvePromise
     })
@@ -89,10 +90,13 @@ if (args.daemon) {
         agentDir,
         hostEnv: env,
         logger,
-        onClosed: () => resolveClosed(),
+        onClosed: (reason) => {
+          closedReason = reason
+          resolveClosed()
+        },
       })
       await closed
-      process.exit(0)
+      process.exit(closedReason === 'shutdown_timeout' ? 1 : 0)
     } catch (error) {
       if (error instanceof DaemonAlreadyRunningError) {
         console.error(error.message)
@@ -545,12 +549,7 @@ try {
       onConfigured: () => {
         args.model = undefined
         args.thinking = undefined
-        cliOverride = buildCliSessionOverride(
-          args,
-          env,
-          cwd,
-          trust.trusted ? true : args.approve,
-        )
+        cliOverride = buildCliSessionOverride(args, env, cwd, args.approve)
       },
       onExit: async () => {
         await clearSessionOverrides?.().catch(() => {})

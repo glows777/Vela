@@ -70,7 +70,7 @@ export async function connectRuntime(
   if (options.autoStart !== false) {
     await ensureDaemonRunning({
       agentDir: paths.agentDir,
-      socketPath: paths.socketPath,
+      ...(options.socketPath ? { socketPath: options.socketPath } : {}),
       hostEnv: stripTransientDaemonEnv(hostEnv),
       ...(options.daemonCommand
         ? { daemonCommand: options.daemonCommand }

@@ -13,6 +13,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function deepEqualConfigValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false
+    }
+    return a.every((item, idx) => deepEqualConfigValue(item, b[idx]))
+  }
+  if (isRecord(a) && isRecord(b)) {
+    const keysA = Object.keys(a)
+    const keysB = Object.keys(b)
+    if (keysA.length !== keysB.length) return false
+    return keysA.every(
+      (key) => Object.hasOwn(b, key) && deepEqualConfigValue(a[key], b[key]),
+    )
+  }
+  return false
+}
+
 export interface EnvironmentRegistryOptions {
   dataDir: string
   environments?: unknown
@@ -161,9 +180,7 @@ export class EnvironmentRegistry {
       const keys = new Set([...Object.keys(prevDefs), ...Object.keys(nextDefs)])
       for (const name of keys) {
         if (!this.opened.has(name)) continue
-        const prevRaw = JSON.stringify(prevDefs[name])
-        const nextRaw = JSON.stringify(nextDefs[name])
-        if (prevRaw !== nextRaw) {
+        if (!deepEqualConfigValue(prevDefs[name], nextDefs[name])) {
           throw Error(
             `Docker configuration for "${name}" changed while already open; explicit owner restart required`,
           )

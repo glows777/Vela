@@ -391,6 +391,17 @@ export function listProcessingInboxForRun(
   return rows.map(rowToInbox)
 }
 
+export function listDeferredWakeSessionIds(db: VelaDatabase): string[] {
+  return db
+    .all<{ session_id: string }>(
+      `SELECT DISTINCT e.session_id
+       FROM inbox_events e
+       JOIN sessions s ON s.id = e.session_id
+       WHERE e.status = 'pending' AND e.wake = 1 AND s.state != 'waiting_human'`,
+    )
+    .map((row) => row.session_id)
+}
+
 export function completeInboxBatchInTx(
   db: VelaDatabase,
   runId: string,

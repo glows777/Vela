@@ -60,9 +60,10 @@ import {
   type StreamDeltaListener,
 } from './event-bus.ts'
 import type { RuntimeEvent, StreamDeltaEvent } from './events.ts'
-import type { InboxEventRecord } from './inbox.ts'
+import { type InboxEventRecord, listDeferredWakeSessionIds } from './inbox.ts'
 import { OutboxDispatcher } from './outbox.ts'
 import { isSessionInChannels, scheduleRuntimeWakeTimer } from './recovery.ts'
+import type { ActiveWorker, VelaRuntimeEngineOptions } from './runtime-types.ts'
 import { type ControlShortcut, executeControlShortcut } from './shortcuts.ts'
 import { SubscriptionManager } from './subscriptions.ts'
 import { TimerScheduler } from './timers.ts'
@@ -75,29 +76,7 @@ import {
   stopSessionInRuntime,
 } from './worker.ts'
 
-export interface VelaRuntimeEngineOptions {
-  db: VelaDatabase
-  agentDir: string
-  environments?: EnvironmentRegistry
-  drivers?: AgentDriver[]
-  ignoredChannels?: readonly string[]
-  onRestartSession?: (sessionId: string) => Promise<void> | void
-  trySteerInboxEvent?: (
-    sessionId: string,
-    inboxEventId: string,
-    text: string,
-    images?: Array<{ data: string; mimeType: string }>,
-  ) => Promise<boolean> | boolean
-  logger?: VelaLogger
-}
-
-interface ActiveWorker {
-  runId: string
-  ownerToken: string
-  controller: AbortController
-  promise: Promise<void>
-  suppressedInterruptedIds?: Set<string>
-}
+export type { VelaRuntimeEngineOptions }
 
 /**
  * Agent-agnostic Runtime control plane over a single `<agentDir>/vela.db`.
@@ -218,7 +197,7 @@ export class VelaRuntimeEngine {
       },
       this.channelStatuses,
     )
-    void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
+    void this.wakeDeferredAndFlushOutbox()
   }
 
   async unregisterChannel(name: string): Promise<void> {
@@ -274,7 +253,7 @@ export class VelaRuntimeEngine {
   setChannelEnabled = (name: string, enabled: boolean): void => {
     setChannelEnabledInDb(this.db, name, enabled)
     if (enabled && !this.disposed) {
-      void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
+      void this.wakeDeferredAndFlushOutbox()
     }
   }
 
@@ -705,6 +684,15 @@ export class VelaRuntimeEngine {
         this.logger.error(`[runtime] outbox flush failed: ${error}`),
       )
       .then(() => {})
+  }
+
+  private wakeDeferredAndFlushOutbox(): Promise<void> {
+    return this.flushOutboxBestEffort().finally(() => {
+      for (const sid of listDeferredWakeSessionIds(this.db)) {
+        this.scheduleSession(sid)
+      }
+      this.syncWakeTimer()
+    })
   }
 
   private async runSessionLoop(

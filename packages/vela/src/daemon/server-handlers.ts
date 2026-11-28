@@ -125,19 +125,21 @@ export function createDaemonHandlers(deps: {
           if (sessionOverrideOwners.get(p.sessionId) !== client) {
             return
           }
-          sessionOverrideOwners.delete(p.sessionId)
-          client.configuredSessions.delete(p.sessionId)
           await runtime.sessions.configure(p.sessionId, p.override)
+          if (sessionOverrideOwners.get(p.sessionId) === client) {
+            sessionOverrideOwners.delete(p.sessionId)
+            client.configuredSessions.delete(p.sessionId)
+          }
           return
         }
         if (client.isDisconnected()) return
         const prevOwner = sessionOverrideOwners.get(p.sessionId)
+        await runtime.sessions.configure(p.sessionId, p.override)
         if (prevOwner && prevOwner !== client) {
           prevOwner.configuredSessions.delete(p.sessionId)
         }
         sessionOverrideOwners.set(p.sessionId, client)
         client.configuredSessions.add(p.sessionId)
-        await runtime.sessions.configure(p.sessionId, p.override)
       }),
     'sessions.setModel': (p) =>
       runtime.sessions.setModel(p.sessionId, p.modelRef),

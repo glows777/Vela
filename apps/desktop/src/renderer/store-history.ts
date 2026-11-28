@@ -4,9 +4,11 @@ import { vela } from './vela.ts'
 
 const LARK_PAGE_LIMIT = 50
 const larkCursors = new Map<string, string>()
+const exhaustedLarkSessions = new Set<string>()
 
 export function clearLarkCursors(): void {
   larkCursors.clear()
+  exhaustedLarkSessions.clear()
 }
 
 function orderedMessages(messages: Message[]): Message[] {
@@ -74,8 +76,13 @@ export async function readLarkGroupHistory(params: {
   }
 
   const remember = (next: string | undefined) => {
-    if (next === undefined) larkCursors.delete(sessionId)
-    else larkCursors.set(sessionId, next)
+    if (next === undefined) {
+      larkCursors.delete(sessionId)
+      exhaustedLarkSessions.add(sessionId)
+    } else {
+      exhaustedLarkSessions.delete(sessionId)
+      larkCursors.set(sessionId, next)
+    }
     return next !== undefined
   }
 
@@ -112,7 +119,13 @@ export async function readLarkGroupHistory(params: {
         return shownIds.size === 0 || overlaps
       },
     )
-    if (!walked && overlaps && larkCursors.has(sessionId)) return undefined
+    if (
+      !walked &&
+      overlaps &&
+      (larkCursors.has(sessionId) || exhaustedLarkSessions.has(sessionId))
+    ) {
+      return undefined
+    }
     onPage(sessionId, shown(sessionId), remember(next))
     return undefined
   } catch (cause) {

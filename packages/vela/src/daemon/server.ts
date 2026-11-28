@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { createServer } from 'node:net'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import type { LarkTransport } from '../lark/transport.ts'
 import { createRuntime, type LocalVelaRuntime } from '../runtime-sdk.ts'
@@ -111,10 +111,11 @@ export async function startDaemonServer(
   options: StartDaemonServerOptions = {},
 ): Promise<DaemonServerHandle> {
   registerBuiltinExtensionHostModules({ startDaemonServer })
+  const endpointEnv = options.hostEnv ?? process.env
   const hostEnv = options.hostEnv ?? {}
   const logger = options.logger ?? silentLogger
-  const rawAgentDir = options.agentDir ?? defaultAgentDir(hostEnv)
-  const paths = resolveDaemonPaths(rawAgentDir, options.socketPath, hostEnv)
+  const rawAgentDir = options.agentDir ?? defaultAgentDir(endpointEnv)
+  const paths = resolveDaemonPaths(rawAgentDir, options.socketPath, endpointEnv)
 
   mkdirSync(paths.agentDir, { recursive: true, mode: 0o700 })
   assertSocketOrMissing(paths.socketPath)
@@ -250,6 +251,37 @@ export async function startDaemonServer(
   let nextPromptId = 1
   let closing: Promise<void> | undefined
   let didBindSocket = false
+  let boundSocketIno: number | undefined
+  let ownershipReleased = false
+  const finalizeOwnership = () => {
+    if (ownershipReleased) return
+    ownershipReleased = true
+    const pidInfo = readOwnerRecord(paths.pidPath)
+    const currentSocketIno = (() => {
+      try {
+        return lstatSync(paths.socketPath).ino
+      } catch {
+        return undefined
+      }
+    })()
+    const ownerUnchanged =
+      didBindSocket &&
+      (!pidInfo?.instanceId || pidInfo.instanceId === instanceId)
+    if (
+      ownerUnchanged &&
+      boundSocketIno !== undefined &&
+      currentSocketIno === boundSocketIno
+    ) {
+      removeStaleSocketFile(paths.socketPath)
+    }
+    if (
+      ownerUnchanged &&
+      (currentSocketIno === undefined || currentSocketIno === boundSocketIno)
+    ) {
+      rmSync(paths.pidPath, { force: true })
+    }
+    releaseOwner()
+  }
   let signalHandlersAttached = false
   let configWatcher: ReturnType<typeof startDaemonConfigWatcher> | undefined
 
@@ -263,28 +295,26 @@ export async function startDaemonServer(
   }
   const forceExitOnSecondSignal = (sig: 'SIGINT' | 'SIGTERM'): never => {
     logger.warn(`[daemon] Received second ${sig} during shutdown; forcing exit`)
-    const pidInfo = readOwnerRecord(paths.pidPath)
-    if (
-      didBindSocket &&
-      (!pidInfo?.instanceId || pidInfo.instanceId === instanceId)
-    ) {
-      try {
-        removeStaleSocketFile(paths.socketPath)
-      } catch {}
-      rmSync(paths.pidPath, { force: true })
-    }
     try {
-      releaseOwner()
+      finalizeOwnership()
     } catch {}
     process.exit(sig === 'SIGINT' ? 130 : 143)
   }
+  const handleSignalClose = (sig: 'SIGINT' | 'SIGTERM') => {
+    void close(sig).catch((error) => {
+      logger.warn(
+        `[daemon] ${sig} shutdown timed out or failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      options.onClosed?.('shutdown_timeout')
+    })
+  }
   const onSigInt = () => {
     if (closing) forceExitOnSecondSignal('SIGINT')
-    void close('SIGINT')
+    handleSignalClose('SIGINT')
   }
   const onSigTerm = () => {
     if (closing) forceExitOnSecondSignal('SIGTERM')
-    void close('SIGTERM')
+    handleSignalClose('SIGTERM')
   }
 
   const close = (reason = 'dispose'): Promise<void> => {
@@ -340,8 +370,9 @@ export async function startDaemonServer(
       sessionOverrideOwners.clear()
       await serverClosed
       let shutdownTimer: ReturnType<typeof setTimeout> | undefined
-      try {
-        const stopServices = (async () => {
+      let timedOut = false
+      const stopServices = (async () => {
+        try {
           await larkHost?.stop().catch(() => {})
           await webhooksHost?.stop().catch(() => {})
           const sessions = await runtime.sessions
@@ -362,36 +393,38 @@ export async function startDaemonServer(
             }),
           )
           await runtime.dispose()
-        })()
+        } finally {
+          if (signalHandlersAttached) {
+            signalHandlersAttached = false
+            process.off('SIGHUP', onSigHup)
+            process.off('SIGINT', onSigInt)
+            process.off('SIGTERM', onSigTerm)
+          }
+          finalizeOwnership()
+        }
+      })()
+      try {
         await Promise.race([
           stopServices,
-          new Promise<void>((resolve) => {
+          new Promise<never>((_resolve, reject) => {
             shutdownTimer = setTimeout(() => {
+              timedOut = true
               logger.warn(
-                `[daemon] Shutdown exceeded ${DAEMON_SHUTDOWN_DEADLINE_MS}ms deadline; forcing close completion`,
+                `[daemon] Shutdown exceeded ${DAEMON_SHUTDOWN_DEADLINE_MS}ms deadline while runtime disposal continues`,
               )
-              resolve()
+              reject(
+                new Error(
+                  `Timed out waiting for Vela daemon shutdown after ${DAEMON_SHUTDOWN_DEADLINE_MS}ms`,
+                ),
+              )
             }, DAEMON_SHUTDOWN_DEADLINE_MS)
             shutdownTimer.unref?.()
           }),
         ])
       } finally {
         clearTimeout(shutdownTimer)
-        if (signalHandlersAttached) {
-          signalHandlersAttached = false
-          process.off('SIGHUP', onSigHup)
-          process.off('SIGINT', onSigInt)
-          process.off('SIGTERM', onSigTerm)
-        }
-        const pidInfo = readOwnerRecord(paths.pidPath)
-        const stillOwnsFiles =
-          didBindSocket &&
-          (!pidInfo?.instanceId || pidInfo.instanceId === instanceId)
-        if (stillOwnsFiles) {
-          removeStaleSocketFile(paths.socketPath)
-          rmSync(paths.pidPath, { force: true })
-        }
-        releaseOwner()
+      }
+      if (!timedOut) {
         options.onClosed?.(reason)
       }
     })()
@@ -549,8 +582,16 @@ export async function startDaemonServer(
       for (const sid of [...client.configuredSessions]) {
         void serializeSessionConfigure(sid, async () => {
           if (sessionOverrideOwners.get(sid) === client) {
-            sessionOverrideOwners.delete(sid)
-            await runtime.sessions.configure(sid, {}).catch(() => {})
+            try {
+              await runtime.sessions.configure(sid, {})
+              if (sessionOverrideOwners.get(sid) === client) {
+                sessionOverrideOwners.delete(sid)
+              }
+            } catch (error) {
+              logger.warn(
+                `[daemon] Failed clearing session override on disconnect for ${sid}: ${error instanceof Error ? error.message : String(error)}`,
+              )
+            }
           }
         })
       }
@@ -585,21 +626,42 @@ export async function startDaemonServer(
       const onErr = (err: Error) => reject(err)
       server.once('error', onErr)
       let prevUmask: number | undefined
+      let umaskUnsupported = false
       if (process.platform !== 'win32') {
         try {
           prevUmask = process.umask(0o177)
         } catch (error) {
           if (
-            (error as NodeJS.ErrnoException).code !==
+            (error as NodeJS.ErrnoException).code ===
             'ERR_WORKER_UNSUPPORTED_OPERATION'
           ) {
+            umaskUnsupported = true
+          } else {
             throw error
           }
+        }
+      }
+      if (umaskUnsupported) {
+        const parentDir = dirname(paths.socketPath)
+        const parentStat = lstatSync(parentDir)
+        const uid = process.getuid?.()
+        if (
+          parentStat.isSymbolicLink() ||
+          !parentStat.isDirectory() ||
+          (uid !== undefined && parentStat.uid !== uid) ||
+          (parentStat.mode & 0o077) !== 0
+        ) {
+          throw new Error(
+            `Refusing daemon socket in non-private directory without process.umask: ${parentDir}`,
+          )
         }
       }
       try {
         server.listen(paths.socketPath, () => {
           didBindSocket = true
+          try {
+            boundSocketIno = lstatSync(paths.socketPath).ino
+          } catch {}
           server.off('error', onErr)
           resolve()
         })

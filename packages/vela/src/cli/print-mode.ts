@@ -155,13 +155,22 @@ export async function runPrintMode(options: {
         await session.waitForSettled()
         const runsList = [...observedRuns.values()]
         const matchedRun = res.eventId
-          ? (runsList.find((r) => r.inboxEventIds?.includes(res.eventId!)) ??
-            runsList.find((r) => r.inboxEventIds === undefined))
+          ? runsList.find((r) => r.inboxEventIds?.includes(res.eventId!))
           : runsList.at(-1)
         if (matchedRun) {
           lastReply = matchedRun.reply
           activeRunFailed = matchedRun.failed
           failure = matchedRun.failure
+        } else if (res.eventId) {
+          const status = await runtime.sessions.status(session.id)
+          activeRunFailed = true
+          failure = {
+            message:
+              status.session.state === 'waiting_human'
+                ? 'Waiting for human approval or input'
+                : `Prompt ${res.eventId} was queued but did not run`,
+            kind: undefined,
+          }
         }
       }
       if (failure) break

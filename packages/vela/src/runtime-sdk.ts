@@ -204,14 +204,40 @@ export function createRuntime(
         )
         const driverName = sessionRow?.driver ?? 'vela'
         if (driverName !== 'vela') {
-          const accepted = await engine.steerSession(sid, text, images, true)
-          if (!accepted) return false
+          const reserved = db.run(
+            `UPDATE inbox_events
+             SET status = 'processing'
+             WHERE id = ? AND status = 'pending'`,
+            inboxEventId,
+          )
+          if (reserved.changes === 0) return false
+          let accepted = false
+          try {
+            accepted = await engine.steerSession(sid, text, images, true)
+          } catch (error) {
+            db.run(
+              `UPDATE inbox_events
+               SET status = 'pending'
+               WHERE id = ? AND status = 'processing' AND run_id IS NULL`,
+              inboxEventId,
+            )
+            throw error
+          }
+          if (!accepted) {
+            db.run(
+              `UPDATE inbox_events
+               SET status = 'pending'
+               WHERE id = ? AND status = 'processing' AND run_id IS NULL`,
+              inboxEventId,
+            )
+            return false
+          }
           const now = new Date().toISOString()
           db.transaction(() => {
             db.run(
               `UPDATE inbox_events
                SET status = 'done', processed_at = COALESCE(processed_at, ?)
-               WHERE id = ? AND status = 'pending'`,
+               WHERE id = ? AND status = 'processing'`,
               now,
               inboxEventId,
             )
@@ -486,13 +512,13 @@ export function createRuntime(
                 .list({ projectId: id, includeArchived: true })
                 .map((s) => s.id)
             : []
-          const removed = engine.projects.remove(id, opts)
-          if (removed && ownedIds.length > 0) {
+          if (ownedIds.length > 0) {
             for (const sid of ownedIds) {
+              await engine.stopSession(sid, 'project_removed').catch(() => {})
               await velaDriver.control.closeSession(sid).catch(() => {})
             }
           }
-          return removed
+          return engine.projects.remove(id, opts)
         },
       },
       trust: {
@@ -531,7 +557,10 @@ export function createRuntime(
         status: async (id) => engine.sessions.status(id),
         messages: (input) => engine.listSessionMessages(input),
         configure: async (sessionId, override) => {
-          await maybeRefreshConfig()
+          const isClearing = !override || Object.keys(override).length === 0
+          if (!isClearing) {
+            await maybeRefreshConfig()
+          }
           await velaDriver.control.configure(sessionId, override)
         },
         setModel: async (sessionId, modelRef) => {

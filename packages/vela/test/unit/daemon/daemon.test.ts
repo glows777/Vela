@@ -826,3 +826,105 @@ test('ensurePrivateSocketDir validates ownership before fchmod and refuses symli
   ensurePrivateSocketDir(customSock)
   expect(existsSync(join(base, 'sub'))).toBe(true)
 })
+
+test('connectRuntime upgrades live legacy daemon and rejects insecure fallback dirs or bad disconnect teardown', async () => {
+  if (process.platform === 'win32') return
+  const shortBase = makeShortTempDir('vd-r2-')
+  const longDir = join(shortBase, 'l'.repeat(110))
+  mkdirSync(longDir, { recursive: true, mode: 0o700 })
+  const newPaths = resolveDaemonPaths(longDir)
+  const legacySock = legacyFallbackSocketPath(longDir)!
+  cleanupTasks.push(() => rmSync(legacySock, { force: true }))
+
+  // #3: start daemon on legacy fallback path, then call default connectRuntime({ agentDir, hostEnv: {} })
+  const legacyDaemon = await startDaemonServer({
+    agentDir: longDir,
+    socketPath: legacySock,
+    hostEnv: {},
+    enableWebhooks: false,
+    enableLark: false,
+    registerSignalHandlers: false,
+  })
+  cleanupTasks.push(() => legacyDaemon.close('test').catch(() => {}))
+
+  const upgradedClient = await connectRuntime({
+    agentDir: longDir,
+    hostEnv: {},
+  })
+  cleanupTasks.push(() => upgradedClient.dispose())
+  expect(Array.isArray(await upgradedClient.projects.list())).toBe(true)
+  const statusAfter = await getDaemonStatus({ agentDir: longDir, hostEnv: {} })
+  expect(statusAfter.socketPath).toBe(newPaths.socketPath)
+
+  // #2: invalid config.json must not block empty sessions.configure({}) release or disconnect cleanup
+  writeFileSync(join(longDir, 'config.json'), '{not-valid-json', {
+    mode: 0o600,
+  })
+  const sess = await upgradedClient.sessions.create({
+    location: { environment: 'local', cwd: longDir },
+  })
+  await expect(
+    upgradedClient.sessions.configure(sess.id, {}),
+  ).resolves.toBeUndefined()
+  await expect(
+    upgradedClient.sessions.configure(sess.id, { cwd: longDir }),
+  ).rejects.toThrow()
+  writeFileSync(join(longDir, 'config.json'), '{}', { mode: 0o600 })
+
+  // #11: worker with ERR_WORKER_UNSUPPORTED_OPERATION rejects explicit socket in non-private parent dir
+  const sharedDir = makeShortTempDir('vd-shared-')
+  chmodSync(sharedDir, 0o755)
+  const workerErr = await new Promise<string>((resolve) => {
+    const workerCode = `
+      const { parentPort } = require('node:worker_threads')
+      process.umask = () => {
+        const e = new Error('unsupported')
+        e.code = 'ERR_WORKER_UNSUPPORTED_OPERATION'
+        throw e
+      }
+      import(${JSON.stringify(join(process.cwd(), 'packages/vela/src/daemon/server.ts'))})
+        .then((m) => m.startDaemonServer({
+          agentDir: ${JSON.stringify(makeShortTempDir('vd-wk-agent-'))},
+          socketPath: ${JSON.stringify(join(sharedDir, 'vela.sock'))},
+          hostEnv: {},
+          enableWebhooks: false,
+          enableLark: false,
+          registerSignalHandlers: false,
+        }))
+        .then(async (h) => { await h.close('test'); parentPort.postMessage('ok') })
+        .catch((err) => parentPort.postMessage(String(err.message || err)))
+    `
+    const { Worker } = require('node:worker_threads')
+    const w = new Worker(workerCode, { eval: true })
+    w.once('message', (msg: string) => resolve(msg))
+    w.once('error', (err: Error) => resolve(err.message))
+  })
+  expect(workerErr).toContain('non-private directory')
+})
+
+test('startDaemonServer honors ambient VELA_DAEMON_SOCKET like connectRuntime', async () => {
+  if (process.platform === 'win32') return
+  const base = makeShortTempDir('vd-amb-')
+  const customSock = join(base, 'ambient.sock')
+  const prevDir = process.env.VELA_DIR
+  const prevSock = process.env.VELA_DAEMON_SOCKET
+  process.env.VELA_DIR = base
+  process.env.VELA_DAEMON_SOCKET = customSock
+  try {
+    const handle = await startDaemonServer({
+      enableWebhooks: false,
+      enableLark: false,
+      registerSignalHandlers: false,
+    })
+    cleanupTasks.push(() => handle.close('test').catch(() => {}))
+    expect(handle.socketPath).toBe(customSock)
+    const client = await connectRuntime({ autoStart: false })
+    cleanupTasks.push(() => client.dispose())
+    expect(Array.isArray(await client.projects.list())).toBe(true)
+  } finally {
+    if (prevDir === undefined) delete process.env.VELA_DIR
+    else process.env.VELA_DIR = prevDir
+    if (prevSock === undefined) delete process.env.VELA_DAEMON_SOCKET
+    else process.env.VELA_DAEMON_SOCKET = prevSock
+  }
+})

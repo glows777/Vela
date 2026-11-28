@@ -55,7 +55,6 @@ import {
 import {
   applyBeforeAgentStartHooks,
   applyInputExtensionHooks,
-  maybeResolveImplicitSpecialModel,
   wireRuntimeToolInterception,
   wrapModelWithExtensionHooks,
 } from './runtime-turn-hooks.ts'
@@ -265,12 +264,6 @@ export function createVelaAgentDriver(
       })
       store = activeStore
       const saved = await activeStore.loadSaved()
-
-      await maybeResolveImplicitSpecialModel(
-        state,
-        request.sessionId,
-        saved?.model,
-      )
 
       const inputMeta = resolveRunInputMeta(options.db, request)
       const runState = resolveRunSilenceAndDepth(

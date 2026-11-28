@@ -383,3 +383,63 @@ test('applyChannelEventState resets local and Lark cursors cleanly and refreshes
   })
   expect(loadedTopics).toEqual(['topic-1'])
 })
+
+test('Round 2 regressions: reconcileLocalMessages drops stale branch tail and readLarkGroupHistory preserves exhausted hasEarlier', async () => {
+  clearLarkCursors()
+  const rootMsg = {
+    id: 'm-root',
+    sessionId: 's-branch',
+    role: 'user' as const,
+    text: 'root',
+    createdAt: '2026-11-28T00:00:00.000Z',
+  }
+  const abandonedBranchMsg = {
+    id: 'm-old-branch',
+    sessionId: 's-branch',
+    role: 'assistant' as const,
+    text: 'abandoned future reply',
+    createdAt: '2026-11-28T00:02:00.000Z',
+  }
+  expect(
+    reconcileLocalMessages([rootMsg, abandonedBranchMsg], [rootMsg]),
+  ).toEqual([rootMsg])
+
+  const project = {
+    id: 'oc_exhausted',
+    channel: 'lark' as const,
+    name: 'Exhausted Group',
+    sessionId: 'lark-exhausted',
+    canCreateTopics: true,
+    isOwner: true,
+  }
+  const pageMsg = {
+    id: 'm-last-1',
+    sessionId: 'lark-exhausted',
+    role: 'assistant' as const,
+    text: 'only page',
+    createdAt: '2026-11-28T00:01:00.000Z',
+  }
+  let shown: (typeof pageMsg)[] = []
+  let hasEarlier: boolean | undefined = true
+  await readLarkGroupHistory({
+    project,
+    shown: () => shown,
+    onPage: (_sid, msgs, earlier) => {
+      shown = msgs
+      if (earlier !== undefined) hasEarlier = earlier
+    },
+    fetchMessages: async () => ({ messages: [pageMsg], nextCursor: undefined }),
+  })
+  expect(hasEarlier).toBe(false)
+
+  await readLarkGroupHistory({
+    project,
+    shown: () => shown,
+    onPage: (_sid, msgs, earlier) => {
+      shown = msgs
+      if (earlier !== undefined) hasEarlier = earlier
+    },
+    fetchMessages: async () => ({ messages: [pageMsg], nextCursor: 'c-1' }),
+  })
+  expect(hasEarlier).toBe(false)
+})

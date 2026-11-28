@@ -640,9 +640,15 @@ export class LarkRuntimeProgressManager {
           }, 30_000)
           timer.unref?.()
           if (this.awaitingOutbox.size >= 512) {
-            const oldestRunId = this.awaitingOutbox.keys().next().value
-            if (oldestRunId !== undefined) {
+            const oldestEntry = this.awaitingOutbox.entries().next().value
+            if (oldestEntry) {
+              const [oldestRunId, oldest] = oldestEntry
               this.awaitingOutbox.delete(oldestRunId)
+              const cancelTask = oldest.cancel().catch(() => {})
+              this.inflightFinish.add(cancelTask)
+              void cancelTask.finally(() =>
+                this.inflightFinish.delete(cancelTask),
+              )
             }
           }
           this.awaitingOutbox.set(event.runId, {
