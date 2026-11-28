@@ -329,6 +329,7 @@ export function createRuntimeControl(
         configured: state.reloadable.extensions,
         explicit: state.options.explicitExtensions,
         extensionConfig: state.reloadable.extensionConfig ?? {},
+        unregisterProviders: false,
       })
     },
 

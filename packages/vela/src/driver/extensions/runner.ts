@@ -5,6 +5,7 @@ import { isVelaJsonSchema } from '../../shared/tool-schema.ts'
 import type { CustomMessage, VelaEvent } from '../agent/events.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
 import {
+  copyMessages,
   isToolContent,
   type ToolContent,
   toolContentText,
@@ -39,6 +40,10 @@ import type {
 export type RuntimeExtensionSession = ExtensionSession & {
   registry: ToolRegistry
   store: SessionStore
+  buildSystem(
+    sections?: Record<string, string>,
+    override?: string | null,
+  ): string
 }
 
 interface RunnerDeps {
@@ -63,6 +68,7 @@ export interface LoadedExtension {
 type AnyHandler = (event: unknown, ctx: ExtensionContext) => unknown
 type RegisteredHandler = {
   extension: string
+  order: number
   fn: AnyHandler
   toolName?: string
   matchesTool?: (targetToolName: string) => boolean
@@ -102,7 +108,7 @@ export class ExtensionRunner {
       const pending: Promise<void>[] = []
       factories.forEach((extension, index) => {
         const name = extension.name || `extension-${index + 1}`
-        const result = extension(this.api(name, core))
+        const result = extension(this.api(name, core, index))
         if (result instanceof Promise) {
           const loading = result.catch((error) => {
             throw new Error(
@@ -137,7 +143,7 @@ export class ExtensionRunner {
     this.ready.catch(() => {})
   }
 
-  private api(name: string, core: boolean): ExtensionAPI {
+  private api(name: string, core: boolean, order: number): ExtensionAPI {
     const loaded: LoadedExtension = {
       name,
       tools: [],
@@ -224,6 +230,7 @@ export class ExtensionRunner {
           typeof handlerOrName === 'string' ? scopedHandler! : handlerOrName
         const entry: RegisteredHandler = {
           extension: name,
+          order,
           core,
           fn: handler,
           ...(toolName === undefined
@@ -238,7 +245,9 @@ export class ExtensionRunner {
                 },
               }),
         }
-        list.push(entry)
+        const insertAt = list.findIndex((existing) => existing.order > order)
+        if (insertAt === -1) list.push(entry)
+        else list.splice(insertAt, 0, entry)
         this.handlers.set(event, list)
         return () => {
           const index = list.indexOf(entry)
@@ -769,25 +778,5 @@ export class ExtensionRunner {
       this.context(session, signal),
     )
     return true
-  }
-}
-
-/**
- * Copies messages for a `context` handler: a deep copy when the content can be cloned, otherwise copies of
- * each message and its parts (values inside a part, like a tool's JSON output, are then shared).
- */
-function copyMessages(messages: ModelMessage[]): ModelMessage[] {
-  try {
-    return structuredClone(messages)
-  } catch {
-    return messages.map(
-      (message) =>
-        ({
-          ...message,
-          content: Array.isArray(message.content)
-            ? message.content.map((part) => ({ ...part }))
-            : message.content,
-        }) as ModelMessage,
-    )
   }
 }

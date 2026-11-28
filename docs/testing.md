@@ -90,7 +90,7 @@ const t = createTestVela({
 await t.run('read src/a.ts')               // = t.session.prompt()
 ```
 
-The built-in memory extension is always loaded, like in the CLI; the RAG extension is loaded with `embedder`. Web and Lark are not loaded.
+The built-in memory extension is always loaded, like in the CLI. Web and Lark are not loaded.
 
 ### Options
 
@@ -105,7 +105,6 @@ The built-in memory extension is always loaded, like in the CLI; the RAG extensi
 | `sessionId` | Id of the default session (default `default`). |
 | `files` | Files to create in `cwd`, as relative path to content. |
 | `skills` | Skills to write to `cwd/.skills/<name>/SKILL.md` (`name`, `description`, `body`, `disableModelInvocation?`). |
-| `embedder` | `true` loads RAG with the faux embedder, or pass your own. |
 | `cwd`, `dataDir` | Reuse a directory (for resume tests); `dataDir` is relative to `cwd`, default `.vela-data`. |
 | `ephemeralSessions` | Keep session history in an in-memory SQLite DB instead of writing `vela.db` under `dataDir` (default `false`). |
 | `thinkingLevel`, `limits`, `logger` | `limits.retryBaseMs` defaults to 0 so retries don't wait. |

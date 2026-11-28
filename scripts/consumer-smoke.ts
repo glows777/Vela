@@ -29,6 +29,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import {
   connectRuntime,
@@ -289,8 +290,16 @@ try {
   const ds2 = await docsOffRuntime.sessions.create({ name: 'docs-off' })
   await docsOffRuntime.prompt(ds2.id, { text: 'check no docs' })
   await docsOffRuntime.waitForIdle(ds2.id)
-  if (!docsSystems[0]?.includes('<docs>') || !docsSystems[0]?.includes('docs/sdk.md'))
-    throw new Error('packaged createRuntime() did not include default <docs> section')
+  const docsMatch = /- Additional docs: ([^\n]+)/.exec(docsSystems[0] ?? '')
+  const resolvedDocsDir = docsMatch?.[1]?.trim()
+  if (
+    !docsSystems[0]?.includes('<docs>') ||
+    !resolvedDocsDir ||
+    !existsSync(join(resolvedDocsDir, 'sdk.md'))
+  )
+    throw new Error(
+      \`packaged createRuntime() did not render readable <docs> section: \${docsSystems[0] ?? ''}\`,
+    )
   if (docsSystems[1]?.includes('<docs>'))
     throw new Error('docs: false failed to suppress <docs> section')
 } finally {

@@ -46,7 +46,7 @@ The picker lists sessions newest first by name (or first message), id, message c
 
 ## Inspect and list saved sessions
 
-`await runtime.sessions.listSummaries({ includeArchived?: boolean, q?: string })` lists saved sessions with summary metadata and search filtering, persisted in SQLite (`sessions`). Tool output, `!` commands, summaries and extension messages are not searched. Pass `includeArchived: true` to include archived sessions.
+`await runtime.sessions.listSummaries({ includeArchived?: boolean, excludeChannels?: boolean, cwd?: string, projectId?: string })` lists saved sessions with summary metadata persisted in SQLite (`sessions`). Pass `includeArchived: true` to include archived sessions.
 
 ## Session tree
 
@@ -68,7 +68,7 @@ Like pi, a session is a tree: moving back to an earlier entry does not erase the
 
 Moving in the tree only changes what the model sees. Files the abandoned branch changed and commands it ran are not undone (pi doesn't either), and its tool calls stay in the session's tool call history.
 
-In the SDK these are `runtime.sessions.tree(sessionId)`, `runtime.sessions.navigateTree(sessionId, entryId, { summarize, focus, label })`, `runtime.sessions.fork(sessionId, entryId, { position, forkId })`, `runtime.sessions.clone(sessionId, { cloneId })`, `runtime.sessions.setLabel(sessionId, entryId, label)`, and `runtime.sessions.inspect(sessionId, { includeEntries: true })`. `fork()` and `clone()` create a new session in `vela.db` and leave the original untouched. See [SDK](sdk.md#session-tree). All of them refuse while the session is running.
+In the SDK these are `runtime.sessions.tree(sessionId)`, `runtime.sessions.navigateTree(sessionId, entryId, { summarize, focus, label })`, `runtime.sessions.fork(sessionId, entryId, { position, sessionId: newId })`, `runtime.sessions.clone(sessionId, { sessionId: newId })`, `runtime.sessions.setLabel(sessionId, entryId, label)`, and `runtime.sessions.inspect(sessionId, { includeEntries: true })`. `fork()` and `clone()` create a new session in `vela.db` and leave the original untouched. See [SDK](sdk.md#session-tree). All of them refuse while the session is running.
 
 ## Export
 
@@ -117,7 +117,7 @@ The summary request uses the same model and system prompt as the main request. I
 
 ### Manual compaction
 
-`/compact [focus]` in interactive mode and `runtime.sessions.compact(sessionId, { focus })` in the SDK summarize now, whatever the thresholds. `focus` tells the summary what to preserve. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When the conversation fits within the recent-token keep budget (`canSummarize` is false, e.g. only the initial message), it fails with `Nothing to compact (session too small)`.
+`/compact [focus]` in interactive mode and `runtime.sessions.compact(sessionId, focus)` in the SDK summarize now, whatever the thresholds. `focus` tells the summary what to preserve. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When the conversation fits within the recent-token keep budget (`canSummarize` is false, e.g. only the initial message), it fails with `Nothing to compact (session too small)`.
 
 ### Turning automatic compaction off
 

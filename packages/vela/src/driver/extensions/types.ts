@@ -55,7 +55,6 @@ export interface ExtensionSession {
   getActiveTools(): string[]
   setActiveTools(names: string[] | undefined): void
   customMessageOf(message: ModelMessage): CustomMessageInfo | undefined
-  buildSystem(sections?: Record<string, string>): string
   notify(message: string, level?: 'info' | 'warning' | 'error'): void
 }
 

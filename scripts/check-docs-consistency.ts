@@ -125,12 +125,21 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
           }
         }
       }
-      if (!RETIREMENT_NOTICE_RE.test(line)) {
-        for (const { label, pattern } of RETIRED_OPERATIONAL_PATTERNS) {
-          if (pattern.test(line)) {
-            errors.push(
-              `${rel}:${i + 1}: contains non-retirement operational reference to retired "${label}" (#599/#602)`,
-            )
+      const clauses = line
+        .split(/(?<=[.!?;])\s+|\s*\|\s*|\b(?:now that|since|whereas|while)\s+/i)
+        .filter(Boolean)
+      const isRetiredTableRow =
+        line.trimStart().startsWith('|') &&
+        RETIREMENT_NOTICE_RE.test(clauses[0] ?? '')
+      if (!isRetiredTableRow) {
+        for (const clause of clauses) {
+          if (RETIREMENT_NOTICE_RE.test(clause)) continue
+          for (const { label, pattern } of RETIRED_OPERATIONAL_PATTERNS) {
+            if (pattern.test(clause)) {
+              errors.push(
+                `${rel}:${i + 1}: contains non-retirement operational reference to retired "${label}" (#599/#602)`,
+              )
+            }
           }
         }
       }

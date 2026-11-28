@@ -314,6 +314,14 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
             eventBus: state.options.eventBus,
             projectId: row.project_id,
             signal: controller.signal,
+            buildSystem: (sections) =>
+              prepared!.builder.build({
+                sessionId,
+                activeTools: prepared!.registry.getActiveTools(),
+                deferredToolSummary:
+                  prepared!.registry.getDeferredToolSummary(),
+                extensionSections: sections ?? prepared!.runtimeSections,
+              }),
             onSetActiveTools: (names) =>
               state.sessionActiveTools.set(
                 sessionId,
@@ -477,6 +485,13 @@ export function createInspectAndBashControl(deps: InspectAndBashDeps) {
           eventBus: state.options.eventBus,
           projectId: row.project_id,
           signal: controller.signal,
+          buildSystem: (sections) =>
+            prepared!.builder.build({
+              sessionId,
+              activeTools: prepared!.registry.getActiveTools(),
+              deferredToolSummary: prepared!.registry.getDeferredToolSummary(),
+              extensionSections: sections ?? prepared!.runtimeSections,
+            }),
           onSetActiveTools: (names) =>
             state.sessionActiveTools.set(
               sessionId,

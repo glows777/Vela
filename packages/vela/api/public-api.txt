@@ -1519,7 +1519,6 @@
       | undefined
       | Promise<ExtensionEvents[K][1] | undefined>
   interface ExtensionSession
-    buildSystem: (sections?: Record<string, string>) => string
     customMessageOf: (message: ModelMessage) => CustomMessageInfo | undefined
     getActiveTools: () => string[]
     notify: (message: string, level?: "info" | "warning" | "error") => void

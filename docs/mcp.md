@@ -62,9 +62,7 @@ An explicit SDK `mcp()` factory or CLI `-e builtin:mcp` remains host-owned and s
 - Connecting to an HTTP server is retried twice after a network error or a 408, 429 or 5xx status. Tool calls are never retried, because the server may already have acted.
 - When a connection drops (for example the stdio process exits), the next call to one of its tools connects again.
 - When a server announces that its tool list changed, new tools are registered and removed tools are unregistered.
-- Configuration errors and servers that failed to connect are reported once, after startup: in interactive mode as a message, otherwise on stderr. The error includes the end of a stdio server's stderr.
-
-`/mcp` lists each server with its state, tool count, exposure and the file that configured it, plus any connection error. `/mcp reconnect <server>` drops a server's connection and connects again, for example after you restarted it.
+- Configuration errors and servers that failed to connect are logged via `logger` and visible to sessions via `tool_search` diagnostics (the error includes the end of a stdio server's stderr); `mcp.ts` does not register a `/mcp` command on Runtime sessions.
 
 ## Tool exposure
 

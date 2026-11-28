@@ -96,6 +96,18 @@ test('#591 / #599 / #602: checkDocsConsistency catches retired APIs, operational
     expect((await checkDocsConsistency(root)).join('\n')).toContain(
       'examples/sdk/demo.ts:1: contains non-retirement operational reference to retired "@glows777/vela/legacy-desktop"',
     )
+    // Mixing an operational retired call with an unrelated retirement sentence on the same line must still fail (#602)
+    writeFileSync(
+      join(root, 'docs/channels.md'),
+      'Configure `lark({ chats: [] })` and call `startChannels()`. Standalone CLI `vela serve` was retired in v0.9.\n',
+    )
+    const mixedLineErrors = (await checkDocsConsistency(root)).join('\n')
+    expect(mixedLineErrors).toContain('retired "lark() factory"')
+    expect(mixedLineErrors).toContain('retired "startChannels("')
+    writeFileSync(
+      join(root, 'docs/channels.md'),
+      '`vela serve` and `--mode rpc` were retired in v0.9 and exit with code 2; use `vela daemon` and `connectRuntime()` instead.\n',
+    )
     writeFileSync(
       join(root, 'examples/sdk/demo.ts'),
       'import { createRuntime } from "@glows777/vela"\nvoid createRuntime\n',

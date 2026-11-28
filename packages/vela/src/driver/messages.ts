@@ -328,3 +328,23 @@ export function estimateMessagesTokens(messages: VelaMessage[]): number {
     imageCount * (IMAGE_TOKENS - 1)
   )
 }
+
+/**
+ * Copies messages for a `context` handler: a deep copy when the content can be cloned, otherwise copies of
+ * each message and its parts (values inside a part, like a tool's JSON output, are then shared).
+ */
+export function copyMessages(messages: VelaMessage[]): VelaMessage[] {
+  try {
+    return structuredClone(messages)
+  } catch {
+    return messages.map(
+      (message) =>
+        ({
+          ...message,
+          content: Array.isArray(message.content)
+            ? message.content.map((part) => ({ ...part }))
+            : message.content,
+        }) as VelaMessage,
+    )
+  }
+}

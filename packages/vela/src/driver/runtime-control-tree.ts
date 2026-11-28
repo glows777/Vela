@@ -93,6 +93,13 @@ export function createTreeControl(deps: TreeControlDeps) {
           eventBus: state.options.eventBus,
           projectId: row.project_id,
           signal: controller.signal,
+          buildSystem: (sections) =>
+            prepared!.builder.build({
+              sessionId,
+              activeTools: prepared!.registry.getActiveTools(),
+              deferredToolSummary: prepared!.registry.getDeferredToolSummary(),
+              extensionSections: sections ?? prepared!.runtimeSections,
+            }),
         })
         if (
           await prepared.extensionRunner.beforeFork(extView, entryId, position)
@@ -254,6 +261,14 @@ export function createTreeControl(deps: TreeControlDeps) {
             eventBus: state.options.eventBus,
             projectId: row.project_id,
             signal: controller.signal,
+            buildSystem: (sections) =>
+              prepared!.builder.build({
+                sessionId,
+                activeTools: prepared!.registry.getActiveTools(),
+                deferredToolSummary:
+                  prepared!.registry.getDeferredToolSummary(),
+                extensionSections: sections ?? prepared!.runtimeSections,
+              }),
           })
           const result = await executeTreeNavigation({
             session: extView,

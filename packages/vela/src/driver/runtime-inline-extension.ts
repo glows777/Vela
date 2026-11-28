@@ -1,13 +1,17 @@
 import type { ProviderDefinition } from '../providers/models/index.ts'
+import type { RuntimeEventBus } from '../runtime/event-bus.ts'
 import { errorMessage } from '../shared/logger.ts'
 import type { ExtensionEventName } from './extensions/events.ts'
 import type {
   ExtensionAPI,
   ExtensionCommand,
   ExtensionContext,
+  ExtensionSession,
   VelaExtension,
 } from './extensions/types.ts'
-import type { ToolDefinition } from './tools/registry.ts'
+import type { ModelMessage } from './messages.ts'
+import type { SessionStore } from './session/index.ts'
+import type { ToolDefinition, ToolRegistry } from './tools/registry.ts'
 
 type AnyHandler = (event: unknown, ctx: ExtensionContext) => unknown
 
@@ -21,6 +25,7 @@ export class PersistentInlineExtension {
   private activeApi?: ExtensionAPI
   private initialized = false
   private initPromise?: Promise<void>
+  private initError?: string
   private readonly tools: Array<{ tool: ToolDefinition; toolName: string }> = []
   private readonly deferredNamespaces = new Map<string, string>()
   private readonly providers = new Map<string, ProviderDefinition>()
@@ -30,7 +35,10 @@ export class PersistentInlineExtension {
     number,
     { event: ExtensionEventName; toolName?: string; fn: AnyHandler }
   >()
-  private activeUnsubs = new Map<number, () => void>()
+  private readonly unsubsByAttachment = new Map<
+    ExtensionAPI,
+    Map<number, () => void>
+  >()
   private readonly shutdownHandlers: Array<() => void | Promise<void>> = []
   private readonly proxyApi: ExtensionAPI
 
@@ -101,24 +109,14 @@ export class PersistentInlineExtension {
         }
         this.handlers.set(id, entry)
         if (this.activeApi) {
-          const unsub =
-            toolName !== undefined
-              ? (
-                  this.activeApi as {
-                    on: (
-                      event: ExtensionEventName,
-                      toolName: string,
-                      fn: AnyHandler,
-                    ) => () => void
-                  }
-                ).on(event, toolName, fn)
-              : this.activeApi.on(event, fn as never)
-          this.activeUnsubs.set(id, unsub)
+          this.subscribeOn(this.activeApi, id, entry)
         }
         return () => {
           this.handlers.delete(id)
-          this.activeUnsubs.get(id)?.()
-          this.activeUnsubs.delete(id)
+          for (const unsubs of this.unsubsByAttachment.values()) {
+            unsubs.get(id)?.()
+            unsubs.delete(id)
+          }
         }
       }) as ExtensionAPI['on'],
     }
@@ -144,8 +142,33 @@ export class PersistentInlineExtension {
     }
     this.shutdownHandlers.length = 0
     this.activeApi = undefined
-    this.activeUnsubs.clear()
+    this.unsubsByAttachment.clear()
     return errors
+  }
+
+  private subscribeOn(
+    targetApi: ExtensionAPI,
+    id: number,
+    entry: { event: ExtensionEventName; toolName?: string; fn: AnyHandler },
+  ): void {
+    const unsub =
+      entry.toolName !== undefined
+        ? (
+            targetApi as {
+              on: (
+                event: ExtensionEventName,
+                toolName: string,
+                fn: AnyHandler,
+              ) => () => void
+            }
+          ).on(entry.event, entry.toolName, entry.fn)
+        : targetApi.on(entry.event, entry.fn as never)
+    let map = this.unsubsByAttachment.get(targetApi)
+    if (!map) {
+      map = new Map()
+      this.unsubsByAttachment.set(targetApi, map)
+    }
+    map.set(id, unsub)
   }
 
   private requireApi(): ExtensionAPI {
@@ -159,16 +182,34 @@ export class PersistentInlineExtension {
 
   private attach(runnerApi: ExtensionAPI): void | Promise<void> {
     this.activeApi = runnerApi
+    if (!this.unsubsByAttachment.has(runnerApi)) {
+      this.unsubsByAttachment.set(runnerApi, new Map())
+    }
+    // Drop unsubscribe callbacks once this host runner shuts down so retired snapshots are GC'd.
+    runnerApi.onShutdown(() => {
+      this.unsubsByAttachment.delete(runnerApi)
+    })
+
     if (!this.initialized) {
       this.initialized = true
-      const result = this.ext(this.proxyApi)
-      if (result instanceof Promise) {
-        this.initPromise = result.finally(() => {
-          this.initPromise = undefined
-        })
-        return this.initPromise
+      try {
+        const result = this.ext(this.proxyApi)
+        if (result instanceof Promise) {
+          this.initPromise = result
+            .catch((error) => {
+              this.initError = errorMessage(error)
+              throw error
+            })
+            .finally(() => {
+              this.initPromise = undefined
+            })
+          return this.initPromise
+        }
+        return
+      } catch (error) {
+        this.initError = errorMessage(error)
+        throw error
       }
-      return
     }
     if (this.initPromise) {
       return this.initPromise
@@ -176,39 +217,128 @@ export class PersistentInlineExtension {
         .then(() => {
           this.activeApi = runnerApi
           this.replayTo(runnerApi)
+          if (this.initError) throw new Error(this.initError)
         })
     }
     this.replayTo(runnerApi)
+    if (this.initError) throw new Error(this.initError)
   }
 
   private replayTo(runnerApi: ExtensionAPI): void {
-    this.activeUnsubs.clear()
     for (const { tool } of this.tools) {
       runnerApi.registerTool(tool)
     }
     for (const [namespace, summaryLine] of this.deferredNamespaces) {
       runnerApi.registerDeferredNamespace?.(namespace, summaryLine)
     }
-    for (const [providerName, provider] of this.providers) {
-      runnerApi.registerProvider(providerName, provider)
-    }
     for (const [commandName, command] of this.commands) {
       runnerApi.registerCommand(commandName, command)
     }
     for (const [id, entry] of this.handlers) {
-      const unsub =
-        entry.toolName !== undefined
-          ? (
-              runnerApi as {
-                on: (
-                  event: ExtensionEventName,
-                  toolName: string,
-                  fn: AnyHandler,
-                ) => () => void
-              }
-            ).on(entry.event, entry.toolName, entry.fn)
-          : runnerApi.on(entry.event, entry.fn as never)
-      this.activeUnsubs.set(id, unsub)
+      this.subscribeOn(runnerApi, id, entry)
     }
+    for (const [providerName, provider] of this.providers) {
+      runnerApi.registerProvider(providerName, provider)
+    }
+  }
+}
+
+/** Lightweight `ExtensionSession` view (with internal `registry`, `store`, and `buildSystem` for `ExtensionRunner`) used inside `VelaAgentDriver`. */
+export function createExtensionSessionView(params: {
+  sessionId: string
+  cwd: string
+  name?: string
+  channel?: string
+  messages: ModelMessage[]
+  registry: ToolRegistry
+  store: SessionStore
+  eventBus?: RuntimeEventBus
+  runId?: string
+  projectId: string | null
+  signal?: AbortSignal
+  buildSystem?: (sections?: Record<string, string>) => string
+  onNotify?: (message: string, level: 'info' | 'warning' | 'error') => void
+  onSetActiveTools?: (names: string[] | undefined) => void
+}): ExtensionSession & {
+  registry: ToolRegistry
+  store: SessionStore
+  buildSystem(
+    sections?: Record<string, string>,
+    override?: string | null,
+  ): string
+  emit(event: unknown): void
+} {
+  return {
+    id: params.sessionId,
+    cwd: params.cwd,
+    get name() {
+      return params.name
+    },
+    get channel() {
+      return params.channel
+    },
+    messages: params.messages,
+    registry: params.registry,
+    store: params.store,
+    signal: params.signal,
+    getActiveTools: () => params.registry.getActiveTools().map((t) => t.name),
+    setActiveTools: (names: string[] | undefined) => {
+      params.registry.setSelection(names)
+      params.onSetActiveTools?.(names)
+    },
+    customMessageOf: (message: ModelMessage) => {
+      const id = params.store.idOf(message)
+      const entry = id ? params.store.getEntry(id) : undefined
+      if (entry?.type !== 'custom_message') return undefined
+      return {
+        customType: entry.customType,
+        display: entry.display,
+        ...(entry.details === undefined ? {} : { details: entry.details }),
+      }
+    },
+    buildSystem: (sections?: Record<string, string>) =>
+      params.buildSystem?.(sections) ?? '',
+    notify: (message: string, level: 'info' | 'warning' | 'error' = 'info') => {
+      if (params.onNotify) {
+        params.onNotify(message, level)
+        return
+      }
+      params.eventBus?.append({
+        sessionId: params.sessionId,
+        projectId: params.projectId,
+        runId: params.runId ?? null,
+        payload: {
+          type: 'notify',
+          ...(params.runId ? { runId: params.runId } : {}),
+          level,
+          message,
+        },
+      })
+    },
+    emit: (event: unknown) => {
+      if (
+        typeof event === 'object' &&
+        event !== null &&
+        (event as { type?: unknown }).type === 'audit'
+      ) {
+        const audit = event as { toolName?: unknown; path?: unknown }
+        if (
+          typeof audit.toolName === 'string' &&
+          typeof audit.path === 'string'
+        ) {
+          params.eventBus?.append({
+            sessionId: params.sessionId,
+            projectId: params.projectId,
+            runId: params.runId ?? null,
+            payload: {
+              type: 'audit',
+              ...(params.runId ? { runId: params.runId } : {}),
+              toolName: audit.toolName,
+              path: audit.path,
+            },
+          })
+        }
+      }
+    },
   }
 }

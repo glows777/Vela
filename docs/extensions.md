@@ -39,7 +39,7 @@ The factory can be synchronous or `async`. User extensions, explicitly supplied 
 
 `api.cwd` (called `vela.cwd` in examples) identifies where the factory instance was loaded. In every event handler, `ctx.cwd` and `ctx.session.cwd` identify the session's directory, including when a user-level extension handles another project. User extension configuration stays fixed at host initialization; project settings cannot reconfigure that singleton. A project factory receives its effective user-plus-project configuration.
 
-Project registrations are isolated, not arbitrary JavaScript execution: A and B may register the same tool or command name independently, but a project cannot override a name already registered by the host. Project `registerProvider` and `registerChannel` calls are reported and refused. Providers, credentials and listeners belong to the host. Module imports retain normal JavaScript caching, so this is neither isolation of module globals nor a security sandbox.
+Project registrations are isolated, not arbitrary JavaScript execution: A and B may register the same tool or command name independently, but a project cannot override a name already registered by the host. Project `registerProvider` calls are reported and refused. Providers, credentials and channel listeners belong to the host. Module imports retain normal JavaScript caching, so this is neither isolation of module globals nor a security sandbox.
 
 ## Where extensions load from
 
@@ -112,7 +112,6 @@ The factory's argument (`vela` below) is an `ExtensionAPI`:
 | `vela.unregisterTool(name)` | Remove a tool this extension registered, by its registered name |
 | `vela.registerCommand(name, command)` | Add a `/name` command |
 | `vela.registerProvider(name, provider)` | Add a host model provider; project instances are diagnosed and refused |
-| `vela.registerChannel(channel)` | Add a host message channel; project instances are diagnosed and refused |
 | `vela.on(event, handler)` | Subscribe to an event. Returns a function that unsubscribes |
 | `vela.onShutdown(handler)` | Run once when this instance is disposed: at host disposal for host factories, or after the last attached session closes for a project snapshot. Close resources shared by that instance, such as server connections |
 
@@ -121,7 +120,7 @@ The factory's argument (`vela` below) is an `ExtensionAPI`:
 Example: [hello-tool.ts](../examples/extensions/hello-tool.ts)
 
 ```ts
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 import { z } from 'zod'
 
 const hello: VelaExtension = (vela) => {
@@ -142,10 +141,10 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 |---|---|
 | `name` | Tool name before the prefix |
 | `description` | What the model reads to decide when to call the tool |
-| `inputSchema` | Zod schema only; plain JSON Schema and AI SDK `jsonSchema(...)` wrappers are not supported for extension-authored tools. Input is validated before `execute` |
-| `execute(input, ctx)` | Runs the tool. `ctx.toolCallId` and `ctx.signal` (aborted when the session is interrupted or closed) are available, as are `ctx.onUpdate` and `ctx.requireEnv()` (resolve the execution environment on demand). Return a string, or any value that is sent as JSON. Throw to report an error to the model. To keep structured data apart from what the model reads (pi's `{ content, details }`), return `new ToolExecutionResult(details, textOrContent)` (exported from `@glows777/vela`): the model gets the text or canonical `ToolContent` array, `details` is kept in the tool history and is the `details` of `tool_execution_end` for UIs. A third argument `{ isError: true }` makes it an error result |
+| `inputSchema` | Zod schema or `createJsonSchema(...)` from `@glows777/vela/extension-api`; input is validated before `execute` |
+| `execute(input, ctx)` | Runs the tool. `ctx.toolCallId` and `ctx.signal` (aborted when the session is interrupted or closed) are available, as are `ctx.onUpdate` and `ctx.requireEnv()` (resolve the execution environment on demand). Return a string, or any value that is sent as JSON. Throw to report an error to the model. To keep structured data apart from what the model reads (pi's `{ content, details }`), return `new ToolExecutionResult(details, textOrContent)` (exported from `@glows777/vela/extension-api`): the model gets the text or canonical `ToolContent` array, `details` is kept in the tool history and is emitted in `tool_finished` / UI details. A third argument `{ isError: true }` makes it an error result |
 | `replay` | `'safe'` explicitly allows replay after a crash; default `'unsafe'`. Both the saved attempt and current definition must opt in, with the same input and execution location. Five consecutive interruptions stop automatic replay. Use only for genuinely repeatable tools, never infer it from annotations. |
-| `executionMode` | `sequential` (default) runs the call alone within its session (other sessions are not affected); `parallel` runs calls alongside other parallel tool calls. A tool that writes files can also wrap the write in `withFileMutationQueue(path, fn)` (exported from `@glows777/vela`, same as pi) so it queues with `write` / `edit` on the same file |
+| `executionMode` | `sequential` (default) runs the call alone within its session (other sessions are not affected); `parallel` runs calls alongside other parallel tool calls |
 | `annotations` | Hints about the tool, same as pi and MCP: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Vela does not enforce these hints; a user extension can inspect them |
 | `maxResultChars` | Results longer than this (default 51,200) are saved to a file and the model gets a preview and the path to read the rest |
 | `hostedOnly` | When `true`, the tool is offered only if the current model declares a same-name hosted equivalent and the tool is allowed. It is never executed locally |
@@ -241,7 +240,7 @@ A provider model may declare `hostedTools: async () => ToolSet` on the model ret
 
 If you only need a different base URL or key for an OpenAI- or Anthropic-compatible service, edit `providers` in `~/.vela/config.json` instead. See [Models](models.md).
 
-### registerChannel
+### Channel integration
 
 Example: [echo-channel.ts](../examples/extensions/echo-channel.ts)
 
@@ -308,44 +307,27 @@ Every other session event (`agent_start`, `message_start`, `message_update`, `me
 
 ## Messages
 
-Like pi's `sendMessage`, `sendUserMessage` and `appendEntry`, but on the session rather than on the API: one Vela serves many sessions at once (a channel opens one per chat), so there is no "current session". Use `ctx.session` in a handler, or keep the session from `session_start` for background work.
+Inside `before_agent_start`, an extension can inject a custom user message using `customMessageIfChanged(ctx.session, customType, content)` from `@glows777/vela/extension-api` when per-turn context changed, and inspect existing custom messages with `ctx.session.customMessageOf(message)` / `lastCustomMessage(ctx.session, customType)`. Host code sends new prompts or steers running sessions through `runtime.prompt(sessionId, input)` and `runtime.steer(sessionId, text)` (and switches models with `runtime.sessions.setModel(sessionId, modelRef)`).
 
 ```ts
-vela.on('session_start', (_event, ctx) => {
-  watcher.onDone((job) =>
-    ctx.session.sendMessage(
-      { customType: 'job', content: `Job ${job.id} finished`, display: true, details: job },
-      { triggerTurn: true },
-    ),
-  )
-})
+import { customMessageIfChanged, type VelaExtension } from '@glows777/vela/extension-api'
+
+const withStatusNote: VelaExtension = (vela) => {
+  vela.on('before_agent_start', (_event, ctx) => {
+    const message = customMessageIfChanged(ctx.session, 'note', `cwd: ${ctx.cwd}`)
+    return message ? { message } : undefined
+  })
+}
 ```
-
-- `session.sendMessage({ customType, content, display, details? }, { triggerTurn?, deliverAs? })` adds a custom message. The model sees `content` (a string or parts, including an image part `{ "type": "image", "data", "mimeType" }`) as a user message; `display` says whether the TUI shows it (as a `[customType]` block); `details` is saved but never sent to the model. Its `message_start` / `message_end` events carry `custom: { customType, display, details }`, and `session.customMessageOf(message)` returns the same for a message in `session.messages`. It is saved as a `custom_message` entry ([session format](session-format.md)). Delivery is the same as pi's:
-  - `deliverAs: 'nextTurn'`: held until the next prompt and added after its user message.
-  - While running, unless `triggerTurn: false`: queued like `steer()`. Queued custom messages are not listed in `session.queue`.
-  - Idle with `triggerTurn: true`: runs the agent loop with the message as its input; resolves when the run ends.
-  - While running with `triggerTurn: false`: appended once the current step's tool results are in, so it never lands between a tool call and its result.
-  - Otherwise: appended right away, without calling the model.
-- `session.sendUserMessage(content, { deliverAs? })` accepts `content: string | (TextContent | ImageContent)[]` and returns `Promise<void>`. It sends input as if the user typed it: it goes through `input` handlers with source `extension`, but is not run as a command or expanded as a skill or prompt template. While running, pass `deliverAs` (`steer`), as with `prompt()`. The input hook can replace the images; they follow the same resize, persistence and model-capability rules as SDK prompts.
-
-  ```ts
-  await ctx.session.sendUserMessage([
-    { type: 'text', text: 'Inspect this screenshot' },
-    { type: 'image', data: pngBase64, mimeType: 'image/png' },
-  ], { deliverAs: 'steer' })
-  ```
-
-- `session.appendEntry(customType, data?)` saves extension state as a `custom` entry, never sent to the model. Read it back from `session.getEntries()`, for example in `session_start` after a resume. Like pi, entries added before the session has any conversation are written once the first message is (a session that never gets one is not saved).
 
 ## Context
 
-Handlers and command handlers receive a context as their second argument:
+Handlers and command handlers receive an `ExtensionContext` as their second argument:
 
 | Field | Description |
 |---|---|
-| `ctx.session` | The session that fired the event: `id`, `name`, `model`, `messages`, `getActiveTools()`, `setActiveTools(names)`, `setModel()`, `prompt()`, ... (see [SDK](sdk.md)) |
-| `ctx.notify(message, level?)` | Emits a `notify` event (`info`, `warning`, or `error`); shown in the TUI chat log, emitted as an event in JSON/RPC mode, and printed to stderr in `-p` mode |
+| `ctx.session` | The `ExtensionSession` view for the session that fired the event: `id`, `cwd`, `name`, `channel`, `messages`, `signal`, `getActiveTools()`, `setActiveTools(names)`, `customMessageOf(message)`, and `notify(message, level?)` |
+| `ctx.notify(message, level?)` | Emits a `notify` event (`info`, `warning`, or `error`) on the session event stream |
 | `ctx.cwd` | The current session's working directory, for both host and project handlers |
 | `ctx.signal` | Abort signal of the running turn; `undefined` when the session is idle. In a command handler it is the command's own signal |
 

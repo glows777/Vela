@@ -1,7 +1,6 @@
 import { basename, join, resolve } from 'node:path'
 import type { VelaDatabase } from '../db/index.ts'
 import type { ModelRegistry } from '../providers/models/index.ts'
-import type { RuntimeEventBus } from '../runtime/event-bus.ts'
 import type { MemoryStore } from '../runtime/memory/index.ts'
 import { errorMessage, type VelaLogger } from '../shared/logger.ts'
 import type { ModelPricing } from '../shared/pricing.ts'
@@ -16,15 +15,18 @@ import type { ExecutionEnv } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
 import { tasks as formatTasksCommand } from './extensions/background/tasks.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
-import type { ExtensionSession, VelaExtension } from './extensions/types.ts'
+import type { VelaExtension } from './extensions/types.ts'
 import type { MemoryDream } from './memory/dream.ts'
-import type { ModelMessage } from './messages.ts'
 import type { RuntimeBackgroundController } from './runtime-background.ts'
 import { resolveRuntimeDream } from './runtime-dream.ts'
-import { PersistentInlineExtension } from './runtime-inline-extension.ts'
-import type { SessionStore } from './session/index.ts'
+import {
+  createExtensionSessionView,
+  PersistentInlineExtension,
+} from './runtime-inline-extension.ts'
 import { ToolRegistry } from './tools/registry.ts'
 import type { TokenTracker } from './usage/tracker.ts'
+
+export { createExtensionSessionView }
 
 export const BUILTIN_NATIVE_EXTENSIONS = new Set([
   'background',
@@ -305,7 +307,14 @@ function resolveNonBuiltinExtensionEntries(
     }
     fileEntries.push(raw)
   }
-  const paths: string[] = [...discoverExtensions(discoveredDir)]
+  const paths: string[] = []
+  try {
+    paths.push(...discoverExtensions(discoveredDir))
+  } catch (error) {
+    errors.push(
+      `[extensions] Failed to scan ${discoveredDir}: ${errorMessage(error)}`,
+    )
+  }
   for (const raw of fileEntries) {
     try {
       paths.push(...discoverExtensions(raw, true))
@@ -413,6 +422,7 @@ export class RuntimeExtensionHost {
     configured?: readonly string[]
     explicit?: readonly (string | VelaExtension)[]
     extensionConfig: Record<string, Record<string, unknown>>
+    unregisterProviders?: boolean
   }): Promise<void> {
     const errors: string[] = []
     const resolvedOwner = resolveNonBuiltinExtensionEntries(
@@ -434,7 +444,9 @@ export class RuntimeExtensionHost {
     const runLoad = prevLoad
       .catch(() => {})
       .then(async () => {
-        this.unregisterExtensionProviders()
+        if (options.unregisterProviders !== false) {
+          this.unregisterExtensionProviders()
+        }
         const nextRegistry = new ToolRegistry(undefined)
         const recordLoadError = (msg: string) => {
           errors.push(msg)
@@ -697,101 +709,5 @@ export class RuntimeExtensionHost {
       }
     }
     this.inlineSlots.clear()
-  }
-}
-
-/** Lightweight `ExtensionSession` view (with internal `registry` and `store` for `ExtensionRunner`) used inside `VelaAgentDriver`. */
-export function createExtensionSessionView(params: {
-  sessionId: string
-  cwd: string
-  name?: string
-  channel?: string
-  messages: ModelMessage[]
-  registry: ToolRegistry
-  store: SessionStore
-  eventBus?: RuntimeEventBus
-  runId?: string
-  projectId: string | null
-  signal?: AbortSignal
-  buildSystem?: (sections?: Record<string, string>) => string
-  onNotify?: (message: string, level: 'info' | 'warning' | 'error') => void
-  onSetActiveTools?: (names: string[] | undefined) => void
-}): ExtensionSession & {
-  registry: ToolRegistry
-  store: SessionStore
-  emit(event: unknown): void
-} {
-  return {
-    id: params.sessionId,
-    cwd: params.cwd,
-    get name() {
-      return params.name
-    },
-    get channel() {
-      return params.channel
-    },
-    messages: params.messages,
-    registry: params.registry,
-    store: params.store,
-    signal: params.signal,
-    getActiveTools: () => params.registry.getActiveTools().map((t) => t.name),
-    setActiveTools: (names: string[] | undefined) => {
-      params.registry.setSelection(names)
-      params.onSetActiveTools?.(names)
-    },
-    customMessageOf: (message: ModelMessage) => {
-      const id = params.store.idOf(message)
-      const entry = id ? params.store.getEntry(id) : undefined
-      if (entry?.type !== 'custom_message') return undefined
-      return {
-        customType: entry.customType,
-        display: entry.display,
-        ...(entry.details === undefined ? {} : { details: entry.details }),
-      }
-    },
-    buildSystem: (sections?: Record<string, string>) =>
-      params.buildSystem?.(sections) ?? '',
-    notify: (message: string, level: 'info' | 'warning' | 'error' = 'info') => {
-      if (params.onNotify) {
-        params.onNotify(message, level)
-        return
-      }
-      params.eventBus?.append({
-        sessionId: params.sessionId,
-        projectId: params.projectId,
-        runId: params.runId ?? null,
-        payload: {
-          type: 'notify',
-          ...(params.runId ? { runId: params.runId } : {}),
-          level,
-          message,
-        },
-      })
-    },
-    emit: (event: unknown) => {
-      if (
-        typeof event === 'object' &&
-        event !== null &&
-        (event as { type?: unknown }).type === 'audit'
-      ) {
-        const audit = event as { toolName?: unknown; path?: unknown }
-        if (
-          typeof audit.toolName === 'string' &&
-          typeof audit.path === 'string'
-        ) {
-          params.eventBus?.append({
-            sessionId: params.sessionId,
-            projectId: params.projectId,
-            runId: params.runId ?? null,
-            payload: {
-              type: 'audit',
-              ...(params.runId ? { runId: params.runId } : {}),
-              toolName: audit.toolName,
-              path: audit.path,
-            },
-          })
-        }
-      }
-    },
   }
 }

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRuntime } from '@glows777/vela'
@@ -374,6 +374,220 @@ test('missing explicit or owner extension path does not suppress healthy file ex
     expect(order).toEqual(['owner', 'inline', 'file'])
   } finally {
     delete (globalThis as { __s4c2HookOrder?: string[] }).__s4c2HookOrder
+    await runtime.dispose()
+  }
+})
+
+test('async inline factory preserves tool_call hook order with file extensions across reloadConfig()', async () => {
+  const dir = makeTempDir('vela-s4c2-async-order')
+  const blocker = join(dir, 'confirm.ts')
+  const order: string[] = []
+  ;(globalThis as { __s4c2AsyncOrder?: string[] }).__s4c2AsyncOrder = order
+  writeFileSync(
+    blocker,
+    `export default function confirm(api: { on: Function }) {
+      api.on('tool_call', 'bash', (ev: { input: { command?: string } }) => {
+        ;(globalThis as { __s4c2AsyncOrder?: string[] }).__s4c2AsyncOrder?.push('file:' + ev.input.command)
+        return { block: true, reason: 'file blocked' }
+      })
+    }`,
+  )
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({}))
+  const asyncInline: VelaExtension = async function lateRewriter(api) {
+    await Promise.resolve()
+    api.on('tool_call', 'bash', (ev) => {
+      const input = ev.input as { command?: string }
+      const cmd = input.command ?? ''
+      order.push(`inline:${cmd}`)
+      input.command = `${cmd}-rewritten`
+    })
+  }
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('bash', { command: 'one' }),
+      fauxText('after 1'),
+      fauxToolCall('bash', { command: 'two' }),
+      fauxText('after 2'),
+    ],
+  })
+  const runtime = createRuntime({
+    agentDir: dir,
+    defaultModel: model,
+    mcp: false,
+    extensions: [asyncInline, blocker],
+  })
+  try {
+    await runtime.ready()
+    const s = await runtime.sessions.create({ name: 'async-order' })
+    await runtime.prompt(s.id, { text: 'first' })
+    await runtime.waitForIdle(s.id)
+    await runtime.reloadConfig()
+    await runtime.prompt(s.id, { text: 'second' })
+    await runtime.waitForIdle(s.id)
+    expect(order).toEqual([
+      'inline:one',
+      'file:one-rewritten',
+      'inline:two',
+      'file:two-rewritten',
+    ])
+  } finally {
+    delete (globalThis as { __s4c2AsyncOrder?: string[] }).__s4c2AsyncOrder
+    await runtime.dispose()
+  }
+})
+
+test('configured provider added on reloadConfig() overrides inline provider and reports collision', async () => {
+  const dir = makeTempDir('vela-s4c2-provider-collision')
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({}))
+  const inlineProvider: VelaExtension = function corpExt(api) {
+    api.registerProvider('corp', {
+      models: [{ id: 'inline-model', name: 'Inline Model' }],
+      createModel: () => createFauxModel({ responses: [fauxText('inline')] }),
+    })
+  }
+  const runtime = createRuntime({
+    agentDir: dir,
+    defaultModel: 'corp/inline-model',
+    mcp: false,
+    extensions: [inlineProvider],
+  })
+  try {
+    await runtime.ready()
+    expect((await runtime.models()).map((m) => m.ref)).toContain(
+      'corp/inline-model',
+    )
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({
+        providers: {
+          corp: {
+            api: 'openai-responses',
+            baseUrl: 'http://127.0.0.1:1/v1',
+            apiKey: 'test',
+            models: [{ id: 'config-model', name: 'Config Model' }],
+          },
+        },
+        model: 'corp/config-model',
+      }),
+    )
+    await runtime.reloadConfig()
+    const refs = (await runtime.models()).map((m) => m.ref)
+    expect(refs).toContain('corp/config-model')
+    expect(refs).not.toContain('corp/inline-model')
+    expect(
+      (await runtime.extensionErrors()).some((e) =>
+        e.includes('already registered'),
+      ),
+    ).toBe(true)
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('unreadable auto-discovery dir and failing inline init retain diagnostics without breaking healthy extensions across reload', async () => {
+  const dir = makeTempDir('vela-s4c2-eacces')
+  const extDir = join(dir, 'extensions')
+  mkdirSync(extDir, { recursive: true })
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({}))
+  chmodSync(extDir, 0o000)
+
+  let initCalls = 0
+  const seenCommands: string[] = []
+  const flakyInline: VelaExtension = async function flaky(api) {
+    initCalls += 1
+    api.registerCommand('partial', {
+      handler: (_args, ctx) => ctx.notify('partial-ok'),
+    })
+    await Promise.resolve()
+    throw new Error('bad init')
+  }
+  const runtime = createRuntime({
+    agentDir: dir,
+    defaultModel: createFauxModel({ responses: [fauxText('ok')] }),
+    mcp: false,
+    extensions: [flakyInline],
+  })
+  const off = runtime.events.subscribe((ev) => {
+    if (ev.type === 'notify') seenCommands.push(ev.message)
+  })
+  try {
+    await runtime.ready()
+    const initialErrs = await runtime.extensionErrors()
+    expect(initialErrs.some((e) => e.includes('Failed to scan'))).toBe(true)
+    expect(initialErrs.some((e) => e.includes('bad init'))).toBe(true)
+
+    const s = await runtime.sessions.create({ name: 'flaky' })
+    await runtime.sessions.runCommand(s.id, '/partial')
+    expect(seenCommands).toEqual(['partial-ok'])
+
+    await runtime.reloadConfig()
+    expect(initCalls).toBe(1)
+    expect(
+      (await runtime.extensionErrors()).some((e) => e.includes('bad init')),
+    ).toBe(true)
+  } finally {
+    chmodSync(extDir, 0o755)
+    off()
+    await runtime.dispose()
+  }
+})
+
+test('unsubscribing inline extension handler removes it from both current and retained snapshots', async () => {
+  const dir = makeTempDir('vela-s4c2-unsub-retired')
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({}))
+  let offHandler: (() => void) | undefined
+  let markBlocked!: () => void
+  const toolStarted = new Promise<void>((r) => {
+    markBlocked = r
+  })
+  let releaseTool!: () => void
+  const toolGate = new Promise<void>((r) => {
+    releaseTool = r
+  })
+  let hits = 0
+  const runtime = createRuntime({
+    agentDir: dir,
+    defaultModel: createFauxModel({
+      responses: [
+        fauxToolCall('bash', { command: 'echo 1' }),
+        fauxToolCall('bash', { command: 'echo 2' }),
+        fauxText('done 1'),
+        fauxToolCall('bash', { command: 'echo 3' }),
+        fauxText('done 2'),
+      ],
+    }),
+    mcp: false,
+    extensions: [
+      function toggle(api) {
+        offHandler = api.on('tool_call', () => {
+          hits += 1
+          if (hits === 1) {
+            markBlocked()
+            return toolGate.then(() => undefined)
+          }
+          return undefined
+        })
+      },
+    ],
+  })
+  try {
+    await runtime.ready()
+    const s = await runtime.sessions.create({ name: 'unsub' })
+    await runtime.prompt(s.id, { text: 'first' })
+    await toolStarted
+    // Trigger config reload while first turn's runner holds generation 1.
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({}))
+    await runtime.reloadConfig()
+    // Unsubscribe handler before letting the retained snapshot dispatch its next tool_call.
+    offHandler?.()
+    releaseTool()
+    await runtime.waitForIdle(s.id)
+    expect(hits).toBe(1)
+    // Subsequent turn on the current runner also does not invoke the unsubscribed handler.
+    await runtime.prompt(s.id, { text: 'second' })
+    await runtime.waitForIdle(s.id)
+    expect(hits).toBe(1)
+  } finally {
     await runtime.dispose()
   }
 })
