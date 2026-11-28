@@ -492,7 +492,8 @@ export class ExtensionRunner {
     const ctx = this.context(session)
     for (const { extension, fn } of this.list('before_agent_start')) {
       // No replacement yet: handlers read the built prompt, never the previous turn's
-      event.systemPrompt = systemPrompt ?? session.buildSystem(event.sections)
+      event.systemPrompt =
+        systemPrompt ?? session.buildSystem(event.sections, null)
       try {
         const result = (await fn(event, ctx)) as
           | BeforeAgentStartEventResult
