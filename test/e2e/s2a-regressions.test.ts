@@ -749,7 +749,9 @@ test('scoped hook targets only extension canonical tool, before_agent_start setM
     }) as typeof fetch
     const switchAtStart: VelaExtension = (vela) => {
       vela.on('before_agent_start', async (_event, ctx) => {
-        ctx.session.setModel('openai/big-out')
+        ;(
+          ctx.session as unknown as { setModel: (id: string) => void }
+        ).setModel('openai/big-out')
       })
     }
     const vela = createVela({

@@ -686,7 +686,7 @@ export function readNested() {
   const extPath = join(extDir, 'type-only-ext.ts')
   writeFileSync(
     extPath,
-    `import type { ExtensionAPI } from '@glows777/vela'
+    `import type { ExtensionAPI } from '@glows777/vela/extension-api'
 import { readNested } from './nested/helper.ts'
 export default function (vela: ExtensionAPI) {
   (vela as unknown as { tag?: string }).tag = readNested()

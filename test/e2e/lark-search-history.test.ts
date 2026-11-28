@@ -2,10 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  createRuntime,
-  DaemonLarkHost,
-} from '../../packages/vela/src/legacy-desktop.ts'
+import { createRuntime } from '@glows777/vela'
+import { DaemonLarkHost } from '../../packages/vela/src/daemon/lark-host.ts'
 import {
   createFauxModel,
   fauxText,

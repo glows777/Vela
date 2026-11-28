@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 import { simulateStreamingMiddleware, wrapLanguageModel } from 'ai'
 import { z } from 'zod'
 import type {

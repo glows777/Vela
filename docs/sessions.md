@@ -10,7 +10,7 @@ Every session has an id (`sessions.id`). Ids use letters, digits, `.`, `_` and `
 
 - The CLI starts a new session on every launch with an id made from the local time and four random characters, such as `20261008-081441-da14`.
 - Channel sessions get `<channel>-<conversationId>`, one shared session per chat (hashed when the ids have other characters). See [Channels](channels.md).
-- In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
+- In the SDK you create sessions via `await runtime.sessions.create({ id, name })` (or a default hub session via `runtime.projects.create({ ..., hubSessionId: true })`).
 
 In the CLI, Vela persists active sessions in SQLite at `$VELA_DIR/vela.db` (`~/.vela/vela.db`: `sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`), while spilled long tool outputs for a session live under `<dataDir>/sessions/<id>/tool-results/` inside the [project data directory](settings.md#data-directory). Opening and closing an empty session leaves no rows in `vela.db`; `--no-session` (`ephemeralSessions: true`) uses an in-memory SQLite database (`:memory:`) and a temporary spill directory removed when the session closes. Memory is unchanged.
 
@@ -18,7 +18,7 @@ Persistent session deletion is manual. Before deleting a session's rows from `ve
 
 The owner can retain or remove each matching guest directory as part of the same retention decision. Deleting the host session alone leaves these container caches in place. The canonical downloads belong to the chat's private `files/` directory and can be shared across topics. Archiving and closing a persistent session preserve its files.
 
-In the SDK, `createRuntime()` stores sessions in `<agentDir>/vela.db` (`~/.vela/vela.db` by default, or `:memory:` with `ephemeral: true`). With `createVela()`, sessions are stored in `<agentDir>/vela.db` when `agentDir` is passed, fall back to `<dataDir>/vela.db` when `createVela({ dataDir })` is called without `agentDir`, or stay in memory (`:memory:`) when neither is provided (or when `ephemeralSessions: true`). See [SDK](sdk.md#session-storage).
+In the SDK, `createRuntime({ agentDir })` stores sessions in `<agentDir>/vela.db` (`~/.vela/vela.db` by default, or `:memory:` when `ephemeral: true` or `ephemeralSessions: true` is set). See [SDK](sdk.md#session-storage).
 
 ## Continue or switch sessions
 
@@ -40,15 +40,13 @@ In interactive mode:
 | `/context` | Show what fills the context window |
 | `/usage` | Show this session's token usage, cache hit rate and cost |
 
-In the SDK, `vela.session(id)` opens a session with an empty history; call `await session.resume()` to continue a saved one. Prompting a session whose id already has saved history without resuming it fails (`Session <id> already has saved history: call resume() to continue it, or use another session id`) rather than mixing two conversations in the database.
+In the SDK, `await runtime.sessions.create({ name })` starts a new persisted session in `vela.db`, and `await runtime.sessions.get(sessionId)` / `await runtime.prompt(sessionId, { text })` continues an existing saved session by id across restarts.
 
-The picker lists sessions newest first by name (or first message), id, message count and time. Sessions with no messages are not listed. Archived sessions are left out (see below).
+The picker lists sessions newest first by name (or first message), id, message count and time. Sessions with no messages are not listed. Archived sessions are left out (`sessions.listSummaries({ includeArchived: true })`).
 
-## Archive and search saved sessions
+## Inspect and list saved sessions
 
-`vela.setSessionArchived(id, true)` takes a saved session out of `vela.listSessions()` and the interactive picker; `false` brings it back. The flag is persisted directly in SQLite (`sessions.archived`), so it survives a restart and no message is deleted. The session keeps its id and can still be opened and resumed by id; a fork or clone of it starts active. Archiving does not need the session to be opened.
-
-`vela.searchSessions(text)` scans the user and assistant message text of saved sessions and returns `{ id, match }[]`, newest first: one hit per session, with a short excerpt around the first match. Tool output, `!` commands, summaries and extension messages are not searched. There is no index: every saved session is read once per search. Pass `{ includeArchived: true }` to search archived sessions too.
+`await runtime.sessions.listSummaries({ includeArchived?: boolean, excludeChannels?: boolean, cwd?: string, projectId?: string })` lists saved sessions with summary metadata persisted in SQLite (`sessions`). Pass `includeArchived: true` to include archived sessions.
 
 ## Session tree
 
@@ -70,11 +68,11 @@ Like pi, a session is a tree: moving back to an earlier entry does not erase the
 
 Moving in the tree only changes what the model sees. Files the abandoned branch changed and commands it ran are not undone (pi doesn't either), and its tool calls stay in the session's tool call history.
 
-In the SDK these are `session.navigateTree(entryId, { summarize, focus, label })`, `session.fork(entryId, { position, sessionId })`, `session.clone()`, `session.setLabel()`, `session.getTree()`, `session.getBranch()` and `session.getLeafId()`. Unlike pi, whose fork replaces its one session, `fork()` and `clone()` open the copy as another session in the same Vela and leave the original open. See [SDK](sdk.md#session-tree). All of them refuse while the session is running.
+In the SDK these are `runtime.sessions.tree(sessionId)`, `runtime.sessions.navigateTree(sessionId, entryId, { summarize, focus, label })`, `runtime.sessions.fork(sessionId, entryId, { position, sessionId: newId })`, `runtime.sessions.clone(sessionId, { sessionId: newId })`, `runtime.sessions.setLabel(sessionId, entryId, label)`, and `runtime.sessions.inspect(sessionId, { includeEntries: true })`. `fork()` and `clone()` create a new session in `vela.db` and leave the original untouched. See [SDK](sdk.md#session-tree). All of them refuse while the session is running.
 
 ## Export
 
-`/export [path]` (`session.exportHtml(path)`, `runtime.sessions.export(id, 'html' | 'jsonl', path)`, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`, or `vela --export <id> branch.jsonl`) writes the branch in the [session export format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
+`/export [path]` (`runtime.sessions.export(sessionId, 'html' | 'jsonl', path)`, `vela --export <id> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. Pass `'jsonl'` (or `vela --export <id> branch.jsonl`) to write the branch in the [session export format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
 
 Review an export before you share it: it can contain your prompts, the model's answers, tool arguments, command output and file contents. Vela has no `/share` upload (pi's `/share` uploads to a gist).
 
@@ -82,7 +80,7 @@ Review an export before you share it: it can contain your prompts, the model's a
 
 One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory and channels; each keeps its own history, queues, compaction, usage, tool results and run lock. This is a difference from pi, where one process holds one active session. A channel like Lark needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
 
-The CLI opens one session at a time on the resident daemon; `connectRuntime()`, `createRuntime()`, and legacy `createVela()` can drive as many sessions concurrently as you need. See [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
+The CLI opens one session at a time on the resident daemon; `connectRuntime()` and `createRuntime()` can drive as many sessions concurrently as you need. See [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
 
 ## Queueing: steer
 
@@ -90,13 +88,13 @@ A session runs one agent loop at a time. Input that arrives while it runs can be
 
 | Mode | When it is sent | Interactive | SDK |
 |---|---|---|---|
-| steer | After the current tool call finishes, skipping remaining queued calls in the step before the next model request | Enter | `session.steer(text)` |
+| steer | After the current tool call finishes, skipping remaining queued calls in the step before the next model request | Enter | `runtime.steer(sessionId, text)` |
 
 By default one queued message is taken at a time (`steeringMode` can be set to `all`). If the loop ends early (an error or loop detection), the remaining messages run in a new loop. After an abort the loop stops and the queue is kept.
 
 In interactive mode the queue is shown above the editor. Alt+Up (macOS: Option+Up) moves queued messages back into the editor; Esc aborts the run and moves them back too.
 
-`prompt()` in the SDK resolves only after the queue is drained and emits `agent_settled` last.
+`runtime.prompt(sessionId, input)` resolves once the input is durably queued; await `runtime.waitForIdle(sessionId)` before reading completed messages (the run emits `run_finished` after finishing).
 
 ## Compaction
 
@@ -119,21 +117,21 @@ The summary request uses the same model and system prompt as the main request. I
 
 ### Manual compaction
 
-`/compact [focus]` in interactive mode, `session.compact(focus)` and `runtime.sessions.compact(id, focus)` in the SDK summarize now, whatever the thresholds. `focus` tells the summary what to preserve. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When the conversation fits within the recent-token keep budget (`canSummarize` is false, e.g. only the initial message), it fails with `Nothing to compact (session too small)`.
+`/compact [focus]` in interactive mode and `runtime.sessions.compact(sessionId, focus)` in the SDK summarize now, whatever the thresholds. `focus` tells the summary what to preserve. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When the conversation fits within the recent-token keep budget (`canSummarize` is false, e.g. only the initial message), it fails with `Nothing to compact (session too small)`.
 
 ### Turning automatic compaction off
 
-Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, or set `session.autoCompaction = false`. Then nothing changes the context on its own: no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works.
+Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), or pass `autoCompaction: false` to `createRuntime()`. Then nothing changes the context on its own: no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works.
 
 ### Thresholds and context window
 
-The token thresholds are `summaryThreshold` and `maxInputTokens`. Their defaults match a 200k window; when the model entry has a `contextWindow`, they are derived from it and recomputed when you switch models. Values set in the `limits` setting or the `limits` option of `createVela()` always win. See [Settings](settings.md#limits) for the defaults and formulas.
+The token thresholds are `summaryThreshold` and `maxInputTokens`. Their defaults match a 200k window; when the model entry has a `contextWindow`, they are derived from it and recomputed when you switch models. Values set in the `limits` setting or the `limits` option of `createRuntime()` always win. See [Settings](settings.md#limits) for the defaults and formulas.
 
 ## Long tool output
 
 A tool result longer than the tool's line limit (200 lines for `grep` and `find`, 500 lines by default and for web tools; `read` pages and `bash` previews have their own limits; see [Tools](tools.md#result-size-and-truncation)) is saved in full to `<dataDir>/sessions/<id>/tool-results/<callId>.txt`. The model gets the head up to the limit, followed by one line with the file path and a hint to page through the rest with `read` and `offset`. Bash keeps its existing tail preview, with the file path only when truncated.
 
-Every tool call and its result is also recorded in SQLite (`vela_tool_calls` in `$VELA_DIR/vela.db` for the CLI, or SDK `<agentDir>/vela.db` / `<dataDir>/vela.db`), which survives compaction. See [Session format](session-format.md#tool-call-history).
+Every tool call and its result is also recorded in SQLite (`vela_tool_calls` in `$VELA_DIR/vela.db` for the CLI, or `<agentDir>/vela.db` in `createRuntime({ agentDir })`), which survives compaction. See [Session format](session-format.md#tool-call-history).
 
 Vela doesn't expire tool results by age: content changes only through compaction summaries when reached.
 
@@ -175,6 +173,6 @@ Every model request records input, output, cache-read and cache-write tokens and
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.
 - `session.usage` in the SDK returns `{ tokens, percent, needsAction, totals }`.
-- Each request records input, output, cache-read, cache-write tokens and cost in `usage_records` in `$VELA_DIR/vela.db` (or SDK `<agentDir>/vela.db` / `<dataDir>/vela.db`). `--no-session` keeps the same totals in memory without persisting to disk.
+- Each request records input, output, cache-read, cache-write tokens and cost in `usage_records` in `$VELA_DIR/vela.db` (or `<agentDir>/vela.db` in `createRuntime({ agentDir })`). `--no-session` keeps the same totals in memory without persisting to disk.
 
 `usage` events carry the same numbers per request. See [SDK](sdk.md#events).

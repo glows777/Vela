@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import * as sdk from '@larksuiteoapi/node-sdk'
 import {
   createLarkChannelAdapter,
   createRuntime,
-  DaemonLarkHost,
   type LocalVelaRuntime,
-} from '../../packages/vela/src/legacy-desktop.ts'
+} from '@glows777/vela'
+import * as sdk from '@larksuiteoapi/node-sdk'
+import { DaemonLarkHost } from '../../packages/vela/src/daemon/lark-host.ts'
 import {
   createFauxModel,
   fauxText,

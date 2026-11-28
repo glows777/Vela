@@ -1129,12 +1129,19 @@ test('custom messages show as a labeled block only with display: true (like pi)'
   ) {
     vela.registerCommand('note', {
       handler: async (_args, ctx) => {
-        await ctx.session.sendMessage({
+        const s = ctx.session as unknown as {
+          sendMessage: (msg: {
+            customType: string
+            content: string
+            display: boolean
+          }) => Promise<void>
+        }
+        await s.sendMessage({
           customType: 'reminder',
           content: 'Shown reminder',
           display: true,
         })
-        await ctx.session.sendMessage({
+        await s.sendMessage({
           customType: 'hidden',
           content: 'Hidden context',
           display: false,

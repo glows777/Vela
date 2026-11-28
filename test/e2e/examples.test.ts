@@ -38,9 +38,14 @@ async function run(args: string[]) {
 
 const sdkExamples: [file: string, expected: string][] = [
   ['01-minimal.ts', 'messages: 2'],
-  ['02-events.ts', '[agent_settled]'],
+  ['02-events.ts', '[run_finished] completed'],
   ['03-multi-session.ts', 'bob: 2 messages, 1 from the user'],
   ['04-custom-storage.ts', 'answer: You are Ada.'],
+  ['05-images.ts', 'resume and vision model request verified'],
+  [
+    '06-tool-images.ts',
+    'tool hook, text-only fallback and resumed image request verified',
+  ],
 ]
 
 for (const [file, expected] of sdkExamples)

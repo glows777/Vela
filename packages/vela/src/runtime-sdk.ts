@@ -11,11 +11,7 @@ import { registerRuntimeSettingsHooksResolver } from './daemon/settings-discover
 import { openDatabase, withReadonlyDb } from './db/index.ts'
 import { savedTrust, saveTrust } from './db/trust.ts'
 import { defaultAgentDir } from './driver/config/paths.ts'
-import {
-  createVelaAgentDriver,
-  type RuntimeMcpAdapter,
-} from './driver/runtime-adapter.ts'
-import type { ResolveSpecialModelFn } from './driver/runtime-types.ts'
+import { createVelaAgentDriver } from './driver/runtime-adapter.ts'
 import { listSessionSummariesFromDb } from './driver/session/db-queries.ts'
 import {
   fileCredentialStore,
@@ -35,13 +31,19 @@ import {
   setChannelEnabledInDb,
   VelaRuntimeEngine,
 } from './runtime/index.ts'
+import {
+  createLazyRuntimeMcpAdapter,
+  createSpecialModelResolver,
+  isLarkExtensionDisabled,
+  mergeExtensionConfig,
+} from './runtime-sdk-helpers.ts'
 import type {
   CreateRuntimeOptions,
   LocalVelaRuntime,
   VelaRuntime,
 } from './runtime-sdk-types.ts'
-import { silentLogger, type VelaLogger } from './shared/logger.ts'
-import type { ModelInput } from './shared/provider-types.ts'
+import { defaultDocsPaths } from './shared/docs-paths.ts'
+import { silentLogger } from './shared/logger.ts'
 
 export type {
   CreateRuntimeOptions,
@@ -56,96 +58,6 @@ export type {
   RuntimeSettingsState,
   VelaRuntime,
 } from './runtime-sdk-types.ts'
-
-function createLazyRuntimeMcpAdapter(
-  hostEnv: Record<string, string | undefined> | undefined,
-  logger: VelaLogger,
-  skipUserConfig = false,
-): RuntimeMcpAdapter {
-  let adapterPromise: Promise<RuntimeMcpAdapter> | undefined
-  const loadAdapter = (): Promise<RuntimeMcpAdapter> => {
-    adapterPromise ??= import('./mcp/runtime-adapter.ts').then((mod) =>
-      mod.createRuntimeMcpAdapter({ hostEnv, logger, skipUserConfig }),
-    )
-    return adapterPromise
-  }
-  return {
-    async attach(params) {
-      const adapter = await loadAdapter()
-      return adapter.attach(params)
-    },
-    async dispose() {
-      if (!adapterPromise) return
-      const adapter = await adapterPromise
-      await adapter.dispose?.()
-    },
-  }
-}
-
-function mergeExtensionConfig(
-  base: Record<string, Record<string, unknown>>,
-  override: Record<string, Record<string, unknown>> | undefined,
-): Record<string, Record<string, unknown>> | undefined {
-  const keys = new Set([...Object.keys(base), ...Object.keys(override ?? {})])
-  if (keys.size === 0) return undefined
-  const merged: Record<string, Record<string, unknown>> = {}
-  for (const key of keys) {
-    merged[key] = { ...(base[key] ?? {}), ...(override?.[key] ?? {}) }
-  }
-  return merged
-}
-
-function isLarkExtensionDisabled(
-  extensions: readonly string[] | undefined,
-): boolean {
-  let disabled = false
-  for (const entry of extensions ?? []) {
-    if (entry === '-builtin:lark') disabled = true
-    else if (entry === '+builtin:lark' || entry === 'builtin:lark')
-      disabled = false
-  }
-  return disabled
-}
-
-function createSpecialModelResolver(): ResolveSpecialModelFn {
-  return async ({ modelRef, recordPath, fallbackModel }) => {
-    const testing = await import('./testing/core/index.ts')
-    let baseModel: ModelInput | undefined
-    if (modelRef === 'mock') {
-      baseModel = testing.createMockModel()
-    } else if (modelRef?.startsWith('faux:')) {
-      baseModel = await testing.loadFauxScenario(modelRef.slice('faux:'.length))
-    } else {
-      baseModel = fallbackModel
-    }
-    if (!baseModel) return undefined
-    const maybeCache = baseModel as unknown as {
-      setCacheEnabled?: (enabled: boolean) => void
-    }
-    if (recordPath) {
-      const recorder = testing.recordModel(baseModel, { path: recordPath })
-      return {
-        model: recorder.model,
-        addInput: (input) => recorder.addInput(input),
-        flush: () => recorder.flush(),
-        ...(maybeCache.setCacheEnabled
-          ? {
-              setCacheEnabled: (enabled) =>
-                maybeCache.setCacheEnabled?.(enabled),
-            }
-          : {}),
-      }
-    }
-    return {
-      model: baseModel,
-      ...(maybeCache.setCacheEnabled
-        ? {
-            setCacheEnabled: (enabled) => maybeCache.setCacheEnabled?.(enabled),
-          }
-        : {}),
-    }
-  }
-}
 
 /**
  * Creates an in-process `LocalVelaRuntime` backed by `<agentDir>/vela.db` (or `:memory:` when `ephemeral: true`).
@@ -321,6 +233,8 @@ export function createRuntime(
       })
     }
 
+    const explicitExtensions = options.extensions
+
     const velaDriver = createVelaAgentDriver({
       db,
       agentDir,
@@ -351,6 +265,9 @@ export function createRuntime(
       defaultTools: initial.ownerConfig.tools,
       extensionConfig: initial.extensionConfig,
       extensions: initial.ownerConfig.extensions,
+      explicitExtensions: explicitExtensions?.length
+        ? explicitExtensions
+        : undefined,
       enabledModels: initial.ownerConfig.enabledModels,
       githubRepositories: extractGithubRepositories(
         initial.ownerConfig.webhooks,
@@ -359,6 +276,9 @@ export function createRuntime(
         engine.getChannelToolsForSession(sid, runId),
       getChannelTimezone: (channel) => engine.channelAdapter(channel)?.timezone,
       hostEnv,
+      docsPaths: options.docs ?? defaultDocsPaths(),
+      systemPrompt: options.systemPrompt,
+      appendSystemPrompt: options.appendSystemPrompt,
       contextFiles: options.contextFiles,
       skills: options.skills,
       promptTemplates: options.promptTemplates,
@@ -391,6 +311,7 @@ export function createRuntime(
       ...(initial.larkError ? { larkError: initial.larkError } : {}),
       disabledByExtension: isLarkExtensionDisabled(
         initial.ownerConfig.extensions,
+        explicitExtensions,
       ),
     }
     let reloadQueue: Promise<void> = Promise.resolve()
@@ -418,6 +339,7 @@ export function createRuntime(
           ...(updated.larkError ? { larkError: updated.larkError } : {}),
           disabledByExtension: isLarkExtensionDisabled(
             updated.ownerConfig.extensions,
+            explicitExtensions,
           ),
         }
         await velaDriver.control.reloadConfig({

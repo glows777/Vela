@@ -327,7 +327,9 @@ export function createRuntimeControl(
       state.sessionResourceSnapshots.clear()
       await state.extHost.reload({
         configured: state.reloadable.extensions,
+        explicit: state.options.explicitExtensions,
         extensionConfig: state.reloadable.extensionConfig ?? {},
+        unregisterProviders: false,
       })
     },
 

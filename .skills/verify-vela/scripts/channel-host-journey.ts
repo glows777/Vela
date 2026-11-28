@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 import { createRuntime } from '@glows777/vela'
-import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
+import { DaemonLarkHost } from '../../../packages/vela/src/daemon/lark-host.ts'
 import { silentLogger } from '../../../packages/vela/src/shared/logger.ts'
 import {
   createFauxModel,

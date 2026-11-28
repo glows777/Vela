@@ -355,8 +355,11 @@ test('Fix #4: discoverExtensions follows valid symlinks, skips broken symlinks, 
   writeFileSync(
     directTarget,
     `import { z } from 'zod'
-import { createJsonSchema } from '@glows777/vela'
-import { silentLogger, type ExtensionAPI } from '@glows777/vela/extension-api'
+import {
+  createJsonSchema,
+  silentLogger,
+  type ExtensionAPI,
+} from '@glows777/vela/extension-api'
 export default function (api: ExtensionAPI) {
   silentLogger.debug('loaded')
   void createJsonSchema({ type: 'object' })

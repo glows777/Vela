@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs'
+import type { DocsPaths } from '../../shared/docs-paths.ts'
 import { type ContextFile, renderContextFiles } from './context-files.ts'
 import type { PromptContext, SectionRender } from './system-prompt.ts'
 
 export * from './environment.ts'
 export * from './system-prompt.ts'
+export type { DocsPaths }
 
 /**
  * The default intro paragraph (pi's preamble). It names no capability: a session's tools vary, and
@@ -80,16 +82,6 @@ export function rules(): SectionRender {
     for (const rule of STANDING_RULES) add(rule)
     return lines.join('\n')
   }
-}
-
-/** Where Vela's own documentation and examples are, resolved once when Vela is created. */
-export interface DocsPaths {
-  /** `<package>/README.md` */
-  readme?: string
-  /** `<package>/docs` */
-  docs?: string
-  /** `<package>/examples` */
-  examples?: string
 }
 
 /**

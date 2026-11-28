@@ -4,7 +4,7 @@
  * every model request in the turn uses the same section and the cache prefix stays stable.
  * Returning `{ systemPrompt }` instead replaces the whole prompt for that turn.
  */
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 
 const today: VelaExtension = (vela) => {
   vela.on('before_agent_start', (event) => {

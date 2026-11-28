@@ -7,7 +7,6 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -20,7 +19,7 @@ import {
 } from '../../../../test/support/vela.ts'
 import { openDatabase, savedTrust, saveTrust } from '../../src/db/index.ts'
 import { createLocalExecutionEnv } from '../../src/driver/execution/local.ts'
-import { loadConfig } from '../../src/driver/index.ts'
+import { createVela, loadConfig } from '../../src/driver/index.ts'
 import { environment } from '../../src/driver/prompt/index.ts'
 import {
   canonicalEnvironmentPath,

@@ -1,7 +1,26 @@
 /** Acyclic public extension contracts; never import the product/root barrel here. */
 
+export type {
+  HostedToolModel,
+  LoginProvider,
+  ModelCompat,
+  ModelInfo,
+  ModelSpec,
+  ProviderContext,
+  ProviderDefinition,
+  ThinkingLevel,
+} from '../providers/models/index.ts'
 export type { VelaLogger } from '../shared/logger.ts'
 export { silentLogger } from '../shared/logger.ts'
+export type { ModelPricing } from '../shared/pricing.ts'
+export type {
+  FinishReason,
+  ModelHandle,
+  ModelInput,
+  ProviderRequestParams,
+  ProviderUsage,
+  ReasoningOption,
+} from '../shared/provider-types.ts'
 export {
   createJsonSchema,
   type ToolInputSchema,
@@ -22,7 +41,11 @@ export type * from './extensions/types.ts'
 export type {
   ImageContent,
   ModelMessage,
+  ProviderOptions,
+  TextContent,
   ToolContent,
+  ToolResultContentItem,
+  ToolResultOutput,
   VelaMessage,
   VelaPart,
 } from './messages.ts'
@@ -38,4 +61,3 @@ export type {
 } from './tools/types.ts'
 export { SpilledToolOutput, ToolExecutionResult } from './tools/types.ts'
 export type { StepRecord, StepUsage, UsageTotals } from './usage/tracker.ts'
-export type { VelaSession } from './vela-session.ts'

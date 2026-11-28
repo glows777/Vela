@@ -11,12 +11,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CliSessionClient } from '../../packages/vela/src/cli/runtime-client.ts'
 import { setupWizard } from '../../packages/vela/src/cli/tui/setup-wizard.ts'
-import { fileCredentialStore } from '../../packages/vela/src/driver/index.ts'
+import {
+  fileCredentialStore,
+  verifyProviderModel,
+} from '../../packages/vela/src/driver/index.ts'
 import {
   createRuntime,
   loadModels,
   memoryCredentialStore,
-  verifyProviderModel,
 } from '../../packages/vela/src/index.ts'
 import { responsesReply } from '../support/responses.ts'
 

@@ -1,6 +1,6 @@
 # Session format and export
 
-Vela persists active sessions in SQLite (`$VELA_DIR/vela.db` in the CLI, or `<dataDir>/vela.db` when only `dataDir` is passed to `createVela()`: `sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`) rather than per-session JSONL files on disk. The append-only JSONL tree layout below describes the **export format** written by `session.exportJsonl()` (compatible with pi's session format) and the logical entry tree stored in `vela_messages`.
+Vela persists active sessions in SQLite (`$VELA_DIR/vela.db` in the CLI, or `<agentDir>/vela.db` in `createRuntime({ agentDir })`: `sessions`, `vela_messages`, `vela_tool_calls`, `runs`, `approvals`, `usage_records`) rather than per-session JSONL files on disk. The append-only JSONL tree layout below describes the **export format** written by `runtime.sessions.export(id, 'jsonl')` (compatible with pi's session format) and the logical entry tree stored in `vela_messages`.
 
 Like pi, entries form a tree: each entry names its `parentId`, and moving back to an earlier entry ([`/tree`](sessions.md#session-tree)) and continuing from there starts a new branch without deleting prior entries. A summary does not delete the messages it replaces; it adds a `compaction` entry, and the model context is rebuilt from the entries of the current branch when a session is resumed.
 

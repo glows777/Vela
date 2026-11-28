@@ -8,7 +8,7 @@ import {
   type FauxRequest,
   type FauxResponse,
 } from '@glows777/vela/testing'
-import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
+import { DaemonLarkHost } from '../../../packages/vela/src/daemon/lark-host.ts'
 import { silentLogger } from '../../../packages/vela/src/shared/logger.ts'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 import { prepareWorkspace } from './workspace.ts'

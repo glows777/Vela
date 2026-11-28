@@ -1,32 +1,34 @@
 /**
- * Minimal SDK usage: one Vela, one session, one prompt.
+ * Minimal SDK usage: one in-process runtime, one session, one prompt.
  *
  * The faux model from `@glows777/vela/testing` plays back a scripted reply, so this runs offline.
- * A real app passes `model: 'openai/<model-id>'` (with `providers` from loadConfig()) or an AI SDK LanguageModel.
+ * A real app passes `defaultModel: 'openai/<model-id>'` (reading providers from `~/.vela/config.json`)
+ * or an AI SDK LanguageModel.
  *
  * Run: bun examples/sdk/01-minimal.ts
  */
-import { createVela } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 import { createFauxModel, fauxText } from '@glows777/vela/testing'
 
-const model = createFauxModel({
+const defaultModel = createFauxModel({
   responses: [fauxText('Hello! I am a scripted faux model.')],
 })
 
-// No dataDir: nothing persists. The session lives in memory and dispose() deletes the temp files.
-const vela = createVela({ model })
+// ephemeral: true uses an in-memory SQLite DB and cleans up temp files on dispose().
+const runtime = createRuntime({ ephemeral: true, defaultModel, mcp: false })
 
 try {
-  const session = vela.session()
-  // Resolves when the run is finished (including tool calls and queued messages).
-  await session.prompt('Say hello')
+  await runtime.ready()
+  const session = await runtime.sessions.create({ name: 'minimal' })
+  await runtime.prompt(session.id, { text: 'Say hello' })
+  await runtime.waitForIdle(session.id)
 
-  const last = session.messages.at(-1)
-  if (last?.role === 'assistant' && Array.isArray(last.content)) {
-    for (const part of last.content)
-      if (part.type === 'text') console.log(part.text)
+  const page = await runtime.sessions.messages({ sessionId: session.id })
+  const last = page.messages.at(-1)
+  if (last?.role === 'assistant') {
+    console.log(last.text)
   }
-  console.log(`messages: ${session.messages.length}`)
+  console.log(`messages: ${page.messages.length}`)
 } finally {
-  await vela.dispose()
+  await runtime.dispose()
 }

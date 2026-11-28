@@ -1,8 +1,8 @@
 # Built-in extensions
 
-Vela ships six selectable built-in extensions in `@glows777/vela`: `background`, `memory`, `todo`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md) and [Packages](sdk.md#packages)).
+Vela ships six built-in capabilities integrated directly into `vela daemon`, the CLI, and `createRuntime()`: `background`, `memory`, `todo`, `web`, `lark`, and `mcp`. See [Extensions](extensions.md) and [Packages](sdk.md#packages).
 
-| Extension | Adds |
+| Built-in | Adds |
 |---|---|
 | `background` | Long-running commands whose result arrives on its own: `bash` with `run_in_background`, plus `background_output` and `background_stop` |
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
@@ -13,33 +13,9 @@ Vela ships six selectable built-in extensions in `@glows777/vela`: `background`,
 
 ## Loading
 
-**CLI.** All six load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI, `vela daemon`, and `createRuntime()`.** Built-ins load automatically based on `<agentDir>/config.json` (when `ephemeral` is not set). Some capabilities stay inactive until configured: `web` registers only `web_fetch` without a search key, `lark` does not connect without an app id and secret, and `mcp` connects nothing until `mcpServers` are configured (pass `mcp: false` to `createRuntime()` to disable MCP pooling explicitly).
 
-To turn one off, add `-builtin:<name>` to `extensions` in `config.json`, for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
-
-**SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
-
-```ts
-import {
-  background,
-  createVela,
-  memory,
-  todo,
-  web,
-} from '@glows777/vela'
-
-const vela = createVela({
-  dataDir: '.vela-data',
-  extensions: [
-    background(),
-    memory(),
-    todo(),
-    web({ tavilyKey: process.env.TAVILY_API_KEY }),
-  ],
-})
-```
-
-For the selectable built-ins below, factory options take precedence. An option you leave out is read from the extension's config section, `extensionConfig.<name>`, which you can pass to `createVela({ extensionConfig })`.
+To turn one off, add `-builtin:<name>` to `extensions` in `config.json` (or `createRuntime({ extensions: ['-builtin:lark'] })`), for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips configurable built-ins in CLI runs. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
 ## Configuration
 
@@ -59,11 +35,11 @@ Remove any of them from the session's `tools` selection; see [Security](security
 
 ## Data
 
-Built-ins store their data in the project data directory: in the CLI, the [project data directory](settings.md#data-directory) under `~/.vela/projects/`; in the SDK, `dataDir`. Without `dataDir`, the SDK uses a temporary directory that `vela.dispose()` deletes.
+Built-ins store their data in the Vela agent directory: in the CLI, `$VELA_DIR` (`~/.vela/`); in the SDK, `<agentDir>/` when `agentDir` is set (defaulting to `~/.vela/`). Pass `createRuntime({ ephemeral: true })` for an isolated temporary runtime whose temp directory `runtime.dispose()` deletes (note `ephemeralSessions: true` still reads/stores owner config and memory under `agentDir`).
 
 | Extension | Location |
 |---|---|
-| `memory` | `<dataDir>/memory/` |
+| `memory` | `<agentDir>/memory/` (or project `.vela/memory/`) |
 
 ## memory
 
@@ -143,15 +119,13 @@ or skipped last run explicitly instead of showing it as an ordinary zero-change 
 included in `/usage` and the usage ledger. `/memory` exposes the latest run and
 pending inbox size so automatic maintenance is visible.
 
-**SDK.** `memory()` takes no options. Configure automatic runs through Vela's
-`extensionConfig: { memory: { dream: false } }`, and invoke manual consolidation
-with `await session.prompt('/dream')`.
+**SDK.** Configure automatic Dream runs via `memory.dream: false` in `<agentDir>/config.json` or `createRuntime({ dreamEnabled: false })`, and run manual consolidation with `await runtime.sessions.runCommand(sessionId, '/dream')`.
 
 ## background
 
 Long-running commands whose result arrives on its own, for work that must not hold the conversation. `bash` starts them: with `run_in_background: true` the call returns at once, and this extension watches the job and delivers its exit. `bash` always declares the parameter, and only a session that loads this extension can use it; without one the call fails with `Background commands are not enabled in this session` before any process starts.
 
-**Tools.** `background_output` and `background_stop` come with the extension, which the CLI loads by default; a chat's narrowed `tools` list or an explicit `tools` selection can drop them, and a DM drops them. `run_in_background` has no tool of its own: loading the extension installs the session's job table, which `bash` reaches through `ToolContext`. The job table owns the ids, the output tails and the deliveries, so `bash` and these two tools cannot disagree about a job. Every running `bash` call and the user's own `!` command are registered there too, so the host can move one to the background mid-run: `runtime.jobs.promoteForeground(sessionId, toolCallId?)` (or `session.backgroundTasks(toolCallId?)` in legacy SDK) — with an id, that call; without one, every call in the foreground. The moved call returns the id and the output so far, and its exit is delivered like any other job's. Moving your own `!` command records it as a background command (`backgroundTaskId`, no exit code yet) instead of a finished one; a `!!` command is left where it is, because a job's exit is delivered to the model and that command promised to stay out of the context.
+**Tools.** `background_output` and `background_stop` come with the extension, which the CLI loads by default; a chat's narrowed `tools` list or an explicit `tools` selection can drop them, and a DM drops them. `run_in_background` has no tool of its own: loading the extension installs the session's job table, which `bash` reaches through `ToolContext`. The job table owns the ids, the output tails and the deliveries, so `bash` and these two tools cannot disagree about a job. Every running `bash` call and the user's own `!` command are registered there too, so the host can move one to the background mid-run: `runtime.jobs.promoteForeground(sessionId, toolCallId?)` — with an id, that call; without one, every call in the foreground. The moved call returns the id and the output so far, and its exit is delivered like any other job's. Moving your own `!` command records it as a background command (`backgroundTaskId`, no exit code yet) instead of a finished one; a `!!` command is left where it is, because a job's exit is delivered to the model and that command promised to stay out of the context.
 
 | Tool | Parameters | Behavior |
 |---|---|---|
@@ -165,13 +139,13 @@ Long-running commands whose result arrives on its own, for work that must not ho
 
 **Delivery.** When a command exits on its own, the session gets one message with the exit state, the command head and the output tail. A stop never delivers: `background_stop` returns the tail in its tool result, and session close and shutdown have no run left to answer. In the CLI and SDK it is a hidden custom message (`customType: background`) that starts a turn, or queues as a steer message, so the model never polls. In a channel the result enters that conversation's gateway queue like any other input: it is answered as a new reply in its topic, or in the group's main timeline as a reply to the person's last message, with the usual anchor, card, reaction and Stop. A silent topic evaluation needs no special case, and an explicit answer never merges into a passive one.
 
-**Lifecycle.** Commands belong to their session, not to the run that started them: an interrupted run (Esc, `session.abort()`) leaves a job running, and its exit still arrives. `background_stop`, `session.close()` and process shutdown stop active execution without delivering its exit directly. A command still in the foreground when the run is interrupted is cancelled with it, as before. A move is recorded before it is promised: if the host cannot save the job's start, the call keeps the command and its own result, and if the run was interrupted in the meantime the command is cancelled rather than left running unclaimed. In hosted group/topic sessions, process shutdown preserves outstanding job identities so startup sends an unknown-result notice; `background_stop` and close clear them. A normal completion counts as delivered only after its result input is saved. Hostless sessions retain the existing lost-id behavior. A job is forgotten once its result has been delivered or returned by `background_stop`, so asking again for that id, or asking after a restart, answers `Unknown background command … It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.` The tail stays in memory (oldest bytes dropped first), so a command that prints forever costs at most that buffer; the whole output goes to the spill file that the exit delivery names.
+**Lifecycle.** Commands belong to their session, not to the run that started them: an interrupted run (`Esc`, `runtime.stop(sessionId)`) leaves a job running, and its exit still arrives. `background_stop`, `runtime.sessions.delete(sessionId)` and process shutdown stop active execution without delivering its exit directly. A command still in the foreground when the run is interrupted is cancelled with it, as before. A move is recorded before it is promised: if the host cannot save the job's start, the call keeps the command and its own result, and if the run was interrupted in the meantime the command is cancelled rather than left running unclaimed. In hosted group/topic sessions, process shutdown preserves outstanding job identities so startup sends an unknown-result notice; `background_stop` and close clear them. A normal completion counts as delivered only after its result input is saved. Hostless sessions retain the existing lost-id behavior. A job is forgotten once its result has been delivered or returned by `background_stop`, so asking again for that id, or asking after a restart, answers `Unknown background command … It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.` The tail stays in memory (oldest bytes dropped first), so a command that prints forever costs at most that buffer; the whole output goes to the spill file that the exit delivery names.
 
 **Unattended runs.** Print mode (`-p` and `--mode json`) sets `SessionOptions.unattended`. By default a background command gets 30 minutes; an explicit `timeout` on `run_in_background` may choose a different duration, up to two hours. The clock starts when a command starts in the background or moves there. At the limit the job is stopped and reports why. Ordinary SDK, desktop, channel, RPC and TUI sessions have no automatic deadline; a command may still specify its own timeout.
 
 **Visibility.** Every session that loads the extension gets both tools, so a long command never blocks the conversation that started it. A job also needs the tool that ends it: a DM, or a chat whose `tools` list removes `background_stop`, keeps `bash` but refuses `run_in_background`, instead of starting a command nobody could stop. See [Channels](channels.md#group-workspaces-memory-and-tools).
 
-**Shell.** A background command runs through the session's execution environment, which supplies the working directory and the authority. `background({ shellPath })` picks the shell for a local session (the CLI passes the resolved `shellPath` setting); an environment that is not local runs the command itself and chooses its own shell. The CLI loads the extension by default; the SDK loads it explicitly with `import { background } from '@glows777/vela'`, then `createVela({ extensions: [background()] })`. That one entry makes `run_in_background` work and gives the session `background_output` and `background_stop`.
+**Shell.** A background command runs through the session's execution environment, which supplies the working directory and the authority. `createRuntime({ shellPath })` or top-level `shellPath` in `config.json` selects the shell for a local session; an environment that is not local runs the command itself and chooses its own shell. Built-in background support (`run_in_background`, `background_output`, and `background_stop`) is enabled by default unless disabled with `-builtin:background` in `extensions`.
 
 ## todo
 
@@ -189,7 +163,7 @@ The model gets a one-line count summary back, not a copy of the list it just sen
 
 **Lark progress card.** The shared progress card shows the current list above the tool rows: `☐` pending, `◐` in progress, `☑` done. A new run in the same topic starts from the list stored in the session, so a follow-up that makes no `todo` call still shows it, including after a restart. More than ten items are cut off with `… and N more`; the full list stays in the session.
 
-**SDK.** `todo()` takes no options. The CLI loads it by default; the SDK loads it explicitly.
+**SDK.** The `todo` tool is enabled by default unless disabled with `-builtin:todo` in `extensions`.
 
 ## web
 
@@ -206,7 +180,7 @@ A matching `tool_call` extension hook prevents hosted substitution because the p
 
 Enabled channel chats can call both tools. Remove either one from the session's `tools` selection.
 
-**SDK.** `web({ tavilyKey, serperKey })`; both are optional.
+**SDK.** Configure keys under top-level `web` in `<agentDir>/config.json` (for example `{ "web": { "tavilyKey": "$TAVILY_API_KEY" } }` with `hostEnv` containing `TAVILY_API_KEY`), or disable with `-builtin:web`.
 
 ## lark
 
@@ -222,8 +196,8 @@ Connects a Lark (Lark) bot to Vela over Lark's long connection. Each enabled cha
 
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#lark).
 
-**SDK.** `lark({ appId, appSecret, owners, chats })`.
+**SDK.** Use `createLarkChannelAdapter(larkConfig | options)` from `@glows777/vela` and register it with `await runtime.registerChannel(...)` (see [Channels](channels.md) and [Channels reference](channels-reference.md)).
 
 ## mcp
 
-Connects to [MCP](https://modelcontextprotocol.io) servers configured under `mcpServers` in `~/.vela/config.json` and the trusted project's `.vela/config.json`, in the `mcpServers` format of Claude Desktop and Claude Code, and registers their tools as `mcp__<server>__<tool>`. Tools are deferred by default: the system prompt names each server and the model loads its tools with `tool_search`. `/mcp` shows each server's state and `/mcp reconnect <server>` reconnects one. In the SDK, pass the servers: `mcp({ servers: { docs: { url: 'https://example.com/mcp' } } })`. See [MCP servers](mcp.md).
+Connects to [MCP](https://modelcontextprotocol.io) servers configured under `mcpServers` in `<agentDir>/config.json` and trusted `<cwd>/.vela/config.json`, in the `mcpServers` format of Claude Desktop and Claude Code, and registers their tools as `mcp__<server>__<tool>`. Tools are deferred by default: the system prompt names each server and the model loads its tools with `tool_search`. Configuration and connection errors are logged to `logger`, and dropped connections reconnect on the next tool call. Pass `mcp: false` in `createRuntime()` to disable MCP pooling. See [MCP servers](mcp.md).

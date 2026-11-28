@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from 'bun:test'
-import { createVela, type SessionOptions } from '@glows777/vela'
 import {
   cleanupTestVelas,
   createFauxModel,
@@ -8,6 +7,7 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
+import { createVela, type SessionOptions } from '../support/compat-vela.ts'
 
 afterEach(cleanupTestVelas)
 

@@ -169,7 +169,7 @@ After authentication, the original `X-GitHub-Delivery` ID is synchronously recor
 
 ### Generic shared-secret events
 
-Independent scripts and alerts can use `POST /events/generic`. Add this section beside `github` under top-level `webhooks` in `~/.vela/config.json` (or under `extensionConfig.channel.eventReceiver` when passing options to the SDK), or use it alone:
+Independent scripts and alerts can use `POST /events/generic`. Add this section beside `github` under top-level `webhooks` in `~/.vela/config.json` (which `vela daemon` and `createRuntime()` load automatically unless `ephemeral: true` is set), or use it alone:
 
 ```json
 {

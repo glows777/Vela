@@ -22,7 +22,7 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 ## Automate or embed Vela
 
 - [JSON mode](json.md) streams the events of one run as JSON lines.
-- The [SDK](sdk.md) runs Vela inside your application or connects over the local daemon socket with `connectRuntime()`, `createRuntime()`, or `createVela()`; [Packages](sdk.md#packages) describes the package exports.
+- The [SDK](sdk.md) embeds Vela in your application (`createRuntime()`) or connects over the local daemon socket with `connectRuntime()`; [Packages](sdk.md#packages) describes the package exports.
 
 ## Extend Vela
 

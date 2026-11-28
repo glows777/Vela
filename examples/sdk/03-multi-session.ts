@@ -1,45 +1,59 @@
 /**
- * Several sessions in one Vela, running at the same time.
+ * Several sessions in one Runtime, running at the same time.
  *
- * Sessions share tools, extensions and the model, but each has its own history, queue,
- * usage and run lock. This is how a channel (for example Lark) serves many users:
- * one shared session per conversation.
+ * Sessions share drivers, extensions, and models, while each keeps its own transcript,
+ * inbox queue, usage, and active run lock.
  *
  * Run: bun examples/sdk/03-multi-session.ts
  */
-import { createVela } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 import { createFauxModel, fauxText } from '@glows777/vela/testing'
 
-// One reply per request, generated from the request; small chunks with a delay make the streams interleave.
 const reply = (req: { lastUserText: string }) =>
   fauxText(`You said "${req.lastUserText}"`)
-const model = createFauxModel({
+const defaultModel = createFauxModel({
   responses: [reply, reply, reply],
   chunkSize: 4,
   chunkDelayMs: 5,
 })
-const vela = createVela({ model })
+const runtime = createRuntime({ ephemeral: true, defaultModel, mcp: false })
 
 try {
-  // vela.subscribe() receives events from every session, with the session id.
-  vela.subscribe((event, sessionId) => {
-    if (event.type === 'agent_end')
-      console.log(`[${sessionId}] agent_end: ${event.reason}`)
+  await runtime.ready()
+  const off = runtime.events.subscribe((event) => {
+    if (event.type === 'run_finished') {
+      console.log(`[${event.sessionId}] run_finished: ${event.status}`)
+    }
   })
 
-  const alice = vela.session('alice')
-  // Per-session options apply when the session is first opened.
-  const bob = vela.session('bob', { tools: ['-bash'] })
+  try {
+    const alice = await runtime.sessions.create({ id: 'alice', name: 'Alice' })
+    const bob = await runtime.sessions.create({ id: 'bob', name: 'Bob' })
+    // Per-session tool overrides apply on that session's runs.
+    await runtime.sessions.configure(bob.id, { tools: ['-bash'] })
 
-  await Promise.all([alice.prompt('Hi from Alice'), bob.prompt('Hi from Bob')])
-  await alice.prompt('Alice again')
+    await Promise.all([
+      runtime.prompt(alice.id, { text: 'Hi from Alice' }),
+      runtime.prompt(bob.id, { text: 'Hi from Bob' }),
+    ])
+    await Promise.all([
+      runtime.waitForIdle(alice.id),
+      runtime.waitForIdle(bob.id),
+    ])
 
-  for (const session of vela.sessions()) {
-    const users = session.messages.filter((m) => m.role === 'user').length
-    console.log(
-      `${session.id}: ${session.messages.length} messages, ${users} from the user`,
-    )
+    await runtime.prompt(alice.id, { text: 'Alice again' })
+    await runtime.waitForIdle(alice.id)
+
+    for (const session of await runtime.sessions.list()) {
+      const page = await runtime.sessions.messages({ sessionId: session.id })
+      const users = page.messages.filter((m) => m.role === 'user').length
+      console.log(
+        `${session.id}: ${page.messages.length} messages, ${users} from the user`,
+      )
+    }
+  } finally {
+    off()
   }
 } finally {
-  await vela.dispose()
+  await runtime.dispose()
 }

@@ -2344,8 +2344,11 @@ test.concurrent('bundled CLI loads external TS extensions with runtime host impo
     extPath,
     `import { readFileSync } from 'node:fs'
 import { z } from 'zod'
-import { createJsonSchema } from '@glows777/vela'
-import { silentLogger, type ExtensionAPI } from '@glows777/vela/extension-api'
+import {
+  createJsonSchema,
+  silentLogger,
+  type ExtensionAPI,
+} from '@glows777/vela/extension-api'
 export default function runtimeHost(vela: ExtensionAPI) {
   silentLogger.debug('loaded')
   void createJsonSchema({ type: 'object' })

@@ -87,7 +87,8 @@ test('Runtime Outbox + LarkChannelAdapter recovers pending delivery across SIGKI
     workerScript,
     `
 import { readFileSync, writeFileSync } from 'node:fs'
-import { createRuntime, createLarkChannelAdapter, DaemonLarkHost } from ${JSON.stringify(join(repoRoot, 'packages/vela/src/legacy-desktop.ts'))}
+import { createRuntime, createLarkChannelAdapter } from ${JSON.stringify(join(repoRoot, 'packages/vela/src/index.ts'))}
+import { DaemonLarkHost } from ${JSON.stringify(join(repoRoot, 'packages/vela/src/daemon/lark-host.ts'))}
 import { loadFauxScenario } from ${JSON.stringify(join(repoRoot, 'packages/vela/src/testing/core/index.ts'))}
 
 const mode = process.argv[2]

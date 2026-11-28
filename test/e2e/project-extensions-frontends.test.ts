@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createRuntime, createVela, type RuntimeEvent } from '@glows777/vela'
+import { createRuntime, type RuntimeEvent } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { extensionCommands } from '../../packages/vela/src/cli/commands/extensions.ts'
 import { loadConfig } from '../../packages/vela/src/driver/index.ts'
+import { createVela } from '../support/compat-vela.ts'
 import { legacyVelaAsRuntime } from '../support/legacy-vela-runtime.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 

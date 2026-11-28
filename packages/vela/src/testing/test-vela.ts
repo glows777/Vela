@@ -1,7 +1,11 @@
-import type { VelaOptions as CoreVelaOptions } from '../driver/index.ts'
+import {
+  type VelaOptions as CoreVelaOptions,
+  createVela,
+  type Vela,
+} from '../driver/index.ts'
 import type { VelaExtension } from '../extension-api.ts'
+import { defaultDocsPaths } from '../shared/docs-paths.ts'
 import { resolveShellPath } from '../shared/shell-path.ts'
-import { createVela, type Vela } from '../vela.ts'
 import {
   type TestVelaOptions as CoreOptions,
   type TestVela as CoreTestVela,
@@ -32,6 +36,7 @@ export function createTestVela(
     ((coreOptions) =>
       createVela({
         ...coreOptions,
+        docs: coreOptions.docs ?? defaultDocsPaths(),
         shellPath:
           coreOptions.shellPath ??
           resolveShellPath(undefined, {

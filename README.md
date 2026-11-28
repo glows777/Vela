@@ -50,23 +50,32 @@ npm install @glows777/vela
 ```
 
 ```ts
-import { createVela, loadConfig } from '@glows777/vela'
+import { createRuntime, loadConfig } from '@glows777/vela'
 
-// Built-in anthropic / openai / openrouter / deepseek providers plus ~/.vela/config.json, keys from ~/.vela/auth.json and the environment
+// Built-in anthropic / openai / openrouter / deepseek providers plus ~/.vela/config.json
 const { providers, credentials } = loadConfig({ env: process.env })
 
-const vela = createVela({ model: 'anthropic/claude-opus-4-8', providers, credentials, cwd: process.cwd() })
-const session = vela.session('main')
-
-session.subscribe((event) => {
-  if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta')
-    process.stdout.write(event.assistantMessageEvent.delta)
+const runtime = createRuntime({
+  defaultModel: 'anthropic/claude-opus-4-8',
+  providers,
+  credentials,
+  hostEnv: process.env,
 })
-await session.prompt('Summarize the README in this folder')
-await vela.dispose()
+await runtime.ready()
+const project = await runtime.projects.create({ name: 'main', cwd: process.cwd(), hubSessionId: true })
+const sessionId = project.hubSessionId!
+
+const off = runtime.events.subscribeDeltas((delta) => {
+  if (delta.sessionId === sessionId && delta.type === 'text_delta')
+    process.stdout.write(delta.delta)
+})
+await runtime.prompt(sessionId, { text: 'Summarize the README in this folder' })
+await runtime.waitForIdle(sessionId)
+off()
+await runtime.dispose()
 ```
 
-The SDK reads no environment variables and persists nothing unless you pass `dataDir`; temporary files are deleted by `dispose()`. See the [SDK docs](docs/sdk.md) and the runnable [examples](examples/).
+The SDK reads no environment variables by default (`hostEnv` defaults to `{}`). Pass `ephemeral: true` for an in-memory SQLite runtime whose temporary directory is deleted by `dispose()`. See the [SDK docs](docs/sdk.md) and the runnable [examples](examples/).
 
 ## Use it from the terminal
 
@@ -94,7 +103,7 @@ Vela publishes a single npm package, [`@glows777/vela`](packages/vela) (alongsid
 
 | Package | What it contains |
 | --- | --- |
-| [`@glows777/vela`](packages/vela) | The `vela` CLI, TUI, `vela daemon`, SDK (`createRuntime`, `connectRuntime`, `createVela`), `@glows777/vela/extension-api`, `@glows777/vela/testing`, built-in extensions (`background`, `memory`, `todo`, `web`, `mcp`), and Lark / Local channel adapters |
+| [`@glows777/vela`](packages/vela) | The `vela` CLI, TUI, `vela daemon`, Runtime SDK (`createRuntime`, `connectRuntime`, daemon lifecycle, `createLarkChannelAdapter`, config & auth helpers), `@glows777/vela/extension-api`, `@glows777/vela/testing`, and built-in daemon/runtime capabilities |
 
 ## Development
 

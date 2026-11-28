@@ -48,7 +48,7 @@ const model = createFauxModel({
 })
 ```
 
-Pass it as the model to [`createVela()`](sdk.md) or to `createTestVela()`, which creates one for you.
+Pass it as `defaultModel` to [`createRuntime()`](sdk.md) or to `createTestVela()`, which creates one for you.
 
 ### Responses
 
@@ -79,7 +79,7 @@ A request after the script runs out fails at once with `faux: no scripted respon
 
 ## createTestVela
 
-`createTestVela()` builds a Vela with the real `createVela()`, a faux model, a fresh temp directory as `cwd` and a data directory inside it. It records every event from every session.
+`createTestVela()` builds a driver test harness with a faux model, a fresh temp directory as `cwd`, and a data directory inside it. It records every event from every session.
 
 ```ts
 const t = createTestVela({
@@ -90,7 +90,7 @@ const t = createTestVela({
 await t.run('read src/a.ts')               // = t.session.prompt()
 ```
 
-The built-in memory extension is always loaded, like in the CLI; the RAG extension is loaded with `embedder`. Web and Lark are not loaded.
+The built-in memory extension is always loaded, like in the CLI. Web and Lark are not loaded.
 
 ### Options
 
@@ -105,10 +105,9 @@ The built-in memory extension is always loaded, like in the CLI; the RAG extensi
 | `sessionId` | Id of the default session (default `default`). |
 | `files` | Files to create in `cwd`, as relative path to content. |
 | `skills` | Skills to write to `cwd/.skills/<name>/SKILL.md` (`name`, `description`, `body`, `disableModelInvocation?`). |
-| `embedder` | `true` loads RAG with the faux embedder, or pass your own. |
 | `cwd`, `dataDir` | Reuse a directory (for resume tests); `dataDir` is relative to `cwd`, default `.vela-data`. |
 | `ephemeralSessions` | Keep session history in an in-memory SQLite DB instead of writing `vela.db` under `dataDir` (default `false`). |
-| `thinkingLevel`, `limits`, `logger` | Same as `createVela()`. `limits.retryBaseMs` defaults to 0 so retries don't wait. |
+| `thinkingLevel`, `limits`, `logger` | `limits.retryBaseMs` defaults to 0 so retries don't wait. |
 | `allowPendingResponses` | Don't fail cleanup when script responses are left over. |
 
 ### The test handle
@@ -140,7 +139,7 @@ An extension with a tool and a `tool_call` hook that asks before running bash:
 
 ```ts
 // greet.ts
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 import { z } from 'zod'
 
 export const greet: VelaExtension = (vela) => {
@@ -238,14 +237,21 @@ VELA_MODEL=faux:run.json vela -p "summarize README.md"        # offline replay
 From code:
 
 ```ts
+import { createRuntime } from '@glows777/vela'
 import { recordModel, replayScenario } from '@glows777/vela/testing'
 
 const recorder = recordModel(realModel, { path: 'run.json' })
-const vela = createVela({ model: recorder.model })
-vela.subscribe((event) => {
-  if (event.type === 'agent_start') recorder.addInput(event.input)
+const runtime = createRuntime({
+  ephemeral: true,
+  defaultModel: recorder.model,
+  mcp: false,
 })
-// ... use vela as usual ...
+const session = await runtime.sessions.create({ name: 'record' })
+for (const text of ['hello']) {
+  recorder.addInput(text)
+  await runtime.prompt(session.id, { text })
+  await runtime.waitForIdle(session.id)
+}
 await recorder.flush()
 
 // later, offline:
@@ -286,7 +292,7 @@ The demo model is not exported and not meant for tests: its answers are fixed En
 
 ## See also
 
-- [SDK](sdk.md) for `createVela()` and sessions
+- [SDK](sdk.md) for `createRuntime()`, `connectRuntime()`, and sessions
 - [Extensions](extensions.md) for the extension API under test
 - [SDK](sdk.md#events) for every event type
 - [CLI](cli.md) for `VELA_MODEL`, `VELA_RECORD` and the other environment variables

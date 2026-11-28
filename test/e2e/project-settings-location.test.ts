@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { selectTools } from '../../packages/vela/src/cli/setup.ts'
 import { stopDaemon } from '../../packages/vela/src/daemon/index.ts'
@@ -10,6 +9,7 @@ import {
   loadConfig,
   type ThinkingLevel,
 } from '../../packages/vela/src/driver/index.ts'
+import { createVela } from '../support/compat-vela.ts'
 import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
 
 function project(cwd: string, label: string, thinking: ThinkingLevel) {

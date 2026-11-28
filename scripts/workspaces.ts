@@ -114,8 +114,6 @@ export async function packWorkspaces(root: string, work: string) {
             'package/dist/extension-api.d.ts',
             'package/dist/testing/index.js',
             'package/dist/testing/index.d.ts',
-            'package/dist/legacy-desktop.js',
-            'package/dist/legacy-desktop.d.ts',
             'package/dist/runtime/docker/adapter.js',
             'package/dist/docker/guest.cjs',
           ]

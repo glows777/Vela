@@ -18,12 +18,21 @@ const RETIRED_BEHAVIOR_CLAIMS = [
   /automatically flattened into ~\/\.vela\/config\.json/i,
 ] as const
 
-const EXCLUDED_VELA_OPTIONS = new Set([
-  'beforeDispose',
-  'eventDefaultTarget',
-  'onSessionSaved',
-  'shellPath',
-])
+const RETIRED_OPERATIONAL_PATTERNS = [
+  { label: 'vela serve', pattern: /\bvela serve\b/ },
+  { label: '--mode rpc', pattern: /--mode rpc\b/ },
+  { label: 'createChannelVela', pattern: /\bcreateChannelVela\b/ },
+  { label: 'startChannels(', pattern: /\bstartChannels\s*\(/ },
+  { label: 'createVela(', pattern: /\bcreateVela\s*\(/ },
+  { label: 'lark() factory', pattern: /`lark\(\)`|\blark\s*\(\{/ },
+  {
+    label: '@glows777/vela/legacy-desktop',
+    pattern: /@glows777\/vela\/legacy-desktop|\blegacy-desktop\b/,
+  },
+] as const
+
+const RETIREMENT_NOTICE_RE =
+  /\b(?:retired|removed|replaced|replaces|instead of|migration|upgrading|removed in v0\.9|legacy channel gateway|exit(?:s|ing)?\s+(?:with\s+)?code\s+2|fail(?:s|ing)?\s+fast)\b/i
 
 function extractInterfaceKeys(
   publicApi: string,
@@ -43,7 +52,7 @@ function extractInterfaceKeys(
 }
 
 function extractSdkTableOptions(sdkDoc: string): string[] {
-  const sectionMarker = '## createVela options\n'
+  const sectionMarker = '## createRuntime options\n'
   const start = sdkDoc.indexOf(sectionMarker)
   if (start === -1) return []
   const nextHeading = sdkDoc.indexOf('\n## ', start + sectionMarker.length)
@@ -68,8 +77,8 @@ function extractUnreleasedSection(changelog: string): string {
 }
 
 /**
- * Enforces documentation consistency (#576, #581, #583, #591) against `public-api.txt`
- * and current SQLite / config / packaging contracts.
+ * Enforces documentation consistency (#576, #581, #583, #591, #593, #599, #602) against
+ * `public-api.txt` and current SQLite / config / Runtime SDK / CLI contracts.
  */
 export async function checkDocsConsistency(root: string): Promise<string[]> {
   const errors: string[] = []
@@ -80,24 +89,58 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
   }
   docFiles.sort()
 
-  for (const file of docFiles) {
+  const userFacingFiles = new Set<string>(docFiles)
+  for (const extra of [
+    'README.md',
+    '.skills/verify-vela/core.md',
+    '.skills/verify-vela/journeys.md',
+  ]) {
+    const abs = join(root, extra)
+    if (existsSync(abs)) userFacingFiles.add(abs)
+  }
+  for await (const rel of new Glob('examples/**/*').scan(root)) {
+    userFacingFiles.add(join(root, rel))
+  }
+
+  for (const file of [...userFacingFiles].sort()) {
     const rel = relative(root, file).replaceAll('\\', '/')
     const text = await readFile(file, 'utf8')
     const lines = text.split('\n')
+    const isDoc = rel.startsWith('docs/')
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!
-      for (const pattern of RETIRED_IDENTIFIERS) {
-        if (pattern.test(line)) {
-          errors.push(
-            `${rel}:${i + 1}: references retired API or package matching ${pattern.source}`,
-          )
+      if (isDoc) {
+        for (const pattern of RETIRED_IDENTIFIERS) {
+          if (pattern.test(line)) {
+            errors.push(
+              `${rel}:${i + 1}: references retired API or package matching ${pattern.source}`,
+            )
+          }
+        }
+        for (const pattern of RETIRED_BEHAVIOR_CLAIMS) {
+          if (pattern.test(line)) {
+            errors.push(
+              `${rel}:${i + 1}: claims removed automatic legacy migration (${pattern.source})`,
+            )
+          }
         }
       }
-      for (const pattern of RETIRED_BEHAVIOR_CLAIMS) {
-        if (pattern.test(line)) {
-          errors.push(
-            `${rel}:${i + 1}: claims removed automatic legacy migration (${pattern.source})`,
-          )
+      const clauses = line
+        .split(/(?<=[.!?;])\s+|\s*\|\s*|\b(?:now that|since|whereas|while)\s+/i)
+        .filter(Boolean)
+      const isRetiredTableRow =
+        line.trimStart().startsWith('|') &&
+        RETIREMENT_NOTICE_RE.test(clauses[0] ?? '')
+      if (!isRetiredTableRow) {
+        for (const clause of clauses) {
+          if (RETIREMENT_NOTICE_RE.test(clause)) continue
+          for (const { label, pattern } of RETIRED_OPERATIONAL_PATTERNS) {
+            if (pattern.test(clause)) {
+              errors.push(
+                `${rel}:${i + 1}: contains non-retirement operational reference to retired "${label}" (#599/#602)`,
+              )
+            }
+          }
         }
       }
     }
@@ -110,23 +153,26 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
       readFile(publicApiPath, 'utf8'),
       readFile(sdkDocPath, 'utf8'),
     ])
-    const velaOptionKeys = extractInterfaceKeys(publicApi, 'VelaOptions')
+    const runtimeOptionKeys = extractInterfaceKeys(
+      publicApi,
+      'CreateRuntimeOptions',
+    )
     const documentedOptions = extractSdkTableOptions(sdkDoc)
     const documentedSet = new Set(documentedOptions)
     if (documentedOptions.length === 0) {
-      errors.push('docs/sdk.md: missing "## createVela options" table')
+      errors.push('docs/sdk.md: missing "## createRuntime options" table')
     } else {
       for (const opt of documentedOptions) {
-        if (!velaOptionKeys.has(opt)) {
+        if (!runtimeOptionKeys.has(opt)) {
           errors.push(
-            `docs/sdk.md: documented createVela option "${opt}" is absent from VelaOptions in packages/vela/api/public-api.txt (#576)`,
+            `docs/sdk.md: documented createRuntime option "${opt}" is absent from CreateRuntimeOptions in packages/vela/api/public-api.txt (#576)`,
           )
         }
       }
-      for (const opt of velaOptionKeys) {
-        if (!documentedSet.has(opt) && !EXCLUDED_VELA_OPTIONS.has(opt)) {
+      for (const opt of runtimeOptionKeys) {
+        if (!documentedSet.has(opt)) {
           errors.push(
-            `docs/sdk.md: public VelaOptions property "${opt}" is missing from "## createVela options" table (#576)`,
+            `docs/sdk.md: public CreateRuntimeOptions property "${opt}" is missing from "## createRuntime options" table (#576)`,
           )
         }
       }
@@ -189,11 +235,11 @@ export async function checkDocsConsistency(root: string): Promise<string[]> {
     ['CHANGELOG.md [Unreleased]', unreleased],
   ] as const) {
     if (
-      !content.includes('createVela({ dataDir })') ||
-      !content.includes('<dataDir>/vela.db')
+      !content.includes('createRuntime({ agentDir })') ||
+      !content.includes('<agentDir>/vela.db')
     ) {
       errors.push(
-        `${label}: must distinguish SDK createVela({ dataDir }) fallback at <dataDir>/vela.db (#583)`,
+        `${label}: must distinguish SDK createRuntime({ agentDir }) storage at <agentDir>/vela.db (#583)`,
       )
     }
   }

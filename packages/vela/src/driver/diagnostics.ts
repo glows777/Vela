@@ -112,7 +112,6 @@ export { resolveModel } from '../providers/models/index.ts'
 export { getToolListError } from '../shared/tool-selection.ts'
 export { extensionName, projectTrustRequired } from './config/settings.ts'
 export { isToolResultError } from './context/tool-result-output.ts'
-export { latestTodoList } from './extensions/todo/list.ts'
 export { isToolContent } from './messages.ts'
 export {
   branchSummaryMessageText,
