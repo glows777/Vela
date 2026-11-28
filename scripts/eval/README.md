@@ -314,3 +314,11 @@ in that group showing the completed run and inbox status.
 
 Offline checks: `bun test scripts/eval/dream.test.ts scripts/eval/graders.test.ts`.
 Faux results prove fixture plumbing and grading, not real-model quality or billing.
+
+## Harbor benchmarks
+
+`harbor/` holds a [Harbor](https://github.com/harbor-framework/harbor) agent adapter that runs the
+packaged Vela CLI as the agent under test, for public suites such as Terminal-Bench 4.x and
+FrontierHarness Eval. It needs Docker or a cloud sandbox and pays per trial, so it is opt-in like the
+runner above. Usage, datasets and known limits: [`harbor/README.md`](harbor/README.md). Tracking
+issue: [#426](https://github.com/glows777/Vela/issues/426).
