@@ -8,7 +8,11 @@ import { persistAssistantStepTx } from '../../src/driver/driver-step.ts'
 import { SpilledToolOutput as ExtSpilledToolOutput } from '../../src/driver/extension-api.ts'
 import type { ExtensionAPI } from '../../src/driver/extensions/types.ts'
 import {
+  type ApprovalDecision,
   createVela,
+  type PendingApprovalInfo,
+  type ResolvedApprovalInfo,
+  SpilledToolOutput,
   type Vela,
   type VelaSession,
 } from '../../src/driver/index.ts'
@@ -19,12 +23,6 @@ import { ToolRegistry } from '../../src/driver/tools/registry.ts'
 import { ToolExecutionResult } from '../../src/driver/tools/types.ts'
 import { TokenTracker } from '../../src/driver/usage/tracker.ts'
 import { VelaDriver } from '../../src/driver/vela-driver.ts'
-import {
-  type ApprovalDecision,
-  type PendingApprovalInfo,
-  type ResolvedApprovalInfo,
-  SpilledToolOutput,
-} from '../../src/index.ts'
 import {
   createFauxModel,
   fauxSummary,

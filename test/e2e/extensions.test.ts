@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 import { jsonSchema } from 'ai'
 import { z } from 'zod'
 import { z as z3 } from 'zod/v3'

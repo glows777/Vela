@@ -6,7 +6,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { createRuntime, RuntimeWebhookReceiver } from '@glows777/vela'
-import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
+import { DaemonLarkHost } from '../../../packages/vela/src/daemon/lark-host.ts'
 import {
   createFauxModel,
   fauxText,

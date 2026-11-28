@@ -4,13 +4,13 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import type { VelaEvent } from '../../packages/vela/src/driver/index.ts'
-import { createVela } from '../../packages/vela/src/index.ts'
 import {
   createFauxModel,
   fauxHang,
   fauxText,
   fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
+import { createVela } from '../support/compat-vela.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

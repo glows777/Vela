@@ -22,7 +22,7 @@ import {
   readBody,
 } from './http.ts'
 
-export const webhookReceiverConfigSchema = z
+const webhookReceiverConfigSchema = z
   .object({
     port: z.number().int().min(0).max(65535).default(8787),
     github: githubWebhookOptions.optional(),

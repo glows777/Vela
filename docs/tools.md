@@ -23,7 +23,7 @@ Each core tool also contributes its own line and rules to the system prompt: `pr
 
 The default set is `read`, `write`, `edit` and `bash`, plus `tool_search`. `ls`, `grep` and `find` stay registered but off: the model neither sees them nor can call them until a session enables one with `--tools +grep` (or `+grep,+find,+ls`) or the [`tools`](settings.md#tools) setting. pi keeps `ls`, `grep` and `find` off in the same way.
 
-Relative paths resolve against the working directory: the directory the CLI was started in, or `cwd` in `createVela()` (default `process.cwd()`). Paths outside it are not blocked.
+Relative paths resolve against the session's working directory (`project.cwd` in `createRuntime()` or `runtime.sessions.configure(id, { cwd })`, defaulting to `<agentDir>`). Paths outside it are not blocked.
 
 Compared with pi: Vela's core tool names (`read`, `write`, `edit`, `ls`, `grep`, `find`, `bash`) match pi's. Vela has no `powershell` or `codemode` tool, and `--tools` and `tools` in `config.json` take the same `+name` / `-name` entries as pi's.
 
@@ -116,15 +116,15 @@ grep and find need the `rg` and `fd` programs. They are looked up in this order:
 
 Set `VELA_OFFLINE=1` to turn off the download; the tool then fails with an error that says how to install the program (`brew install ripgrep fd`, or `apt install ripgrep fd-find`).
 
-With the SDK, pass `binDir` to enable the same lookup and download, and `offline` to turn off the download:
+With the SDK, `VELA_OFFLINE=1` or `offline: true` disables automatic downloads; pass `offline: false` in `createRuntime()` when managed downloads are desired:
 
 ```ts
-import { createVela } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 
-const vela = createVela({ binDir: '/opt/my-app/bin', offline: false })
+const runtime = createRuntime({ offline: false })
 ```
 
-Without `binDir`, only `PATH` is searched and nothing is downloaded.
+When neither tool is installed in `$VELA_DIR/bin` or on `PATH` and downloads are disabled (`offline: true`), search calls fail with installation hints.
 
 ### bash
 
@@ -134,9 +134,9 @@ Without `binDir`, only `PATH` is searched and nothing is downloaded.
 | `timeout` | number | Optional timeout in seconds (default `120`, max `1800`) |
 | `run_in_background` | boolean | Start the command as a background task and return at once with its id |
 
-Runs `<shellPath> -c <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createVela({ shellPath })` to use another Bash-compatible shell). The CLI selects the Git for Windows `bin\\bash.exe` wrapper on Windows. Direct SDK users default to `bash.exe` on `PATH` and can set `shellPath` to the full Git Bash path. The environment streams combined stdout and stderr. Short output stays inline. When either output limit is crossed, the environment writes the full output to a file. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`; like pi, these three are error results (`isError: true`), with the preview as the error text. While the command runs, the tail of its output is sent as `tool_execution_update` events (`partialResult` is `{ content: [{ type: 'text', text }] }`, at most every 100ms and only when the output grew).
+Runs `<shellPath> -c <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createRuntime({ shellPath })` to use another Bash-compatible shell). The CLI selects the Git for Windows `bin\\bash.exe` wrapper on Windows. Direct SDK users default to `bash.exe` on `PATH` and can set `shellPath` to the full Git Bash path. The environment streams combined stdout and stderr. Short output stays inline. When either output limit is crossed, the environment writes the full output to a file. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`; like pi, these three are error results (`isError: true`), with the preview as the error text. While the command runs, the tail of its output is sent as `tool_execution_update` events (`partialResult` is `{ content: [{ type: 'text', text }] }`, at most every 100ms and only when the output grew).
 
-A running call can also be moved to the background while it waits: `runtime.jobs.promoteForeground(sessionId, toolCallId?)` (and legacy `session.backgroundTasks()`) takes over the call, which returns `Command was manually moved to the background with ID: bg-1.` with the output so far, and the exit arrives as the job's result. The tool result's `execution` metadata carries `backgroundTaskId` and `backgroundedByUser: true`; the call is still recorded as `completed`. A job created either way answers `background_output` and stops through `background_stop` the same way, and Esc does not stop it (closing the session does). A `!!` command is left in the foreground: its exit would reach the model, so moving everything skips it.
+A running call can also be moved to the background while it waits: `runtime.jobs.promoteForeground(sessionId, toolCallId?)` takes over the call, which returns `Command was manually moved to the background with ID: bg-1.` with the output so far, and the exit arrives as the job's result. The tool result's `execution` metadata carries `backgroundTaskId` and `backgroundedByUser: true`; the call is still recorded as `completed`. A job created either way answers `background_output` and stops through `background_stop` the same way, and Esc does not stop it (closing the session does). A `!!` command is left in the foreground: its exit would reach the model, so moving everything skips it.
 
 With `run_in_background: true` the call starts a job and returns without waiting: `Command running in background with ID: bg-1.` and `You will be notified when it completes; do not poll the file or start a second copy.` Any output the command already wrote comes with that result, which names no file: the environment only knows its spill path once the command ends. The job belongs to the session and delivers its exit as its own message; see [background](built-in-extensions.md#background). Only a session with that extension and its `background_stop` tool has the capability; without either, the call fails with `Background commands are not enabled in this session` instead of ignoring the parameter and running the command in the foreground. Because that depends on the session, the parameter's own description states the condition and the system prompt does not tell every `bash` session to use it. When the output passes the limits above, the session's execution environment spills it to a file there and the exit delivery names it (`Full output: <path>`), so `read` pages the whole log; the tail sent to the model stays bounded.
 

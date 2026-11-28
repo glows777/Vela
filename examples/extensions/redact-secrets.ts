@@ -4,7 +4,7 @@
  * Note: for oversized results this hook gets a preview, and the full output stays on disk (the model
  * can read it by path). This reduces leaks; it does not isolate secrets.
  */
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 
 const SECRET = /\b(sk-[A-Za-z0-9]{8,}|[A-Z_]*(KEY|TOKEN|SECRET)=\S+)/g
 

@@ -3,7 +3,7 @@
  * Load this user extension to guard against accidental deletion; Vela has no built-in command gate.
  * This simple pattern catches mistakes; it is not a security boundary.
  */
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 
 const confirmDangerous: VelaExtension = (vela) => {
   vela.on('tool_call', async (event, ctx) => {

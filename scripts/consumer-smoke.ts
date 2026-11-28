@@ -4,7 +4,7 @@
  * Installs into fresh, empty Node and Bun projects outside the workspace:
  * - Node project (npm install): strict NodeNext tsconfig (exactOptionalPropertyTypes etc.,
  *   no @types/bun) type-checks `@glows777/vela`, `@glows777/vela/extension-api`, and `@glows777/vela/testing`,
- *   then runs SDK sessions (tools, images, grep/find, MCP, Lark fake transport) and CLI under Node;
+ *   then runs Runtime SDK, daemon IPC, MCP, image, extension-api, Lark fake transport, and CLI smoke under Node;
  * - Bun project (bun install): default `bun init` tsconfig, runs the same SDK smoke and CLI under Bun.
  */
 
@@ -25,46 +25,54 @@ const IMAGE = (
 
 const SMOKE = `
 import assert from 'node:assert/strict'
-import { Readable } from 'node:stream'
-import { mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import {
   connectRuntime,
   createLarkChannelAdapter,
+  createLocalExecutionEnv,
   createRuntime,
-  createVela,
+  DaemonAlreadyRunningError,
   EnvironmentRegistry,
-  importExtension,
-  inspectSession,
-  inspectVela,
-  type LarkChannelAdapterOptions,
-  type LarkMessageEvent,
-  type LarkTransport,
-  type LocalVelaRuntime,
-  mcp,
-  memory,
-  SpilledToolOutput,
-  ToolExecutionResult,
+  fileCredentialStore,
+  getDaemonStatus,
+  LarkChannelAdapter,
+  larkConfig,
+  loadConfig,
+  loadModels,
+  memoryCredentialStore,
+  RuntimeWebhookReceiver,
+  silentLogger,
+  startDaemon,
+  startDaemonServer,
+  stopDaemon,
   type AgentDriverCapabilities,
-  type ApprovalDecision,
-  type ApprovalStatus,
   type ConnectRuntimeOptions,
   type CreateRuntimeOptions,
   type DaemonStatus,
   type ImageContent,
-  type McpOptions,
-  type PendingApprovalInfo,
-  type ResolvedApprovalInfo,
+  type LarkChannelAdapterOptions,
+  type LarkMessageEvent,
+  type LarkTransport,
+  type LocalVelaRuntime,
+  type RuntimeEvent,
   type SessionKind,
   type SessionState,
-  type ToolContent,
-  type VelaEvent,
   type VelaExtension,
   type VelaRuntime,
 } from '@glows777/vela'
-import { defineJsonSchemaTool } from '@glows777/vela/extension-api'
+import * as rootNamespace from '@glows777/vela'
+import {
+  createJsonSchema,
+  defineJsonSchemaTool,
+  SpilledToolOutput,
+  ToolExecutionResult,
+  type ExtensionAPI,
+  type ToolContent,
+} from '@glows777/vela/extension-api'
 import {
   cleanupTestVelas,
   createFauxModel,
@@ -74,25 +82,92 @@ import {
 } from '@glows777/vela/testing'
 import { z } from 'zod'
 
-if (typeof defineJsonSchemaTool !== 'function')
+// Verify root package converges to the 18 Runtime/Daemon symbols (no legacy/retired exports).
+const rootExports = Object.entries(rootNamespace as Record<string, unknown>)
+  .filter(([, value]) => value !== undefined)
+  .map(([key]) => key)
+  .sort()
+const expectedRootExports = [
+  'DaemonAlreadyRunningError',
+  'EnvironmentRegistry',
+  'LarkChannelAdapter',
+  'RuntimeWebhookReceiver',
+  'connectRuntime',
+  'createLarkChannelAdapter',
+  'createLocalExecutionEnv',
+  'createRuntime',
+  'fileCredentialStore',
+  'getDaemonStatus',
+  'larkConfig',
+  'loadConfig',
+  'loadModels',
+  'memoryCredentialStore',
+  'silentLogger',
+  'startDaemon',
+  'startDaemonServer',
+  'stopDaemon',
+].sort()
+assert.deepEqual(rootExports, expectedRootExports)
+for (const retired of [
+  'createVela',
+  'VelaSession',
+  'web',
+  'webConfig',
+  'mcp',
+  'mcpConfig',
+  'memory',
+  'todo',
+  'background',
+  'createJsonSchema',
+  'defineJsonSchemaTool',
+  'ToolExecutionResult',
+  'SpilledToolOutput',
+  'inspectSession',
+  'inspectVela',
+  'saveLarkSection',
+  'saveModelSetup',
+  'usableModel',
+  'importExtension',
+]) {
+  assert.equal(retired in rootNamespace, false, \`retired export leaked: \${retired}\`)
+}
+if (typeof defineJsonSchemaTool !== 'function' || typeof createJsonSchema !== 'function')
   throw new Error('missing @glows777/vela/extension-api export')
 if (typeof SpilledToolOutput !== 'function')
   throw new Error('missing SpilledToolOutput export')
 if (typeof createLarkChannelAdapter !== 'function')
   throw new Error('missing createLarkChannelAdapter export')
-if (typeof connectRuntime !== 'function')
-  throw new Error('missing connectRuntime export')
-const _approvalTypeCheck = (
-  _d?: ApprovalDecision,
-  _p?: PendingApprovalInfo,
-  _r?: ResolvedApprovalInfo,
+if (typeof connectRuntime !== 'function' || typeof startDaemonServer !== 'function')
+  throw new Error('missing daemon runtime exports')
+const _smokeChecks = (
   _c?: ConnectRuntimeOptions,
   _s?: DaemonStatus,
-) => void [_d, _p, _r, _c, _s]
-void _approvalTypeCheck
+  _cap?: AgentDriverCapabilities,
+  _kind?: SessionKind,
+  _state?: SessionState,
+  _env?: EnvironmentRegistry,
+  _cls?: typeof LarkChannelAdapter,
+  _err?: typeof DaemonAlreadyRunningError,
+  _recv?: typeof RuntimeWebhookReceiver,
+  _cfg?: typeof larkConfig,
+  _lc?: typeof loadConfig,
+  _lm?: typeof loadModels,
+  _fc?: typeof fileCredentialStore,
+  _mc?: typeof memoryCredentialStore,
+  _le?: typeof createLocalExecutionEnv,
+  _sl?: typeof silentLogger,
+  _gs?: typeof getDaemonStatus,
+  _sd?: typeof startDaemon,
+  _st?: typeof stopDaemon,
+  _rt?: VelaRuntime,
+) => void [
+  _c, _s, _cap, _kind, _state, _env, _cls, _err, _recv, _cfg, _lc, _lm, _fc,
+  _mc, _le, _sl, _gs, _sd, _st, _rt,
+]
+void _smokeChecks
 
-const hello: VelaExtension = (vela) => {
-  vela.registerTool({
+const hello: VelaExtension = (api) => {
+  api.registerTool({
     name: 'greet',
     description: 'greet someone',
     inputSchema: z.object({ name: z.string() }),
@@ -101,42 +176,48 @@ const hello: VelaExtension = (vela) => {
   })
 }
 
-const model = createFauxModel({
+const helloModel = createFauxModel({
   responses: [fauxToolCall('hello_greet', { name: 'Vela' }), fauxText('done')],
 })
-const vela = createVela({ model, extensions: [hello, memory()] })
-const session = vela.session('default')
-const types: string[] = []
-session.subscribe((e: VelaEvent) => { types.push(e.type) })
-await session.prompt('say hi')
-// Types really resolve from the .d.ts (not any); otherwise the @ts-expect-error below reports "unused"
-const typeChecks = () => {
-  // @ts-expect-error prompt only accepts strings
-  void session.prompt(42)
-  // @ts-expect-error tool availability is configured only through tools
-  vela.session('legacy', { permissions: { bash: 'ask' } })
-  // @ts-expect-error SessionScope is removed from the public API
-  vela.session('scoped', { scope: { id: 'x', kind: 'chat' } })
-  // @ts-expect-error Session.scope is removed from the public API
-  void session.scope
+const helloRuntime: LocalVelaRuntime = createRuntime({
+  ephemeral: true,
+  defaultModel: helloModel,
+  extensions: [hello],
+  mcp: false,
+})
+const helloEvents: string[] = []
+try {
+  await helloRuntime.ready()
+  const s0 = await helloRuntime.sessions.create({ name: 'default' })
+  const off = helloRuntime.events.subscribe((e: RuntimeEvent) => {
+    helloEvents.push(e.type)
+  })
+  await helloRuntime.prompt(s0.id, { text: 'say hi' })
+  await helloRuntime.waitForIdle(s0.id)
+  off()
+  const typeChecks = () => {
+    // @ts-expect-error prompt input requires an object with text
+    void helloRuntime.prompt(s0.id, 42)
+    // @ts-expect-error legacy sessions(opts) permissions field was removed
+    void helloRuntime.sessions.configure(s0.id, { permissions: { bash: 'ask' } })
+  }
+  void typeChecks
+  // @ts-expect-error no such RuntimeEvent type
+  const bogus: RuntimeEvent = { type: 'no_such_event' }
+  void bogus
+} finally {
+  await helloRuntime.dispose()
 }
-void typeChecks
-// @ts-expect-error no such event type
-const bogus: VelaEvent = { type: 'no_such_event' }
-void bogus
-if (!inspectVela(vela).tools.length || (await inspectSession(vela, session)).windowTokens <= 0)
-  throw new Error('diagnostic consumer failed')
-await vela.dispose()
-if (!types.includes('tool_execution_end') || types.at(-1) !== 'agent_settled')
-  throw new Error(\`unexpected events: \${types.join(',')}\`)
-if (!JSON.stringify(model.calls[1]?.prompt).includes('hi Vela'))
-  throw new Error('tool result did not reach the model')
+if (!helloEvents.includes('tool_finished') || !helloEvents.includes('run_finished'))
+  throw new Error(\`unexpected runtime events: \${helloEvents.join(',')}\`)
+if (!JSON.stringify(helloModel.calls[1]?.prompt).includes('hi Vela'))
+  throw new Error('inline extension tool result did not reach the model')
 
 const t = createTestVela({ responses: [fauxText('ok')] })
 await t.run('hello')
 if (t.lastAssistantText() !== 'ok') throw new Error('createTestVela failed')
 
-// Standalone .ts extension outside node_modules resolves host zod + @glows777/vela/extension-api via jiti
+// Standalone .ts extension outside node_modules resolves host zod + @glows777/vela/extension-api via jiti / Bun.build
 const extRoot = await mkdtemp(join(tmpdir(), 'vela-ext-smoke-'))
 try {
   const extPath = join(extRoot, 'standalone.ts')
@@ -150,18 +231,24 @@ try {
       '}',
     ].join('\\n'),
   )
-  const extFactory = await importExtension(extPath, 'standalone')
   const extModel = createFauxModel({
     responses: [fauxToolCall('standalone_ping', { v: 'jiti' }), fauxText('ext ok')],
   })
-  const extVela = createVela({ model: extModel, extensions: [extFactory] })
+  const extRuntime = createRuntime({
+    ephemeral: true,
+    defaultModel: extModel,
+    extensions: [extPath],
+    mcp: false,
+  })
   try {
-    const extSession = extVela.session('ext')
-    await extSession.prompt('ping jiti')
+    await extRuntime.ready()
+    const extSession = await extRuntime.sessions.create({ name: 'ext' })
+    await extRuntime.prompt(extSession.id, { text: 'ping jiti' })
+    await extRuntime.waitForIdle(extSession.id)
     if (!JSON.stringify(extModel.calls[1]?.prompt).includes('pong:jiti'))
-      throw new Error('jiti standalone extension tool did not execute')
+      throw new Error('standalone extension tool did not execute')
   } finally {
-    await extVela.dispose()
+    await extRuntime.dispose()
   }
 } finally {
   rmSync(extRoot, { recursive: true, force: true })
@@ -170,21 +257,42 @@ void mkdirSync
 
 // Photon WASM must resolve from the installed package under both Node and Bun.
 const image: ImageContent = { type: 'image', data: '${IMAGE}', mimeType: 'image/png' }
-const pictured = createTestVela({ responses: [fauxText('image received')] })
-await pictured.session.prompt('Describe the image', { images: [image] })
-const files = pictured.model.calls[0]?.prompt.flatMap((m) => m.role === 'user' ? m.content.filter((p) => p.type === 'file' && p.mediaType.startsWith('image/')) : []) ?? []
-if (files.length !== 1 || JSON.stringify(pictured.session.messages[0]).includes(image.data))
-  throw new Error('packaged image prompt was not resized and sent as an image')
-console.log('image sdk ok')
+const imgRuntime = createRuntime({
+  ephemeral: true,
+  defaultModel: createFauxModel({ responses: [fauxText('image received')] }),
+  mcp: false,
+})
+try {
+  await imgRuntime.ready()
+  const imgSession = await imgRuntime.sessions.create({ name: 'images' })
+  const blob = await imgRuntime.blobs.storeInbound({
+    sessionId: imgSession.id,
+    filename: 'wide.png',
+    mimeType: 'image/png',
+    bytes: new Uint8Array(Buffer.from(image.data, 'base64')),
+  })
+  await imgRuntime.prompt(imgSession.id, {
+    text: 'Describe the image',
+    attachments: [{ blobId: blob.id, name: 'wide.png', mimeType: 'image/png', inlineOnly: true }],
+  })
+  await imgRuntime.waitForIdle(imgSession.id)
+  const imgPage = await imgRuntime.sessions.messages({ sessionId: imgSession.id })
+  const storedUser = imgPage.messages.find((m) => m.role === 'user')
+  if (!storedUser || JSON.stringify(storedUser.content).includes(image.data))
+    throw new Error('packaged image prompt was not resized and sent as an image')
+  console.log('image sdk ok')
+} finally {
+  await imgRuntime.dispose()
+}
 
-// Tool source, shared image normalization and canonical tool types from the real package.
+// Tool source, shared image normalization and canonical tool types from @glows777/vela/extension-api.
 const toolContent: ToolContent = [{ type: 'text', text: 'Caption' }, image]
 if (new ToolExecutionResult({ source: 'smoke' }, toolContent).text !== 'Caption')
   throw new Error('packaged ToolContent API failed')
 const imageTool = createTestVela({ responses: [fauxToolCall('read', { path: 'image.dat' }), fauxText('read')] })
 await writeFile(join(imageTool.cwd, 'image.dat'), Buffer.from(image.data, 'base64'))
 await imageTool.run('Read image.dat')
-const toolFiles = imageTool.model.calls[1]?.prompt.flatMap(m => m.role === 'tool' ? m.content.flatMap(p => p.type === 'tool-result' && p.output.type === 'content' ? p.output.value.filter(c => c.type === 'file' && c.mediaType.startsWith('image/')) : []) : []) ?? []
+const toolFiles = imageTool.model.calls[1]?.prompt.flatMap((m) => m.role === 'tool' ? m.content.flatMap((p) => p.type === 'tool-result' && p.output.type === 'content' ? p.output.value.filter((c) => c.type === 'file' && c.mediaType.startsWith('image/')) : []) : []) ?? []
 if (toolFiles.length !== 1 || JSON.stringify(imageTool.session.messages).includes(image.data))
   throw new Error('packaged read image was not resized and sent')
 console.log('tool image sdk ok')
@@ -205,23 +313,48 @@ const searched = Object.fromEntries(
 if (!searched['find']?.includes('src/a.ts') || !searched['grep']?.includes('src/a.ts:1: export const answer = 42'))
   throw new Error(\`grep / find results missing: \${JSON.stringify(searched)}\`)
 
-// MCP stdio extension lazy-loads @modelcontextprotocol/sdk on demand and returns real tool output
-const mcpOptions: McpOptions = { servers: { local: { command: process.execPath, args: ['server.ts'], exposure: 'direct' } } }
-const m = createTestVela({
-  cwd: process.cwd(),
-  dataDir: '.mcp-data',
-  extensions: [mcp(mcpOptions)],
-  responses: [fauxToolCall('mcp__local__echo', { text: 'stdio works' }), fauxText('done')],
-})
+// MCP stdio server configured in <agentDir>/config.json lazy-loads @modelcontextprotocol/sdk on demand
+const mcpAgentDir = await mkdtemp(join(tmpdir(), 'vela-mcp-smoke-'))
 try {
-  await m.run('echo')
-  const echoResult = (m.model.calls[1]?.toolResults ?? []).find((r) => r.toolName === 'mcp__local__echo')
-  const outputText = JSON.stringify(echoResult?.output ?? '')
-  if (!echoResult || outputText.includes('AI_NoSuchToolError') || !outputText.includes('stdio works'))
-    throw new Error(\`mcp tool result missing or failed: \${JSON.stringify(m.model.calls[1]?.toolResults)}\`)
-  console.log('mcp stdio sdk ok')
+  await writeFile(
+    join(mcpAgentDir, 'config.json'),
+    JSON.stringify({
+      mcpServers: {
+        local: {
+          command: process.execPath,
+          args: ['server.ts'],
+          exposure: 'direct',
+        },
+      },
+    }),
+  )
+  const mcpModel = createFauxModel({
+    responses: [fauxToolCall('mcp__local__echo', { text: 'stdio works' }), fauxText('done')],
+  })
+  const mcpRuntime = createRuntime({
+    agentDir: mcpAgentDir,
+    defaultModel: mcpModel,
+    trustOverride: () => true,
+  })
+  try {
+    await mcpRuntime.ready()
+    const proj = await mcpRuntime.projects.create({
+      name: 'McpSmoke',
+      cwd: process.cwd(),
+      hubSessionId: true,
+    })
+    await mcpRuntime.prompt(proj.hubSessionId!, { text: 'echo' })
+    await mcpRuntime.waitForIdle(proj.hubSessionId!)
+    const echoResult = (mcpModel.calls[1]?.toolResults ?? []).find((r) => r.toolName === 'mcp__local__echo')
+    const outputText = JSON.stringify(echoResult?.output ?? '')
+    if (!echoResult || outputText.includes('AI_NoSuchToolError') || !outputText.includes('stdio works'))
+      throw new Error(\`mcp tool result missing or failed: \${JSON.stringify(mcpModel.calls[1]?.toolResults)}\`)
+    console.log('mcp stdio sdk ok')
+  } finally {
+    await mcpRuntime.dispose()
+  }
 } finally {
-  await m.cleanup()
+  rmSync(mcpAgentDir, { recursive: true, force: true })
 }
 
 // Lark fake transport round trip (incoming message -> reply)
@@ -271,10 +404,7 @@ try {
     },
   })
   const deadline = Date.now() + 5_000
-  while (
-    !larkSent.some((text) => text.includes('lark received')) &&
-    Date.now() < deadline
-  ) {
+  while (!larkSent.some((text) => text.includes('lark received')) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 20))
   }
   assert(larkSent.some((text) => text.includes('lark received')))
@@ -283,20 +413,36 @@ try {
   await larkRuntime.dispose()
 }
 
-const _runtimeTypeCheck = (
-  _rt?: VelaRuntime,
-  _opts?: CreateRuntimeOptions,
-  _cap?: AgentDriverCapabilities,
-  _kind?: SessionKind,
-  _state?: SessionState,
-  _ap?: ApprovalStatus,
-  _env?: EnvironmentRegistry,
-) => void [_rt, _opts, _cap, _kind, _state, _ap, _env]
-void _runtimeTypeCheck
+// startDaemonServer() + connectRuntime() IPC round trip inside consumer package
+const ipcAgentDir = await mkdtemp(join(tmpdir(), 'vela-ipc-smoke-'))
+try {
+  const server = await startDaemonServer({
+    agentDir: ipcAgentDir,
+    defaultModel: createFauxModel({ responses: [fauxText('ipc daemon hello')] }),
+    enableLark: false,
+    enableWebhooks: false,
+    registerSignalHandlers: false,
+  })
+  const ipcClient = await connectRuntime({ agentDir: ipcAgentDir })
+  try {
+    const sess = await ipcClient.sessions.create({ name: 'ipc-smoke' })
+    await ipcClient.prompt(sess.id, { text: 'hi ipc' })
+    await ipcClient.waitForIdle(sess.id)
+    const msgPage = await ipcClient.sessions.messages({ sessionId: sess.id })
+    assert(msgPage.messages.some((m) => m.text.includes('ipc daemon hello')))
+    console.log('startDaemonServer + connectRuntime IPC ok')
+  } finally {
+    await ipcClient.dispose()
+    await server.close('smoke-done')
+  }
+} finally {
+  rmSync(ipcAgentDir, { recursive: true, force: true })
+}
 
 const runtimeOpts: CreateRuntimeOptions = {
   ephemeral: true,
   defaultModel: createFauxModel({ responses: [fauxText('runtime ok')] }),
+  mcp: false,
 }
 const rt: LocalVelaRuntime = createRuntime(runtimeOpts)
 try {
@@ -309,6 +455,17 @@ try {
 } finally {
   await rt.dispose()
 }
+
+// Verify ./legacy-desktop was completely removed from the packed package.
+const installedPkgPath = join(process.cwd(), 'node_modules/@glows777/vela/package.json')
+const installedPkg = JSON.parse(readFileSync(installedPkgPath, 'utf8')) as {
+  exports: Record<string, unknown>
+}
+assert.equal('./legacy-desktop' in installedPkg.exports, false)
+assert.equal(
+  existsSync(join(process.cwd(), 'node_modules/@glows777/vela/dist/legacy-desktop.js')),
+  false,
+)
 
 await cleanupTestVelas()
 console.log('sdk ok')

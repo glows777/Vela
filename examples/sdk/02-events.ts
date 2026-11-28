@@ -1,7 +1,8 @@
 /**
- * Subscribe to session events (pi's shape): streamed text, tool calls and results, usage and the end of the run.
+ * Subscribe to Runtime durable events and live stream deltas: streamed text, tool calls,
+ * committed messages, and the end of the run.
  *
- * The faux model first asks for the `read` tool, then answers. The tool really runs,
+ * The faux model first asks for the `read` tool, then answers. The tool really runs
  * against a temporary working directory created here.
  *
  * Run: bun examples/sdk/02-events.ts
@@ -9,75 +10,77 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
 
 const cwd = mkdtempSync(join(tmpdir(), 'vela-example-'))
 writeFileSync(join(cwd, 'notes.txt'), 'Ship the docs on Friday.\n')
 
-const model = createFauxModel({
+const defaultModel = createFauxModel({
   responses: [
     fauxToolCall('read', { path: 'notes.txt' }),
-    // A function step builds the reply from the request: here, from the tool result.
     (req) =>
       fauxText(`The note says: ${req.toolResults[0]?.output.split('\n')[0]}`),
   ],
 })
-const vela = createVela({ model, cwd })
+const runtime = createRuntime({
+  ephemeral: true,
+  defaultModel,
+  mcp: false,
+  trustOverride: () => true,
+})
 
 try {
-  const session = vela.session()
+  await runtime.ready()
+  const project = await runtime.projects.create({
+    name: 'EventsDemo',
+    cwd,
+    hubSessionId: true,
+  })
+  const sessionId = project.hubSessionId!
+
   let streaming = false
-  session.subscribe((event) => {
+  const offDeltas = runtime.events.subscribeDeltas((delta) => {
+    if (delta.sessionId !== sessionId) return
+    if (delta.type === 'text_delta') {
+      process.stdout.write(delta.delta)
+      streaming = true
+    }
+  })
+  const offEvents = runtime.events.subscribe((event) => {
+    if (event.sessionId !== sessionId) return
     switch (event.type) {
-      case 'agent_start':
-        console.log(`[agent_start] ${event.input}`)
+      case 'run_started':
+        console.log(`[run_started] trigger=${event.trigger}`)
         break
-      case 'turn_start':
-        console.log(`[turn_start] turn ${event.turn}`)
+      case 'tool_started':
+        console.log(
+          `[tool_started] ${event.toolName} ${JSON.stringify(event.input)}`,
+        )
         break
-      case 'message_update':
-        // The assistant message streams as updates; text_delta carries the new text
-        if (event.assistantMessageEvent.type === 'text_delta') {
-          process.stdout.write(event.assistantMessageEvent.delta)
-          streaming = true
+      case 'tool_finished':
+        console.log(`[tool_finished] ${event.toolName} error=${event.isError}`)
+        break
+      case 'message_committed':
+        if (event.message.role === 'assistant') {
+          console.log(`${streaming ? '\n' : ''}[message_committed] assistant`)
+          streaming = false
         }
         break
-      case 'message_end':
-        if (event.message.role === 'assistant')
-          console.log(
-            `${streaming ? '\n' : ''}[message_end] assistant, ${event.stopReason}`,
-          )
-        streaming = false
-        break
-      case 'tool_execution_start':
-        console.log(
-          `[tool_execution_start] ${event.toolName} ${JSON.stringify(event.args)}`,
-        )
-        break
-      case 'tool_execution_end':
-        console.log(
-          `[tool_execution_end] ${event.toolName}: ${String(event.result).split('\n')[0]}`,
-        )
-        break
-      case 'usage':
-        console.log(
-          `[usage] in=${event.usage.inputTokens} out=${event.usage.outputTokens}`,
-        )
-        break
-      case 'turn_end':
-        console.log(`[turn_end] ${event.toolResults.length} tool result(s)`)
-        break
-      case 'agent_end':
-        console.log(`[agent_end] ${event.reason}`)
-        break
-      case 'agent_settled':
-        console.log('[agent_settled]')
+      case 'run_finished':
+        console.log(`[run_finished] ${event.status}`)
         break
     }
   })
-  await session.prompt('What does notes.txt say?')
+
+  try {
+    await runtime.prompt(sessionId, { text: 'What does notes.txt say?' })
+    await runtime.waitForIdle(sessionId)
+  } finally {
+    offDeltas()
+    offEvents()
+  }
 } finally {
-  await vela.dispose()
+  await runtime.dispose()
   rmSync(cwd, { recursive: true, force: true })
 }

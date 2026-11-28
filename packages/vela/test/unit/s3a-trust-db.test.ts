@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { savedTrust, saveTrust, trustLocationKey } from '../../src/db/index.ts'
 import { createLocalExecutionEnv } from '../../src/driver/execution/local.ts'
+import { createVela } from '../../src/driver/index.ts'
 import { executionEnvOs } from '../../src/shared/execution.ts'
 
 const dirs: { cleanup(): void }[] = []

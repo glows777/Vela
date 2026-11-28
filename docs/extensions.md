@@ -13,7 +13,7 @@ Core always installs `auditLog`, including in the SDK with no user extensions an
 An extension is a module whose default export is a function that receives the extension API. Put it in `~/.vela/extensions/hello.ts`:
 
 ```ts
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 
 const hello: VelaExtension = (vela) => {
   vela.registerCommand('hello', {
@@ -77,7 +77,7 @@ For session-capable built-ins, `builtin:` switches apply in order, user settings
 vela --no-extensions -e builtin:memory -e ./hello.ts
 ```
 
-For host extensions, when an extension fails to import or its factory throws, the CLI prints `[extensions] Failed to load <path>: <error>` to stderr and starts without it. Tools and commands it registered before failing stay registered. (The SDK is stricter: a synchronous throw makes `createVela()` throw, and a failed async factory makes `vela.ready()` and `prompt()` reject.)
+For host extensions, when an extension fails to import or its factory throws, errors are logged to `logger` and recorded in `runtime.extensionErrors()` without aborting host startup. Tools and commands it registered before failing stay registered.
 
 A project initialization failure blocks preparation of that project and disposes its partial instance; it does not silently publish partial project registrations.
 
@@ -203,7 +203,7 @@ vela.registerProvider('local', {
 })
 ```
 
-After this, `local/qwen3:8b` works with `--model`, `/model`, `model` in `config.json`, `createVela({ model })` and `session.setModel()`. `createModel(id, ctx)` returns an AI SDK `LanguageModel`; listed models carry metadata such as the context window (an unlisted field falls back to the built-in catalog when it knows the id), and unlisted ids still work. Provider names are not prefixed. Registering a name that already exists (including the built-in `anthropic`, `openai`, `openrouter` and `deepseek`, and providers from `config.json`) throws.
+After this, `local/qwen3:8b` works with `--model`, `/model`, `model` in `config.json`, `createRuntime({ defaultModel })` and `runtime.sessions.setModel()`. `createModel(id, ctx)` returns an AI SDK `LanguageModel`; listed models carry metadata such as the context window (an unlisted field falls back to the built-in catalog when it knows the id), and unlisted ids still work. Provider names are not prefixed. Registering a name that already exists (including the built-in `anthropic`, `openai`, `openrouter` and `deepseek`, and providers from `config.json`) throws.
 
 A provider can take part in `/login`:
 
@@ -368,18 +368,22 @@ Handlers and command handlers receive a context as their second argument:
 const baseUrl = typeof vela.config.baseUrl === 'string' ? vela.config.baseUrl : 'http://localhost:11434/v1'
 ```
 
-The object is frozen and its values are `unknown`; validate them. For project instances, project settings deep-merge over user settings. User custom extension singletons keep their user configuration; project overrides targeting them are ignored with a diagnostic. Explicit CLI extensions retain their startup configuration. With the SDK, pass `createVela({ extensionConfig: { 'local-provider': { ... } } })`. See [Settings](settings.md).
+The object is frozen and its values are `unknown`; validate them. For project instances, project settings deep-merge over user settings. User custom extension singletons keep their user configuration; project overrides targeting them are ignored with a diagnostic. Explicit CLI extensions retain their startup configuration. With the SDK, pass `createRuntime({ extensionConfig: { 'local-provider': { ... } } })`. See [Settings](settings.md).
 
 ## Using extensions from the SDK
 
-The SDK loads no extensions by default. Pass factories to `createVela()`:
+Pass inline `VelaExtension` factories or file/directory specs in `createRuntime({ extensions })`:
 
 ```ts
-import { createVela, memory } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 import hello from './hello.ts'
 
-const vela = createVela({ model, extensions: [memory(), hello] })
-await vela.ready()
+const runtime = createRuntime({
+  ephemeral: true,
+  defaultModel,
+  extensions: [hello, './extra-ext.ts'],
+})
+await runtime.ready()
 ```
 
 See [SDK](sdk.md) and, for testing extensions with the scripted faux model, [Testing](testing.md).

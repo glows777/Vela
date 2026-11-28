@@ -118,7 +118,7 @@ Without the setting, or when no pattern matches, Ctrl+P cycles through all avail
 | `summaryThreshold` | `150000` | Estimated input tokens at which the history is summarized. |
 | `maxInputTokens` | `183616` | Reference input token ceiling derived from `contextWindow` (compact thresholds follow it). |
 
-The SDK takes the same keys as `createVela({ limits })`; unknown keys are an error in both places.
+The SDK takes the same keys as `createRuntime({ limits })`; unknown keys are an error in both places.
 
 When the model entry has a `contextWindow` `W` (in `providers` or an extension provider's model list), `maxInputTokens` and `summaryThreshold` are derived from it instead of using the defaults above, which correspond to a 200k window:
 
@@ -135,7 +135,7 @@ A list of extension files and directories to load, and `builtin:` switches that 
 
 ### Built-in and custom extension sections
 
-Built-in extensions read top-level sections (`lark`, `web`, `memory`, `webhooks`, `local`, and strict-variable `mcpServers` — see [MCP servers](mcp.md)), while custom third-party extensions read `extensionConfig.<name>` as `vela.config`. String values in `lark`, `web`, `memory`, `webhooks`, `local`, and `extensionConfig` support `$NAME` or `${NAME}` once per config layer (an unset variable becomes an empty string; `$$` is a literal `$`). Placing any built-in extension name (`lark`, `web`, `mcp`, `memory`, `channel`, `local`, `background`, `todo`) under `extensionConfig` is rejected.
+Built-in capabilities read top-level sections (`lark`, `web`, `memory`, `webhooks`, and strict-variable `mcpServers` — see [MCP servers](mcp.md)), while custom third-party extensions read `extensionConfig.<name>` as `vela.config`. String values in `lark`, `web`, `memory`, `webhooks`, and `extensionConfig` support `$NAME` or `${NAME}` once per config layer (an unset variable becomes an empty string; `$$` is a literal `$`). Placing any built-in extension name (`lark`, `web`, `mcp`, `memory`, `channel`, `local`, `background`, `todo`) under `extensionConfig` is rejected.
 
 ```json
 {
@@ -197,7 +197,7 @@ Trust only controls what loads at startup. It does not limit what tools can do a
 
 Like pi, Vela puts project instructions from `AGENTS.md` or `CLAUDE.md` into the system prompt. It looks in `~/.vela/` first, then in every directory from the filesystem root down to the working folder, and takes at most one file per directory, the first of `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`. Files closer to the working folder come later, so their instructions read as more specific. In a git worktree nested inside its main checkout, the main checkout's file is skipped when the worktree has its own.
 
-The files are read at startup and are not gated by project trust (same as pi): they are text for the model, which would read them anyway when it reads the project. Treat a folder's instructions as untrusted input even when you decline trust. `--no-context-files` turns them off. In the SDK, pass `contextFiles` to `createVela()`; see [SDK](sdk.md#createvela-options).
+The files are read at startup and are not gated by project trust (same as pi): they are text for the model, which would read them anyway when it reads the project. Treat a folder's instructions as untrusted input even when you decline trust. `--no-context-files` turns them off. In the SDK, pass `contextFiles` to `createRuntime()`; see [SDK](sdk.md#createruntime-options).
 
 The CLI prints the paths it loaded. Print, JSON and RPC mode write one `[context]` line to stderr. Interactive mode writes that line into the chat log at startup, and `/status` lists the same paths after `Context files:`. A file in the working folder is shown relative to that folder (`AGENTS.md`). A file under the home directory is shown with `~`. A file under the agent directory that is outside the home directory is shown with `$VELA_DIR`. With `--no-context-files`, or when no file was found, there is no line.
 
@@ -239,7 +239,7 @@ A directory that contains `SKILL.md` is one skill and is not searched further. O
 5. `~/.vela/skills/`
 6. `~/.agents/skills/`
 
-When you start Vela from your home directory, `<home>/.skills/` counts as user configuration and always loads. The SDK takes skill paths through `createVela({ skillDirs })`; see [SDK](sdk.md).
+When you start Vela from your home directory, `<home>/.skills/` counts as user configuration and always loads. The SDK takes preloaded skills through `createRuntime({ skills })`; see [SDK](sdk.md).
 
 ## Prompt templates
 
@@ -255,7 +255,7 @@ Review $1. Focus on ${2:-correctness}.
 
 `/review src/app.ts "error handling"` sends `Review src/app.ts. Focus on error handling.` Arguments are split like a shell (quotes group words). Placeholders: `$1`, `$2`, … for one argument, `$@` or `$ARGUMENTS` for all of them, `${N:-default}` and `${@:-default}` for a fallback, `${@:N}` for the arguments from the Nth on and `${@:N:L}` for L of them. Without a `description`, the first line of the body is shown in completion.
 
-Templates load from `<project>/.vela/prompts/` (trusted projects only), the `prompts` setting and `~/.vela/prompts/`, one level deep; the first template with a name wins. Extension commands with the same name run instead of a template. The SDK takes template paths through `createVela({ promptTemplateDirs })`.
+Templates load from `<project>/.vela/prompts/` (trusted projects only), the `prompts` setting and `~/.vela/prompts/`, one level deep; the first template with a name wins. Extension commands with the same name run instead of a template. The SDK takes preloaded templates through `createRuntime({ promptTemplates })`.
 
 ## The system prompt
 
@@ -265,11 +265,11 @@ The system prompt is built from named, tagged sections: the intro paragraph (unt
 
 The CLI resolves these two project files from the session’s working directory, including when resuming a saved session or opening another project through Local. Their contents are part of the session resource snapshot and stay stable across ordinary wakes.
 
-Text in `~/.vela/SYSTEM.md`, or in `<project>/.vela/SYSTEM.md` when the project is trusted (the project file wins), replaces the default prompt: it becomes the intro paragraph and `<tools>`, `<rules>` and `<docs>` are left out. `--system-prompt <text or file>` (repeatable) replaces both for one run. In the SDK, pass `systemPrompt` to `createVela()`. Addendum, project context, skills, cwd, environment and extension sections stay.
+Text in `~/.vela/SYSTEM.md`, or in `<project>/.vela/SYSTEM.md` when the project is trusted (the project file wins), replaces the default prompt: it becomes the intro paragraph and `<tools>`, `<rules>` and `<docs>` are left out. `--system-prompt <text or file>` (repeatable) replaces both for one run. In the SDK, pass `systemPrompt` to `createRuntime()`. Addendum, project context, skills, cwd, environment and extension sections stay.
 
-Text in `~/.vela/APPEND_SYSTEM.md`, or in `<project>/.vela/APPEND_SYSTEM.md` when the project is trusted (the project file wins), is added to the system prompt in an `<addendum>` section. `--append-system-prompt <text or file>` (repeatable) replaces both for one run. In the SDK, pass `appendSystemPrompt` to `createVela()`.
+Text in `~/.vela/APPEND_SYSTEM.md`, or in `<project>/.vela/APPEND_SYSTEM.md` when the project is trusted (the project file wins), is added to the system prompt in an `<addendum>` section. `--append-system-prompt <text or file>` (repeatable) replaces both for one run. In the SDK, pass `appendSystemPrompt` to `createRuntime()`.
 
-`<docs>` points at Vela's own README, `docs/` and `examples/` folders, so the model reads the installed documentation when it is asked about the harness, its SDK or its extensions. A source checkout that was never built has no `docs/` folder and gets no such section; the SDK can name its own folders with `createVela({ docs })`, or turn the section off with `docs: false`.
+`<docs>` points at Vela's own README, `docs/` and `examples/` folders, so the model reads the installed documentation when it is asked about the harness, its SDK or its extensions. A source checkout that was never built has no `docs/` folder and gets no such section; the SDK can name its own folders with `createRuntime({ docs })`, or turn the section off with `docs: false`.
 
 ## Legacy data
 

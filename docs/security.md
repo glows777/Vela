@@ -76,7 +76,7 @@ This controls tool availability, not data access. For example, a session with `r
 
 Blocking risky tool calls is a user extension, not a built-in rule. In a `tool_call` handler, inspect `event.toolName` and `event.input`, and return `{ block: true, reason }` to refuse matching calls. See [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
 
-Load the example with `vela -e ./examples/extensions/confirm-dangerous.ts`, or import it and pass it in `createVela({ extensions: [confirmDangerous] })`. The example's simple command pattern catches mistakes, not every dangerous action. Hooks can inspect other tools too; they do not restrict arbitrary extension code or provider-hosted execution. Matching `tool_call` handlers keep tools on the local execution path rather than using a provider-hosted equivalent.
+Load the example with `vela -e ./examples/extensions/confirm-dangerous.ts`, or import it and pass it in `createRuntime({ extensions: [confirmDangerous] })`. The example's simple command pattern catches mistakes, not every dangerous action. Hooks can inspect other tools too; they do not restrict arbitrary extension code or provider-hosted execution. Matching `tool_call` handlers keep tools on the local execution path rather than using a provider-hosted equivalent.
 
 ## Prompt injection
 

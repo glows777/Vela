@@ -18,7 +18,7 @@ Persistent session deletion is manual. Before deleting a session's rows from `ve
 
 The owner can retain or remove each matching guest directory as part of the same retention decision. Deleting the host session alone leaves these container caches in place. The canonical downloads belong to the chat's private `files/` directory and can be shared across topics. Archiving and closing a persistent session preserve its files.
 
-In the SDK, `createRuntime()` stores sessions in `<agentDir>/vela.db` (`~/.vela/vela.db` by default, or `:memory:` with `ephemeral: true`). With `createVela()`, sessions are stored in `<agentDir>/vela.db` when `agentDir` is passed, fall back to `<dataDir>/vela.db` when `createVela({ dataDir })` is called without `agentDir`, or stay in memory (`:memory:`) when neither is provided (or when `ephemeralSessions: true`). See [SDK](sdk.md#session-storage).
+In the SDK, `createRuntime({ agentDir })` stores sessions in `<agentDir>/vela.db` (`~/.vela/vela.db` by default, or `:memory:` when `ephemeral: true` or `ephemeralSessions: true` is set). See [SDK](sdk.md#session-storage).
 
 ## Continue or switch sessions
 
@@ -82,7 +82,7 @@ Review an export before you share it: it can contain your prompts, the model's a
 
 One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory and channels; each keeps its own history, queues, compaction, usage, tool results and run lock. This is a difference from pi, where one process holds one active session. A channel like Lark needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
 
-The CLI opens one session at a time on the resident daemon; `connectRuntime()`, `createRuntime()`, and legacy `createVela()` can drive as many sessions concurrently as you need. See [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
+The CLI opens one session at a time on the resident daemon; `connectRuntime()` and `createRuntime()` can drive as many sessions concurrently as you need. See [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
 
 ## Queueing: steer
 
@@ -123,17 +123,17 @@ The summary request uses the same model and system prompt as the main request. I
 
 ### Turning automatic compaction off
 
-Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, or set `session.autoCompaction = false`. Then nothing changes the context on its own: no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works.
+Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), or pass `autoCompaction: false` to `createRuntime()`. Then nothing changes the context on its own: no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works.
 
 ### Thresholds and context window
 
-The token thresholds are `summaryThreshold` and `maxInputTokens`. Their defaults match a 200k window; when the model entry has a `contextWindow`, they are derived from it and recomputed when you switch models. Values set in the `limits` setting or the `limits` option of `createVela()` always win. See [Settings](settings.md#limits) for the defaults and formulas.
+The token thresholds are `summaryThreshold` and `maxInputTokens`. Their defaults match a 200k window; when the model entry has a `contextWindow`, they are derived from it and recomputed when you switch models. Values set in the `limits` setting or the `limits` option of `createRuntime()` always win. See [Settings](settings.md#limits) for the defaults and formulas.
 
 ## Long tool output
 
 A tool result longer than the tool's line limit (200 lines for `grep` and `find`, 500 lines by default and for web tools; `read` pages and `bash` previews have their own limits; see [Tools](tools.md#result-size-and-truncation)) is saved in full to `<dataDir>/sessions/<id>/tool-results/<callId>.txt`. The model gets the head up to the limit, followed by one line with the file path and a hint to page through the rest with `read` and `offset`. Bash keeps its existing tail preview, with the file path only when truncated.
 
-Every tool call and its result is also recorded in SQLite (`vela_tool_calls` in `$VELA_DIR/vela.db` for the CLI, or SDK `<agentDir>/vela.db` / `<dataDir>/vela.db`), which survives compaction. See [Session format](session-format.md#tool-call-history).
+Every tool call and its result is also recorded in SQLite (`vela_tool_calls` in `$VELA_DIR/vela.db` for the CLI, or `<agentDir>/vela.db` in `createRuntime({ agentDir })`), which survives compaction. See [Session format](session-format.md#tool-call-history).
 
 Vela doesn't expire tool results by age: content changes only through compaction summaries when reached.
 
@@ -175,6 +175,6 @@ Every model request records input, output, cache-read and cache-write tokens and
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.
 - `session.usage` in the SDK returns `{ tokens, percent, needsAction, totals }`.
-- Each request records input, output, cache-read, cache-write tokens and cost in `usage_records` in `$VELA_DIR/vela.db` (or SDK `<agentDir>/vela.db` / `<dataDir>/vela.db`). `--no-session` keeps the same totals in memory without persisting to disk.
+- Each request records input, output, cache-read, cache-write tokens and cost in `usage_records` in `$VELA_DIR/vela.db` (or `<agentDir>/vela.db` in `createRuntime({ agentDir })`). `--no-session` keeps the same totals in memory without persisting to disk.
 
 `usage` events carry the same numbers per request. See [SDK](sdk.md#events).

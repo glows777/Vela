@@ -2,7 +2,7 @@
  * registerCommand + ctx.notify: `/todo buy milk` adds a todo, `/todo` lists them.
  * Notifications are emitted as `notify` events on the session event stream.
  */
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 
 const todo: VelaExtension = (vela) => {
   // One todo list per session

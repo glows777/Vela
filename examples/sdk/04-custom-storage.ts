@@ -1,34 +1,37 @@
 /**
- * Persistent SQLite sessions: pass a shared `dataDir` so sessions persist in
- * `<dataDir>/vela.db` and resume across Vela restarts.
+ * Persistent SQLite sessions: pass a shared `agentDir` so sessions persist in
+ * `<agentDir>/vela.db` and resume across Runtime restarts.
  *
  * Run: bun examples/sdk/04-custom-storage.ts
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 import { createFauxModel, fauxText } from '@glows777/vela/testing'
 
-const dataDir = mkdtempSync(join(tmpdir(), 'vela-example-storage-'))
+const agentDir = mkdtempSync(join(tmpdir(), 'vela-example-storage-'))
 
 try {
-  // First process: talk, then shut down. Messages are stored in <dataDir>/vela.db.
-  const first = createVela({
-    model: createFauxModel({
+  // First process: talk, then shut down. Messages are stored in <agentDir>/vela.db.
+  const first = createRuntime({
+    agentDir,
+    defaultModel: createFauxModel({
       responses: [fauxText('Noted: your name is Ada.')],
     }),
-    dataDir,
+    mcp: false,
   })
-  const session = first.session('support-42')
-  session.setName('Ada support chat')
-  await session.prompt('My name is Ada.')
-  console.log('saved sessions:', await first.listSessions())
+  await first.ready()
+  await first.sessions.create({ id: 'support-42', name: 'Ada support chat' })
+  await first.prompt('support-42', { text: 'My name is Ada.' })
+  await first.waitForIdle('support-42')
+  console.log('saved sessions:', await first.sessions.listSummaries())
   await first.dispose()
 
-  // Second process: same dataDir, same id. resume() restores the history.
-  const second = createVela({
-    model: createFauxModel({
+  // Second process: same agentDir, same session id. Prompting continues the saved transcript.
+  const second = createRuntime({
+    agentDir,
+    defaultModel: createFauxModel({
       responses: [
         (req) =>
           fauxText(
@@ -41,20 +44,23 @@ try {
           ),
       ],
     }),
-    dataDir,
+    mcp: false,
   })
   try {
-    const resumed = second.session('support-42')
-    console.log('resumed:', await resumed.resume(), `name=${resumed.name}`)
-    await resumed.prompt('What is my name?')
-    const last = resumed.messages.at(-1)
-    if (last?.role === 'assistant' && Array.isArray(last.content))
-      for (const part of last.content)
-        if (part.type === 'text') console.log('answer:', part.text)
-    console.log(`history: ${resumed.messages.length} messages`)
+    await second.ready()
+    const restored = await second.sessions.get('support-42')
+    console.log('resumed:', restored !== undefined, `name=${restored?.name}`)
+    await second.prompt('support-42', { text: 'What is my name?' })
+    await second.waitForIdle('support-42')
+    const page = await second.sessions.messages({ sessionId: 'support-42' })
+    const last = page.messages.at(-1)
+    if (last?.role === 'assistant') {
+      console.log('answer:', last.text)
+    }
+    console.log(`history: ${page.messages.length} messages`)
   } finally {
     await second.dispose()
   }
 } finally {
-  rmSync(dataDir, { recursive: true, force: true })
+  rmSync(agentDir, { recursive: true, force: true })
 }

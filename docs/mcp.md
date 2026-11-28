@@ -107,27 +107,19 @@ An MCP server runs with your permissions (stdio) or acts with the credentials yo
 
 ## SDK
 
-`createVela()` loads no extensions by default. Pass `mcp()` with the servers in the same format; the SDK does not read `config.json`:
+`createRuntime()` automatically connects to servers configured under top-level `mcpServers` in `<agentDir>/config.json` (and trusted `<cwd>/.vela/config.json`) unless `mcp: false` or `ephemeral: true` is passed:
 
 ```ts
-import { createVela, mcp } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 
-const vela = createVela({
-  model: 'anthropic/<model-id>',
-  extensions: [
-    mcp({
-      servers: {
-        filesystem: {
-          command: 'npx',
-          args: ['-y', '@modelcontextprotocol/server-filesystem', '.'],
-        },
-      },
-    }),
-  ],
+const runtime = createRuntime({
+  agentDir: '~/.vela',
+  defaultModel: 'anthropic/<model-id>',
+  hostEnv: process.env,
 })
 ```
 
-Without `servers`, `mcp()` reads `mcpServers` from `extensionConfig.mcp`. Values are used as given: resolve any environment variables yourself. Call `await vela.dispose()` to close the connections and stop stdio servers.
+Call `await runtime.dispose()` to close pooled MCP connections and stop stdio servers.
 
 ## Not supported yet
 

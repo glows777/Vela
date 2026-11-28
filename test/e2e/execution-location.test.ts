@@ -1,9 +1,9 @@
 import { expect, spyOn, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
+import { createVela } from '../support/compat-vela.ts'
 
 test('saved local execution location survives session restart and clone', async () => {
   const dir = tempDir()

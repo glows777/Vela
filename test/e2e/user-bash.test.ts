@@ -1,15 +1,15 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import type {
-  ModelMessage,
-  SessionMessageEntry,
+import {
+  createVela,
+  type ModelMessage,
+  type SessionMessageEntry,
 } from '../../packages/vela/src/driver/index.ts'
 import {
   fauxText,
   fauxToolCall,
 } from '../../packages/vela/src/testing/core/index.ts'
-import { createVela } from '../../packages/vela/src/vela.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

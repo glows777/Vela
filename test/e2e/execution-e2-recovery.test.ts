@@ -7,7 +7,6 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { createVela } from '@glows777/vela'
 import {
   createFauxModel,
   fauxText,
@@ -19,6 +18,7 @@ import {
   createLocalExecutionEnv,
   loadConfig,
 } from '../../packages/vela/src/driver/index.ts'
+import { createVela } from '../support/compat-vela.ts'
 
 test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   'an unreadable workspace skill reports its path and leaves the session and neighboring skill usable',

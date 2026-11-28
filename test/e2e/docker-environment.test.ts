@@ -798,7 +798,7 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
   )
 
   test('the SDK rejects adapters that do not match the requested cwd or local identity', async () => {
-    const { createVela } = await import('@glows777/vela')
+    const { createVela } = await import('../support/compat-vela.ts')
     const { createFauxModel, fauxText } = await import('@glows777/vela/testing')
     const model = createFauxModel({ responses: [fauxText('unexpected')] })
     const vela = createVela({

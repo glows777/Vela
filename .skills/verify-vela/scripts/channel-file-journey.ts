@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createRuntime } from '@glows777/vela'
-import { DaemonLarkHost } from '../../../packages/vela/src/legacy-desktop.ts'
+import { DaemonLarkHost } from '../../../packages/vela/src/daemon/lark-host.ts'
 import { silentLogger } from '../../../packages/vela/src/shared/logger.ts'
 import {
   createFauxModel,

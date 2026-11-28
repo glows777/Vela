@@ -22,8 +22,7 @@
     "paths": {
       "@glows777/vela": ["./packages/vela/src/index.ts"],
       "@glows777/vela/extension-api": ["./packages/vela/src/extension-api.ts"],
-      "@glows777/vela/testing": ["./packages/vela/src/testing/index.ts"],
-      "@glows777/vela/legacy-desktop": ["./packages/vela/src/legacy-desktop.ts"]
+      "@glows777/vela/testing": ["./packages/vela/src/testing/index.ts"]
     }
   },
   "exclude": [

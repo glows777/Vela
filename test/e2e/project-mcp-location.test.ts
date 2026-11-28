@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createVela } from '@glows777/vela'
 import {
   createFauxModel,
   fauxText,
@@ -10,6 +9,7 @@ import {
 } from '@glows777/vela/testing'
 import { parseArgs } from '../../packages/vela/src/cli/setup.ts'
 import { loadConfig } from '../../packages/vela/src/load-config.ts'
+import { createVela } from '../support/compat-vela.ts'
 import {
   cliHostExtensionConfig,
   cliProjectExtensions,

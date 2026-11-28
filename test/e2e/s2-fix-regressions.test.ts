@@ -1,16 +1,14 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import {
-  createVela,
-  memoryCredentialStore,
-  ToolExecutionResult,
-} from '@glows777/vela'
+import { memoryCredentialStore } from '@glows777/vela'
+import { ToolExecutionResult } from '@glows777/vela/extension-api'
 import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
 import { z } from 'zod'
 import { stopDaemon } from '../../packages/vela/src/daemon/index.ts'
 import { openDatabase } from '../../packages/vela/src/db/sqlite.ts'
 import { SessionStore } from '../../packages/vela/src/driver/session/index.ts'
+import { createVela } from '../support/compat-vela.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')

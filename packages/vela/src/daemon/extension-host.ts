@@ -9,24 +9,52 @@ export function registerBuiltinExtensionHostModules(
 ): void {
   registerExtensionHostModules({
     '@glows777/vela/extension-api': () => import('../extension-api.ts'),
-    '@glows777/vela': () =>
-      Promise.all([
+    '@glows777/vela': async () => {
+      const [
+        client,
+        launcher,
+        ownerLock,
+        localExec,
+        lark,
+        loadCfg,
+        authStore,
+        runtimeMod,
+        runtimeSdk,
+        loggerMod,
+      ] = await Promise.all([
         import('./client.ts'),
         import('./launcher.ts'),
         import('./owner-lock.ts'),
-        import('./paths.ts'),
-        import('./protocol.ts'),
-        import('../driver/index.ts'),
-        import('../driver/diagnostics.ts'),
-        import('../extension-api.ts'),
+        import('../driver/execution/local.ts'),
         import('../lark/index.ts'),
         import('../load-config.ts'),
-        import('../mcp/index.ts'),
+        import('../providers/auth/store.ts'),
         import('../runtime/index.ts'),
         import('../runtime-sdk.ts'),
-        import('../settings.ts'),
-        import('../vela.ts'),
-      ]).then((mods) => Object.assign({}, ...mods, extraDaemonExports ?? {})),
+        import('../shared/logger.ts'),
+      ])
+      return {
+        // 18 converged root runtime symbols (matching packages/vela/src/index.ts)
+        createRuntime: runtimeSdk.createRuntime,
+        connectRuntime: client.connectRuntime,
+        getDaemonStatus: launcher.getDaemonStatus,
+        startDaemon: launcher.startDaemon,
+        stopDaemon: launcher.stopDaemon,
+        DaemonAlreadyRunningError: ownerLock.DaemonAlreadyRunningError,
+        EnvironmentRegistry: runtimeMod.EnvironmentRegistry,
+        RuntimeWebhookReceiver: runtimeMod.RuntimeWebhookReceiver,
+        createLarkChannelAdapter: lark.createLarkChannelAdapter,
+        LarkChannelAdapter: lark.LarkChannelAdapter,
+        larkConfig: lark.larkConfig,
+        loadConfig: loadCfg.loadConfig,
+        loadModels: loadCfg.loadModels,
+        fileCredentialStore: authStore.fileCredentialStore,
+        memoryCredentialStore: authStore.memoryCredentialStore,
+        createLocalExecutionEnv: localExec.createLocalExecutionEnv,
+        silentLogger: loggerMod.silentLogger,
+        ...extraDaemonExports,
+      }
+    },
     zod: () => import('zod'),
   })
 }

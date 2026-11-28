@@ -116,7 +116,7 @@ export function checkRegexAndAsset() {
   const extPath = join(extDir, 'regex-ext.ts')
   writeFileSync(
     extPath,
-    `import type { ExtensionAPI } from '@glows777/vela'
+    `import type { ExtensionAPI } from '@glows777/vela/extension-api'
 import { checkRegexAndAsset } from './nested/helper.ts'
 export default function (vela: ExtensionAPI) {
   (vela as unknown as { probe?: unknown }).probe = checkRegexAndAsset()

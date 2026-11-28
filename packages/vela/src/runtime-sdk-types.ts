@@ -1,7 +1,9 @@
 import type { VelaDatabase } from './db/index.ts'
 import type { CompactionResult } from './driver/agent/events.ts'
 import type { ExecutionLocation } from './driver/execution/types.ts'
+import type { VelaExtension } from './driver/extensions/types.ts'
 import type { ContextFile } from './driver/prompt/context-files.ts'
+import type { DocsPaths } from './driver/prompt/index.ts'
 import type { PromptTemplate } from './driver/prompt/templates.ts'
 import type {
   RuntimeSessionInspection,
@@ -454,7 +456,15 @@ export interface CreateRuntimeOptions {
   shellPath?: string
   limits?: Partial<VelaLimits>
   tools?: ToolDefinition[]
+  /** Additional host extensions (file/directory specs or inline `VelaExtension` factories) merged after `<agentDir>/config.json`. */
+  extensions?: readonly (string | VelaExtension)[]
   extensionConfig?: Record<string, Record<string, unknown>>
+  /** Override system prompt text (replaces default intro and built-in `<tools>`/`<rules>`/`<docs>` sections). */
+  systemPrompt?: string
+  /** Extra system prompt text appended inside `<addendum>`. */
+  appendSystemPrompt?: string
+  /** Built-in documentation paths for the `<docs>` system prompt section (`false` disables it; defaults to package docs). */
+  docs?: DocsPaths | false
   contextFiles?: readonly ContextFile[]
   skills?: readonly SkillDefinition[]
   promptTemplates?: readonly PromptTemplate[]

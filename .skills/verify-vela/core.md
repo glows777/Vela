@@ -8,7 +8,7 @@ Pick the surface first:
 
 | You are | Use | Docs |
 |---|---|---|
-| TypeScript in the same process or local daemon IPC | `createRuntime()`, `connectRuntime()`, or legacy `createVela()` from `@glows777/vela` (see [packages](../../docs/sdk.md#packages)) | [sdk](../../docs/sdk.md) |
+| TypeScript in the same process or local daemon IPC | `createRuntime()` or `connectRuntime()` from `@glows777/vela` (see [packages](../../docs/sdk.md#packages)) | [sdk](../../docs/sdk.md) |
 | Another language or process | `vela --mode json "<prompt>"` (one run) or `connectRuntime()` over `vela.sock` | [json](../../docs/json.md) |
 | Adding tools, commands, providers, hooks or a chat app | An extension: `(vela) => { vela.registerTool(…); vela.on(…) }` | [extensions](../../docs/extensions.md), [channels](../../docs/channels.md) |
 | Testing any of the above offline | `@glows777/vela/testing` | [testing](../../docs/testing.md) |
@@ -18,18 +18,20 @@ Pick the surface first:
 The smallest real program, offline (swap the faux model for `'openai/<id>'` plus `providers: loadConfig().providers` to use a real one):
 
 ```ts
-import { createVela } from '@glows777/vela'
+import { createRuntime } from '@glows777/vela'
 import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
 
 const model = createFauxModel({ responses: [fauxToolCall('bash', { command: 'ls' }), fauxText('done')] })
-const vela = createVela({ model })               // no dataDir: sessions stay in memory
+const runtime = createRuntime({ ephemeral: true, defaultModel: model, mcp: false })
 try {
-  const session = vela.session('demo')           // one Vela, many sessions
-  session.subscribe((e) => console.log(e.type))  // agent_start … tool_execution_end … agent_settled
-  await session.prompt('what is here?')
-  console.log(session.messages.at(-1))
+  await runtime.ready()
+  const session = await runtime.sessions.create({ name: 'demo' })
+  runtime.events.subscribe((e) => console.log(e.type)) // run_started … tool_finished … run_finished
+  await runtime.prompt(session.id, { text: 'what is here?' })
+  await runtime.waitForIdle(session.id)
+  console.log((await runtime.sessions.messages({ sessionId: session.id })).messages.at(-1))
 } finally {
-  await vela.dispose()
+  await runtime.dispose()
 }
 ```
 
@@ -68,7 +70,7 @@ Write a script in the run's `work/` that imports `$REPO/packages/vela/src/index.
 | Hooks | `extensions: [(v) => { v.on('tool_call', e => ({ block: true, reason })); v.on('tool_result', () => ({ output: 'X' })) }]` | `[Blocked by hook] …`; the model sees `X`; mutating `e.input` changes the call | e2e/extensions |
 | Providers, model, thinking | `v.registerProvider('local', { models: [{ id: 'm1', reasoning: true }], createModel })`; `await vela.ready()`; `setModel('local/m1')`, `setThinkingLevel('high')` | Answer from that model; `availableThinkingLevels()` | e2e/models |
 | Session tree | 2 turns; `fork(userEntry.id, { sessionId })`, `navigateTree(id)`, `clone({ sessionId })` | Fork returns `selectedText` and the history before it; navigate returns `editorText`; clone copies the branch | e2e/session-tree |
-| Persistence | `createVela({ cwd, dataDir: '.d', model })`, prompt, `dispose()`; a new Vela, `session(id).resume()` | Resumed history; `listSessions()`; with `sessionStorage: memorySessionStorage()`, `session.persistence.type` is `memory` | e2e/session, e2e/sessions, e2e/sdk |
+| Persistence | `createRuntime({ agentDir: '.d', defaultModel: model })`, prompt, `dispose()`; a new `createRuntime({ agentDir: '.d', defaultModel: model })`, continue session | Resumed history in `<agentDir>/vela.db`; `sessions.listSummaries()`; with `ephemeral: true`, runs use `:memory:` SQLite | e2e/session, e2e/sessions, e2e/sdk |
 | Image inputs | Load a fixture as `{ type: 'image', data: base64, mimeType }`; `session.prompt('describe', { images })`, then steer/follow-up, resume/clone/fork; switch between text-only and vision model metadata | Provider receives an image file; oversized images become <=2000px / <=4.5 MiB; text-only request has a placeholder but history still has image data; invalid images have a text reason; summaries contain no base64 text | e2e/images, e2e/rpc |
 | Tool image results | Run `examples/sdk/06-tool-images.ts`; call read on a misleading image extension; replace tool content in a hook; change to a text-only model, dispose and resume | Canonical inline image, post-hook resize, text-only omission, resumed vision image; no base64 in caption files or summary text | e2e/tool-images, e2e/tool-image-file-limits, e2e/tool-image-providers |
 | Session cwd | `proj-b/AGENTS.md` exists; `vela.session('b', { cwd: 'proj-b' })`; faux `write` `out.txt`, then `(req) => fauxText(req.system.includes('<B rule>') ? 'yes' : 'no')` | `session.cwd` is the absolute `proj-b`; `proj-b/out.txt` exists and the Vela cwd has no `out.txt`; the system prompt carries proj-b's AGENTS.md | e2e/session-cwd |

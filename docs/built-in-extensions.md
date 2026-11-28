@@ -1,8 +1,8 @@
 # Built-in extensions
 
-Vela ships six selectable built-in extensions in `@glows777/vela`: `background`, `memory`, `todo`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md) and [Packages](sdk.md#packages)).
+Vela ships six built-in capabilities integrated directly into `vela daemon`, the CLI, and `createRuntime()`: `background`, `memory`, `todo`, `web`, `lark`, and `mcp`. See [Extensions](extensions.md) and [Packages](sdk.md#packages).
 
-| Extension | Adds |
+| Built-in | Adds |
 |---|---|
 | `background` | Long-running commands whose result arrives on its own: `bash` with `run_in_background`, plus `background_output` and `background_stop` |
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
@@ -13,33 +13,9 @@ Vela ships six selectable built-in extensions in `@glows777/vela`: `background`,
 
 ## Loading
 
-**CLI.** All six load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI, `vela daemon`, and `createRuntime()`.** Built-ins load automatically based on `<agentDir>/config.json` (when `ephemeral` is not set). Some capabilities stay inactive until configured: `web` registers only `web_fetch` without a search key, `lark` does not connect without an app id and secret, and `mcp` connects nothing until `mcpServers` are configured (pass `mcp: false` to `createRuntime()` to disable MCP pooling explicitly).
 
-To turn one off, add `-builtin:<name>` to `extensions` in `config.json`, for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
-
-**SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
-
-```ts
-import {
-  background,
-  createVela,
-  memory,
-  todo,
-  web,
-} from '@glows777/vela'
-
-const vela = createVela({
-  dataDir: '.vela-data',
-  extensions: [
-    background(),
-    memory(),
-    todo(),
-    web({ tavilyKey: process.env.TAVILY_API_KEY }),
-  ],
-})
-```
-
-For the selectable built-ins below, factory options take precedence. An option you leave out is read from the extension's config section, `extensionConfig.<name>`, which you can pass to `createVela({ extensionConfig })`.
+To turn one off, add `-builtin:<name>` to `extensions` in `config.json` (or `createRuntime({ extensions: ['-builtin:lark'] })`), for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips configurable built-ins in CLI runs. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
 ## Configuration
 
@@ -143,9 +119,7 @@ or skipped last run explicitly instead of showing it as an ordinary zero-change 
 included in `/usage` and the usage ledger. `/memory` exposes the latest run and
 pending inbox size so automatic maintenance is visible.
 
-**SDK.** `memory()` takes no options. Configure automatic runs through Vela's
-`extensionConfig: { memory: { dream: false } }`, and invoke manual consolidation
-with `await session.prompt('/dream')`.
+**SDK.** Configure automatic Dream runs via `memory.dream: false` in `<agentDir>/config.json` or `createRuntime({ dreamEnabled: false })`, and run manual consolidation with `await runtime.prompt(sessionId, { text: '/dream' })`.
 
 ## background
 
@@ -171,7 +145,7 @@ Long-running commands whose result arrives on its own, for work that must not ho
 
 **Visibility.** Every session that loads the extension gets both tools, so a long command never blocks the conversation that started it. A job also needs the tool that ends it: a DM, or a chat whose `tools` list removes `background_stop`, keeps `bash` but refuses `run_in_background`, instead of starting a command nobody could stop. See [Channels](channels.md#group-workspaces-memory-and-tools).
 
-**Shell.** A background command runs through the session's execution environment, which supplies the working directory and the authority. `background({ shellPath })` picks the shell for a local session (the CLI passes the resolved `shellPath` setting); an environment that is not local runs the command itself and chooses its own shell. The CLI loads the extension by default; the SDK loads it explicitly with `import { background } from '@glows777/vela'`, then `createVela({ extensions: [background()] })`. That one entry makes `run_in_background` work and gives the session `background_output` and `background_stop`.
+**Shell.** A background command runs through the session's execution environment, which supplies the working directory and the authority. `createRuntime({ shellPath })` or top-level `shellPath` in `config.json` selects the shell for a local session; an environment that is not local runs the command itself and chooses its own shell. Built-in background support (`run_in_background`, `background_output`, and `background_stop`) is enabled by default unless disabled with `-builtin:background` in `extensions`.
 
 ## todo
 
@@ -189,7 +163,7 @@ The model gets a one-line count summary back, not a copy of the list it just sen
 
 **Lark progress card.** The shared progress card shows the current list above the tool rows: `☐` pending, `◐` in progress, `☑` done. A new run in the same topic starts from the list stored in the session, so a follow-up that makes no `todo` call still shows it, including after a restart. More than ten items are cut off with `… and N more`; the full list stays in the session.
 
-**SDK.** `todo()` takes no options. The CLI loads it by default; the SDK loads it explicitly.
+**SDK.** The `todo` tool is enabled by default unless disabled with `-builtin:todo` in `extensions`.
 
 ## web
 
@@ -206,7 +180,7 @@ A matching `tool_call` extension hook prevents hosted substitution because the p
 
 Enabled channel chats can call both tools. Remove either one from the session's `tools` selection.
 
-**SDK.** `web({ tavilyKey, serperKey })`; both are optional.
+**SDK.** Configure keys under top-level `web` in `<agentDir>/config.json` (for example `{ "web": { "tavilyKey": "$TAVILY_API_KEY" } }` with `hostEnv` containing `TAVILY_API_KEY`), or disable with `-builtin:web`.
 
 ## lark
 
@@ -222,8 +196,8 @@ Connects a Lark (Lark) bot to Vela over Lark's long connection. Each enabled cha
 
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#lark).
 
-**SDK.** `lark({ appId, appSecret, owners, chats })`.
+**SDK.** Use `createLarkChannelAdapter(larkConfig | options)` from `@glows777/vela` and register it with `await runtime.registerChannel(...)` (see [Channels](channels.md) and [Channels reference](channels-reference.md)).
 
 ## mcp
 
-Connects to [MCP](https://modelcontextprotocol.io) servers configured under `mcpServers` in `~/.vela/config.json` and the trusted project's `.vela/config.json`, in the `mcpServers` format of Claude Desktop and Claude Code, and registers their tools as `mcp__<server>__<tool>`. Tools are deferred by default: the system prompt names each server and the model loads its tools with `tool_search`. `/mcp` shows each server's state and `/mcp reconnect <server>` reconnects one. In the SDK, pass the servers: `mcp({ servers: { docs: { url: 'https://example.com/mcp' } } })`. See [MCP servers](mcp.md).
+Connects to [MCP](https://modelcontextprotocol.io) servers configured under `mcpServers` in `<agentDir>/config.json` and trusted `<cwd>/.vela/config.json`, in the `mcpServers` format of Claude Desktop and Claude Code, and registers their tools as `mcp__<server>__<tool>`. Tools are deferred by default: the system prompt names each server and the model loads its tools with `tool_search`. `/mcp` shows each server's state and `/mcp reconnect <server>` reconnects one. Pass `mcp: false` in `createRuntime()` to disable MCP pooling. See [MCP servers](mcp.md).

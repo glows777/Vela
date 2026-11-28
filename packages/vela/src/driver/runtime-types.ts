@@ -24,6 +24,7 @@ import type { VelaLimits } from '../shared/limits.ts'
 import type { VelaLogger } from '../shared/logger.ts'
 import type { ModelInput } from '../shared/provider-types.ts'
 import type { ExecutionLocation } from './execution/types.ts'
+import type { VelaExtension } from './extensions/types.ts'
 import type { ContextFile } from './prompt/context-files.ts'
 import type { DocsPaths } from './prompt/index.ts'
 import type { PromptTemplate } from './prompt/templates.ts'
@@ -167,6 +168,7 @@ export interface RuntimeReloadableConfig {
   defaultTools?: readonly string[]
   extensionConfig?: Record<string, Record<string, unknown>>
   extensions?: readonly string[]
+  inlineExtensions?: readonly VelaExtension[]
   enabledModels?: readonly string[]
   githubRepositories?: readonly string[]
   dreamEnabled?: boolean
@@ -203,6 +205,7 @@ export interface VelaAgentDriverOptions {
   defaultTools?: readonly string[]
   extensionConfig?: Record<string, Record<string, unknown>>
   extensions?: readonly string[]
+  inlineExtensions?: readonly VelaExtension[]
   enabledModels?: readonly string[]
   githubRepositories?: readonly string[]
   getChannelTools?: (

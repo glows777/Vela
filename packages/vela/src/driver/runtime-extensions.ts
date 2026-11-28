@@ -394,6 +394,7 @@ export class RuntimeExtensionHost {
 
   reload(options: {
     configured?: readonly string[]
+    inline?: readonly VelaExtension[]
     extensionConfig: Record<string, Record<string, unknown>>
   }): Promise<void> {
     const errors: string[] = []
@@ -412,14 +413,24 @@ export class RuntimeExtensionHost {
       .then(async () => {
         this.unregisterExtensionProviders()
         const nextRegistry = new ToolRegistry(undefined)
+        const recordLoadError = (msg: string) => {
+          errors.push(msg)
+          this.deps.logger.error(msg)
+        }
         const factories = await loadExtensionEntries({
           entries: resolved.entries,
           onBeforeImport: this.deps.onBeforeImport,
-          onError: (msg) => {
-            errors.push(msg)
-            this.deps.logger.error(msg)
-          },
+          onError: recordLoadError,
         })
+        for (const [idx, ext] of (options.inline ?? []).entries()) {
+          factories.push(
+            wrapReportedExtension(
+              ext,
+              recordLoadError,
+              ext.name || `inline#${idx + 1}`,
+            ),
+          )
+        }
         const runner = new ExtensionRunner(
           {
             cwd: this.deps.agentDir,

@@ -4,7 +4,7 @@
  * If you only need a different URL and key, edit `providers` in ~/.vela/config.json instead; no extension needed.
  */
 import { createOpenAI } from '@ai-sdk/openai'
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 
 const localProvider: VelaExtension = (vela) => {
   const baseURL =

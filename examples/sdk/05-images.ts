@@ -2,17 +2,16 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createVela, type ImageContent } from '@glows777/vela'
+import { type CreateRuntimeOptions, createRuntime } from '@glows777/vela'
 import { createFauxModel, fauxText } from '@glows777/vela/testing'
 
-const dataDir = await mkdtemp(join(tmpdir(), 'vela-image-example-'))
-const image: ImageContent = {
-  type: 'image',
-  data: process.argv[2]
-    ? (await readFile(process.argv[2])).toString('base64')
-    : 'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAEUlEQVR4nGNQqTyJFTFQTwIAqbwswWi7rh0AAAAASUVORK5CYII=',
-  mimeType: 'image/png', // Vela detects the actual format from the bytes.
-}
+const agentDir = await mkdtemp(join(tmpdir(), 'vela-image-example-'))
+const rawBytes = process.argv[2]
+  ? await readFile(process.argv[2])
+  : Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAEUlEQVR4nGNQqTyJFTFQTwIAqbwswWi7rh0AAAAASUVORK5CYII=',
+      'base64',
+    )
 const model = createFauxModel({
   responses: [
     fauxText('Received image.'),
@@ -20,7 +19,7 @@ const model = createFauxModel({
     fauxText('Image restored.'),
   ],
 })
-const providers = {
+const providers: CreateRuntimeOptions['providers'] = {
   demo: {
     models: [
       { id: 'vision', input: ['text', 'image'] },
@@ -29,29 +28,63 @@ const providers = {
     createModel: () => model,
   },
 }
-const options = { model: 'demo/vision', providers, dataDir }
-const vela = createVela(options)
-let resumed: ReturnType<typeof createVela> | undefined
+const options: CreateRuntimeOptions = {
+  agentDir,
+  defaultModel: 'demo/vision',
+  providers,
+  mcp: false,
+}
+const runtime = createRuntime(options)
+let resumed: ReturnType<typeof createRuntime> | undefined
 try {
-  const session = vela.session('images')
-  await session.prompt('Describe this picture.', { images: [image] })
-  const content = session.messages[0]?.content
-  const saved =
-    typeof content === 'string'
-      ? undefined
-      : content?.find((part) => part.type === 'image' && 'data' in part)
-  if (!saved || !('data' in saved))
-    throw new Error('Image did not enter history')
+  await runtime.ready()
+  const session = await runtime.sessions.create({
+    id: 'images',
+    name: 'Images',
+  })
+  const blob = await runtime.blobs.storeInbound({
+    sessionId: session.id,
+    filename: 'picture.png',
+    mimeType: 'image/png',
+    bytes: new Uint8Array(rawBytes),
+  })
+  await runtime.prompt(session.id, {
+    text: 'Describe this picture.',
+    attachments: [
+      {
+        blobId: blob.id,
+        name: 'picture.png',
+        mimeType: 'image/png',
+        inlineOnly: true,
+      },
+    ],
+  })
+  await runtime.waitForIdle(session.id)
+
+  const page = await runtime.sessions.messages({ sessionId: session.id })
+  const content = page.messages[0]?.content
+  const saved = Array.isArray(content)
+    ? (content.find(
+        (part): part is { type: 'image'; mimeType: string; data: string } =>
+          typeof part === 'object' &&
+          part !== null &&
+          (part as { type?: unknown }).type === 'image' &&
+          'data' in part,
+      ) ?? undefined)
+    : undefined
+  if (!saved) throw new Error('Image did not enter history')
   console.log(
     JSON.stringify({
       event: 'saved_image',
       mimeType: saved.mimeType,
       base64Bytes: saved.data.length,
-      resized: saved.data !== image.data,
+      resized: saved.data !== rawBytes.toString('base64'),
     }),
   )
-  session.setModel('demo/text')
-  await session.prompt('Continue with the text model.')
+
+  await runtime.sessions.setModel(session.id, 'demo/text')
+  await runtime.prompt(session.id, { text: 'Continue with the text model.' })
+  await runtime.waitForIdle(session.id)
   if (
     !model.calls[1]?.lastUserText ||
     !JSON.stringify(model.calls[1].prompt).includes(
@@ -60,12 +93,16 @@ try {
   )
     throw new Error('Text-only fallback missing')
   console.log('text-only fallback verified; saved image retained')
-  await vela.dispose()
-  resumed = createVela(options)
-  const again = resumed.session('images')
-  if (!(await again.resume())) throw new Error('Saved session missing')
-  again.setModel('demo/vision')
-  await again.prompt('Look at the saved image again.')
+  await runtime.dispose()
+
+  resumed = createRuntime(options)
+  await resumed.ready()
+  if (!(await resumed.sessions.get('images'))) {
+    throw new Error('Saved session missing')
+  }
+  await resumed.sessions.setModel('images', 'demo/vision')
+  await resumed.prompt('images', { text: 'Look at the saved image again.' })
+  await resumed.waitForIdle('images')
   const files =
     model.calls[2]?.prompt.flatMap((m) =>
       m.role === 'user'
@@ -83,6 +120,6 @@ try {
   )
 } finally {
   await resumed?.dispose()
-  await vela.dispose()
-  await rm(dataDir, { recursive: true, force: true })
+  await runtime.dispose()
+  await rm(agentDir, { recursive: true, force: true })
 }

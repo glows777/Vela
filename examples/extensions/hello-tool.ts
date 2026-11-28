@@ -1,9 +1,9 @@
 /**
  * registerTool: give the model a new tool. It is shared by all sessions and the model can call it directly.
  * The tool name the model sees is prefixed with the extension name: `hello-tool_greet` when the CLI loads
- * this file (named after the file), `hello_greet` when passed to createVela() (named after the function).
+ * this file (named after the file), `hello_greet` when passed to createRuntime({ extensions: [hello] }) (named after the function).
  */
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension } from '@glows777/vela/extension-api'
 import { z } from 'zod'
 
 const hello: VelaExtension = (vela) => {

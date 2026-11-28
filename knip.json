@@ -26,7 +26,6 @@
         "src/index.ts!",
         "src/extension-api.ts!",
         "src/testing/index.ts!",
-        "src/legacy-desktop.ts!",
         "src/cli/main.ts!",
         "src/driver/execution/docker-guest.ts!",
         "test/**/*.test.ts"

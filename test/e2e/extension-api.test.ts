@@ -1,6 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
-import type { ExtensionAPI, VelaSession } from '@glows777/vela'
-import { ToolExecutionResult } from '@glows777/vela'
+import {
+  type ExtensionAPI,
+  ToolExecutionResult,
+  type VelaSession,
+} from '@glows777/vela/extension-api'
 import { z } from 'zod'
 import {
   type FauxRequest,

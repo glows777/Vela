@@ -120,7 +120,7 @@ Manage the resident background daemon:
 vela daemon start
 ```
 
-The CLI uses `vela daemon` (`start`, `status`, `stop`, or foreground `run`) to own `<VELA_DIR>/vela.db` and serve local clients on `<VELA_DIR>/vela.sock`. Note that standalone `vela serve` was retired in v0.9 (channel adapters migrate onto the Runtime daemon in the next slice). To run the daemon under a service manager, follow [Deploy `vela daemon`](deploy.md).
+The CLI uses `vela daemon` (`start`, `status`, `stop`, or foreground `run`) to own `<VELA_DIR>/vela.db`, host built-in Lark and webhook adapters, and serve local clients on `<VELA_DIR>/vela.sock` (standalone `vela serve` was retired in v0.9). To run the daemon under a service manager, follow [Deploy `vela daemon`](deploy.md).
 
 ## 5. Use Vela in a terminal
 

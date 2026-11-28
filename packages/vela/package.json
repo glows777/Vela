@@ -22,10 +22,6 @@
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js"
-    },
-    "./legacy-desktop": {
-      "types": "./dist/legacy-desktop.d.ts",
-      "import": "./dist/legacy-desktop.js"
     }
   },
   "engines": {
