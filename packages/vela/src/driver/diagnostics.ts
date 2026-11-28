@@ -110,6 +110,7 @@ export async function inspectSession(
 export { THINKING_LEVELS } from '../providers/models/catalog.ts'
 export { resolveModel } from '../providers/models/index.ts'
 export { getToolListError } from '../shared/tool-selection.ts'
+export { extensionName } from './config/extension-discovery.ts'
 export { projectTrustRequired } from './config/settings.ts'
 export { isToolResultError } from './context/tool-result-output.ts'
 export { isToolContent } from './messages.ts'

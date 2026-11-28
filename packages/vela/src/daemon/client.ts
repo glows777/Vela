@@ -62,6 +62,7 @@ interface ActiveClientLogin {
 export async function connectRuntime(
   options: ConnectRuntimeOptions = {},
 ): Promise<VelaRuntime> {
+  // vela-boundary: allow
   const hostEnv = options.hostEnv ?? process.env
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
   const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)

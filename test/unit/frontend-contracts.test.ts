@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import * as expectModule from '../../packages/vela/src/driver/config/extension-discovery.ts'
 import * as settings from '../../packages/vela/src/driver/config/settings.ts'
 import * as diagnostics from '../../packages/vela/src/driver/diagnostics.ts'
 import * as messages from '../../packages/vela/src/driver/messages.ts'
@@ -25,11 +26,11 @@ test('experimental frontend helpers are the canonical core implementations', () 
     THINKING_LEVELS: catalog.THINKING_LEVELS,
     getToolListError: selection.getToolListError,
     isToolContent: messages.isToolContent,
-    extensionName: (settings as unknown as Record<string, unknown>)
-      .extensionName,
+    extensionName: expectModule.extensionName,
     projectTrustRequired: (settings as unknown as Record<string, unknown>)
       .projectTrustRequired,
   }
+  expect(diagnostics.extensionName).toBe(expectModule.extensionName)
   for (const [name, value] of Object.entries(canonical)) {
     expect(api[name]).toBeDefined()
     expect(api[name]).toBe(value)

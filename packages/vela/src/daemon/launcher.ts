@@ -290,6 +290,7 @@ async function waitForDaemonExit(
 export async function ensureDaemonRunning(
   options: DaemonLifecycleOptions = {},
 ): Promise<DaemonHello> {
+  // vela-boundary: allow
   const rawHostEnv = options.hostEnv ?? process.env
   const hostEnv = stripTransientDaemonEnv(rawHostEnv)
   const agentDir = options.agentDir ?? defaultAgentDir(rawHostEnv)
@@ -536,6 +537,7 @@ export async function startDaemon(
 export async function stopDaemon(
   options: DaemonLifecycleOptions = {},
 ): Promise<boolean> {
+  // vela-boundary: allow
   const hostEnv = options.hostEnv ?? process.env
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
   const hasExplicitSocket = Boolean(
@@ -617,6 +619,7 @@ export async function stopDaemon(
 export async function getDaemonStatus(
   options: DaemonLifecycleOptions = {},
 ): Promise<DaemonStatus> {
+  // vela-boundary: allow
   const hostEnv = options.hostEnv ?? process.env
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
   const hasExplicitSocket = Boolean(

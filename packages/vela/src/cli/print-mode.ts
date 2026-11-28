@@ -34,7 +34,7 @@ export async function runPrintMode(options: {
   const { runtime, session, messages, mode } = options
   let writing = Promise.resolve()
   let lastReply = ''
-  let activeRunFailed = false
+  let userRunFailed = false
   let failure:
     | {
         message: string
@@ -44,6 +44,7 @@ export async function runPrintMode(options: {
     | undefined
   interface ObservedRun {
     runId: string
+    trigger: string
     inboxEventIds?: readonly string[]
     reply: string
     failed: boolean
@@ -73,6 +74,7 @@ export async function runPrintMode(options: {
     if (event.type === 'run_started') {
       observedRuns.set(event.runId, {
         runId: event.runId,
+        trigger: event.trigger,
         inboxEventIds: event.inboxEventIds,
         reply: '',
         failed: false,
@@ -154,28 +156,34 @@ export async function runPrintMode(options: {
       if (!res.handledCommand) {
         await session.waitForSettled()
         const runsList = [...observedRuns.values()]
-        const matchedRun = res.eventId
-          ? runsList.find((r) => r.inboxEventIds?.includes(res.eventId!))
-          : runsList.at(-1)
-        if (matchedRun) {
-          lastReply = matchedRun.reply
-          activeRunFailed = matchedRun.failed
-          failure = matchedRun.failure
-        } else if (res.eventId) {
-          const status = await runtime.sessions.status(session.id)
-          activeRunFailed = true
-          failure = {
-            message:
-              status.session.state === 'waiting_human'
-                ? 'Waiting for human approval or input'
-                : `Prompt ${res.eventId} was queued but did not run`,
-            kind: undefined,
+        const matchedIdx = res.eventId
+          ? runsList.findIndex((r) => r.inboxEventIds?.includes(res.eventId!))
+          : runsList.length - 1
+        if (matchedIdx === -1) {
+          if (res.eventId) {
+            const status = await runtime.sessions.status(session.id)
+            userRunFailed = true
+            failure = {
+              message:
+                status.session.state === 'waiting_human'
+                  ? 'Waiting for human approval or input'
+                  : `Prompt ${res.eventId} was queued but did not run`,
+              kind: undefined,
+            }
           }
+        } else {
+          const matchedRun = runsList[matchedIdx]!
+          const jobRuns = runsList
+            .slice(matchedIdx + 1)
+            .filter((r) => r.trigger === 'job')
+          lastReply = matchedRun.reply
+          userRunFailed = matchedRun.failed
+          failure = matchedRun.failure ?? jobRuns.find((r) => r.failed)?.failure
         }
       }
       if (failure) break
     }
-    if (mode === 'text' && lastReply && !activeRunFailed && !failure) {
+    if (mode === 'text' && lastReply && !userRunFailed) {
       await writeStdout(`${lastReply}\n`)
     }
     if (failure) {

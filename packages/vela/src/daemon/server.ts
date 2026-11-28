@@ -111,6 +111,7 @@ export async function startDaemonServer(
   options: StartDaemonServerOptions = {},
 ): Promise<DaemonServerHandle> {
   registerBuiltinExtensionHostModules({ startDaemonServer })
+  // vela-boundary: allow
   const endpointEnv = options.hostEnv ?? process.env
   const hostEnv = options.hostEnv ?? {}
   const logger = options.logger ?? silentLogger
@@ -298,6 +299,7 @@ export async function startDaemonServer(
     try {
       finalizeOwnership()
     } catch {}
+    // vela-boundary: allow
     process.exit(sig === 'SIGINT' ? 130 : 143)
   }
   const handleSignalClose = (sig: 'SIGINT' | 'SIGTERM') => {
