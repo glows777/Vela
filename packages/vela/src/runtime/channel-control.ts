@@ -1,4 +1,6 @@
+import { Buffer } from 'node:buffer'
 import type { VelaDatabase } from '../db/index.ts'
+import type { BlobStore } from './blobs.ts'
 import {
   getHostPostAuthorInDb,
   ingestChannelMessageInRuntime,
@@ -10,6 +12,7 @@ import type {
   ChannelAdapter,
   ChannelAdapterContext,
   ChannelBinding,
+  ChannelConnectionState,
   ChannelHostSubmitInput,
   ChannelHostSubmitResult,
   ChannelStatusInfo,
@@ -197,11 +200,12 @@ export function createChannelAdapterContext(params: {
     text: string,
     images?: Array<{ data: string; mimeType: string }>,
   ) => Promise<boolean>
+  reportStatus?: (status: ChannelConnectionState) => void
 }): ChannelAdapterContext {
-  const ingestWithReceipt = (
+  const ingestWithReceipt = async (
     message: Parameters<typeof ingestChannelMessageInRuntime>[0]['msg'],
-  ) =>
-    ingestChannelMessageInRuntime({
+  ) => {
+    const receipt = await ingestChannelMessageInRuntime({
       db: params.db,
       blobs: params.blobs,
       projects: params.projects,
@@ -214,6 +218,18 @@ export function createChannelAdapterContext(params: {
       executeShortcut: params.executeShortcut,
       scheduleSession: params.scheduleSession,
     })
+    if (receipt.admitted) {
+      params.eventBus.emitChannelEvent({
+        type: 'channel_history_changed',
+        channel: message.channel,
+        chatId: message.externalChatId,
+        ...(message.threadId && receipt.sessionId
+          ? { sessionId: receipt.sessionId }
+          : {}),
+      })
+    }
+    return receipt
+  }
   return {
     ingest: async (message) => {
       await ingestWithReceipt(message)
@@ -247,6 +263,7 @@ export function createChannelAdapterContext(params: {
       ),
     getHostPostAuthor: (externalMessageId) =>
       getHostPostAuthorInDb(params.db, params.adapter.name, externalMessageId),
+    ...(params.reportStatus ? { reportStatus: params.reportStatus } : {}),
   }
 }
 
@@ -254,11 +271,19 @@ export async function steerSessionInRuntime(params: {
   disposed: boolean
   db: VelaDatabase
   sessions: SessionStoreControl
+  blobs?: BlobStore
   drivers: ReadonlyMap<string, AgentDriver>
   activeWorkers: ReadonlyMap<string, unknown>
   submitPrompt: (input: {
     sessionId: string
     text: string
+    attachments?: Array<{
+      kind: 'image'
+      blobId: string
+      name: string
+      mimeType: string
+      inlineOnly?: boolean
+    }>
     source: 'user'
     wake: boolean
   }) => unknown
@@ -271,6 +296,7 @@ export async function steerSessionInRuntime(params: {
     disposed,
     db,
     sessions,
+    blobs,
     drivers,
     activeWorkers,
     submitPrompt,
@@ -303,25 +329,144 @@ export async function steerSessionInRuntime(params: {
   }
   if (noQueueFallback) return false
   resetStreak()
-  submitPrompt({ sessionId, text, source: 'user', wake: true })
+  const attachments =
+    blobs && images?.length
+      ? await Promise.all(
+          images.map(async (img, i) => {
+            const ext = img.mimeType.split('/')[1] || 'png'
+            const blob = await blobs.storeInbound({
+              sessionId,
+              ...(session.projectId ? { projectId: session.projectId } : {}),
+              filename: `image-${i + 1}.${ext}`,
+              mimeType: img.mimeType,
+              bytes: Buffer.from(img.data, 'base64'),
+            })
+            return {
+              kind: 'image' as const,
+              blobId: blob.id,
+              name: blob.filename,
+              mimeType: img.mimeType,
+              inlineOnly: true,
+            }
+          }),
+        )
+      : undefined
+  submitPrompt({ sessionId, text, attachments, source: 'user', wake: true })
   return true
+}
+
+export interface ChannelStatusTracker {
+  begin(channel: string): (status: ChannelConnectionState) => void
+  markInitialIfUnset(channel: string, status: ChannelConnectionState): void
+  markStopped(channel: string): void
+}
+
+export function createChannelStatusTracker(
+  eventBus: import('./event-bus.ts').RuntimeEventBus,
+): ChannelStatusTracker {
+  const states = new Map<
+    string,
+    {
+      currentlyConnected: boolean
+      everConnected: boolean
+      sawFailureOrDisconnect: boolean
+      emittedInitialStatus: boolean
+    }
+  >()
+  const entryOf = (channel: string) => {
+    let entry = states.get(channel)
+    if (!entry) {
+      entry = {
+        currentlyConnected: false,
+        everConnected: false,
+        sawFailureOrDisconnect: false,
+        emittedInitialStatus: false,
+      }
+      states.set(channel, entry)
+    }
+    return entry
+  }
+  const report = (channel: string, state: ChannelConnectionState) => {
+    const entry = entryOf(channel)
+    entry.emittedInitialStatus = true
+    const shouldReset =
+      state.connected &&
+      !entry.currentlyConnected &&
+      (entry.everConnected || entry.sawFailureOrDisconnect)
+    if (state.connected) {
+      entry.everConnected = true
+    } else if (entry.everConnected || state.error) {
+      entry.sawFailureOrDisconnect = true
+    }
+    entry.currentlyConnected = state.connected
+    eventBus.emitChannelEvent({
+      type: 'channel_status',
+      channel,
+      connected: state.connected,
+      ...(state.error ? { error: state.error } : {}),
+      ...(shouldReset ? { reset: true } : {}),
+    })
+  }
+  return {
+    begin: (channel) => {
+      entryOf(channel).emittedInitialStatus = false
+      return (state) => report(channel, state)
+    },
+    markInitialIfUnset: (channel, status) => {
+      if (!entryOf(channel).emittedInitialStatus) {
+        report(channel, status)
+      }
+    },
+    markStopped: (channel) => {
+      const entry = entryOf(channel)
+      if (entry.everConnected) {
+        entry.sawFailureOrDisconnect = true
+      }
+      entry.currentlyConnected = false
+      eventBus.emitChannelEvent({
+        type: 'channel_status',
+        channel,
+        connected: false,
+      })
+    },
+  }
 }
 
 export async function registerChannelInRuntime(
   channels: Map<string, ChannelAdapter>,
   params: Parameters<typeof createChannelAdapterContext>[0],
+  statusTracker?: ChannelStatusTracker,
 ): Promise<void> {
   const { adapter } = params
   const existing = channels.get(adapter.name)
-  if (existing) await existing.stop()
+  if (existing) {
+    await existing.stop()
+    statusTracker?.markStopped(adapter.name)
+  }
+  const reportStatus = statusTracker?.begin(adapter.name)
   channels.set(adapter.name, adapter)
   try {
-    await adapter.start(createChannelAdapterContext(params))
+    await adapter.start(
+      createChannelAdapterContext({
+        ...params,
+        ...(reportStatus ? { reportStatus } : {}),
+      }),
+    )
+    if (statusTracker && channels.get(adapter.name) === adapter) {
+      statusTracker.markInitialIfUnset(
+        adapter.name,
+        adapter.status?.() ?? { connected: false },
+      )
+    }
   } catch (error) {
     if (channels.get(adapter.name) === adapter) {
       channels.delete(adapter.name)
     }
     await adapter.stop().catch(() => {})
+    statusTracker?.markInitialIfUnset(adapter.name, {
+      connected: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
     throw error
   }
   for (const sid of listSessionsWithPendingWake(params.db)) {
@@ -391,24 +536,33 @@ function resolveSessionChannelBinding(
 ): ChannelBinding | undefined {
   const directRows = db.all<{ id: string }>(
     `SELECT id FROM channel_bindings
-     WHERE session_id = ? AND enabled = 1
-     ORDER BY created_at ASC, rowid ASC`,
+     WHERE session_id = ?
+     ORDER BY enabled DESC, created_at ASC, rowid ASC`,
     session.id,
   )
   for (const row of directRows) {
     const binding = bindings.get(row.id)
-    if (binding && isBindingActive(db, bindings, binding)) return binding
+    if (binding) return binding
   }
-  if (session.projectId && session.kind === 'hub') {
-    const rootRows = db.all<{ id: string }>(
-      `SELECT id FROM channel_bindings
-       WHERE project_id = ? AND thread_id IS NULL AND enabled = 1
-       ORDER BY created_at ASC, rowid ASC`,
+  if (session.projectId) {
+    const project = db.get<{ hub_session_id: string | null }>(
+      'SELECT hub_session_id FROM projects WHERE id = ?',
       session.projectId,
     )
-    for (const row of rootRows) {
-      const binding = bindings.get(row.id)
-      if (binding && isBindingActive(db, bindings, binding)) return binding
+    const isProjectHub = project?.hub_session_id
+      ? project.hub_session_id === session.id
+      : session.kind === 'hub'
+    if (isProjectHub) {
+      const rootRows = db.all<{ id: string }>(
+        `SELECT id FROM channel_bindings
+         WHERE project_id = ? AND thread_id IS NULL
+         ORDER BY enabled DESC, created_at ASC, rowid ASC`,
+        session.projectId,
+      )
+      for (const row of rootRows) {
+        const binding = bindings.get(row.id)
+        if (binding) return binding
+      }
     }
   }
   return undefined
@@ -424,7 +578,7 @@ export async function listRuntimeOrChannelMessages(
   const session = sessions.get(input.sessionId)
   if (!session) throw new Error(`Session ${input.sessionId} not found`)
   const binding = resolveSessionChannelBinding(db, bindings, session)
-  if (binding) {
+  if (binding && isBindingActive(db, bindings, binding)) {
     const adapter = channels.get(binding.channel)
     if (adapter?.listMessages) {
       if (
@@ -555,6 +709,9 @@ export function getChannelToolsForSessionInDb(
   }
   if (!hasExplicitTarget) {
     binding ??= resolveSessionChannelBinding(db, bindings, session)
+    if (binding && !isBindingActive(db, bindings, binding)) {
+      binding = undefined
+    }
   }
   if (!binding) return undefined
   const adapter = channels.get(binding.channel)

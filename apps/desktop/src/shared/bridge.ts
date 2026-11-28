@@ -1,12 +1,20 @@
 /** Serializable desktop host contract. No SDK or Electron objects cross this boundary. */
 export type Connection = { connected: boolean; error?: string }
+
 export type Session = {
   /** The channel that owns it: `local` or `lark`. */
   channel: string
   sessionId: string
-  chatId: string
-  chatKind: 'group' | 'direct'
+  /** Owning group chat id for `lark`, project id for `local` project sessions, or `null` for Quick Chat. */
+  chatId: string | null
+  chatKind: 'group' | 'direct' | 'quick'
+  /** Linked project id, or `null` for Quick Chat sessions. */
+  projectId: string | null
   topic?: { rootId: string; threadId: string }
+  /** True when this Local session is a legacy pre-cutover triage hub. */
+  isHub?: boolean
+  /** Execution environment and working directory when present on the session. */
+  location?: { environment: string; cwd: string }
   task: string
   state: 'running' | 'queued' | 'waiting' | 'done' | 'stopped'
   requester: { id: string; name: string }
@@ -14,14 +22,16 @@ export type Session = {
   waitingReason?: string
   runId?: string
 }
+
 /** A folder on this computer, named by its folder. */
-type LocalProject = {
+export type LocalProject = {
   id: string
   channel: 'local'
   cwd: string
+  location?: { environment: string; cwd: string }
   name: string
-  sessionId: string
 }
+
 /** A Lark group. `id` is its chat id; a group with no readable name shows it. */
 type LarkProject = {
   id: string
@@ -29,17 +39,20 @@ type LarkProject = {
   name?: string
   sessionId: string
 }
+
 export type Project = LocalProject | LarkProject
+
 export type Message = {
   id: string
   sessionId: string
   role: 'user' | 'assistant' | 'system'
   text: string
   createdAt: string
-  /** Who wrote it in a Lark group; absent in a Local project. */
+  /** Who wrote it in a Lark group; absent in a Local session. */
   senderName?: string
   clientMessageId?: string
 }
+
 /**
  * A group message from this app: the bot posts it in the group, signed with the
  * `Vela app` constant, so Lark records it as the bot's own message.
@@ -47,8 +60,17 @@ export type Message = {
 export type LarkSubmit =
   | { chatId: string; sessionId: string; text: string }
   | { chatId: string; newTopic: { title: string }; text: string }
+
+export type LocalSubmit = {
+  projectId?: string | null
+  sessionId?: string
+  text: string
+  images?: { type: 'image'; data: string; mimeType: string }[]
+  clientMessageId?: string
+}
+
 export type SubmitReceipt = {
-  /** `posted`: it is in Lark. `uncertain`: it may be. `not-sent`: nothing was posted. */
+  /** `posted`: delivered/accepted. `uncertain`: it may be. `not-sent`: nothing was posted. */
   outcome: 'posted' | 'uncertain' | 'not-sent'
   sessionId?: string
   messageId?: string
@@ -56,13 +78,15 @@ export type SubmitReceipt = {
   /** Why a submission did not finish: a plain `posted` carries none. */
   error?: string
 }
+
 /** One model a provider offers, without anything that would name a key. */
 type SettingsModel = {
   id: string
   contextWindow?: number
   reasoning?: boolean
 }
-export type SettingsProvider = {
+
+type SettingsProvider = {
   name: string
   /** Where its credential comes from ('auth.json', 'OPENAI_API_KEY', …); absent when none is saved. */
   credential?: string
@@ -70,6 +94,11 @@ export type SettingsProvider = {
   custom: boolean
   models: SettingsModel[]
 }
+
+export type DesktopPreferences = {
+  stopDaemonOnQuit: boolean
+}
+
 /** What the pages show of Vela's configuration. Keys never cross this boundary. */
 export type SettingsState = {
   /** The user directory (VELA_DIR). */
@@ -86,25 +115,29 @@ export type SettingsState = {
   /** The saved default model, `provider/id`. */
   model?: string
   thinkingLevel?: ThinkingLevel | 'max'
+  stopDaemonOnQuit: boolean
   lark: {
     appId: string
     appSecretSaved: boolean
     chats: string[]
     envExpression: boolean
-    runInApp: boolean
+    enabled: boolean
     loaded: boolean
     startupError?: string
   }
   providers: SettingsProvider[]
 }
+
 export type LarkSetup =
   | { appId: string; appSecret?: string }
   | { removeChat: string }
-  | { runInApp: boolean }
+  | { enabled: boolean }
+
 export type ProviderApi =
   | 'openai-completions'
   | 'openai-responses'
   | 'anthropic-messages'
+
 export const THINKING_LEVELS = [
   'off',
   'minimal',
@@ -113,7 +146,9 @@ export const THINKING_LEVELS = [
   'high',
   'xhigh',
 ] as const
+
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
+
 /** A provider and model to check and then save. */
 export type ModelSetup = {
   provider: string
@@ -125,7 +160,9 @@ export type ModelSetup = {
   /** A provider that config.json doesn't define yet; saved with this model. */
   custom?: { api: ProviderApi; baseUrl: string }
 }
+
 export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+
 /**
  * Deployment-local wall clock, as the host takes it: `at` is `YYYY-MM-DDTHH:mm` with
  * no offset, and `time` is `HH:MM`. Nothing here is UTC.
@@ -133,6 +170,7 @@ export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
 export type RoutineSchedule =
   | { at: string }
   | { time: string; days?: Weekday[] }
+
 /** A routine as the host records it, with the display strings it built for its timezone. */
 export type Routine = {
   id: string
@@ -148,16 +186,20 @@ export type Routine = {
   /** Local wall clock of the next run; null when the host finds none. */
   nextRun: string | null
 }
-type ChannelInput = {
-  channelId: string
-  senderId: string
-  senderName: string
-  text: string
-  images?: { type: 'image'; data: string; mimeType: string }[]
-  chatKind?: 'group' | 'direct'
-  topic?: { rootId: string; threadId: string }
-  replyToId?: string
-}
+
+type ChannelEventPayload =
+  | {
+      type: 'channel_status'
+      connected: boolean
+      error?: string
+      reset?: boolean
+    }
+  | {
+      type: 'channel_history_changed'
+      chatId?: string
+      sessionId?: string
+    }
+
 export type Event =
   | {
       type: 'session'
@@ -185,12 +227,10 @@ export type Event =
       }
     }
   | { type: 'connection'; channel: string; value: Connection }
+  | { type: 'channel'; channel: string; value: ChannelEventPayload }
   | { type: 'local'; channel: 'local'; value: LocalEvent }
-  /** Lark history is read, not streamed: re-read on `reset` or after a change. */
-  | { type: 'lark'; channel: 'lark'; value: LarkEvent }
-type LarkEvent =
-  | { type: 'reset' }
-  | { type: 'history_changed'; chatId: string; sessionId?: string }
+  | { type: 'error'; channel: string; value: { code: string; message: string } }
+
 type LocalEvent = {
   version: 1
   id: string
@@ -205,6 +245,7 @@ type LocalEvent = {
       type: 'reset'
       data: { reason: 'connected'; reload: ('sessions' | 'messages')[] }
     }
+  | { type: 'session_reset'; data: Record<string, never> }
   | { type: 'run_started'; data: Record<string, never> }
   | {
       type: 'run_finished'
@@ -221,6 +262,7 @@ type LocalEvent = {
   | { type: 'status'; data: { text: string } }
   | { type: 'error'; data: { code: string; message: string } }
 )
+
 export interface DesktopBridge {
   channels(): Promise<{ name: string; description: string }[]>
   /** Vela's configuration, without the contents of config.json or auth.json. */
@@ -228,43 +270,40 @@ export interface DesktopBridge {
   /** Checks the key with one small request, then saves the choice; returns the new state. */
   saveModel(input: ModelSetup): Promise<SettingsState>
   saveLark(input: LarkSetup): Promise<SettingsState>
+  savePreferences(input: Partial<DesktopPreferences>): Promise<SettingsState>
   sessions(channel: string, chatId?: string): Promise<Session[]>
+  createSession(input: {
+    projectId?: string | null
+    name?: string
+  }): Promise<Session>
+  renameSession(input: {
+    sessionId: string
+    name: string
+  }): Promise<Session | undefined>
+  deleteSession(input: { sessionId: string }): Promise<boolean>
   connection(channel: string): Promise<Connection>
   submit(
     channel: string,
-    message:
-      | ChannelInput
-      | LarkSubmit
-      | {
-          projectId: string
-          sessionId: string
-          text: string
-          clientMessageId?: string
-        },
+    message: LarkSubmit | LocalSubmit,
   ): Promise<SubmitReceipt>
   stop(
     channel: string,
-    target: { chatId: string; rootId?: string },
+    target: { sessionId?: string; chatId?: string; rootId?: string },
     runId: string,
   ): Promise<boolean>
-  /** Wait for a mention. A cancelled wait returns undefined. Only main keeps the group to save. */
+  /** Wait for a mention. A cancelled wait returns undefined. Only daemon keeps the group to save. */
   discoverLarkGroup(): Promise<{ chatId: string; name?: string } | undefined>
   confirmLarkGroup(): Promise<void>
   cancelLarkSetup(): Promise<void>
   projects(): Promise<Project[]>
   openProject(input: { cwd: string; name?: string }): Promise<LocalProject>
+  removeProject(input: { projectId: string }): Promise<boolean>
   /** Native folder picker in main. Cancel and dismissal both return undefined. */
   chooseFolder(): Promise<string | undefined>
+  /** Unified session history (`after` for local/forward catch-up, `cursor` for pagination). */
   messages(input: {
-    projectId: string
     sessionId: string
     after?: string
-    limit?: number
-  }): Promise<{ messages: Message[]; nextCursor?: string }>
-  /** Group history newest first, topic history oldest first. */
-  larkMessages(input: {
-    chatId: string
-    sessionId: string
     cursor?: string
     limit?: number
   }): Promise<{ messages: Message[]; nextCursor?: string }>
@@ -290,53 +329,46 @@ export interface DesktopBridge {
   cancelRoutine(channel: string, chatId: string, id: string): Promise<boolean>
   onEvent(listener: (event: Event) => void): () => void
 }
+
 /** IPC channels carry only the fixed methods above, never arbitrary SDK access. */
 export const REQUEST = 'vela:request'
 export const EVENT = 'vela:event'
+
 export type Request =
   | { method: 'channels' }
   | { method: 'settings' }
   | { method: 'saveLark'; input: LarkSetup }
   | { method: 'saveModel'; input: ModelSetup }
+  | { method: 'savePreferences'; input: Partial<DesktopPreferences> }
   | { method: 'sessions'; channel: string; chatId?: string }
+  | {
+      method: 'createSession'
+      input: { projectId?: string | null; name?: string }
+    }
+  | { method: 'renameSession'; input: { sessionId: string; name: string } }
+  | { method: 'deleteSession'; input: { sessionId: string } }
   | { method: 'connection'; channel: string }
   | {
       method: 'submit'
       channel: string
-      message:
-        | ChannelInput
-        | LarkSubmit
-        | {
-            projectId: string
-            sessionId: string
-            text: string
-            clientMessageId?: string
-          }
+      message: LarkSubmit | LocalSubmit
     }
   | {
       method: 'stop'
       channel: string
-      target: { chatId: string; rootId?: string }
+      target: { sessionId?: string; chatId?: string; rootId?: string }
       runId: string
     }
   | { method: 'discoverLarkGroup' | 'confirmLarkGroup' | 'cancelLarkSetup' }
   | { method: 'projects' }
   | { method: 'openProject'; input: { cwd: string; name?: string } }
+  | { method: 'removeProject'; input: { projectId: string } }
   | { method: 'chooseFolder' }
   | {
       method: 'messages'
       input: {
-        projectId: string
         sessionId: string
         after?: string
-        limit?: number
-      }
-    }
-  | {
-      method: 'larkMessages'
-      input: {
-        chatId: string
-        sessionId: string
         cursor?: string
         limit?: number
       }

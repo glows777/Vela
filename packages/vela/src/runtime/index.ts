@@ -1,5 +1,10 @@
 export type { ApprovalRecord, ApprovalStatus } from './approvals.ts'
 export { type BlobDirection, type BlobRecord, BlobStore } from './blobs.ts'
+export {
+  hasChannelEnabledInDb,
+  isChannelEnabledInDb,
+  setChannelEnabledInDb,
+} from './channel-ingress.ts'
 export type {
   ChannelAdapter,
   ChannelAdapterContext,
@@ -44,8 +49,13 @@ export {
   EnvironmentRegistry,
   type EnvironmentRegistryOptions,
 } from './environments.ts'
-export type { RuntimeEventListener, StreamDeltaListener } from './event-bus.ts'
 export type {
+  ChannelRuntimeEventListener,
+  RuntimeEventListener,
+  StreamDeltaListener,
+} from './event-bus.ts'
+export type {
+  ChannelRuntimeEvent,
   RunEndStatus,
   RuntimeEvent,
   RuntimeEventPayload,

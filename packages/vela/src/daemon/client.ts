@@ -2,11 +2,16 @@ import { createConnection, type Socket } from 'node:net'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import type { AuthInteraction, LoginOptions } from '../providers/auth/types.ts'
 import type {
+  ChannelRuntimeEventListener,
   RuntimeEventListener,
   StreamDeltaListener,
 } from '../runtime/index.ts'
 import type { VelaRuntime } from '../runtime-sdk-types.ts'
-import { ensureDaemonRunning, stripTransientDaemonEnv } from './launcher.ts'
+import {
+  type DaemonCommandOverride,
+  ensureDaemonRunning,
+  stripTransientDaemonEnv,
+} from './launcher.ts'
 import { resolveDaemonPaths } from './paths.ts'
 import {
   createNdjsonParser,
@@ -26,10 +31,14 @@ export interface ConnectRuntimeOptions {
   autoStart?: boolean
   /** Environment variables forwarded when spawning the daemon on cold start. */
   hostEnv?: Record<string, string | undefined>
+  /** Custom executable/script command used by packaged Electron (`ELECTRON_RUN_AS_NODE=1`) to spawn the daemon. */
+  daemonCommand?: DaemonCommandOverride
   /** @internal Override expected appVersion for version-mismatch tests. */
   appVersion?: string
   /** @internal Override expected protocolVersion for handshake tests. */
   protocolVersion?: number
+  /** @internal Hook invoked when the daemon IPC socket closes unexpectedly. */
+  onDisconnect?: (error: Error) => void
   /** Timeout (ms) for auto-starting and handshaking with the daemon. */
   timeoutMs?: number
 }
@@ -62,6 +71,9 @@ export async function connectRuntime(
       agentDir: paths.agentDir,
       socketPath: paths.socketPath,
       hostEnv: stripTransientDaemonEnv(hostEnv),
+      ...(options.daemonCommand
+        ? { daemonCommand: options.daemonCommand }
+        : {}),
       appVersion: options.appVersion,
       protocolVersion: options.protocolVersion,
       timeoutMs: options.timeoutMs,
@@ -73,6 +85,7 @@ export async function connectRuntime(
   const { runtime, verifyHello } = createSocketRuntimeClient(
     paths.agentDir,
     socket,
+    options.onDisconnect,
   )
   try {
     const hello = await verifyHello()
@@ -127,14 +140,17 @@ async function openSocket(
 function createSocketRuntimeClient(
   agentDir: string,
   socket: Socket,
+  onDisconnect?: (error: Error) => void,
 ): { runtime: VelaRuntime; verifyHello: () => Promise<DaemonHello> } {
   let nextReqId = 1
   let nextLoginId = 1
   let nextLogoutId = 1
+  let nextSetupId = 1
   let closed = false
   const pending = new Map<number, PendingRpc>()
   const eventListeners = new Set<RuntimeEventListener>()
   const deltaListeners = new Set<StreamDeltaListener>()
+  const channelListeners = new Set<ChannelRuntimeEventListener>()
   const activeLogins = new Map<number, ActiveClientLogin>()
 
   const writeMsg = (msg: DaemonWireMessage) => {
@@ -165,7 +181,7 @@ function createSocketRuntimeClient(
     })
   }
 
-  const failAll = (err: Error) => {
+  const failAll = (err: Error, unexpected = true) => {
     if (closed) return
     closed = true
     for (const p of pending.values()) p.reject(err)
@@ -182,6 +198,12 @@ function createSocketRuntimeClient(
     activeLogins.clear()
     eventListeners.clear()
     deltaListeners.clear()
+    channelListeners.clear()
+    if (unexpected) {
+      try {
+        onDisconnect?.(err)
+      } catch {}
+    }
   }
 
   const parse = createNdjsonParser(
@@ -206,6 +228,14 @@ function createSocketRuntimeClient(
         for (const listener of [...deltaListeners]) {
           try {
             listener(msg.delta)
+          } catch {}
+        }
+        return
+      }
+      if (msg.type === 'channel_event') {
+        for (const listener of [...channelListeners]) {
+          try {
+            listener(msg.event)
           } catch {}
         }
         return
@@ -392,6 +422,68 @@ function createSocketRuntimeClient(
         rpc('channels.setEnabled', { name, enabled }),
       chats: (channel) => rpc('channels.chats', { channel }),
       submit: (channel, input) => rpc('channels.submit', { channel, input }),
+      subscribe: (listener) => {
+        const wasEmpty = channelListeners.size === 0
+        channelListeners.add(listener)
+        if (wasEmpty && !closed) {
+          void rpc('channels.subscribe').catch(() => {})
+        }
+        return () => {
+          channelListeners.delete(listener)
+          if (channelListeners.size === 0 && !closed) {
+            void rpc('channels.unsubscribe').catch(() => {})
+          }
+        }
+      },
+    },
+    settings: {
+      get: () => rpc('settings.get'),
+      saveModel: (input) => rpc('settings.saveModel', { input }),
+      saveLark: (input) => rpc('settings.saveLark', { input }),
+      discoverLarkGroup: async (opts) => {
+        const signal = opts?.signal
+        if (signal?.aborted) return undefined
+        const setupId = nextSetupId++
+        let abortListener: (() => void) | undefined
+        const rpcPromise = rpc<
+          Awaited<ReturnType<VelaRuntime['settings']['discoverLarkGroup']>>
+        >('settings.discoverLarkGroup', { setupId })
+        if (!signal) return rpcPromise
+        return new Promise<
+          Awaited<ReturnType<VelaRuntime['settings']['discoverLarkGroup']>>
+        >((resolve, reject) => {
+          let settled = false
+          abortListener = () => {
+            try {
+              writeMsg({ type: 'discovery_cancel', setupId })
+            } catch {}
+          }
+          signal.addEventListener('abort', abortListener, { once: true })
+          rpcPromise.then(
+            (res) => {
+              if (settled) return
+              settled = true
+              resolve(signal.aborted ? undefined : res)
+            },
+            (err) => {
+              if (settled) return
+              settled = true
+              if (signal.aborted) {
+                resolve(undefined)
+                return
+              }
+              reject(err)
+            },
+          )
+        }).finally(() => {
+          if (abortListener) {
+            signal.removeEventListener('abort', abortListener)
+          }
+        })
+      },
+      confirmLarkGroup: (chatId) =>
+        rpc('settings.confirmLarkGroup', { chatId }),
+      cancelLarkSetup: () => rpc('settings.cancelLarkSetup'),
     },
     blobs: {
       get: (id) => rpc('blobs.get', { id }),
@@ -529,7 +621,7 @@ function createSocketRuntimeClient(
     },
     recover: () => rpc('runtime.recover'),
     dispose: async () => {
-      failAll(new Error('Daemon client disposed'))
+      failAll(new Error('Daemon client disposed'), false)
       socket.end()
       socket.destroy()
     },

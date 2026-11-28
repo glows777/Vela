@@ -1,4 +1,8 @@
 import type { VelaDatabase } from '../db/index.ts'
+import { resolveWaitForInputOnUserReplyInTx } from './approvals.ts'
+import type { SessionStoreControl } from './domain.ts'
+import type { RuntimeEventBus } from './event-bus.ts'
+import { enqueueInboxEvent, type InboxEventRecord } from './inbox.ts'
 
 function extractInboxText(payloadJson: string): string | undefined {
   try {
@@ -51,4 +55,66 @@ export function clearPendingUserInbox(
     )
     return texts
   })
+}
+
+export interface SubmitRuntimePromptInput {
+  sessionId: string
+  text: string
+  dedupeKey?: string
+  source?: 'user' | 'handoff' | 'session'
+  wake?: boolean
+  passive?: boolean
+  attachments?: Array<{
+    blobId: string
+    name: string
+    mimeType?: string
+    inlineOnly?: boolean
+  }>
+  metadata?: Record<string, unknown>
+}
+
+export function submitPromptInRuntime(params: {
+  disposed: boolean
+  db: VelaDatabase
+  sessions: SessionStoreControl
+  eventBus: RuntimeEventBus
+  scheduleSession: (sessionId: string) => void
+  input: SubmitRuntimePromptInput
+}): { event: InboxEventRecord; inserted: boolean } {
+  const { disposed, db, sessions, eventBus, scheduleSession, input } = params
+  if (disposed) throw new Error('Runtime has been disposed')
+  const session = sessions.get(input.sessionId)
+  if (!session) throw new Error(`Session ${input.sessionId} not found`)
+  const passive = input.passive === true
+  const wake = input.wake ?? !passive
+  const source = input.source ?? 'user'
+  const result = db.transaction(() => {
+    const enqueued = enqueueInboxEvent(db, {
+      sessionId: input.sessionId,
+      projectId: session.projectId,
+      source,
+      dedupeKey: input.dedupeKey ?? null,
+      wake,
+      passive,
+      payload: {
+        type: source,
+        text: input.text,
+        ...(input.attachments?.length
+          ? { attachments: input.attachments }
+          : {}),
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      },
+    })
+    if (enqueued.inserted && wake && !passive && source === 'user') {
+      resolveWaitForInputOnUserReplyInTx(db, eventBus, {
+        sessionId: input.sessionId,
+        replyText: input.text,
+      })
+    }
+    return enqueued
+  })
+  if (result.inserted && result.event.wake) {
+    scheduleSession(input.sessionId)
+  }
+  return result
 }

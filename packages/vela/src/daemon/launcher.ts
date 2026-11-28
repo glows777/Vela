@@ -55,10 +55,17 @@ export function stripTransientDaemonEnv(
   return out
 }
 
+export interface DaemonCommandOverride {
+  command: string
+  args?: string[]
+  env?: Record<string, string | undefined>
+}
+
 interface DaemonLifecycleOptions {
   agentDir?: string
   socketPath?: string
   hostEnv?: Record<string, string | undefined>
+  daemonCommand?: DaemonCommandOverride
   appVersion?: string
   protocolVersion?: number
   timeoutMs?: number
@@ -448,18 +455,34 @@ export async function ensureDaemonRunning(
     removeStaleSocketFile(paths.socketPath)
     mkdirSync(paths.agentDir, { recursive: true })
     const logFd = openSync(paths.logPath, 'a', 0o600)
-    const { command, args } = resolveDaemonSpawnCommand(paths.agentDir)
-    const childEnv: NodeJS.ProcessEnv = { ...hostEnv }
+    const { command, args } = options.daemonCommand
+      ? {
+          command: options.daemonCommand.command,
+          args: [
+            ...(options.daemonCommand.args ?? []),
+            '--agent-dir',
+            paths.agentDir,
+          ],
+        }
+      : resolveDaemonSpawnCommand(paths.agentDir)
+    const childEnv: NodeJS.ProcessEnv = {
+      ...hostEnv,
+      ...(options.daemonCommand?.env ?? {}),
+    }
     if (options.socketPath) {
       childEnv.VELA_DAEMON_SOCKET = options.socketPath
     }
     let childExited:
       | { code: number | null; signal: NodeJS.Signals | null }
       | undefined
+    let spawnError: Error | undefined
     const child = spawn(command, args, {
       detached: true,
       stdio: ['ignore', logFd, logFd],
       env: childEnv,
+    })
+    child.on('error', (error) => {
+      spawnError = error
     })
     child.on('exit', (code, signal) => {
       childExited = { code, signal }
@@ -469,10 +492,16 @@ export async function ensureDaemonRunning(
 
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
+      if (spawnError) break
       const hello = await probeDaemonHello(paths.socketPath, 300)
       if (hello && matches(hello)) return hello
-      if (childExited) break
+      if (childExited || spawnError) break
       await sleep(50)
+    }
+    if (spawnError) {
+      throw new Error(
+        `Failed to spawn Vela daemon (${command}): ${spawnError.message}`,
+      )
     }
     const tail = readLogTail(paths.logPath)
     const reason = childExited

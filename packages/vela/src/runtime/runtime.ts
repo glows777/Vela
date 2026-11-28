@@ -9,11 +9,12 @@ import {
   createApprovalRequest,
   listRuntimePendingApprovals,
   resolveRuntimeApproval,
-  resolveWaitForInputOnUserReplyInTx,
 } from './approvals.ts'
 import { BackgroundJobManager } from './background-jobs.ts'
 import { BlobStore } from './blobs.ts'
 import {
+  type ChannelStatusTracker,
+  createChannelStatusTracker,
   getChannelToolsForSessionInDb,
   ingestWebhookEventInRuntime,
   isChannelEnabledInDb,
@@ -34,6 +35,10 @@ import type {
   ChannelToolSpec,
 } from './channels.ts'
 import {
+  type SubmitRuntimePromptInput,
+  submitPromptInRuntime,
+} from './control-inbox.ts'
+import {
   ChannelBindingStore,
   ProjectStore,
   type SessionRecord,
@@ -48,12 +53,13 @@ import {
 } from './driver.ts'
 import { EnvironmentRegistry } from './environments.ts'
 import {
+  type ChannelRuntimeEventListener,
   RuntimeEventBus,
   type RuntimeEventListener,
   type StreamDeltaListener,
 } from './event-bus.ts'
 import type { RuntimeEvent, StreamDeltaEvent } from './events.ts'
-import { enqueueInboxEvent, type InboxEventRecord } from './inbox.ts'
+import type { InboxEventRecord } from './inbox.ts'
 import { OutboxDispatcher } from './outbox.ts'
 import { isSessionInChannels, scheduleRuntimeWakeTimer } from './recovery.ts'
 import { type ControlShortcut, executeControlShortcut } from './shortcuts.ts'
@@ -109,6 +115,7 @@ export class VelaRuntimeEngine {
   private readonly ignoredChannels: ReadonlySet<string>
   private readonly drivers = new Map<string, AgentDriver>()
   private readonly channels = new Map<string, ChannelAdapter>()
+  private readonly channelStatuses: ChannelStatusTracker
   private readonly activeWorkers = new Map<string, ActiveWorker>()
   private readonly stoppingSessions = new Map<string, number>()
   private readonly inFlightDeliveries = new Set<string>()
@@ -135,12 +142,20 @@ export class VelaRuntimeEngine {
     this.sessions = new SessionStoreControl(this.db, () => this.syncWakeTimer())
     this.bindings = new ChannelBindingStore(this.db)
     this.eventBus = new RuntimeEventBus(this.db)
+    this.channelStatuses = createChannelStatusTracker(this.eventBus)
     this.outbox = new OutboxDispatcher(
       this.db,
       (name) =>
         this.isChannelEnabled(name) ? this.channels.get(name) : undefined,
       () => this.syncWakeTimer(),
       (sessionId) => this.scheduleSession(sessionId),
+      (info) =>
+        this.eventBus.emitChannelEvent({
+          type: 'channel_history_changed',
+          channel: info.channel,
+          chatId: info.externalChatId,
+          ...(info.threadId ? { sessionId: info.sessionId } : {}),
+        }),
     )
     this.timers = new TimerScheduler(
       this.db,
@@ -168,24 +183,28 @@ export class VelaRuntimeEngine {
 
   async registerChannel(adapter: ChannelAdapter): Promise<void> {
     if (this.disposed) throw new Error('Runtime has been disposed')
-    await registerChannelInRuntime(this.channels, {
-      db: this.db,
-      blobs: this.blobs,
-      projects: this.projects,
-      sessions: this.sessions,
-      bindings: this.bindings,
-      eventBus: this.eventBus,
-      inFlightDeliveries: this.inFlightDeliveries,
-      adapter,
-      executeShortcut: (s) => this.executeShortcut(s),
-      scheduleSession: (sid) => this.scheduleSession(sid),
-      stopSession: (sid, r) => this.stopSession(sid, r),
-      steerSession: async (sid, t) => {
-        await this.steerSession(sid, t)
+    await registerChannelInRuntime(
+      this.channels,
+      {
+        db: this.db,
+        blobs: this.blobs,
+        projects: this.projects,
+        sessions: this.sessions,
+        bindings: this.bindings,
+        eventBus: this.eventBus,
+        inFlightDeliveries: this.inFlightDeliveries,
+        adapter,
+        executeShortcut: (s) => this.executeShortcut(s),
+        scheduleSession: (sid) => this.scheduleSession(sid),
+        stopSession: (sid, r) => this.stopSession(sid, r),
+        steerSession: async (sid, t) => {
+          await this.steerSession(sid, t)
+        },
+        trySteerSession: (sid, t, images) =>
+          this.steerSession(sid, t, images, true),
       },
-      trySteerSession: (sid, t, images) =>
-        this.steerSession(sid, t, images, true),
-    })
+      this.channelStatuses,
+    )
     void this.flushOutboxBestEffort().finally(() => this.syncWakeTimer())
   }
 
@@ -193,7 +212,11 @@ export class VelaRuntimeEngine {
     const existing = this.channels.get(name)
     if (!existing) return
     this.channels.delete(name)
-    await existing.stop()
+    try {
+      await existing.stop()
+    } finally {
+      this.channelStatuses.markStopped(name)
+    }
     await this.outbox.drainChannel(name).catch(() => {})
   }
 
@@ -288,56 +311,18 @@ export class VelaRuntimeEngine {
   }
 
   /** Submits a user prompt (or queued steering/handoff/note) into `inbox_events` and wakes the worker. */
-  submitPrompt(input: {
-    sessionId: string
-    text: string
-    dedupeKey?: string
-    source?: 'user' | 'handoff' | 'session'
-    wake?: boolean
-    passive?: boolean
-    attachments?: Array<{
-      blobId: string
-      name: string
-      mimeType?: string
-      inlineOnly?: boolean
-    }>
-    metadata?: Record<string, unknown>
-  }): { event: InboxEventRecord; inserted: boolean } {
-    if (this.disposed) throw new Error('Runtime has been disposed')
-    const session = this.sessions.get(input.sessionId)
-    if (!session) throw new Error(`Session ${input.sessionId} not found`)
-    const passive = input.passive === true
-    const wake = input.wake ?? !passive
-    const source = input.source ?? 'user'
-    const result = this.db.transaction(() => {
-      const enqueued = enqueueInboxEvent(this.db, {
-        sessionId: input.sessionId,
-        projectId: session.projectId,
-        source,
-        dedupeKey: input.dedupeKey ?? null,
-        wake,
-        passive,
-        payload: {
-          type: source,
-          text: input.text,
-          ...(input.attachments?.length
-            ? { attachments: input.attachments }
-            : {}),
-          ...(input.metadata ? { metadata: input.metadata } : {}),
-        },
-      })
-      if (enqueued.inserted && wake && !passive && source === 'user') {
-        resolveWaitForInputOnUserReplyInTx(this.db, this.eventBus, {
-          sessionId: input.sessionId,
-          replyText: input.text,
-        })
-      }
-      return enqueued
+  submitPrompt(input: SubmitRuntimePromptInput): {
+    event: InboxEventRecord
+    inserted: boolean
+  } {
+    return submitPromptInRuntime({
+      disposed: this.disposed,
+      db: this.db,
+      sessions: this.sessions,
+      eventBus: this.eventBus,
+      scheduleSession: (sid) => this.scheduleSession(sid),
+      input,
     })
-    if (result.inserted && result.event.wake) {
-      this.scheduleSession(input.sessionId)
-    }
-    return result
   }
 
   steerSession(
@@ -350,6 +335,7 @@ export class VelaRuntimeEngine {
       disposed: this.disposed,
       db: this.db,
       sessions: this.sessions,
+      blobs: this.blobs,
       drivers: this.drivers,
       activeWorkers: this.activeWorkers,
       submitPrompt: (input) => this.submitPrompt(input),
@@ -511,6 +497,10 @@ export class VelaRuntimeEngine {
 
   subscribeDeltas(listener: StreamDeltaListener): () => void {
     return this.eventBus.subscribeDeltas(listener)
+  }
+
+  subscribeChannelEvents(listener: ChannelRuntimeEventListener): () => void {
+    return this.eventBus.subscribeChannelEvents(listener)
   }
 
   /** Single-DB deterministic crash recovery run on startup. */

@@ -23,7 +23,9 @@ export async function verifyLarkSettings(
       .getByRole('button', { name: 'Lark' })
       .click()
   }
-  const toggle = page.getByRole('switch', { name: 'Run Lark in this app' })
+  const toggle = page.getByRole('switch', {
+    name: 'Enable Lark connection on this computer',
+  })
   const connected = page.getByText('Connected', { exact: true })
   const input = page.getByLabel('App secret', { exact: true })
   const save = page.getByRole('button', { name: 'Save credentials' })
@@ -37,7 +39,10 @@ export async function verifyLarkSettings(
       await close.click()
       await panel.waitFor({ state: 'detached' })
     }
-    await page.getByLabel('Message Vela in this project').fill(message)
+    const label = (await page.getByLabel('Message Vela').count())
+      ? 'Message Vela'
+      : 'Message Vela in this project'
+    await page.getByLabel(label).fill(message)
     await page.getByRole('button', { name: 'Send' }).click()
   }
 
@@ -65,7 +70,7 @@ export async function verifyLarkSettings(
   await waitForLocalWork(page, false)
   await open()
   await toggle.click()
-  await page.getByText('Off in this app', { exact: true }).waitFor()
+  await page.getByText('Off on this computer', { exact: true }).waitFor()
   assert.equal(
     await startup.count(),
     0,
@@ -117,14 +122,20 @@ export async function verifyLarkSettings(
   await themes(page, 'lark-settings-connected')
 
   await toggle.click()
-  await page.getByText('Off in this app', { exact: true }).waitFor()
+  await page.getByText('Off on this computer', { exact: true }).waitFor()
   assert.deepEqual(
     await page.evaluate(async () =>
       (await window.vela.channels()).map((c) => c.name),
     ),
     ['local'],
   )
-  assert.equal((await disk()).lark.runInApp, false)
+  assert.equal(
+    await page.evaluate(
+      async () => (await window.vela.settings()).lark.enabled,
+    ),
+    false,
+  )
+  assert.equal((await disk()).lark.runInApp, undefined)
   assert.equal((await disk()).extensions, undefined)
   await themes(page, 'lark-settings-off')
   await submit('Does Local still work?')
@@ -139,12 +150,10 @@ export async function verifyLarkSettings(
     await waitForLocalWork(page, true)
     await open()
     await toggle.click()
-    await page
-      .getByRole('alert')
-      .filter({ hasText: 'A session is still running' })
-      .waitFor()
-    assert.equal(await toggle.isChecked(), true)
-    assert.equal((await disk()).lark.runInApp, true)
+    await page.getByText('Off on this computer', { exact: true }).waitFor()
+    assert.equal(await toggle.isChecked(), false)
+    await toggle.click()
+    await connected.waitFor()
   } finally {
     release()
   }
@@ -173,7 +182,7 @@ export async function verifyLarkSettings(
   assert(
     saved.appId === 'verify-app' &&
       saved.appSecret === secret &&
-      saved.runInApp === true,
+      saved.runInApp === undefined,
   )
   await pendingCredentialJourney(page, dir, `${secret}-rotation`, submit)
   assert(
@@ -181,20 +190,24 @@ export async function verifyLarkSettings(
     'The later credential edit remains saved',
   )
   await open()
-  const invalidDataDir = join(dir, 'unavailable-storage')
-  await writeFile(invalidDataDir, 'a file cannot be used as a data directory')
+  await toggle.click()
+  await page.getByText('Off on this computer', { exact: true }).waitFor()
+  const invalidTimezone = 'Mars/Olympus-Secret-Timezone'
   const original = await disk()
   await writeFile(
     path,
-    JSON.stringify({ ...original, dataDir: invalidDataDir }),
+    JSON.stringify({
+      ...original,
+      lark: { ...original.lark, timezone: invalidTimezone },
+    }),
   )
   try {
     await toggle.click()
     const diagnostic = page
       .getByRole('alert')
-      .filter({ hasText: /check.*data directory/i })
+      .filter({ hasText: /check lark in config\.json/i })
     await diagnostic.waitFor({ timeout: 5000 })
-    assert(!(await diagnostic.innerText()).includes(invalidDataDir))
+    assert(!(await diagnostic.innerText()).includes(invalidTimezone))
     await themes(page, 'lark-settings-replacement-error')
     assert.deepEqual(
       await page.evaluate(async () =>
@@ -209,10 +222,12 @@ export async function verifyLarkSettings(
     )
   } finally {
     const repaired = await disk()
-    delete repaired.dataDir
+    delete repaired.lark.timezone
     await writeFile(path, JSON.stringify(repaired))
   }
   await open()
+  await toggle.click()
+  await page.getByText('Off on this computer', { exact: true }).waitFor()
   await toggle.click()
   await connected.waitFor()
   assert.equal(
@@ -258,7 +273,7 @@ async function verifyReply(
   message: string,
 ) {
   await submit(message)
-  const chat = page.getByLabel('Project chat')
+  const chat = page.getByLabel(/Project chat|Session messages/)
   const submitted = chat
     .locator('[data-role="user"]')
     .filter({ hasText: message })

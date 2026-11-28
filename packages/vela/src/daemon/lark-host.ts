@@ -52,6 +52,7 @@ export class DaemonLarkHost {
   private lastStartError?: string
   private configured = false
   private stopped = false
+  private pausedForDiscovery = false
   private currentAdapter?: ReturnType<typeof createLarkChannelAdapter>
 
   constructor(
@@ -61,6 +62,10 @@ export class DaemonLarkHost {
       hostEnv: Record<string, string | undefined>
       logger: VelaLogger
       transport?: LarkTransport
+      createTransport?: (info: {
+        appId?: string
+        appSecret?: string
+      }) => LarkTransport | undefined
     },
   ) {}
 
@@ -77,6 +82,27 @@ export class DaemonLarkHost {
 
   configError(): string | undefined {
     return this.lastConfigError
+  }
+
+  isRegistered(): boolean {
+    return this.registered
+  }
+
+  isConfigured(): boolean {
+    return this.configured
+  }
+
+  async pauseForDiscovery(): Promise<void> {
+    if (this.stopped) return
+    this.pausedForDiscovery = true
+    await this.syncQueue.catch(() => {})
+    await this.unregisterIfRegistered()
+  }
+
+  async resumeFromDiscovery(): Promise<void> {
+    this.pausedForDiscovery = false
+    if (this.stopped) return
+    await this.sync(this.lastConfig, true)
   }
 
   sync(config: DaemonLarkConfig, force = false): Promise<void> {
@@ -373,6 +399,10 @@ export class DaemonLarkHost {
       await this.unregisterIfRegistered()
       return
     }
+    if (this.pausedForDiscovery) {
+      await this.unregisterIfRegistered()
+      return
+    }
 
     try {
       await this.syncProjectAndBindings(chats, validatedTimezone)
@@ -411,6 +441,13 @@ export class DaemonLarkHost {
       return
     }
 
+    const customTransport =
+      transport ??
+      this.options.createTransport?.({
+        appId: appId ?? hostEnv.LARK_APP_ID,
+        appSecret: appSecret ?? hostEnv.LARK_APP_SECRET,
+      })
+
     this.lastStartError = undefined
     const adapter = createLarkChannelAdapter({
       appId,
@@ -418,7 +455,7 @@ export class DaemonLarkHost {
       owners,
       chats,
       logger,
-      transport,
+      transport: customTransport,
       timezone: validatedTimezone,
       hostEnv,
     })

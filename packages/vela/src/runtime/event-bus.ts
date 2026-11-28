@@ -1,5 +1,6 @@
 import type { VelaDatabase } from '../db/index.ts'
 import type {
+  ChannelRuntimeEvent,
   RuntimeEvent,
   RuntimeEventPayload,
   StreamDeltaEvent,
@@ -7,6 +8,7 @@ import type {
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void
 export type StreamDeltaListener = (delta: StreamDeltaEvent) => void
+export type ChannelRuntimeEventListener = (event: ChannelRuntimeEvent) => void
 
 interface EventRow {
   seq: number
@@ -40,6 +42,7 @@ const MAX_DELTA_BUFFER_CHARS = 512 * 1024
 export class RuntimeEventBus {
   private readonly eventListeners = new Set<RuntimeEventListener>()
   private readonly deltaListeners = new Set<StreamDeltaListener>()
+  private readonly channelListeners = new Set<ChannelRuntimeEventListener>()
   private readonly activeDeltaBuffer = new Map<
     string,
     { events: StreamDeltaEvent[]; chars: number }
@@ -188,5 +191,24 @@ export class RuntimeEventBus {
   subscribeDeltas(listener: StreamDeltaListener): () => void {
     this.deltaListeners.add(listener)
     return () => this.deltaListeners.delete(listener)
+  }
+
+  emitChannelEvent(event: ChannelRuntimeEvent): void {
+    for (const listener of [...this.channelListeners]) {
+      try {
+        const maybePromise = listener(event) as unknown
+        if (
+          maybePromise &&
+          typeof (maybePromise as PromiseLike<unknown>).then === 'function'
+        ) {
+          Promise.resolve(maybePromise).catch(() => {})
+        }
+      } catch {}
+    }
+  }
+
+  subscribeChannelEvents(listener: ChannelRuntimeEventListener): () => void {
+    this.channelListeners.add(listener)
+    return () => this.channelListeners.delete(listener)
   }
 }

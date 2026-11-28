@@ -1,11 +1,13 @@
-import { PanelRight } from 'lucide-react'
+import { PanelRight, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 import type { Project } from '../../shared/bridge.ts'
 import { projectName, projectTag } from '../format.ts'
+import { ConfirmDialog } from '../ui/confirm-dialog.tsx'
 import styles from './header-bar.module.css'
 
 /**
  * 44px conversation bar: page name, source and folder or Lark chat ID, a waiting
- * indicator, and the right-side sessions toggle.
+ * indicator, Remove project (on Local projects), and the right-side sessions toggle.
  */
 export function HeaderBar({
   project,
@@ -13,6 +15,7 @@ export function HeaderBar({
   waiting = false,
   panelOpen,
   onTogglePanel,
+  onRemoveProject,
 }: {
   project?: Project
   /** The page name when no project is open; Home otherwise. */
@@ -20,8 +23,9 @@ export function HeaderBar({
   waiting?: boolean
   panelOpen?: boolean
   onTogglePanel?: () => void
+  onRemoveProject?: () => void
 }) {
-  // A group with no readable name already shows its chat id as the title.
+  const [confirmRemove, setConfirmRemove] = useState<HTMLButtonElement>()
   const detail =
     project?.channel === 'lark'
       ? project.name
@@ -50,6 +54,17 @@ export function HeaderBar({
             Waiting for you
           </p>
         ) : null}
+        {project?.channel === 'local' && onRemoveProject ? (
+          <button
+            type="button"
+            className={styles.toggle}
+            aria-label="Remove project"
+            title="Remove project"
+            onClick={(event) => setConfirmRemove(event.currentTarget)}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
+        ) : null}
         {onTogglePanel ? (
           <button
             type="button"
@@ -62,6 +77,18 @@ export function HeaderBar({
           </button>
         ) : null}
       </div>
+      {confirmRemove && project?.channel === 'local' && onRemoveProject ? (
+        <ConfirmDialog
+          title="Remove project"
+          description={`Remove “${projectName(project)}” from Vela? Files in ${project.cwd} stay on this computer.`}
+          trigger={confirmRemove}
+          onCancel={() => setConfirmRemove(undefined)}
+          onConfirm={() => {
+            setConfirmRemove(undefined)
+            onRemoveProject()
+          }}
+        />
+      ) : null}
     </header>
   )
 }

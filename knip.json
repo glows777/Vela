@@ -36,6 +36,7 @@
     "apps/desktop": {
       "entry": [
         "src/main/index.ts",
+        "src/main/daemon.ts",
         "src/renderer/specimen.tsx",
         "scripts/*.ts",
         "forge.config.cjs",

@@ -69,22 +69,22 @@ export function Lark({ settings }: { settings: SettingsState['lark'] }) {
           <p role="status">
             {settings.loaded
               ? status
-              : settings.runInApp
+              : settings.enabled
                 ? 'Lark is not loaded in this app'
-                : 'Off in this app'}
+                : 'Off on this computer'}
           </p>
         )}
       </div>
       <div className={styles.heading}>
         <Switch
-          label="Run Lark in this app"
-          checked={settings.runInApp}
+          label="Enable Lark connection on this computer"
+          checked={settings.enabled}
           disabled={pending}
-          onCheckedChange={(runInApp) => void save({ runInApp })}
+          onCheckedChange={(enabled) => void save({ enabled })}
         />
         <p className={styles.note}>
-          Turn this off before using the same Lark app with{' '}
-          <code>vela serve</code>. This switch is saved in config.json.
+          Saved locally on this computer. Local chats keep running even when
+          Lark is turned off.
         </p>
       </div>
       <form

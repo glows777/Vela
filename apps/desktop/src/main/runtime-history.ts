@@ -1,12 +1,9 @@
 import { Buffer } from 'node:buffer'
-import type {
-  LocalVelaRuntime,
-  RuntimeEvent,
-} from '@glows777/vela/legacy-desktop'
+import type { RuntimeEvent, VelaRuntime } from '@glows777/vela'
 import type { Message, Request } from '../shared/bridge.ts'
 
 type RuntimeMessageRecord = Awaited<
-  ReturnType<LocalVelaRuntime['sessions']['messages']>
+  ReturnType<VelaRuntime['sessions']['messages']>
 >['messages'][number]
 
 export type BridgedMessage = {
@@ -241,7 +238,7 @@ function compareMessagesChronological(
 }
 
 async function listAllSessionFailureMessages(
-  runtime: LocalVelaRuntime,
+  runtime: VelaRuntime,
   sessionId: string,
   afterFailAt?: { createdAt: string; id: string } | null,
 ): Promise<Message[]> {
@@ -290,42 +287,95 @@ async function listAllSessionFailureMessages(
   return [...byId.values()].sort(compareMessagesChronological)
 }
 
-async function assertLocalSessionInProject(
-  runtime: LocalVelaRuntime,
-  projectId: string,
+const LARK_APP_AUTHOR_NAME = 'Vela app'
+
+async function resolveMessageSource(
+  runtime: VelaRuntime,
   sessionId: string,
-): Promise<void> {
-  const bindings = await runtime.bindings.list({ channel: 'lark' })
+): Promise<'local' | 'lark'> {
+  const session = await runtime.sessions.get(sessionId)
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found`)
+  }
+  const [bindings, statuses] = await Promise.all([
+    runtime.bindings.list({ channel: 'lark' }),
+    runtime.channels.list().catch(() => []),
+  ])
+  const larkChannelEnabled =
+    statuses.find((s) => s.name === 'lark')?.enabled !== false
+  const anyBinding = bindings.find((b) => b.sessionId === sessionId)
+  if (anyBinding) {
+    const root = anyBinding.threadId
+      ? bindings.find(
+          (b) => b.externalId === anyBinding.externalId && !b.threadId,
+        )
+      : anyBinding
+    if (!larkChannelEnabled || !anyBinding.enabled || !root?.enabled) {
+      throw new Error(`Unknown or disabled Lark chat for session ${sessionId}`)
+    }
+    return 'lark'
+  }
   const larkProjectIds = new Set(
     bindings.map((b) => b.projectId).filter((id): id is string => Boolean(id)),
   )
-  const project = await runtime.projects.get(projectId)
-  if (!project || project.archived || larkProjectIds.has(project.id)) {
-    throw new Error(`Unknown project ${projectId}`)
+  if (session.projectId) {
+    const project = await runtime.projects.get(session.projectId)
+    if (!project || project.archived) {
+      throw new Error(`Unknown project ${session.projectId}`)
+    }
+    if (larkProjectIds.has(project.id)) {
+      const root = bindings.find(
+        (b) => b.projectId === project.id && !b.threadId && b.enabled,
+      )
+      if (larkChannelEnabled && root && project.hubSessionId === sessionId) {
+        return 'lark'
+      }
+      throw new Error(`Unknown or disabled Lark session ${sessionId}`)
+    }
   }
-  const session = await runtime.sessions.get(sessionId)
-  if (
-    !session ||
-    (session.projectId !== project.id && session.id !== project.hubSessionId)
-  ) {
-    throw new Error(
-      `Session ${sessionId} does not belong to project ${projectId}`,
-    )
-  }
+  return 'local'
 }
 
 /**
- * Fetches paginated Local conversation history combining persisted `vela_messages`
- * and failed-run error replies across arbitrary page sizes and event counts.
+ * Fetches unified paginated conversation history for Local, Quick Chat, and Lark sessions.
  */
-export async function fetchLocalDesktopMessages(
-  runtime: LocalVelaRuntime,
+export async function fetchDesktopMessages(
+  runtime: VelaRuntime,
   input: Extract<Request, { method: 'messages' }>['input'],
   clientIdsByMessage:
     | ReadonlyMap<string, string>
     | Pick<DesktopClientIdTracker, 'getForMessage'>,
 ): Promise<{ messages: Message[]; nextCursor?: string }> {
-  await assertLocalSessionInProject(runtime, input.projectId, input.sessionId)
+  const source = await resolveMessageSource(runtime, input.sessionId)
+  if (source === 'lark') {
+    const page = await runtime.sessions.messages({
+      sessionId: input.sessionId,
+      cursor: input.cursor,
+      limit: input.limit,
+    })
+    return {
+      messages: page.messages
+        .map((row) => {
+          if (
+            row.role === 'user' &&
+            !row.senderId &&
+            row.senderName === LARK_APP_AUTHOR_NAME
+          ) {
+            return {
+              id: row.id,
+              sessionId: row.sessionId,
+              role: 'assistant' as const,
+              text: `${row.senderName}: ${row.text}`,
+              createdAt: row.createdAt,
+              senderName: 'Vela',
+            }
+          }
+          return toDesktopMessage(row)
+        })
+        .filter((m): m is Message => Boolean(m)),
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    }
+  }
 
   const getClientId = (messageId: string) =>
     clientIdsByMessage instanceof Map
@@ -334,7 +384,7 @@ export async function fetchLocalDesktopMessages(
         ? clientIdsByMessage.getForMessage(messageId)
         : (clientIdsByMessage as ReadonlyMap<string, string>).get(messageId)
 
-  const decoded = decodeLocalHistoryCursor(input.after)
+  const decoded = decodeLocalHistoryCursor(input.after ?? input.cursor)
   const want = Math.max(1, input.limit ?? 100)
 
   const visibleMsgs: Array<{ msg: Message; seq: number }> = []
@@ -417,4 +467,36 @@ export async function fetchLocalDesktopMessages(
     messages: collected,
     nextCursor: encodeLocalHistoryCursor(nextCursor),
   }
+}
+
+export async function fetchLastRunStatus(
+  runtime: VelaRuntime,
+  cache: Map<string, string>,
+  sessionId: string,
+): Promise<string | undefined> {
+  const cached = cache.get(sessionId)
+  if (cached !== undefined) return cached || undefined
+  let afterSeq: number | undefined
+  let latest: string | undefined
+  try {
+    while (true) {
+      const events = await runtime.events.list({
+        sessionId,
+        ...(afterSeq !== undefined ? { afterSeq } : {}),
+        limit: 200,
+      })
+      for (const evt of events) {
+        if (evt.type === 'run_started') latest = 'running'
+        else if (evt.type === 'run_finished') latest = evt.status
+      }
+      if (events.length < 200) break
+      const nextSeq = events.at(-1)?.seq
+      if (nextSeq === undefined) break
+      afterSeq = nextSeq
+    }
+  } catch {
+    return undefined
+  }
+  cache.set(sessionId, latest ?? '')
+  return latest
 }

@@ -2,6 +2,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -102,13 +103,24 @@ interface BunBuildPlugin {
       }) => { path: string; namespace?: string } | undefined,
     ): void
     onLoad(
-      opts: { filter: RegExp; namespace: string },
-      cb: (args: { path: string }) => { contents: string; loader: 'js' },
+      opts: { filter: RegExp; namespace?: string },
+      cb: (args: {
+        path: string
+      }) =>
+        | { contents: string; loader: 'js' | 'jsx' | 'ts' | 'tsx' }
+        | undefined,
     ): void
   }): void
 }
 
+interface BunTranspilerLike {
+  scanImports(code: string): Array<{ kind: string; path: string }>
+}
+
 interface BunLike {
+  Transpiler?: new (options: {
+    loader: 'js' | 'jsx' | 'ts' | 'tsx'
+  }) => BunTranspilerLike
   build(options: {
     entrypoints: string[]
     target: 'bun'
@@ -120,6 +132,310 @@ interface BunLike {
     logs: unknown[]
     outputs: Array<{ text(): Promise<string> }>
   }>
+}
+
+function bunLoaderForPath(filePath: string): 'js' | 'jsx' | 'ts' | 'tsx' {
+  if (filePath.endsWith('.tsx')) return 'tsx'
+  if (filePath.endsWith('.jsx')) return 'jsx'
+  if (/\.(?:mjs|cjs|js)$/.test(filePath)) return 'js'
+  return 'ts'
+}
+
+function isIdentChar(ch: string): boolean {
+  return /[A-Za-z0-9_$]/.test(ch)
+}
+
+const REGEX_BEFORE_KEYWORDS = new Set([
+  'return',
+  'case',
+  'throw',
+  'delete',
+  'void',
+  'typeof',
+  'yield',
+  'await',
+  'in',
+  'instanceof',
+  'new',
+  'else',
+  'do',
+  'of',
+  'export',
+  'default',
+  'extends',
+  'satisfies',
+  'as',
+])
+
+const REGEX_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'with'])
+
+function skipBalancedTemplateExpr(src: string, start: number): number {
+  let i = start
+  let depth = 1
+  let canStartRegex = true
+  let lastWord = ''
+  const parenStartsRegex: boolean[] = []
+  while (i < src.length && depth > 0) {
+    const ch = src[i]!
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+      i += 1
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      i = skipQuoted(src, i, ch)
+      canStartRegex = false
+      lastWord = ''
+    } else if (ch === '`') {
+      i = skipTemplate(src, i)
+      canStartRegex = false
+      lastWord = ''
+    } else if (ch === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i + 2)
+      i = nl === -1 ? src.length : nl + 1
+    } else if (ch === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2)
+      i = end === -1 ? src.length : end + 2
+    } else if (ch === '/' && canStartRegex) {
+      i = skipRegexLiteral(src, i)
+      canStartRegex = false
+      lastWord = ''
+    } else if (isIdentChar(ch) && !/[0-9]/.test(ch)) {
+      let j = i + 1
+      while (j < src.length && isIdentChar(src[j]!)) j += 1
+      lastWord = src.slice(i, j)
+      canStartRegex = REGEX_BEFORE_KEYWORDS.has(lastWord)
+      i = j
+    } else {
+      if (ch === '(') {
+        parenStartsRegex.push(REGEX_PAREN_KEYWORDS.has(lastWord))
+        canStartRegex = true
+      } else if (ch === ')') {
+        canStartRegex = parenStartsRegex.pop() ?? false
+      } else if (ch === '{') {
+        depth += 1
+        canStartRegex = true
+      } else if (ch === '}') {
+        depth -= 1
+        canStartRegex = true
+      } else if (
+        ch === '[' ||
+        ch === ',' ||
+        ch === ';' ||
+        ch === ':' ||
+        ch === '?' ||
+        ch === '='
+      ) {
+        canStartRegex = true
+      } else {
+        canStartRegex = !/[0-9\])]/.test(ch)
+      }
+      lastWord = ''
+      i += 1
+    }
+  }
+  return i
+}
+
+function skipRegexLiteral(src: string, start: number): number {
+  let i = start + 1
+  let inCharClass = false
+  while (i < src.length) {
+    const ch = src[i]!
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    if (ch === '[' && !inCharClass) {
+      inCharClass = true
+      i += 1
+      continue
+    }
+    if (ch === ']' && inCharClass) {
+      inCharClass = false
+      i += 1
+      continue
+    }
+    if (ch === '/' && !inCharClass) {
+      i += 1
+      while (i < src.length && /[a-zA-Z]/.test(src[i]!)) i += 1
+      break
+    }
+    if (ch === '\n' || ch === '\r') break
+    i += 1
+  }
+  return i
+}
+
+function skipQuoted(src: string, start: number, quote: string): number {
+  let i = start + 1
+  while (i < src.length) {
+    const ch = src[i]!
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    i += 1
+    if (ch === quote) break
+  }
+  return i
+}
+
+function skipTemplate(src: string, start: number): number {
+  let i = start + 1
+  while (i < src.length) {
+    const ch = src[i]!
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    if (ch === '$' && src[i + 1] === '{') {
+      i = skipBalancedTemplateExpr(src, i + 2)
+      continue
+    }
+    i += 1
+    if (ch === '`') break
+  }
+  return i
+}
+
+/** Rewrites bare `import.meta.{url,dir,path}` tokens in source code for one module path without touching strings, regexes, or comments. */
+function rewriteImportMetaForFile(source: string, filePath: string): string {
+  const metaReplacements: Record<string, string> = {
+    url: JSON.stringify(pathToFileURL(filePath).href),
+    dir: JSON.stringify(dirname(filePath)),
+    path: JSON.stringify(filePath),
+  }
+  const rewriteSlice = (start: number, end: number): string => {
+    let out = ''
+    let i = start
+    let canStartRegex = true
+    let lastWord = ''
+    const parenStartsRegex: boolean[] = []
+    while (i < end) {
+      const ch = source[i]!
+      if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+        out += ch
+        i += 1
+        continue
+      }
+      if (ch === "'" || ch === '"') {
+        const next = skipQuoted(source, i, ch)
+        out += source.slice(i, next)
+        i = next
+        canStartRegex = false
+        lastWord = ''
+        continue
+      }
+      if (ch === '`') {
+        let j = i + 1
+        out += '`'
+        while (j < end) {
+          const tc = source[j]!
+          if (tc === '\\') {
+            out += source.slice(j, j + 2)
+            j += 2
+            continue
+          }
+          if (tc === '$' && source[j + 1] === '{') {
+            const exprEnd = skipBalancedTemplateExpr(source, j + 2)
+            out += `\${${rewriteSlice(j + 2, exprEnd - 1)}}`
+            j = exprEnd
+            continue
+          }
+          out += tc
+          j += 1
+          if (tc === '`') break
+        }
+        i = j
+        canStartRegex = false
+        lastWord = ''
+        continue
+      }
+      if (ch === '/' && source[i + 1] === '/') {
+        const nl = source.indexOf('\n', i + 2)
+        const next = nl === -1 || nl > end ? end : nl + 1
+        out += source.slice(i, next)
+        i = next
+        continue
+      }
+      if (ch === '/' && source[i + 1] === '*') {
+        const close = source.indexOf('*/', i + 2)
+        const next = close === -1 || close + 2 > end ? end : close + 2
+        out += source.slice(i, next)
+        i = next
+        continue
+      }
+      if (ch === '/' && canStartRegex) {
+        const next = Math.min(skipRegexLiteral(source, i), end)
+        out += source.slice(i, next)
+        i = next
+        canStartRegex = false
+        lastWord = ''
+        continue
+      }
+      if (
+        source.startsWith('import.meta.', i) &&
+        (i === 0 || (!isIdentChar(source[i - 1]!) && source[i - 1] !== '.'))
+      ) {
+        const afterDot = i + 'import.meta.'.length
+        let propEnd = afterDot
+        while (propEnd < end && isIdentChar(source[propEnd]!)) propEnd += 1
+        const prop = source.slice(afterDot, propEnd)
+        if (prop in metaReplacements) {
+          out += metaReplacements[prop]!
+          i = propEnd
+          canStartRegex = false
+          lastWord = ''
+          continue
+        }
+      }
+      if (isIdentChar(ch) && !/[0-9]/.test(ch)) {
+        let j = i + 1
+        while (j < end && isIdentChar(source[j]!)) j += 1
+        lastWord = source.slice(i, j)
+        out += lastWord
+        i = j
+        canStartRegex = REGEX_BEFORE_KEYWORDS.has(lastWord)
+        continue
+      }
+      if (ch === '(') {
+        parenStartsRegex.push(REGEX_PAREN_KEYWORDS.has(lastWord))
+        canStartRegex = true
+      } else if (ch === ')') {
+        canStartRegex = parenStartsRegex.pop() ?? false
+      } else if (
+        ch === '[' ||
+        ch === '{' ||
+        ch === '}' ||
+        ch === ',' ||
+        ch === ';' ||
+        ch === ':' ||
+        ch === '?' ||
+        ch === '='
+      ) {
+        canStartRegex = true
+      } else if (ch === '+' && source[i + 1] === '+') {
+        out += '++'
+        i += 2
+        canStartRegex = false
+        lastWord = ''
+        continue
+      } else if (ch === '-' && source[i + 1] === '-') {
+        out += '--'
+        i += 2
+        canStartRegex = false
+        lastWord = ''
+        continue
+      } else {
+        canStartRegex = !/[0-9\])]/.test(ch)
+      }
+      lastWord = ''
+      out += ch
+      i += 1
+    }
+    return out
+  }
+  return rewriteSlice(0, source.length)
 }
 
 function buildExtensionWithBun(
@@ -148,15 +464,13 @@ function buildExtensionWithBun(
         entrypoints: [key],
         target: 'bun',
         format: 'esm',
-        define: {
-          'import.meta.url': JSON.stringify(pathToFileURL(key).href),
-          'import.meta.dir': JSON.stringify(dirname(key)),
-          'import.meta.path': JSON.stringify(key),
-        },
         plugins: [
           {
             name: 'vela-extension-host',
             setup(build) {
+              build.onResolve({ filter: /^file:\/\// }, (args) => ({
+                path: fileURLToPath(args.path),
+              }))
               build.onResolve({ filter: /.*/ }, (args) => {
                 if (!hostSpecifiers.has(args.path)) return undefined
                 if (hostLoaders[args.path] || diskAliases.has(args.path)) {
@@ -171,6 +485,17 @@ function buildExtensionWithBun(
                   contents: `module.exports = globalThis[Symbol.for('vela.jiti.hostModules')][${JSON.stringify(args.path)}];\n`,
                   loader: 'js',
                 }),
+              )
+              build.onLoad(
+                { filter: /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/, namespace: 'file' },
+                (args) => {
+                  const text = readFileSync(args.path, 'utf8')
+                  if (!text.includes('import.meta.')) return undefined
+                  return {
+                    contents: rewriteImportMetaForFile(text, args.path),
+                    loader: bunLoaderForPath(args.path),
+                  }
+                },
               )
             },
           },
@@ -284,6 +609,37 @@ function getJiti(aliasZod: boolean): Promise<JitiInstance> {
   return pending
 }
 
+function needsHostBundlerUnderBun(bun: BunLike, sourcePath: string): boolean {
+  let source = ''
+  try {
+    source = readFileSync(sourcePath, 'utf8')
+  } catch {
+    return false
+  }
+  const runtimeImports =
+    typeof bun.Transpiler === 'function'
+      ? new bun.Transpiler({ loader: bunLoaderForPath(sourcePath) })
+          .scanImports(source)
+          .map((item) => item.path)
+      : [
+          ...source.matchAll(
+            /['"](@glows777\/vela(?:\/extension-api)?|zod)['"]/g,
+          ),
+        ].map((m) => m[1]!)
+  const importsVela = runtimeImports.some(
+    (spec) =>
+      spec === '@glows777/vela' || spec === '@glows777/vela/extension-api',
+  )
+  if (importsVela && !hasLocalPackage(sourcePath, '@glows777/vela')) {
+    return true
+  }
+  const importsBareZod = runtimeImports.includes('zod')
+  if (importsBareZod && !hasLocalPackage(sourcePath, 'zod')) {
+    return true
+  }
+  return false
+}
+
 /**
  * Loads an extension file whose default export is `(vela) => {}`. The returned
  * function is named after the extension, which sets its tool prefix and config section.
@@ -297,20 +653,28 @@ export async function importExtension(
   let factory: unknown
   const bun = (globalThis as { Bun?: BunLike }).Bun
   if (bun) {
-    try {
-      const mod = (await import(pathToFileURL(path).href)) as {
-        default?: unknown
-      }
-      factory = mod.default
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND/.test(message))
-        throw error
+    if (needsHostBundlerUnderBun(bun, path)) {
       const builtUrl = await buildExtensionWithBun(bun, path)
-      const mod = (await import(builtUrl)) as {
-        default?: unknown
-      }
+      const mod = (await import(builtUrl)) as { default?: unknown }
       factory = mod.default
+    } else {
+      try {
+        const mod = (await import(pathToFileURL(path).href)) as {
+          default?: unknown
+        }
+        factory = mod.default
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (
+          !/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND/.test(message)
+        )
+          throw error
+        const builtUrl = await buildExtensionWithBun(bun, path)
+        const mod = (await import(builtUrl)) as {
+          default?: unknown
+        }
+        factory = mod.default
+      }
     }
   } else {
     const jiti = await getJiti(!hasLocalPackage(path, 'zod'))

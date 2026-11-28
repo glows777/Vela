@@ -48,13 +48,11 @@ export async function ensureCliProject(
 ): Promise<string> {
   const canonicalCwd = canonicalLocalPath(cwd)
   const existing =
-    (await runtime.projects.getByCwd(cwd)) ??
-    (canonicalCwd !== cwd
-      ? await runtime.projects.getByCwd(canonicalCwd)
-      : undefined)
+    (await runtime.projects.getByCwd(canonicalCwd)) ??
+    (canonicalCwd !== cwd ? await runtime.projects.getByCwd(cwd) : undefined)
   if (existing) return existing.id
   const name = basename(canonicalCwd) || 'project'
-  const created = await runtime.projects.create({ name, cwd })
+  const created = await runtime.projects.create({ name, cwd: canonicalCwd })
   return created.id
 }
 

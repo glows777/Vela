@@ -6,14 +6,14 @@ Vela desktop brings Local projects, Local sessions, Lark projects, and Lark sess
 
 ## Process ownership
 
-- `src/main/` owns Electron lifecycle and the in-process SDK host. Run `createRuntime` with Local projects and Lark here. Sessions and events use function calls rather than a CLI subprocess, RPC, or HTTP service.
+- `src/main/` owns Electron lifecycle and the thin daemon client host. Connect via `connectRuntime()` (spawning unpacked `daemon.mjs` with `ELECTRON_RUN_AS_NODE=1` when no daemon is resident) rather than running a parallel in-process `createRuntime` database owner. Sessions, settings, and channel events flow through the daemon `VelaRuntime` proxy.
 - `src/renderer/` owns the browser-only UI. It reaches main through one constrained `contextBridge` preload API so Node, Electron, and SDK privileges stay outside the page.
 - `src/preload/` owns that bridge and imports no SDK. Expose typed operations rather than generic IPC access. No other IPC channels.
 - `src/shared/` owns the bridge contract in one TypeScript file. It stays browser-safe and imports no main, preload, Node, Electron, or SDK code, so shared types cannot carry privileges into the renderer.
 
-Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The SDK host, shared contract, preload bridge, and real-window assertions are connected. Home, the Local and Lark project pages, the session side panel, the New project dialog, the Routines page, first-run setup and Settings › General/Models/Lark are product screens. New project → Lark shares the CLI’s mention discovery and Lark settings writer.
+Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The daemon bridge, shared contract, preload bridge, and real-window assertions are connected. Home, the Local and Lark project pages, the session side panel, the New project dialog, the Routines page, first-run setup and Settings › General/Models/Lark are product screens. New project → Lark uses the shared daemon settings/discovery API and writer.
 
-While “Run Lark in this app” is on, the app owns its Lark connection. Never use the same Lark app credentials concurrently with `vela serve`, because the two hosts would compete for one connection and persisted channel state.
+The daemon owns `vela.db`, webhooks, and the optional Lark connection on the shared `VELA_DIR`, honoring the `vela.db` channel toggle ("Enable Lark connection on this computer") across CLI and Desktop clients.
 
 Keep `sandbox`, `contextIsolation`, and disabled `nodeIntegration`. Deny new windows, page navigation, and permission requests. Keep the strict CSP in both HTML entries. These limits contain renderer content as product functionality grows.
 

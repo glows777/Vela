@@ -242,9 +242,9 @@ export function NewProjectDialog({
                   {step === 'mention' ? (
                     <p role="status">
                       Mention the bot in the new Lark group. Until a new group
-                      is found or you cancel, Local and Lark are paused. Vela
-                      won’t answer messages sent to enabled groups during this
-                      time.
+                      is found or you cancel, the Lark connection pauses briefly
+                      while Local chats keep running. Vela won’t answer messages
+                      sent to enabled groups during this time.
                     </p>
                   ) : null}
                   {group && (step === 'confirm' || step === 'saving') ? (

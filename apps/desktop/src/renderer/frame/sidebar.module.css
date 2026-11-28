@@ -33,15 +33,6 @@
   padding: 2px 8px 10px;
 }
 
-.mode {
-  color: var(--vela-muted);
-  font-family: var(--vela-family-mono);
-  font-size: 10.5px;
-  font-weight: 500;
-  opacity: 0.75;
-  -webkit-app-region: no-drag;
-}
-
 .newSession {
   display: flex;
   align-items: center;

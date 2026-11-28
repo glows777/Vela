@@ -3,13 +3,15 @@ import { useEffect, useRef, useState } from 'react'
 import { Composer } from '../components/composer.tsx'
 import { PageError } from '../components/page-error.tsx'
 import {
+  defaultHomePick,
   larkStartHint,
-  lastUsedProject,
   needsYou,
   projectName,
   projectOf,
   projectTag,
+  QUICK_PICK,
   recentSessions,
+  sessionProjectId,
   stateWord,
 } from '../format.ts'
 import type { Snapshot } from '../store.ts'
@@ -17,40 +19,46 @@ import { startSession } from '../store.ts'
 import { Select } from '../ui/select.tsx'
 import styles from './home.module.css'
 
-/** Desktop workbench: compact attention & recent sessions above, anchored composer dock below. */
+/** Desktop workbench: compact attention & recent sessions above, always-on composer dock below. */
 export function Home({
   snapshot,
   focusSignal,
   onOpenProject,
+  onOpenQuick,
   onOpenSession,
 }: {
   snapshot: Snapshot
   focusSignal: number
-  onOpenProject: (projectId: string) => void
-  onOpenSession: (projectId: string, sessionId: string) => void
+  onOpenProject: (projectId: string, sessionId?: string) => void
+  onOpenQuick: (sessionId?: string) => void
+  onOpenSession: (projectId: string | null, sessionId: string) => void
 }) {
   const needs = needsYou(snapshot)
   const recent = recentSessions(snapshot)
-  const [picked, setPicked] = useState('')
+  const [picked, setPicked] = useState(() =>
+    snapshot.ready ? defaultHomePick(snapshot) : '',
+  )
   const picker = useRef<HTMLButtonElement>(null)
   const focusPicker = useRef('')
 
-  // Changing destination mounts a new composer with that project's draft.
   useEffect(() => {
     if (!focusPicker.current || focusPicker.current !== picked) return
     focusPicker.current = ''
     picker.current?.focus()
   }, [picked])
 
-  // Latch the suggested project once: later activity must not move the destination
-  // while the person is typing.
   useEffect(() => {
     if (picked || !snapshot.ready) return
-    const suggestion = lastUsedProject(snapshot)
-    if (suggestion) setPicked(suggestion.id)
+    setPicked(defaultHomePick(snapshot))
   }, [picked, snapshot])
 
-  const project = snapshot.projects.find((item) => item.id === picked)
+  const effectivePick =
+    picked || (snapshot.ready ? defaultHomePick(snapshot) : QUICK_PICK)
+  const project =
+    effectivePick !== QUICK_PICK
+      ? snapshot.projects.find((item) => item.id === effectivePick)
+      : undefined
+  const activePick = project ? project.id : QUICK_PICK
 
   if (!snapshot.ready) return <div className={styles.page} aria-busy="true" />
 
@@ -79,7 +87,10 @@ export function Home({
                         type="button"
                         className={styles.attention}
                         onClick={() =>
-                          onOpenSession(session.chatId, session.sessionId)
+                          onOpenSession(
+                            sessionProjectId(session),
+                            session.sessionId,
+                          )
                         }
                       >
                         <span className={styles.glyph} aria-hidden="true">
@@ -89,9 +100,9 @@ export function Home({
                           <span className={styles.attentionMeta}>
                             {[
                               'Waiting for you',
-                              owner ? projectName(owner) : undefined,
+                              owner ? projectName(owner) : 'Quick chat',
                               owner ? projectTag(owner) : undefined,
-                              session.task,
+                              session.task || 'New session',
                             ]
                               .filter(Boolean)
                               .join(' · ')}
@@ -128,7 +139,10 @@ export function Home({
                         type="button"
                         className={styles.row}
                         onClick={() =>
-                          onOpenSession(session.chatId, session.sessionId)
+                          onOpenSession(
+                            sessionProjectId(session),
+                            session.sessionId,
+                          )
                         }
                       >
                         <span
@@ -142,11 +156,13 @@ export function Home({
                           ].join(' ')}
                           aria-hidden="true"
                         />
-                        <span className={styles.rowTitle}>{session.task}</span>
+                        <span className={styles.rowTitle}>
+                          {session.task || 'New session'}
+                        </span>
                         <span className={styles.meta}>
                           {owner
                             ? `${projectName(owner)} · ${projectTag(owner)}`
-                            : 'Local'}
+                            : 'Quick chat'}
                         </span>
                         <span className={styles.word}>
                           {stateWord[session.state]}
@@ -166,13 +182,13 @@ export function Home({
           <h3 id="start" className={styles.srOnly}>
             Start a session
           </h3>
-          {project ? (
-            <Composer
-              key={project.id}
-              label="Message Vela"
-              draftKey={`home:${project.id}`}
-              focusSignal={focusSignal}
-              hint={
+          <Composer
+            key={activePick}
+            label="Message Vela"
+            draftKey={`home:${activePick}`}
+            focusSignal={focusSignal}
+            hint={
+              project ? (
                 project.channel === 'lark' ? (
                   larkStartHint(projectName(project))
                 ) : (
@@ -180,32 +196,36 @@ export function Home({
                     Runs in <code>{project.cwd}</code> on this computer.
                   </>
                 )
-              }
-              onSend={(text) =>
-                startSession(project, text, () => onOpenProject(project.id))
-              }
-            >
-              <Select
-                compact
-                label="Project"
-                value={project.id}
-                options={snapshot.projects.map((item) => ({
+              ) : (
+                'Starts a quick chat without linking a folder.'
+              )
+            }
+            onSend={(text) =>
+              startSession(project ?? 'quick', text, (createdSessionId) => {
+                if (project) onOpenProject(project.id, createdSessionId)
+                else onOpenQuick(createdSessionId)
+              })
+            }
+          >
+            <Select
+              compact
+              label="Project"
+              value={activePick}
+              options={[
+                { value: QUICK_PICK, label: 'Quick chat' },
+                ...snapshot.projects.map((item) => ({
                   value: item.id,
                   label: `${projectName(item)} · ${projectTag(item)}`,
-                }))}
-                triggerRef={picker}
-                onChange={(next) => {
-                  if (next === picked) return
-                  focusPicker.current = next
-                  setPicked(next)
-                }}
-              />
-            </Composer>
-          ) : (
-            <p className={styles.emptyLine}>
-              Create a project to start a session in a folder.
-            </p>
-          )}
+                })),
+              ]}
+              triggerRef={picker}
+              onChange={(next) => {
+                if (next === activePick) return
+                focusPicker.current = next
+                setPicked(next)
+              }}
+            />
+          </Composer>
           {snapshot.error ? (
             <PageError message={snapshot.error} className={styles.error} />
           ) : null}

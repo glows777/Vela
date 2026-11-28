@@ -3,7 +3,9 @@ const { dirname, join } = require('node:path')
 
 module.exports = {
   packagerConfig: {
-    asar: true,
+    asar: {
+      unpack: '**/.vite/build/{daemon.mjs,photon_rs_bg.wasm,babel.cjs}',
+    },
     extraResource: [
       'src/assets/fonts/Barlow-LICENSE.txt',
       'src/assets/fonts/JapaneseFonts-LICENSE.txt',
@@ -19,6 +21,7 @@ module.exports = {
     new VitePlugin({
       build: [
         { entry: 'src/main/index.ts', config: 'vite.main.config.mjs' },
+        { entry: 'src/main/daemon.ts', config: 'vite.daemon.config.mjs' },
         { entry: 'src/preload/index.ts', config: 'vite.preload.config.mjs' },
       ],
       renderer: [{ name: 'main_window', config: 'vite.renderer.config.mjs' }],

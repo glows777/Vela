@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { appendFile, mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { stopDaemon } from '@glows777/vela'
 import type { Page } from 'playwright'
 
 // A bridge read is asynchronous. Playwright's DOM predicate checks the returned
@@ -97,17 +98,33 @@ export async function verifyLarkDiscovery(
         .getByRole('button', { name: 'Lark' })
         .click()
     }
-    const toggle = page.getByRole('switch', { name: 'Run Lark in this app' })
+    const toggle = page.getByRole('switch', {
+      name: 'Enable Lark connection on this computer',
+    })
     const normalScenario = await readFile(scenario, 'utf8')
     await Bun.write(scenario, JSON.stringify({ responses: [{ hang: true }] }))
     await larkSettings()
     await toggle.click()
-    await page.getByText('Off in this app', { exact: true }).waitFor()
+    await page.getByText('Off on this computer', { exact: true }).waitFor()
     const offSettings = await readFile(settings, 'utf8')
-    assert.equal(JSON.parse(offSettings).lark.runInApp, false)
+    assert.equal(JSON.parse(offSettings).lark.runInApp, undefined)
+    assert.equal(
+      await page.evaluate(
+        async () => (await window.vela.settings()).lark.enabled,
+      ),
+      false,
+    )
     await sidebar.getByRole('button', { name: 'New project' }).click()
     await dialog.getByLabel('Folder path').fill(dir)
     await dialog.getByRole('button', { name: 'Create project' }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    await page.getByLabel('Message Vela in this project').waitFor()
+    const panel = page.getByRole('complementary', { name: 'Sessions' })
+    const closeSessions = panel.getByRole('button', { name: 'Close sessions' })
+    if (await closeSessions.isVisible()) {
+      await closeSessions.click()
+      await panel.waitFor({ state: 'detached' })
+    }
     await send(
       page,
       'Message Vela in this project',
@@ -133,8 +150,9 @@ export async function verifyLarkDiscovery(
     assert.equal((await page.evaluate(activeLocal))?.runId, active.runId)
     assert(
       await page.evaluate(
-        ({ chatId, runId }) => window.vela.stop('local', { chatId }, runId),
-        { chatId: active.chatId, runId: active.runId },
+        ({ sessionId, runId }) =>
+          window.vela.stop('local', { sessionId }, runId),
+        { sessionId: active.sessionId, runId: active.runId },
       ),
     )
     await waitForBridge(
@@ -183,7 +201,10 @@ export async function verifyLarkDiscovery(
     await add.click()
     await dialog
       .getByRole('status')
-      .filter({ hasText: /Local and Lark are paused/ })
+      .filter({
+        hasText:
+          /Lark connection pauses briefly while Local chats keep running/,
+      })
       .waitFor()
     await dialog
       .getByText(/won’t answer messages sent to enabled groups/)
@@ -228,11 +249,10 @@ export async function verifyLarkDiscovery(
     )
     await waitForBridge(page, async () => {
       const project = (await window.vela.projects()).find(
-        (p) => p.id === 'oc_enabled',
+        (p) => p.channel === 'lark' && p.id === 'oc_enabled',
       )
-      if (!project) return false
-      const history = await window.vela.larkMessages({
-        chatId: project.id,
+      if (project?.channel !== 'lark') return false
+      const history = await window.vela.messages({
         sessionId: project.sessionId,
       })
       return history.messages.some(
@@ -248,7 +268,10 @@ export async function verifyLarkDiscovery(
     assert.equal(await readFile(settings, 'utf8'), original)
     await Bun.write(join(discovery, 'control.jsonl'), '')
     await dialog.getByRole('button', { name: 'Enabled group' }).click()
-    await page.getByRole('button', { name: 'Close sessions' }).click()
+    if (await closeSessions.isVisible()) {
+      await closeSessions.click()
+      await panel.waitFor({ state: 'detached' })
+    }
     await send(
       page,
       'Message Vela in this group',
@@ -275,21 +298,44 @@ export async function verifyLarkDiscovery(
     await sidebar.getByRole('button', { name: 'New project' }).click()
     await dialog.getByLabel('Folder path').fill(dir)
     await dialog.getByRole('button', { name: 'Create project' }).click()
-    await send(page, 'Message Vela in this project', 'Does Local still work?')
+    await dialog.waitFor({ state: 'hidden' })
+    await page.getByLabel('Message Vela').waitFor()
+    if (await closeSessions.isVisible()) {
+      await closeSessions.click()
+      await panel.waitFor({ state: 'detached' })
+    }
+    await send(page, 'Message Vela', 'Does Local still work?')
     await page
       .getByText('Local answer after cancel.', { exact: true })
       .waitFor()
 
-    await send(page, 'Message Vela in this project', 'Keep this run active')
+    await send(page, 'Message Vela', 'Keep this run active')
     await waitForBridge(page, async () =>
       (await window.vela.sessions('local')).find((s) => s.runId),
     )
+    const activeLocalDuringDiscovery = await page.evaluate(async () =>
+      (await window.vela.sessions('local')).find((s) => s.runId),
+    )
+    assert(activeLocalDuringDiscovery?.runId)
     await open()
     await add.click()
     await dialog
-      .getByRole('alert')
-      .filter({ hasText: /stop|finish/i })
+      .getByRole('status')
+      .filter({
+        hasText:
+          /Lark connection pauses briefly while Local chats keep running/,
+      })
       .waitFor()
+    assert.equal(
+      (
+        await page.evaluate(async () =>
+          (await window.vela.sessions('local')).find((s) => s.runId),
+        )
+      )?.runId,
+      activeLocalDuringDiscovery.runId,
+    )
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await add.waitFor()
     assert.equal(await readFile(settings, 'utf8'), original)
     assert(
       await page.evaluate(async () => {
@@ -300,7 +346,7 @@ export async function verifyLarkDiscovery(
           active?.runId &&
           (await window.vela.stop(
             'local',
-            { chatId: active.chatId },
+            { sessionId: active.sessionId },
             active.runId,
           ))
         )
@@ -340,7 +386,10 @@ export async function verifyLarkDiscovery(
           active?.runId &&
           (await window.vela.stop(
             'lark',
-            { chatId: active.chatId },
+            {
+              sessionId: active.sessionId,
+              ...(active.chatId ? { chatId: active.chatId } : {}),
+            },
             active.runId,
           ))
         )
@@ -390,5 +439,6 @@ export async function verifyLarkDiscovery(
     await themes(page, 'lark-new-project-added')
   } finally {
     await app.close()
+    await stopDaemon({ agentDir: dir }).catch(() => {})
   }
 }
