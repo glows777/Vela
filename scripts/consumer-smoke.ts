@@ -290,7 +290,7 @@ try {
   const ds2 = await docsOffRuntime.sessions.create({ name: 'docs-off' })
   await docsOffRuntime.prompt(ds2.id, { text: 'check no docs' })
   await docsOffRuntime.waitForIdle(ds2.id)
-  const docsMatch = /- Additional docs: ([^\n]+)/.exec(docsSystems[0] ?? '')
+  const docsMatch = /- Additional docs: ([^\\n]+)/.exec(docsSystems[0] ?? '')
   const resolvedDocsDir = docsMatch?.[1]?.trim()
   if (
     !docsSystems[0]?.includes('<docs>') ||
