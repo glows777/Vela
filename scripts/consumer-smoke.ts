@@ -29,7 +29,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import {
   connectRuntime,
