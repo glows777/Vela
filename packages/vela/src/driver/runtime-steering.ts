@@ -23,43 +23,78 @@ export function buildSteeringMessage(
 }
 
 /**
- * Drains active steering messages for `sessionId`, atomically completing any
- * inbox-backed entries in SQLite so they cannot be double-delivered or lost.
+ * Drains active steering messages for `sessionId`, skipping any inbox-backed
+ * entries whose `inbox_events` row is no longer pending. Completion (`status = 'done'`)
+ * is deferred to `commitSteeredInboxInTx` so it commits atomically with transcript append.
  */
 export function takeSessionSteering(params: {
   db: VelaDatabase
   sessionId: string
-  runId: string
   activeSteering: Map<string, ModelMessage[]>
   activeSteeringInboxIds: WeakMap<ModelMessage, string>
+  pendingCommitSteering?: ModelMessage[]
 }): ModelMessage[] {
-  const { db, sessionId, runId, activeSteering, activeSteeringInboxIds } =
-    params
+  const {
+    db,
+    sessionId,
+    activeSteering,
+    activeSteeringInboxIds,
+    pendingCommitSteering,
+  } = params
   const list = activeSteering.get(sessionId) ?? []
   activeSteering.set(sessionId, [])
   if (list.length === 0) return []
   const accepted: ModelMessage[] = []
-  const now = new Date().toISOString()
   for (const msg of list) {
     const inboxEventId = activeSteeringInboxIds.get(msg)
     if (!inboxEventId) {
       accepted.push(msg)
+      pendingCommitSteering?.push(msg)
       continue
     }
-    activeSteeringInboxIds.delete(msg)
-    const res = db.run(
-      `UPDATE inbox_events
-       SET status = 'done', run_id = ?, processed_at = COALESCE(processed_at, ?)
-       WHERE id = ? AND status = 'pending'`,
-      runId,
-      now,
+    const row = db.get<{ status: string }>(
+      `SELECT status FROM inbox_events WHERE id = ?`,
       inboxEventId,
     )
-    if (res.changes > 0) {
+    if (row?.status === 'pending') {
       accepted.push(msg)
+      pendingCommitSteering?.push(msg)
+    } else {
+      activeSteeringInboxIds.delete(msg)
     }
   }
   return accepted
+}
+
+/** Atomically transitions an inbox-backed steering message to `done` inside the transcript append transaction. */
+export function commitSteeredInboxInTx(params: {
+  db: VelaDatabase
+  message: ModelMessage
+  runId: string
+  activeSteeringInboxIds: WeakMap<ModelMessage, string>
+  pendingCommitSteering?: ModelMessage[]
+}): void {
+  const { db, message, runId, activeSteeringInboxIds, pendingCommitSteering } =
+    params
+  if (pendingCommitSteering) {
+    const idx = pendingCommitSteering.indexOf(message)
+    if (idx !== -1) pendingCommitSteering.splice(idx, 1)
+  }
+  const inboxEventId = activeSteeringInboxIds.get(message)
+  if (!inboxEventId) return
+  activeSteeringInboxIds.delete(message)
+  const now = new Date().toISOString()
+  const res = db.run(
+    `UPDATE inbox_events
+     SET status = 'done', run_id = ?, processed_at = COALESCE(processed_at, ?)
+     WHERE id = ? AND status = 'pending'`,
+    runId,
+    now,
+    inboxEventId,
+  )
+  if (res.changes === 0) {
+    throw new Error(`Steering inbox event ${inboxEventId} is no longer pending`)
+  }
 }
 
 /**
@@ -75,6 +110,7 @@ export async function flushSessionSteering(params: {
   activeSteering: Map<string, ModelMessage[]>
   activeSteeringInboxIds: WeakMap<ModelMessage, string>
   deferredSteering: ModelMessage[]
+  pendingCommitSteering?: ModelMessage[]
   wake: boolean
   shouldWakeSession: boolean
   wakeSession?: (sessionId: string) => void
@@ -87,13 +123,18 @@ export async function flushSessionSteering(params: {
     activeSteering,
     activeSteeringInboxIds,
     deferredSteering,
+    pendingCommitSteering,
     wake,
     shouldWakeSession,
     wakeSession,
   } = params
   const live = activeSteering.get(sessionId)
   activeSteering.delete(sessionId)
-  const allUnconsumed = [...deferredSteering.splice(0), ...(live ?? [])]
+  const allUnconsumed = [
+    ...deferredSteering.splice(0),
+    ...(pendingCommitSteering?.splice(0) ?? []),
+    ...(live ?? []),
+  ]
   const standalone: ModelMessage[] = []
   let hasPreservedInbox = false
   for (const msg of allUnconsumed) {

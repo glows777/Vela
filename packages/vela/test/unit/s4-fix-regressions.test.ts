@@ -1,20 +1,35 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runPrintMode } from '../../src/cli/print-mode.ts'
+import { larkSetup } from '../../src/cli/tui/lark-setup.ts'
+import { prepareInteractiveSession } from '../../src/cli/tui/session-open.ts'
+import { connectRuntime } from '../../src/daemon/client.ts'
 import { DaemonLarkHost } from '../../src/daemon/lark-host.ts'
 import {
   acquireOwnerLock,
   DaemonAlreadyRunningError,
   readOwnerRecord,
 } from '../../src/daemon/owner-lock.ts'
+import { startDaemonServer } from '../../src/daemon/server.ts'
+import { saveRuntimeLarkSetup } from '../../src/daemon/settings-service.ts'
 import { openDatabase } from '../../src/db/index.ts'
 import { createLocalExecutionEnv } from '../../src/driver/execution/local.ts'
 import {
   buildSteeringMessage,
+  commitSteeredInboxInTx,
   flushSessionSteering,
   takeSessionSteering,
 } from '../../src/driver/runtime-steering.ts'
+import { SessionStore } from '../../src/driver/session/index.ts'
 import { processLarkInboundEvent } from '../../src/lark/runtime-inbound.ts'
 import { LarkRuntimeProgressManager } from '../../src/lark/runtime-progress.ts'
 import type { LarkTransport } from '../../src/lark/transport.ts'
@@ -44,7 +59,11 @@ import { scheduleRuntimeWakeTimer } from '../../src/runtime/wake-timer.ts'
 import { createRuntime } from '../../src/runtime-sdk.ts'
 import type { ExecutionEnv } from '../../src/shared/execution.ts'
 import { silentLogger } from '../../src/shared/logger.ts'
-import { createFauxModel } from '../../src/testing/core/index.ts'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/core/index.ts'
 
 const cleanups: Array<() => Promise<void> | void> = []
 
@@ -137,7 +156,7 @@ test('acquireOwnerLock reclaims stale dead-PID lock and rejects active owners', 
   expect(readOwnerRecord(lockPath)).toBeUndefined()
 })
 
-test('updateEnvironmentRegistryConfig hot-reloads changed definitions for subsequent resolves', async () => {
+test('updateEnvironmentRegistryConfig hot-reloads unopened definitions and blocks mutating an already-open container', async () => {
   const dir = tempDir('vela-env-reload-')
   const openedImages: string[] = []
   let retiredCleanup = 0
@@ -167,23 +186,33 @@ test('updateEnvironmentRegistryConfig hot-reloads changed definitions for subseq
   })
   expect(openedImages).toEqual(['alpine:v1'])
 
+  // Changing an already-open container must reject rather than hit Docker identity mismatch.
+  expect(() =>
+    updateEnvironmentRegistryConfig(registry, {
+      box: { image: 'alpine:v2', network: 'on' },
+    }),
+  ).toThrow(/explicit owner restart required/i)
+
+  // Adding a new unopened environment while preserving `box` succeeds immediately.
   updateEnvironmentRegistryConfig(registry, {
-    box: { image: 'alpine:v2', network: 'on' },
+    box: { image: 'alpine:v1', network: 'off' },
+    box2: { image: 'alpine:v2', network: 'on' },
   })
   await registry.resolve({
     sessionId: 's2',
-    location: { environment: 'box', cwd: '/workspace' },
+    location: { environment: 'box2', cwd: '/workspace' },
   })
   expect(openedImages).toEqual(['alpine:v1', 'alpine:v2'])
   await registry.dispose()
   expect(retiredCleanup).toBe(2)
 })
 
-test('steering helpers atomically claim inbox entries and flush standalone images into BlobStore on exit', async () => {
+test('steering helpers commit inbox done atomically with transcript append and roll back on tx failure', async () => {
   const dir = tempDir('vela-steer-')
   const db = openDatabase({ path: join(dir, 'vela.db') })
   cleanups.push(() => db.close())
   const blobs = new BlobStore(db, join(dir, 'blobs'))
+  const store = new SessionStore('s-steer', db, { blobsDir: blobs.rootDir })
   const projects = new ProjectStore(db)
   const sessions = new SessionStoreControl(db)
   const project = projects.create({
@@ -224,15 +253,55 @@ test('steering helpers atomically claim inbox entries and flush standalone image
     [claimedMsg, inbox1.id],
     [preservedMsg, inbox2.id],
   ])
+  const pendingCommitSteering: (typeof claimedMsg)[] = []
 
   const taken = takeSessionSteering({
     db,
     sessionId: session.id,
-    runId: 'run-1',
     activeSteering,
     activeSteeringInboxIds: inboxMap,
+    pendingCommitSteering,
   })
   expect(taken).toEqual([claimedMsg])
+  // Before transcript commit, inbox_events row remains 'pending'.
+  expect(
+    db.get<{ status: string }>(
+      'SELECT status FROM inbox_events WHERE id = ?',
+      inbox1.id,
+    )?.status,
+  ).toBe('pending')
+
+  // If the transcript commit transaction throws, both entry and inbox_events roll back cleanly.
+  expect(() =>
+    store.runInTransaction(() => {
+      commitSteeredInboxInTx({
+        db,
+        message: claimedMsg,
+        runId: 'run-1',
+        activeSteeringInboxIds: inboxMap,
+        pendingCommitSteering,
+      })
+      throw new Error('simulated append failure')
+    }),
+  ).toThrow('simulated append failure')
+  expect(
+    db.get<{ status: string }>(
+      'SELECT status FROM inbox_events WHERE id = ?',
+      inbox1.id,
+    )?.status,
+  ).toBe('pending')
+
+  // Re-attaching inboxMap and committing cleanly succeeds once and prevents duplicate pickup.
+  inboxMap.set(claimedMsg, inbox1.id)
+  store.runInTransaction(() => {
+    commitSteeredInboxInTx({
+      db,
+      message: claimedMsg,
+      runId: 'run-1',
+      activeSteeringInboxIds: inboxMap,
+      pendingCommitSteering,
+    })
+  })
   const claimedRow = db.get<{ status: string }>(
     'SELECT status FROM inbox_events WHERE id = ?',
     inbox1.id,
@@ -242,7 +311,6 @@ test('steering helpers atomically claim inbox entries and flush standalone image
     takeSessionSteering({
       db,
       sessionId: session.id,
-      runId: 'run-1',
       activeSteering: new Map([[session.id, [claimedMsg]]]),
       activeSteeringInboxIds: new WeakMap([[claimedMsg, inbox1.id]]),
     }),
@@ -258,6 +326,7 @@ test('steering helpers atomically claim inbox entries and flush standalone image
     activeSteering,
     activeSteeringInboxIds: inboxMap,
     deferredSteering: [preservedMsg],
+    pendingCommitSteering,
     wake: true,
     shouldWakeSession: true,
     wakeSession: (sid) => {
@@ -290,7 +359,7 @@ test('steering helpers atomically claim inbox entries and flush standalone image
   expect(blobs.get(payload.attachments![0]!.blobId)).toBeDefined()
 })
 
-test('getBoundChannelForSession ignores channel_enabled=false toggles and includes topic/non-hub sessions', () => {
+test('getBoundChannelForSession preserves localOnly OAuth restrictions even when bindings or group roots are disabled', () => {
   const db = openDatabase({ path: ':memory:' })
   cleanups.push(() => db.close())
   const projects = new ProjectStore(db)
@@ -300,6 +369,11 @@ test('getBoundChannelForSession ignores channel_enabled=false toggles and includ
     name: 'Lark Project',
     cwd: '/tmp/proj',
     hubSessionId: true,
+  })
+  const topicSession = sessions.create({
+    projectId: project.id,
+    kind: 'topic',
+    name: 'Child topic',
   })
   const nonHub = sessions.create({
     projectId: project.id,
@@ -312,13 +386,33 @@ test('getBoundChannelForSession ignores channel_enabled=false toggles and includ
     kind: 'group',
     projectId: project.id,
     sessionId: project.hubSessionId!,
+    enabled: false,
+  })
+  bindings.upsert({
+    channel: 'lark',
+    externalId: 'oc_root',
+    threadId: 'omt_child',
+    kind: 'group',
+    projectId: project.id,
+    sessionId: topicSession.id,
     enabled: true,
+  })
+  const dm = sessions.create({ kind: 'chat', name: 'DM' })
+  bindings.upsert({
+    channel: 'lark',
+    externalId: 'ou_dm',
+    kind: 'direct',
+    projectId: null,
+    sessionId: dm.id,
+    enabled: false,
   })
   setChannelEnabledInDb(db, 'lark', false)
 
   expect(getActiveChannelForSession(db, project.hubSessionId!)).toBeUndefined()
   expect(getBoundChannelForSession(db, project.hubSessionId!)).toBe('lark')
+  expect(getBoundChannelForSession(db, topicSession.id)).toBe('lark')
   expect(getBoundChannelForSession(db, nonHub.id)).toBe('lark')
+  expect(getBoundChannelForSession(db, dm.id)).toBe('lark')
 })
 
 test('verifyProviderModel blocks localOnly OAuth credentials when blockLocalOnlyOAuth is enabled', async () => {
@@ -681,4 +775,552 @@ test('LarkRuntimeProgressManager cleans up previous activeRuns and control token
   })
   await new Promise((r) => setTimeout(r, 10))
   expect(removedReactions).toContain('rx_prev')
+})
+
+test('LarkRuntimeProgressManager keeps awaitingOutbox alive past 30s timeout so late successful delivery settles done', async () => {
+  let subscriber:
+    | ((
+        event: Parameters<
+          Parameters<NonNullable<ChannelAdapterContext['subscribeEvents']>>[0]
+        >[0],
+      ) => void)
+    | undefined
+  const reactions: Array<{ msg: string; emoji: string }> = []
+  const transport = makeMockLarkTransport({
+    async addReaction(msgId, emoji) {
+      reactions.push({ msg: msgId, emoji })
+      return `rx_${reactions.length}`
+    },
+  })
+  const ctx: ChannelAdapterContext = {
+    async ingest() {},
+    subscribeEvents(fn) {
+      subscriber = fn
+      return () => {}
+    },
+    subscribeDeltas() {
+      return () => {}
+    },
+    listBindings: () => [
+      {
+        id: 'b-slow',
+        channel: 'lark',
+        externalId: 'oc_slow',
+        threadId: null,
+        kind: 'group',
+        projectId: 'p-slow',
+        sessionId: 's-slow',
+        enabled: true,
+        createdAt: '2026-11-28T00:00:00.000Z',
+        updatedAt: '2026-11-28T00:00:00.000Z',
+      },
+    ],
+  }
+  const origSetTimeout = globalThis.setTimeout
+  const firedCallbacks: Array<() => void> = []
+  ;(globalThis as { setTimeout: typeof setTimeout }).setTimeout = ((
+    cb: () => void,
+    ms?: number,
+  ) => {
+    if (ms === 30_000) {
+      firedCallbacks.push(cb)
+      return origSetTimeout(() => {}, 1000)
+    }
+    return origSetTimeout(cb, ms)
+  }) as typeof setTimeout
+
+  const manager = new LarkRuntimeProgressManager(ctx, transport, {
+    isChatEnabled: () => true,
+    isOwner: () => true,
+    logger: silentLogger,
+  })
+  manager.start()
+  cleanups.push(() => manager.stop())
+
+  try {
+    manager.noteAdmittedInbound({
+      inboxEventId: 'in-slow',
+      externalChatId: 'oc_slow',
+      messageId: 'om_slow',
+      text: 'slow',
+      isDirect: false,
+    })
+    subscriber?.({
+      seq: 1,
+      timestamp: '2026-11-28T00:00:00.000Z',
+      sessionId: 's-slow',
+      projectId: 'p-slow',
+      type: 'run_started',
+      trigger: 'channel',
+      runId: 'run-slow',
+      inboxEventIds: ['in-slow'],
+    })
+    subscriber?.({
+      seq: 2,
+      timestamp: '2026-11-28T00:00:01.000Z',
+      sessionId: 's-slow',
+      projectId: 'p-slow',
+      type: 'run_finished',
+      runId: 'run-slow',
+      status: 'completed',
+      replyPending: true,
+    })
+    expect(firedCallbacks).toHaveLength(1)
+    firedCallbacks[0]!()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(reactions.some((r) => r.emoji === 'CrossMark')).toBe(false)
+
+    manager.noteOutboxOutcome('run-slow', true)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(reactions.some((r) => r.emoji === 'DONE')).toBe(true)
+    expect(reactions.some((r) => r.emoji === 'CrossMark')).toBe(false)
+  } finally {
+    ;(globalThis as { setTimeout: typeof setTimeout }).setTimeout =
+      origSetTimeout
+  }
+})
+
+test('ephemeralSessions (--no-session) persists rotating OAuth refresh tokens to owner auth.json', async () => {
+  const agentDir = tempDir('vela-no-sess-oauth-')
+  writeFileSync(
+    join(agentDir, 'auth.json'),
+    JSON.stringify({
+      rotating: {
+        type: 'oauth',
+        access: 'old-access',
+        refresh: 'ref-1',
+        expires: 1,
+      },
+    }),
+    { mode: 0o600 },
+  )
+  const rtNoSession = createRuntime({
+    agentDir,
+    ephemeralSessions: true,
+    defaultModel: 'rotating/m1',
+    providers: {
+      rotating: {
+        models: [{ id: 'm1', name: 'm1' }],
+        oauth: {
+          name: 'Rotating OAuth',
+          async login() {
+            throw new Error('unused')
+          },
+          async refresh(cred) {
+            return {
+              ...cred,
+              access: 'new-access',
+              refresh: 'ref-2',
+              expires: Date.now() + 3600_000,
+            }
+          },
+        },
+        authSource: (c) => (c ? 'oauth' : undefined),
+        createModel: (_id, ctx) => {
+          const base = createFauxModel({ responses: [fauxText('ok')] })
+          return {
+            ...base,
+            async doGenerate(opts: Parameters<typeof base.doGenerate>[0]) {
+              const cred = await ctx.credential()
+              expect(cred?.type).toBe('oauth')
+              if (cred?.type === 'oauth') expect(cred.refresh).toBe('ref-2')
+              return base.doGenerate(opts)
+            },
+            async doStream(opts: Parameters<typeof base.doStream>[0]) {
+              const cred = await ctx.credential()
+              expect(cred?.type).toBe('oauth')
+              if (cred?.type === 'oauth') expect(cred.refresh).toBe('ref-2')
+              return base.doStream(opts)
+            },
+          }
+        },
+      },
+    },
+  })
+  cleanups.push(() => rtNoSession.dispose())
+  const s = await rtNoSession.sessions.create({
+    location: { environment: 'local', cwd: agentDir },
+  })
+  await rtNoSession.prompt(s.id, { text: 'hello' })
+  await rtNoSession.waitForIdle(s.id)
+  const persisted = JSON.parse(
+    readFileSync(join(agentDir, 'auth.json'), 'utf8'),
+  ) as {
+    rotating?: { refresh?: string; access?: string }
+  }
+  expect(persisted.rotating?.refresh).toBe('ref-2')
+  expect(persisted.rotating?.access).toBe('new-access')
+})
+
+test('custom AgentDriver with steer receives steerInboxEvent while built-in driver still owns vela sessions', async () => {
+  const agentDir = tempDir('vela-custom-steer-')
+  const steered: string[] = []
+  let releaseTurn: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    releaseTurn = resolve
+  })
+  cleanups.push(() => releaseTurn())
+  const rt = createRuntime({
+    agentDir,
+    drivers: [
+      {
+        name: 'custom-drv',
+        capabilities: {
+          recovery: 'turn',
+          executionEnv: 'managed',
+          steer: true,
+          approval: false,
+        },
+        async runTurn() {
+          await gate
+          return { status: 'completed', replyText: 'done' }
+        },
+        async steer(_sid, text) {
+          steered.push(text)
+          return true
+        },
+      },
+    ],
+  })
+  cleanups.push(() => rt.dispose())
+
+  let inboxId = ''
+  await rt.registerChannel({
+    name: 'mockch',
+    async start(ctx) {
+      const s = await rt.sessions.create({
+        driver: 'custom-drv',
+        location: { environment: 'local', cwd: agentDir },
+      })
+      const r = await ctx.ingestWithReceipt!({
+        channel: 'mockch',
+        dedupeKey: 'm-1',
+        externalChatId: 'c1',
+        kind: 'group',
+        senderId: 'u1',
+        senderName: 'User',
+        text: 'steer custom',
+        wake: false,
+        timestamp: new Date().toISOString(),
+        requireExistingSession: false,
+      })
+      expect(r.admitted).toBe(false)
+      void s
+    },
+    async stop() {},
+    async deliver() {
+      return { externalMessageId: 'out' }
+    },
+  })
+
+  const customSession = await rt.sessions.create({
+    driver: 'custom-drv',
+    location: { environment: 'local', cwd: agentDir },
+  })
+  await rt.bindings.upsert({
+    channel: 'mockch',
+    externalId: 'c-custom',
+    kind: 'group',
+    sessionId: customSession.id,
+    enabled: true,
+  })
+  // Trigger initial run and wait briefly for active worker, then steer a second queued inbox event
+  await rt.prompt(customSession.id, { text: 'first' })
+  await new Promise((r) => setTimeout(r, 15))
+  const second = await rt.prompt(customSession.id, {
+    text: 'second queued',
+    wake: false,
+  })
+  inboxId = second.eventId
+  const adapterCtx = await new Promise<ChannelAdapterContext>((resolve) => {
+    void rt.registerChannel({
+      name: 'mockch2',
+      async start(ctx) {
+        resolve(ctx)
+      },
+      async stop() {},
+      async deliver() {
+        return { externalMessageId: 'out2' }
+      },
+    })
+  })
+  const ok = await adapterCtx.steerInboxEvent!(
+    customSession.id,
+    inboxId,
+    'second queued',
+  )
+  expect(ok).toBe(true)
+  expect(steered).toEqual(['second queued'])
+  releaseTurn()
+  await rt.waitForIdle(customSession.id)
+})
+
+test('runPrintMode correlates reply and failure to its own inboxEventId across concurrent same-session runs', async () => {
+  const listeners = new Set<
+    (e: import('../../src/runtime/events.ts').RuntimeEvent) => void
+  >()
+  let resolveSettled!: () => void
+  const settledPromise = new Promise<void>((r) => {
+    resolveSettled = r
+  })
+  const fakeRuntime = {
+    events: {
+      subscribe(
+        fn: (e: import('../../src/runtime/events.ts').RuntimeEvent) => void,
+      ) {
+        listeners.add(fn)
+        return () => listeners.delete(fn)
+      },
+      subscribeDeltas: () => () => {},
+    },
+  } as unknown as import('../../src/runtime-sdk-types.ts').VelaRuntime
+  const fakeSession = {
+    id: 's-print',
+    async prompt() {
+      setTimeout(() => {
+        for (const fn of listeners) {
+          fn({
+            seq: 1,
+            timestamp: '2026-11-28T00:00:00.000Z',
+            sessionId: 's-print',
+            projectId: null,
+            type: 'run_started',
+            trigger: 'timer',
+            runId: 'run-timer',
+            inboxEventIds: ['evt-timer'],
+          })
+          fn({
+            seq: 2,
+            timestamp: '2026-11-28T00:00:01.000Z',
+            sessionId: 's-print',
+            projectId: null,
+            type: 'message_committed',
+            runId: 'run-timer',
+            messageId: 'm-timer',
+            message: { role: 'assistant', content: 'UNRELATED_TIMER_ANSWER' },
+          })
+          fn({
+            seq: 3,
+            timestamp: '2026-11-28T00:00:02.000Z',
+            sessionId: 's-print',
+            projectId: null,
+            type: 'run_finished',
+            runId: 'run-timer',
+            status: 'completed',
+          })
+          fn({
+            seq: 4,
+            timestamp: '2026-11-28T00:00:03.000Z',
+            sessionId: 's-print',
+            projectId: null,
+            type: 'run_started',
+            trigger: 'user',
+            runId: 'run-own',
+            inboxEventIds: ['evt-own'],
+          })
+          fn({
+            seq: 5,
+            timestamp: '2026-11-28T00:00:04.000Z',
+            sessionId: 's-print',
+            projectId: null,
+            type: 'message_committed',
+            runId: 'run-own',
+            messageId: 'm-own',
+            message: { role: 'assistant', content: 'OWN_ANSWER' },
+          })
+          fn({
+            seq: 6,
+            timestamp: '2026-11-28T00:00:05.000Z',
+            sessionId: 's-print',
+            projectId: null,
+            type: 'run_finished',
+            runId: 'run-own',
+            status: 'completed',
+          })
+          resolveSettled()
+        }
+      }, 5)
+      return { eventId: 'evt-own' }
+    },
+    waitForSettled: () => settledPromise,
+  } as unknown as import('../../src/cli/runtime-client.ts').CliSessionClient
+
+  const writes: string[] = []
+  const origWrite = process.stdout.write.bind(process.stdout)
+  ;(process.stdout as { write: typeof origWrite }).write = ((
+    chunk: unknown,
+  ) => {
+    writes.push(String(chunk))
+    return true
+  }) as typeof origWrite
+  try {
+    const code = await runPrintMode({
+      runtime: fakeRuntime,
+      session: fakeSession,
+      messages: ['hi'],
+      mode: 'text',
+    })
+    expect(code).toBe(0)
+    expect(writes.join('')).toBe('OWN_ANSWER\n')
+  } finally {
+    ;(process.stdout as { write: typeof origWrite }).write = origWrite
+  }
+})
+
+test('prepareInteractiveSession passes resume flag so /new preserves explicit model while /resume keeps session model', async () => {
+  const agentDir = tempDir('vela-new-resume-')
+  const rt = createRuntime({ agentDir, defaultModel: createFauxModel() })
+  cleanups.push(() => rt.dispose())
+  const observedResumeFlags: Array<boolean | undefined> = []
+
+  await prepareInteractiveSession(
+    rt,
+    {
+      runtime: rt,
+      cwd: agentDir,
+      sessionId: 's-fresh',
+      resume: false,
+      pick: false,
+      newSessionId: () => 's-next',
+      configure: async (_sess, opts) => {
+        observedResumeFlags.push(opts?.resume)
+        return true
+      },
+      onExit: async () => {},
+    },
+    's-new',
+    false,
+    false,
+  )
+  await rt.sessions.create({
+    id: 's-saved',
+    location: { environment: 'local', cwd: agentDir },
+  })
+  await prepareInteractiveSession(
+    rt,
+    {
+      runtime: rt,
+      cwd: agentDir,
+      sessionId: 's-saved',
+      resume: true,
+      pick: false,
+      newSessionId: () => 's-next',
+      configure: async (_sess, opts) => {
+        observedResumeFlags.push(opts?.resume)
+        return true
+      },
+      onExit: async () => {},
+    },
+    's-saved',
+    true,
+    false,
+  )
+  expect(observedResumeFlags).toEqual([false, true])
+})
+
+test('daemon abortActiveDiscovery awaits teardown before saveLark completes and larkSetup avoids channels.setEnabled disable', async () => {
+  const agentDir = tempDir('vela-disc-await-')
+  let releaseTeardown!: () => void
+  const teardownGate = new Promise<void>((r) => {
+    releaseTeardown = r
+  })
+  const handle = await startDaemonServer({
+    agentDir,
+    hostEnv: {},
+    enableWebhooks: false,
+    enableLark: true,
+    registerSignalHandlers: false,
+    onCreateLarkDiscoveryTransport: async () => makeMockLarkTransport(),
+    onVerifyLarkCredentials: async () => {},
+  })
+  cleanups.push(() => handle.close('test'))
+
+  writeFileSync(
+    join(agentDir, 'config.json'),
+    JSON.stringify({ lark: { appId: 'cli_a', appSecret: 'sec_a' } }),
+    { mode: 0o600 },
+  )
+  await handle.runtime.reloadConfig()
+
+  const clientA = await connectRuntime({ agentDir, autoStart: false })
+  const clientB = await connectRuntime({ agentDir, autoStart: false })
+  cleanups.push(
+    () => clientA.dispose(),
+    () => clientB.dispose(),
+  )
+
+  // Disconnect/abort in larkSetup with mock runtime must not leave channel_enabled:lark = false
+  await expect(
+    larkSetup({
+      runtime: clientA,
+      agentDir,
+      select: async (title) =>
+        title.includes('Continue') ? 'continue' : 'keep',
+      input: async () => 'x',
+      addNotice: () => {},
+      setSummary: () => {},
+      signal: AbortSignal.abort(),
+    }),
+  ).resolves.toBe(false)
+  const statuses = await clientB.channels.list()
+  expect(statuses.find((s) => s.name === 'lark')?.enabled).not.toBe(false)
+
+  // Async onBeforeCredentialWrite must settle before saveRuntimeLarkSetup resolves
+  let finished = false
+  const saving = saveRuntimeLarkSetup({
+    agentDir,
+    hostEnv: {},
+    runtime: handle.runtime,
+    input: { appId: 'cli_b', appSecret: 'sec_b' },
+    verifyCredentials: async () => {},
+    onBeforeCredentialWrite: async () => {
+      await teardownGate
+    },
+  }).then(() => {
+    finished = true
+  })
+  await new Promise((r) => setTimeout(r, 20))
+  expect(finished).toBe(false)
+  releaseTeardown()
+  await saving
+  expect(finished).toBe(true)
+})
+
+test('waiting_human turn awaits image steer blob flush and VELA_RECORD records auto-selected registry default', async () => {
+  const agentDir = tempDir('vela-wait-rec-')
+  const recordPath = join(agentDir, 'recorded.jsonl')
+  writeFileSync(
+    join(agentDir, 'auth.json'),
+    JSON.stringify({ custom: { type: 'api_key', key: 'k' } }),
+    { mode: 0o600 },
+  )
+  const rt = createRuntime({
+    agentDir,
+    providers: {
+      custom: {
+        models: [{ id: 'auto-m', name: 'auto-m' }],
+        authSource: (c) => (c ? 'api_key' : undefined),
+        createModel: () =>
+          createFauxModel({
+            responses: [
+              fauxToolCall('bash', { command: 'echo hi' }),
+              fauxText('recorded ok'),
+            ],
+          }),
+      },
+    },
+    toolApprovalCheck: async () => ({
+      requireApproval: true,
+      summary: 'Needs manual approval',
+    }),
+  })
+  cleanups.push(() => rt.dispose())
+  const sess = await rt.sessions.create({
+    location: { environment: 'local', cwd: agentDir },
+  })
+  await rt.sessions.configure(sess.id, { recordPath })
+  await rt.prompt(sess.id, { text: 'run bash' })
+  await rt.waitForIdle(sess.id)
+  expect(existsSync(recordPath)).toBe(true)
+  expect(readFileSync(recordPath, 'utf8').length).toBeGreaterThan(0)
 })

@@ -91,25 +91,33 @@ export async function larkSetup(host: Host): Promise<boolean> {
     return false
   }
   let connection: Connection | undefined
-  let pausedDaemonLark = false
   try {
+    let group: { chatId: string; name?: string } | undefined
     if (host.runtime && !host.connect) {
-      const statuses = await host.runtime.channels.list().catch(() => [])
-      const lark = statuses.find((s) => s.name === 'lark')
-      if (lark?.enabled) {
-        await host.runtime.channels.setEnabled('lark', false).catch(() => {})
-        pausedDaemonLark = true
+      if (appId || secretInput) {
+        await host.runtime.settings.saveLark({
+          appId: id,
+          ...(secretInput ? { appSecret: secret } : {}),
+        })
       }
+      host.addNotice(
+        'Credentials verified. Mention the bot in the group to enable (Ctrl+C twice to cancel).',
+      )
+      group = await host.runtime.settings.discoverLarkGroup({
+        signal: host.signal,
+      })
+      if (!group) return false
+    } else {
+      connection = await (host.connect ?? connectLarkSetup)(
+        id,
+        secret,
+        host.signal,
+      )
+      host.addNotice(
+        'Credentials verified. Mention the bot in the group to enable (Ctrl+C twice to cancel).',
+      )
+      group = await connection.waitForMention()
     }
-    connection = await (host.connect ?? connectLarkSetup)(
-      id,
-      secret,
-      host.signal,
-    )
-    host.addNotice(
-      'Credentials verified. Mention the bot in the group to enable (Ctrl+C twice to cancel).',
-    )
-    const group = await connection.waitForMention()
     const label = group.name ? `${group.name} (${group.chatId})` : group.chatId
     const confirmed = await host.select(
       `Enable ${label}? Every member of an enabled group has full access to Vela tools.`,
@@ -120,14 +128,18 @@ export async function larkSetup(host: Host): Promise<boolean> {
     )
     if (confirmed !== 'yes') return false
     try {
-      await saveLarkSection({
-        agentDir: host.agentDir,
-        ...(appId ? { appId: id } : {}),
-        ...(secretInput ? { appSecret: secret } : {}),
-        addChat: group.chatId,
-        env: process.env,
-      })
-      await host.runtime?.reloadConfig().catch(() => {})
+      if (host.runtime && !host.connect) {
+        await host.runtime.settings.confirmLarkGroup(group.chatId)
+      } else {
+        await saveLarkSection({
+          agentDir: host.agentDir,
+          ...(appId ? { appId: id } : {}),
+          ...(secretInput ? { appSecret: secret } : {}),
+          addChat: group.chatId,
+          env: process.env,
+        })
+        await host.runtime?.reloadConfig().catch(() => {})
+      }
     } catch (error) {
       host.addNotice(
         (error instanceof Error ? error.message : String(error)).replaceAll(
@@ -139,6 +151,9 @@ export async function larkSetup(host: Host): Promise<boolean> {
       return false
     }
     try {
+      if (!connection) {
+        connection = await connectLarkSetup(id, secret, host.signal)
+      }
       await connection.send(
         group.chatId,
         'Vela is connected to this group; start `vela daemon` (for example `vela daemon start` or `vela daemon run`, see docs/deploy.md) and @ me.',
@@ -182,9 +197,5 @@ export async function larkSetup(host: Host): Promise<boolean> {
     return false
   } finally {
     connection?.stop()
-    if (pausedDaemonLark && host.runtime) {
-      await host.runtime.channels.setEnabled('lark', true).catch(() => {})
-      await host.runtime.reloadConfig().catch(() => {})
-    }
   }
 }

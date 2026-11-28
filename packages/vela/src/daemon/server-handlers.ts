@@ -47,6 +47,10 @@ export function createDaemonHandlers(deps: {
   requestClose: (reason: string) => void
   nextPromptId: () => number
   sessionOverrideOwners: Map<string, ConnectedClient>
+  serializeSessionConfigure: <T>(
+    sessionId: string,
+    fn: () => Promise<T>,
+  ) => Promise<T>
 }): Record<string, DaemonRpcHandler> {
   const {
     runtime,
@@ -57,6 +61,7 @@ export function createDaemonHandlers(deps: {
     requestClose,
     nextPromptId,
     sessionOverrideOwners,
+    serializeSessionConfigure,
   } = deps
 
   return {
@@ -101,35 +106,39 @@ export function createDaemonHandlers(deps: {
     'sessions.get': (p) => runtime.sessions.get(p.id),
     'sessions.create': (p) => runtime.sessions.create(p),
     'sessions.rename': (p) => runtime.sessions.rename(p.id, p.name),
-    'sessions.delete': async (p) => {
-      const prevOwner = sessionOverrideOwners.get(p.id)
-      if (prevOwner) {
-        prevOwner.configuredSessions.delete(p.id)
-        sessionOverrideOwners.delete(p.id)
-      }
-      return runtime.sessions.delete(p.id)
-    },
+    'sessions.delete': (p) =>
+      serializeSessionConfigure(p.id, async () => {
+        const prevOwner = sessionOverrideOwners.get(p.id)
+        if (prevOwner) {
+          prevOwner.configuredSessions.delete(p.id)
+          sessionOverrideOwners.delete(p.id)
+        }
+        return runtime.sessions.delete(p.id)
+      }),
     'sessions.reset': (p) => runtime.sessions.reset(p.id),
     'sessions.status': (p) => runtime.sessions.status(p.id),
     'sessions.messages': (p) => runtime.sessions.messages(p),
-    'sessions.configure': async (p, client) => {
-      if (client.isDisconnected()) return
-      const empty = !p.override || Object.keys(p.override).length === 0
-      if (empty) {
-        if (sessionOverrideOwners.get(p.sessionId) === client) {
+    'sessions.configure': (p, client) =>
+      serializeSessionConfigure(p.sessionId, async () => {
+        const empty = !p.override || Object.keys(p.override).length === 0
+        if (empty) {
+          if (sessionOverrideOwners.get(p.sessionId) !== client) {
+            return
+          }
           sessionOverrideOwners.delete(p.sessionId)
           client.configuredSessions.delete(p.sessionId)
+          await runtime.sessions.configure(p.sessionId, p.override)
+          return
         }
-      } else {
+        if (client.isDisconnected()) return
         const prevOwner = sessionOverrideOwners.get(p.sessionId)
         if (prevOwner && prevOwner !== client) {
           prevOwner.configuredSessions.delete(p.sessionId)
         }
         sessionOverrideOwners.set(p.sessionId, client)
         client.configuredSessions.add(p.sessionId)
-      }
-      await runtime.sessions.configure(p.sessionId, p.override)
-    },
+        await runtime.sessions.configure(p.sessionId, p.override)
+      }),
     'sessions.setModel': (p) =>
       runtime.sessions.setModel(p.sessionId, p.modelRef),
     'sessions.setThinkingLevel': (p) =>

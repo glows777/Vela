@@ -345,8 +345,8 @@ export async function steerSessionInRuntime(params: {
   const driver = drivers.get(session.driver)
   if (
     activeWorkers.has(sessionId) &&
-    driver?.capabilities.steer &&
-    driver.steer
+    (driver?.capabilities?.steer ?? Boolean(driver?.steer)) &&
+    driver?.steer
   ) {
     resetStreak()
     if ((await driver.steer(sessionId, text, images)) !== false) return true

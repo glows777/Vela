@@ -42,6 +42,7 @@ import {
 } from './runtime-session-setup.ts'
 import {
   buildSteeringMessage,
+  commitSteeredInboxInTx,
   flushSessionSteering,
   takeSessionSteering,
 } from './runtime-steering.ts'
@@ -216,20 +217,29 @@ export function createVelaAgentDriver(
     state.activeAbort.set(request.sessionId, controller)
     state.activeSteering.set(request.sessionId, [])
     const deferredSteering: ModelMessage[] = []
+    const pendingCommitSteering: ModelMessage[] = []
     let waitingHuman = false
-    const flushSteering = (wake: boolean): Promise<void> =>
-      flushSessionSteering({
-        db: options.db,
-        blobs: options.blobs,
-        sessionId: request.sessionId,
-        projectId: request.projectId,
-        activeSteering: state.activeSteering,
-        activeSteeringInboxIds: state.activeSteeringInboxIds,
-        deferredSteering,
-        wake,
-        shouldWakeSession: !waitingHuman && !state.disposed,
-        wakeSession: request.wakeSession ?? options.wakeSession,
-      })
+    let flushChain: Promise<void> = Promise.resolve()
+    const flushSteering = (wake: boolean): Promise<void> => {
+      flushChain = flushChain
+        .catch(() => {})
+        .then(() =>
+          flushSessionSteering({
+            db: options.db,
+            blobs: options.blobs,
+            sessionId: request.sessionId,
+            projectId: request.projectId,
+            activeSteering: state.activeSteering,
+            activeSteeringInboxIds: state.activeSteeringInboxIds,
+            deferredSteering,
+            pendingCommitSteering,
+            wake,
+            shouldWakeSession: !waitingHuman && !state.disposed,
+            wakeSession: request.wakeSession ?? options.wakeSession,
+          }),
+        )
+      return flushChain
+    }
 
     let releasedClaim = false
     let claim:
@@ -612,11 +622,18 @@ export function createVelaAgentDriver(
           takeSessionSteering({
             db: options.db,
             sessionId: request.sessionId,
-            runId: request.runId,
             activeSteering: state.activeSteering,
             activeSteeringInboxIds: state.activeSteeringInboxIds,
+            pendingCommitSteering,
           }),
         onMessageCommittedInTx: (messageId, message) => {
+          commitSteeredInboxInTx({
+            db: options.db,
+            message,
+            runId: request.runId,
+            activeSteeringInboxIds: state.activeSteeringInboxIds,
+            pendingCommitSteering,
+          })
           request.onEvent({
             type: 'message_committed',
             runId: request.runId,
@@ -659,7 +676,7 @@ export function createVelaAgentDriver(
       )
       if (result.reason === 'waiting_human' || waitingApproval) {
         waitingHuman = true
-        flushSteering(true)
+        await flushSteering(true)
         return {
           status: 'waiting_human',
           replyText: assistantText(lastAssistant),
@@ -667,7 +684,7 @@ export function createVelaAgentDriver(
           committedInTx,
         }
       }
-      flushSteering(!controller.signal.aborted)
+      await flushSteering(!controller.signal.aborted)
 
       await runPostTurnCompaction({
         enabled: contextManager.autoCompaction && !isSilent && !state.disposed,

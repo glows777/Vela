@@ -18,6 +18,10 @@ import {
   stopDaemon,
 } from '../../../src/daemon/index.ts'
 import {
+  ensurePrivateSocketDir,
+  legacyFallbackSocketPath,
+} from '../../../src/daemon/paths.ts'
+import {
   createNdjsonParser,
   type DaemonWireMessage,
   decodeIpcValue,
@@ -605,4 +609,220 @@ test('stopDaemon never signals an unrelated live PID from a stale daemon.pid fil
   expect(existsSync(paths.pidPath)).toBe(false)
   // Sleeper process must still be alive
   expect(() => process.kill(sleeper.pid!, 0)).not.toThrow()
+})
+
+test('sessions.configure serializes ownership so client A disconnect or empty release cannot wipe client B override', async () => {
+  const agentDir = makeShortTempDir('vd-cfg-race-')
+  const handle = await startDaemonServer({
+    agentDir,
+    hostEnv: {},
+    enableWebhooks: false,
+    enableLark: false,
+    registerSignalHandlers: false,
+  })
+  cleanupTasks.push(() => handle.close('test'))
+
+  const clientA = await connectRuntime({ agentDir, autoStart: false })
+  const clientB = await connectRuntime({ agentDir, autoStart: false })
+  cleanupTasks.push(() => clientB.dispose())
+
+  const session = await clientA.sessions.create({
+    location: { environment: 'local', cwd: agentDir },
+  })
+  await clientA.sessions.configure(session.id, { noTools: true })
+  await clientB.sessions.configure(session.id, { noTools: true })
+
+  // Even an explicit empty configure from A (no longer owner) or A disconnect leaves B's { noTools: true } intact.
+  await clientA.sessions.configure(session.id, {})
+  await clientA.dispose()
+  await new Promise((r) => setTimeout(r, 30))
+
+  const inspected = await clientB.sessions.inspect(session.id, {
+    includeEntries: false,
+  })
+  expect(inspected.activeTools).toEqual([])
+})
+
+test('daemon listen failure on EADDRINUSE never unlinks another live daemon socket', async () => {
+  const agentDirA = makeShortTempDir('vd-eaddr-a-')
+  const agentDirB = makeShortTempDir('vd-eaddr-b-')
+  const sharedSocket = join(agentDirA, 'shared.sock')
+
+  const results = await Promise.allSettled([
+    startDaemonServer({
+      agentDir: agentDirA,
+      socketPath: sharedSocket,
+      hostEnv: {},
+      enableWebhooks: false,
+      enableLark: false,
+      registerSignalHandlers: false,
+    }),
+    startDaemonServer({
+      agentDir: agentDirB,
+      socketPath: sharedSocket,
+      hostEnv: {},
+      enableWebhooks: false,
+      enableLark: false,
+      registerSignalHandlers: false,
+    }),
+  ])
+
+  const fulfilled = results.filter(
+    (r): r is PromiseFulfilledResult<DaemonServerHandle> =>
+      r.status === 'fulfilled',
+  )
+  for (const r of fulfilled) cleanupTasks.push(() => r.value.close('test'))
+  const rejected = results.filter(
+    (r): r is PromiseRejectedResult => r.status === 'rejected',
+  )
+  expect(fulfilled).toHaveLength(1)
+  expect(rejected).toHaveLength(1)
+
+  expect(existsSync(sharedSocket)).toBe(true)
+  const winnerAgentDir = fulfilled[0]!.value.agentDir
+  const client = await connectRuntime({
+    agentDir: winnerAgentDir,
+    socketPath: sharedSocket,
+    autoStart: false,
+  })
+  cleanupTasks.push(() => client.dispose())
+  expect(await client.models()).toEqual([])
+})
+
+test('daemon startDaemonServer works when process.umask throws ERR_WORKER_UNSUPPORTED_OPERATION (worker_threads)', async () => {
+  const agentDir = makeShortTempDir('vd-worker-umask-')
+  const origUmask = process.umask
+  ;(process as { umask: typeof origUmask }).umask = (() => {
+    throw Object.assign(new Error('process.umask is unsupported in workers'), {
+      code: 'ERR_WORKER_UNSUPPORTED_OPERATION',
+    })
+  }) as typeof origUmask
+
+  try {
+    const handle = await startDaemonServer({
+      agentDir,
+      hostEnv: {},
+      enableWebhooks: false,
+      enableLark: false,
+      registerSignalHandlers: false,
+    })
+    cleanupTasks.push(() => handle.close('test'))
+    if (process.platform !== 'win32') {
+      expect(statSync(handle.socketPath).mode & 0o777).toBe(0o600)
+    }
+  } finally {
+    ;(process as { umask: typeof origUmask }).umask = origUmask
+  }
+})
+
+test('daemon shutdown rejects late connections arriving during drain and force-exits on second SIGTERM', async () => {
+  const { connect } = await import('node:net')
+  const { spawn } = await import('node:child_process')
+  const agentDir = makeShortTempDir('vd-drain-sig-')
+  const handle = await startDaemonServer({
+    agentDir,
+    hostEnv: {},
+    enableWebhooks: false,
+    enableLark: false,
+    registerSignalHandlers: false,
+  })
+
+  const closingPromise = handle.close('test-drain')
+  const lateClosed = await new Promise<boolean>((resolve) => {
+    const sock = connect(handle.socketPath)
+    sock.on('error', () => resolve(true))
+    sock.on('close', () => resolve(true))
+    setTimeout(() => {
+      sock.destroy()
+      resolve(false)
+    }, 500)
+  })
+  await closingPromise
+  expect(lateClosed).toBe(true)
+
+  // Verify second SIGTERM interrupts a stalled daemon cleanup hook cleanly.
+  const childScript = join(makeShortTempDir('vd-sig2-'), 'stall-daemon.ts')
+  const childDir = makeShortTempDir('vd-sig2-dir-')
+  writeFileSync(
+    childScript,
+    `import { startDaemonServer } from ${JSON.stringify(join(process.cwd(), 'packages/vela/src/daemon/server.ts'))}
+const h = await startDaemonServer({ agentDir: ${JSON.stringify(childDir)}, hostEnv: {}, enableWebhooks: false, enableLark: false })
+h.runtime.dispose = () => new Promise(() => { const keep = setInterval(() => {}, 10_000); void keep })
+process.stdout.write('READY\\n')
+`,
+  )
+  const child = spawn(process.execPath, ['run', childScript], {
+    cwd: process.cwd(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let childErr = ''
+  child.stderr?.on('data', (d: Buffer) => {
+    childErr += d.toString('utf8')
+  })
+  cleanupTasks.push(() => {
+    try {
+      child.kill('SIGKILL')
+    } catch {}
+  })
+  const exitPromise = new Promise<number | null>((resolve) => {
+    child.once('exit', (code) => resolve(code))
+    setTimeout(() => resolve(-1), 4000)
+  })
+  await new Promise<void>((resolve, reject) => {
+    let buf = ''
+    child.stdout?.on('data', (chunk: Buffer) => {
+      buf += chunk.toString('utf8')
+      if (buf.includes('READY')) resolve()
+    })
+    child.once('exit', (code) =>
+      reject(new Error(`early exit ${code}: ${childErr}`)),
+    )
+    setTimeout(() => reject(new Error(`ready timeout: ${childErr}`)), 5000)
+  })
+  child.kill('SIGTERM')
+  await new Promise((r) => setTimeout(r, 120))
+  child.kill('SIGTERM')
+  const exitCode = await exitPromise
+  expect({ exitCode, childErr }).toEqual({
+    exitCode: 143,
+    childErr: expect.any(String),
+  })
+})
+
+test('launcher discovers, reports, stops, and upgrades a live daemon still using legacy fallback socket path', async () => {
+  if (process.platform === 'win32') return
+  const shortBase = makeShortTempDir('vd-up-')
+  const longDir = join(shortBase, 'l'.repeat(110))
+  mkdirSync(longDir, { recursive: true, mode: 0o700 })
+  const newPaths = resolveDaemonPaths(longDir)
+  const legacySock = legacyFallbackSocketPath(longDir)!
+  expect(legacySock).toBeDefined()
+  expect(legacySock).not.toBe(newPaths.socketPath)
+  cleanupTasks.push(() => rmSync(legacySock, { force: true }))
+
+  const legacyDaemon = await startDaemonServer({
+    agentDir: longDir,
+    socketPath: legacySock,
+    hostEnv: {},
+    enableWebhooks: false,
+    enableLark: false,
+    registerSignalHandlers: false,
+  })
+  cleanupTasks.push(() => legacyDaemon.close('test').catch(() => {}))
+
+  const status = await getDaemonStatus({ agentDir: longDir, hostEnv: {} })
+  expect(status.running).toBe(true)
+  expect(status.socketPath).toBe(legacySock)
+
+  const stopped = await stopDaemon({ agentDir: longDir, hostEnv: {} })
+  expect(stopped).toBe(true)
+  expect(existsSync(legacySock)).toBe(false)
+})
+
+test('ensurePrivateSocketDir validates ownership before fchmod and refuses symlink fallback dir', () => {
+  if (process.platform === 'win32') return
+  const base = makeShortTempDir('vd-priv-dir-')
+  const customSock = join(base, 'sub', 'vela.sock')
+  ensurePrivateSocketDir(customSock)
+  expect(existsSync(join(base, 'sub'))).toBe(true)
 })

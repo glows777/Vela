@@ -466,8 +466,9 @@ test('Runtime memory stays host-owned across two projects without loading projec
   const bDir = join(dir.path, 'B')
   const agentDir = join(dir.path, 'user')
   mkdirSync(agentDir)
+  const ownerConfigPath = join(agentDir, 'config.json')
   writeFileSync(
-    join(agentDir, 'config.json'),
+    ownerConfigPath,
     JSON.stringify({
       memory: { dream: false },
     }),
@@ -481,40 +482,118 @@ test('Runtime memory stays host-owned across two projects without loading projec
       }),
     )
   }
-  const runtime = createRuntime({
+  const backdateDreamTurns = () => {
+    const db = openDatabase({ path: join(agentDir, 'vela.db') })
+    try {
+      const staleTime = Date.now() - 3 * 24 * 3600_000
+      const rows = db.all<{ key: string; value_json: string }>(
+        "SELECT key, value_json FROM kv_meta WHERE key LIKE 'memory_dream:%'",
+      )
+      for (const row of rows) {
+        const parsed = JSON.parse(row.value_json) as {
+          pendingRefs?: Array<{ time?: number }>
+        }
+        if (Array.isArray(parsed.pendingRefs)) {
+          for (const entry of parsed.pendingRefs) {
+            entry.time = staleTime
+          }
+          db.run(
+            'UPDATE kv_meta SET value_json = ? WHERE key = ?',
+            JSON.stringify(parsed),
+            row.key,
+          )
+        }
+      }
+    } finally {
+      db.close()
+    }
+  }
+  const countDreamRuns = (): number => {
+    const db = openDatabase({ path: join(agentDir, 'vela.db') })
+    try {
+      const rows = db.all<{ value_json: string }>(
+        "SELECT value_json FROM kv_meta WHERE key LIKE 'memory_dream:%'",
+      )
+      let runs = 0
+      for (const row of rows) {
+        const parsed = JSON.parse(row.value_json) as { lastRun?: unknown }
+        if (parsed.lastRun) runs += 1
+      }
+      return runs
+    } finally {
+      db.close()
+    }
+  }
+
+  const offModel = createFauxModel({
+    responses: [fauxText('A'), fauxText('B'), fauxText('B again')],
+  })
+  const offRuntime = createRuntime({
     agentDir,
-    defaultModel: createFauxModel({
-      responses: [fauxText('A'), fauxText('B'), fauxText('B again')],
-    }),
+    defaultModel: offModel,
     hostEnv: {},
     mcp: false,
   })
   try {
-    await runtime.ready()
-    await runtime.trust.approve(aDir, true)
-    await runtime.trust.approve(bDir, true)
-    const a = await runtime.sessions.create({
+    await offRuntime.ready()
+    await offRuntime.trust.approve(aDir, true)
+    await offRuntime.trust.approve(bDir, true)
+    const a = await offRuntime.sessions.create({
       location: { environment: 'local', cwd: aDir },
     })
-    const b = await runtime.sessions.create({
+    const b = await offRuntime.sessions.create({
       location: { environment: 'local', cwd: bDir },
     })
-    await runtime.prompt(a.id, { text: 'A' })
-    await runtime.waitForIdle(a.id)
-    await runtime.prompt(b.id, { text: 'B' })
-    await runtime.waitForIdle(b.id)
-    await runtime.prompt(b.id, { text: 'B remains active' })
-    await runtime.waitForIdle(b.id)
-    const inspectedB = await runtime.sessions.inspect(b.id)
+    await offRuntime.prompt(a.id, { text: 'A' })
+    await offRuntime.waitForIdle(a.id)
+    await offRuntime.prompt(b.id, { text: 'B' })
+    await offRuntime.waitForIdle(b.id)
+    backdateDreamTurns()
+    await offRuntime.prompt(b.id, { text: 'B remains active' })
+    await offRuntime.waitForIdle(b.id)
+    const inspectedB = await offRuntime.sessions.inspect(b.id)
     expect(inspectedB.activeTools).toContain('memory')
     expect(inspectedB.extensionErrors).toEqual([])
-    expect(
-      JSON.parse(readFileSync(join(agentDir, 'config.json'), 'utf8')).memory,
-    ).toEqual({ dream: false })
   } finally {
-    await runtime.dispose()
+    await offRuntime.dispose()
+  }
+  expect(offModel.calls).toHaveLength(3)
+  expect(countDreamRuns()).toBe(0)
+
+  // Control: enabling memory.dream in the owner config causes the backdated turn to dream.
+  writeFileSync(
+    ownerConfigPath,
+    JSON.stringify({
+      memory: { dream: true },
+    }),
+  )
+  const onModel = createFauxModel({
+    responses: [
+      fauxText('A enabled'),
+      fauxText(JSON.stringify({ summary: 'Consolidated', actions: [] })),
+    ],
+  })
+  const onRuntime = createRuntime({
+    agentDir,
+    defaultModel: onModel,
+    hostEnv: {},
+    mcp: false,
+  })
+  try {
+    await onRuntime.ready()
+    const a2 = await onRuntime.sessions.create({
+      location: { environment: 'local', cwd: aDir },
+    })
+    await onRuntime.prompt(a2.id, { text: 'trigger dream check' })
+    await onRuntime.waitForIdle(a2.id)
+    for (let i = 0; i < 50 && onModel.calls.length < 2; i++) {
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  } finally {
+    await onRuntime.dispose()
     dir.cleanup()
   }
+  expect(onModel.calls.length).toBeGreaterThanOrEqual(2)
 })
 
 test('preparing a same-cwd nonlocal target cannot inherit local project authority or prematurely replace its tools', async () => {

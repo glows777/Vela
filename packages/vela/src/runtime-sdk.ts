@@ -8,7 +8,7 @@ import {
   type VelaSettings,
 } from './config/index.ts'
 import { registerRuntimeSettingsHooksResolver } from './daemon/settings-discovery.ts'
-import { openDatabase, withReadonlyDb } from './db/index.ts'
+import { openDatabase } from './db/index.ts'
 import { savedTrust, saveTrust } from './db/trust.ts'
 import { defaultAgentDir } from './driver/config/paths.ts'
 import { createVelaAgentDriver } from './driver/runtime-adapter.ts'
@@ -37,6 +37,7 @@ import {
   createSpecialModelResolver,
   isLarkExtensionDisabled,
   mergeExtensionConfig,
+  seedEphemeralDbFromOwner,
 } from './runtime-sdk-helpers.ts'
 import type {
   CreateRuntimeOptions,
@@ -89,44 +90,7 @@ export function createRuntime(
       path: isEphemeralDb ? ':memory:' : join(agentDir, 'vela.db'),
     })
   if (isEphemeralDb && !isEphemeral && !options.db) {
-    try {
-      withReadonlyDb(join(agentDir, 'vela.db'), (ownerDb) => {
-        const trustRows = ownerDb.all<{
-          path: string
-          trusted: number
-          updated_at: string
-        }>('SELECT path, trusted, updated_at FROM trusted_paths')
-        for (const r of trustRows) {
-          db.run(
-            'INSERT OR REPLACE INTO trusted_paths (path, trusted, updated_at) VALUES (?, ?, ?)',
-            r.path,
-            r.trusted,
-            r.updated_at,
-          )
-        }
-        const oauthRows = ownerDb.all<{
-          provider: string
-          client_id: string
-          host_id: string | null
-          subject: string | null
-          updated_at: string
-        }>(
-          'SELECT provider, client_id, host_id, subject, updated_at FROM oauth_registrations',
-        )
-        for (const r of oauthRows) {
-          db.run(
-            'INSERT OR REPLACE INTO oauth_registrations (provider, client_id, host_id, subject, updated_at) VALUES (?, ?, ?, ?, ?)',
-            r.provider,
-            r.client_id,
-            r.host_id,
-            r.subject,
-            r.updated_at,
-          )
-        }
-      })
-    } catch {
-      /* ignore unreadable owner db when seeding ephemeral state */
-    }
+    seedEphemeralDbFromOwner(db, agentDir)
   }
 
   try {
@@ -191,25 +155,9 @@ export function createRuntime(
     if (hasLegacyLarkDisabled) {
       setChannelEnabledInDb(db, 'lark', false)
     }
-    const readInitialCredentials = () => {
-      if (isEphemeral) return {}
-      try {
-        const disk = fileCredentialStore(authPath)
-        const out: Record<string, NonNullable<ReturnType<typeof disk.get>>> = {}
-        for (const provider of disk.list()) {
-          const cred = disk.get(provider)
-          if (cred) out[provider] = cred
-        }
-        return out
-      } catch {
-        return {}
-      }
-    }
     const credentials =
       options.credentials ??
-      (isEphemeralDb
-        ? memoryCredentialStore(readInitialCredentials())
-        : fileCredentialStore(authPath))
+      (isEphemeral ? memoryCredentialStore() : fileCredentialStore(authPath))
     const registrations = new SqliteOAuthRegistrationStore(db)
     const models = new ModelRegistry(
       initial.providers,
@@ -249,7 +197,32 @@ export function createRuntime(
       drivers: options.drivers,
       ignoredChannels: options.ignoredChannels,
       onRestartSession: (sid) => closeDriverSession?.(sid),
-      trySteerInboxEvent: (sid, inboxEventId, text, images) => {
+      trySteerInboxEvent: async (sid, inboxEventId, text, images) => {
+        const sessionRow = db.get<{ driver: string | null }>(
+          'SELECT driver FROM sessions WHERE id = ?',
+          sid,
+        )
+        const driverName = sessionRow?.driver ?? 'vela'
+        if (driverName !== 'vela') {
+          const accepted = await engine.steerSession(sid, text, images, true)
+          if (!accepted) return false
+          const now = new Date().toISOString()
+          db.transaction(() => {
+            db.run(
+              `UPDATE inbox_events
+               SET status = 'done', processed_at = COALESCE(processed_at, ?)
+               WHERE id = ? AND status = 'pending'`,
+              now,
+              inboxEventId,
+            )
+            db.run(
+              'UPDATE sessions SET followup_streak = 0, updated_at = ? WHERE id = ?',
+              now,
+              sid,
+            )
+          })
+          return true
+        }
         if (!trySteerDriverInboxEvent?.(sid, inboxEventId, text, images)) {
           return false
         }
@@ -507,7 +480,20 @@ export function createRuntime(
         getByCwd: async (cwd) => engine.projects.getByCwd(cwd),
         create: async (input) => engine.projects.create(input),
         update: async (id, patch) => engine.projects.update(id, patch),
-        remove: async (id, opts) => engine.projects.remove(id, opts),
+        remove: async (id, opts) => {
+          const ownedIds = opts?.deleteSessions
+            ? engine.sessions
+                .list({ projectId: id, includeArchived: true })
+                .map((s) => s.id)
+            : []
+          const removed = engine.projects.remove(id, opts)
+          if (removed && ownedIds.length > 0) {
+            for (const sid of ownedIds) {
+              await velaDriver.control.closeSession(sid).catch(() => {})
+            }
+          }
+          return removed
+        },
       },
       trust: {
         check: async (location) =>

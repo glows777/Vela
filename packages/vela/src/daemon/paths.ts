@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, rmSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  rmSync,
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 import { canonicalLocalPath } from '../db/trust.ts'
 
@@ -50,30 +58,42 @@ export function ensurePrivateSocketDir(socketPath: string): void {
     return
   }
   const uid = currentPosixUid()
-  const inspect = () => {
-    const st = lstatSync(dir)
-    if (st.isSymbolicLink() || !st.isDirectory()) {
-      throw new Error(
-        `Refusing to use non-directory fallback socket dir: ${dir}`,
-      )
-    }
-    if (uid !== undefined && st.uid !== uid) {
-      throw new Error(
-        `Refusing to use fallback socket dir ${dir} owned by uid ${st.uid}`,
-      )
-    }
-    if ((st.mode & 0o777) !== 0o700) {
-      chmodSync(dir, 0o700)
-    }
-  }
   try {
-    inspect()
+    mkdirSync(dir, { mode: 0o700 })
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    chmodSync(dir, 0o700)
-    inspect()
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
   }
+  const st = lstatSync(dir)
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw new Error(`Refusing to use non-directory fallback socket dir: ${dir}`)
+  }
+  if (uid !== undefined && st.uid !== uid) {
+    throw new Error(
+      `Refusing to use fallback socket dir ${dir} owned by uid ${st.uid}`,
+    )
+  }
+  if ((st.mode & 0o777) !== 0o700) {
+    const flags =
+      constants.O_RDONLY |
+      (constants.O_NOFOLLOW ?? 0) |
+      (constants.O_DIRECTORY ?? 0)
+    const fd = openSync(dir, flags)
+    try {
+      fchmodSync(fd, 0o700)
+    } finally {
+      closeSync(fd)
+    }
+  }
+}
+
+export function legacyFallbackSocketPath(agentDir: string): string | undefined {
+  if (process.platform === 'win32') return undefined
+  const dir = canonicalLocalPath(agentDir)
+  const preferred = join(dir, 'vela.sock')
+  if (Buffer.byteLength(preferred) <= POSIX_SOCKET_MAX_BYTES) {
+    return undefined
+  }
+  return join('/tmp', `vela-${shortDirHash(dir)}.sock`)
 }
 
 export function daemonOwnerLockPath(agentDir: string): string {

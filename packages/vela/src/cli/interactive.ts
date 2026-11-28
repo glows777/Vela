@@ -246,8 +246,15 @@ export class InteractiveMode {
           session: this.session,
           agentDir: options.agentDir,
           projectSettingsPath: options.projectSettingsPath,
-          select: (title, choices, selected) =>
-            this.select(title, choices, selected, this.setupAbort.signal),
+          select: (title, choices, selected, signal) =>
+            this.select(
+              title,
+              choices,
+              selected,
+              signal
+                ? AbortSignal.any([signal, this.setupAbort.signal])
+                : this.setupAbort.signal,
+            ),
           input: (title, placeholder, signal, secret, allowEmpty) =>
             this.input(
               title,

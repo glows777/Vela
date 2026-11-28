@@ -177,9 +177,12 @@ function createSocketRuntimeClient(
   const channelListeners = new Set<ChannelRuntimeEventListener>()
   const activeLogins = new Map<number, ActiveClientLogin>()
 
+  const disconnectError = (message: string): Error =>
+    Object.assign(new Error(message), { code: 'VELA_DAEMON_DISCONNECTED' })
+
   const writeMsg = (msg: DaemonWireMessage) => {
     if (closed || socket.destroyed || !socket.writable) {
-      throw new Error('Daemon client connection is closed')
+      throw disconnectError('Daemon client connection is closed')
     }
     socket.write(encodeWireLine(msg))
   }
@@ -187,7 +190,7 @@ function createSocketRuntimeClient(
   const rpc = <T>(method: string, params?: unknown): Promise<T> => {
     if (closed) {
       return Promise.reject(
-        new Error('Daemon runtime client has been disposed'),
+        disconnectError('Daemon runtime client has been disposed'),
       )
     }
     const id = nextReqId++

@@ -266,30 +266,58 @@ export function mergeSessionMessages(
 export function reconcileLocalMessages(
   existingList: Message[],
   incoming: Message[],
+  liveSinceReadStart?: ReadonlySet<string>,
 ): Message[] {
   if (incoming.length === 0) {
-    return existingList.filter((m) => m.id.startsWith('pending:'))
+    return existingList.filter(
+      (m) => m.id.startsWith('pending:') || liveSinceReadStart?.has(m.id),
+    )
   }
   const incomingClientIds = new Set(
     incoming
       .map((m) => m.clientMessageId)
       .filter((id): id is string => Boolean(id)),
   )
-  const pendingUnmatched = existingList.filter(
-    (m) =>
-      m.id.startsWith('pending:') &&
-      (!m.clientMessageId || !incomingClientIds.has(m.clientMessageId)),
+  const existingNonPendingIds = new Set(
+    existingList.filter((m) => !m.id.startsWith('pending:')).map((m) => m.id),
   )
+  const newIncomingUsers = incoming.filter(
+    (m) =>
+      m.role === 'user' &&
+      !m.clientMessageId &&
+      !existingNonPendingIds.has(m.id),
+  )
+  const usedUserIndices = new Set<number>()
+  const pendingUnmatched: Message[] = []
+  for (const m of existingList) {
+    if (!m.id.startsWith('pending:')) continue
+    if (m.clientMessageId && incomingClientIds.has(m.clientMessageId)) {
+      continue
+    }
+    if (m.role === 'user') {
+      const trimmed = m.text.trim()
+      const idx = newIncomingUsers.findIndex(
+        (inc, i) =>
+          !usedUserIndices.has(i) &&
+          inc.text.trim() === trimmed &&
+          inc.createdAt >= m.createdAt,
+      )
+      if (idx !== -1) {
+        usedUserIndices.add(idx)
+        continue
+      }
+    }
+    pendingUnmatched.push(m)
+  }
   const latestIncomingTime = incoming.at(-1)?.createdAt
   const incomingIds = new Set(incoming.map((m) => m.id))
-  const newerLive = latestIncomingTime
-    ? existingList.filter(
-        (m) =>
-          !m.id.startsWith('pending:') &&
-          m.createdAt > latestIncomingTime &&
-          !incomingIds.has(m.id),
-      )
-    : []
+  const newerLive = existingList.filter(
+    (m) =>
+      !m.id.startsWith('pending:') &&
+      !incomingIds.has(m.id) &&
+      (liveSinceReadStart?.has(m.id) ||
+        (latestIncomingTime !== undefined && m.createdAt > latestIncomingTime)),
+  )
   return byTime([...incoming, ...pendingUnmatched, ...newerLive])
 }
 

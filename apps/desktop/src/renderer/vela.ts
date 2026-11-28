@@ -7,4 +7,7 @@ declare global {
 }
 
 /** The only way the page reaches main; preload defines it before the bundle runs. */
-export const vela = window.vela
+export const vela: DesktopBridge =
+  typeof window === 'undefined'
+    ? (undefined as unknown as DesktopBridge)
+    : window.vela

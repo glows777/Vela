@@ -12,25 +12,30 @@ import {
   statSync,
   writeSync,
 } from 'node:fs'
-import { createConnection } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defaultAgentDir } from '../driver/config/paths.ts'
 import {
   assertSocketOrMissing,
-  assertSocketOwnership,
   daemonOwnerLockPath,
   ensurePrivateSocketDir,
   removeStaleSocketFile,
   resolveDaemonPaths,
 } from './paths.ts'
 import {
-  createNdjsonParser,
+  isPidAlive,
+  probeDaemonHello,
+  probeReachableDaemon,
+  readLogTail,
+  readOwnerRecord,
+  readPidRecord,
+  rpcOnce,
+  sleep,
+} from './probe.ts'
+import {
   DAEMON_PROTOCOL_VERSION,
   type DaemonHello,
   type DaemonStatus,
-  deserializeError,
-  encodeWireLine,
   getAppVersion,
 } from './protocol.ts'
 
@@ -73,20 +78,6 @@ export interface DaemonLifecycleOptions {
   appVersion?: string
   protocolVersion?: number
   timeoutMs?: number
-}
-
-function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function extractPreloadArgs(execArgv: readonly string[]): string[] {
@@ -132,73 +123,6 @@ function resolveDaemonSpawnCommand(agentDir: string): {
     }
   }
   throw new Error('Unable to locate Vela CLI entry to start daemon')
-}
-
-async function rpcOnce<T>(
-  socketPath: string,
-  method: string,
-  params: unknown,
-  timeoutMs: number,
-): Promise<T> {
-  assertSocketOwnership(socketPath)
-  return new Promise<T>((resolve, reject) => {
-    const socket = createConnection(socketPath)
-    let settled = false
-    const timer = setTimeout(() => {
-      finish(new Error(`Timed out calling ${method} on ${socketPath}`))
-    }, timeoutMs)
-    const finish = (err: unknown, result?: T) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      socket.destroy()
-      if (err !== undefined) reject(err)
-      else resolve(result as T)
-    }
-    const parse = createNdjsonParser(
-      (msg) => {
-        if (msg.type === 'res' && msg.id === 1) {
-          if (msg.ok) finish(undefined, msg.result as T)
-          else finish(deserializeError(msg.error))
-        }
-      },
-      (err) => {
-        finish(
-          err instanceof Error
-            ? err
-            : new Error(`Daemon IPC parse error: ${String(err)}`),
-        )
-        return false
-      },
-    )
-    socket.on('error', (err) => finish(err))
-    socket.on('close', () =>
-      finish(
-        new Error(`Socket closed while calling ${method} on ${socketPath}`),
-      ),
-    )
-    socket.on('data', parse)
-    socket.on('connect', () => {
-      socket.write(encodeWireLine({ type: 'req', id: 1, method, params }))
-    })
-  })
-}
-
-/** Probes a running daemon endpoint for handshake metadata; returns `undefined` if unreachable. */
-async function probeDaemonHello(
-  socketPath: string,
-  timeoutMs = 500,
-): Promise<DaemonHello | undefined> {
-  try {
-    return await rpcOnce<DaemonHello>(
-      socketPath,
-      'daemon.hello',
-      undefined,
-      timeoutMs,
-    )
-  } catch {
-    return undefined
-  }
 }
 
 function readLaunchLock(
@@ -281,56 +205,6 @@ async function acquireLock(
     } finally {
       rmSync(tmpPath, { force: true })
     }
-  }
-}
-
-function readLogTail(logPath: string, maxLines = 20): string {
-  if (!existsSync(logPath)) return ''
-  try {
-    const lines = readFileSync(logPath, 'utf8').trim().split('\n')
-    return lines.slice(-maxLines).join('\n')
-  } catch {
-    return ''
-  }
-}
-
-function readPidRecord(
-  pidPath: string,
-): { pid?: number; instanceId?: string } | undefined {
-  if (!existsSync(pidPath)) return undefined
-  try {
-    const parsed = JSON.parse(readFileSync(pidPath, 'utf8')) as {
-      pid?: unknown
-      instanceId?: unknown
-    }
-    return {
-      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
-      ...(typeof parsed.instanceId === 'string'
-        ? { instanceId: parsed.instanceId }
-        : {}),
-    }
-  } catch {
-    return undefined
-  }
-}
-
-function readOwnerRecord(
-  ownerPath: string,
-): { pid?: number; instanceId?: string } | undefined {
-  if (!existsSync(ownerPath)) return undefined
-  try {
-    const parsed = JSON.parse(readFileSync(ownerPath, 'utf8')) as {
-      pid?: unknown
-      instanceId?: unknown
-    }
-    return {
-      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
-      ...(typeof parsed.instanceId === 'string'
-        ? { instanceId: parsed.instanceId }
-        : {}),
-    }
-  } catch {
-    return undefined
   }
 }
 
@@ -419,6 +293,9 @@ export async function ensureDaemonRunning(
   const rawHostEnv = options.hostEnv ?? process.env
   const hostEnv = stripTransientDaemonEnv(rawHostEnv)
   const agentDir = options.agentDir ?? defaultAgentDir(rawHostEnv)
+  const hasExplicitSocket = Boolean(
+    options.socketPath ?? rawHostEnv.VELA_DAEMON_SOCKET,
+  )
   const paths = resolveDaemonPaths(agentDir, options.socketPath, rawHostEnv)
   const ownerPath = daemonOwnerLockPath(paths.agentDir)
   assertSocketOrMissing(paths.socketPath)
@@ -442,17 +319,35 @@ export async function ensureDaemonRunning(
         hello.appVersion === expectedApp,
     )
 
-  const existing = await probeDaemonHello(paths.socketPath, 500)
-  assertMatchingAgentDir(existing)
-  if (existing && matches(existing)) return existing
+  const existingEndpoint = await probeReachableDaemon(
+    paths,
+    hasExplicitSocket,
+    500,
+  )
+  if (
+    existingEndpoint &&
+    existingEndpoint.socketPath === paths.socketPath &&
+    matches(existingEndpoint.hello)
+  ) {
+    return existingEndpoint.hello
+  }
 
   const release = await acquireLock(paths.lockPath, timeoutMs)
   try {
-    let secondCheck = await probeDaemonHello(paths.socketPath, 500)
-    assertMatchingAgentDir(secondCheck)
-    if (secondCheck && matches(secondCheck)) return secondCheck
+    let secondEndpoint = await probeReachableDaemon(
+      paths,
+      hasExplicitSocket,
+      500,
+    )
+    if (
+      secondEndpoint &&
+      secondEndpoint.socketPath === paths.socketPath &&
+      matches(secondEndpoint.hello)
+    ) {
+      return secondEndpoint.hello
+    }
 
-    if (!secondCheck) {
+    if (!secondEndpoint) {
       const ownerDeadline = Date.now() + timeoutMs
       while (Date.now() < ownerDeadline) {
         const owner = readOwnerRecord(ownerPath)
@@ -463,16 +358,25 @@ export async function ensureDaemonRunning(
         ) {
           break
         }
-        const candidate = await probeDaemonHello(paths.socketPath, 300)
-        assertMatchingAgentDir(candidate)
+        const candidate = await probeReachableDaemon(
+          paths,
+          hasExplicitSocket,
+          300,
+        )
         if (candidate) {
-          secondCheck = candidate
+          secondEndpoint = candidate
           break
         }
         await sleep(50)
       }
-      if (secondCheck && matches(secondCheck)) return secondCheck
-      if (!secondCheck) {
+      if (
+        secondEndpoint &&
+        secondEndpoint.socketPath === paths.socketPath &&
+        matches(secondEndpoint.hello)
+      ) {
+        return secondEndpoint.hello
+      }
+      if (!secondEndpoint) {
         const ownerAfterWait = readOwnerRecord(ownerPath)
         if (
           ownerAfterWait?.pid &&
@@ -486,7 +390,9 @@ export async function ensureDaemonRunning(
       }
     }
 
-    if (secondCheck) {
+    if (secondEndpoint) {
+      const targetSocketPath = secondEndpoint.socketPath
+      const secondCheck = secondEndpoint.hello
       const pidRecord = readPidRecord(paths.pidPath)
       const target = {
         pid: secondCheck.pid ?? pidRecord?.pid,
@@ -494,10 +400,10 @@ export async function ensureDaemonRunning(
         allowSignal: secondCheck.pid !== undefined,
       }
       try {
-        await rpcOnce(paths.socketPath, 'daemon.stop', undefined, 3000)
+        await rpcOnce(targetSocketPath, 'daemon.stop', undefined, 3000)
       } catch {}
       const outcome = await waitForDaemonExit(
-        paths.socketPath,
+        targetSocketPath,
         paths.pidPath,
         target,
         30_000,
@@ -507,6 +413,9 @@ export async function ensureDaemonRunning(
         throw new Error(
           `Timed out stopping mismatched Vela daemon (pid ${target.pid ?? 'unknown'})`,
         )
+      }
+      if (targetSocketPath !== paths.socketPath) {
+        removeStaleSocketFile(targetSocketPath)
       }
       if (outcome === 'replaced') {
         const replacement = await probeDaemonHello(paths.socketPath, 500)
@@ -624,15 +533,14 @@ export async function stopDaemon(
 ): Promise<boolean> {
   const hostEnv = options.hostEnv ?? process.env
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
+  const hasExplicitSocket = Boolean(
+    options.socketPath ?? hostEnv.VELA_DAEMON_SOCKET,
+  )
   const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
   const ownerPath = daemonOwnerLockPath(paths.agentDir)
-  assertSocketOrMissing(paths.socketPath)
-  const hello = await probeDaemonHello(paths.socketPath, 500)
-  if (hello && hello.agentDir !== paths.agentDir) {
-    throw new Error(
-      `Socket ${paths.socketPath} belongs to ${hello.agentDir}, expected ${paths.agentDir}`,
-    )
-  }
+  const reachable = await probeReachableDaemon(paths, hasExplicitSocket, 500)
+  const hello = reachable?.hello
+  const targetSocketPath = reachable?.socketPath ?? paths.socketPath
   const ownerRecord = readOwnerRecord(ownerPath)
   const liveOwner =
     ownerRecord?.pid !== undefined && isPidAlive(ownerRecord.pid)
@@ -649,7 +557,7 @@ export async function stopDaemon(
   }
   if (hello) {
     try {
-      await rpcOnce(paths.socketPath, 'daemon.stop', undefined, 5000)
+      await rpcOnce(targetSocketPath, 'daemon.stop', undefined, 5000)
     } catch {}
   } else if (liveOwner?.pid && liveOwner.pid !== process.pid) {
     try {
@@ -657,7 +565,7 @@ export async function stopDaemon(
     } catch {}
   }
   const outcome = await waitForDaemonExit(
-    paths.socketPath,
+    targetSocketPath,
     paths.pidPath,
     { pid, instanceId, allowSignal: Boolean(hello?.pid || liveOwner) },
     options.timeoutMs ?? 30_000,
@@ -665,10 +573,10 @@ export async function stopDaemon(
   )
   if (outcome === 'timeout') {
     throw new Error(
-      `Failed to stop Vela daemon (pid ${pid ?? 'unknown'}, socket: ${paths.socketPath})`,
+      `Failed to stop Vela daemon (pid ${pid ?? 'unknown'}, socket: ${targetSocketPath})`,
     )
   }
-  const latestHello = await probeDaemonHello(paths.socketPath, 150)
+  const latestHello = await probeDaemonHello(targetSocketPath, 150)
   const latestOwner = readOwnerRecord(ownerPath)
   const latestOwnerAlive =
     latestOwner?.pid !== undefined && isPidAlive(latestOwner.pid)
@@ -687,7 +595,7 @@ export async function stopDaemon(
     !replacedByNewPid &&
     (!latestHello || (instanceId && latestHello.instanceId === instanceId))
   ) {
-    removeStaleSocketFile(paths.socketPath)
+    removeStaleSocketFile(targetSocketPath)
   }
   if (
     existsSync(paths.pidPath) &&
@@ -706,24 +614,22 @@ export async function getDaemonStatus(
 ): Promise<DaemonStatus> {
   const hostEnv = options.hostEnv ?? process.env
   const agentDir = options.agentDir ?? defaultAgentDir(hostEnv)
+  const hasExplicitSocket = Boolean(
+    options.socketPath ?? hostEnv.VELA_DAEMON_SOCKET,
+  )
   const paths = resolveDaemonPaths(agentDir, options.socketPath, hostEnv)
-  assertSocketOrMissing(paths.socketPath)
-  const hello = await probeDaemonHello(paths.socketPath, 500)
-  if (!hello) {
+  const reachable = await probeReachableDaemon(paths, hasExplicitSocket, 500)
+  if (!reachable) {
     return {
       running: false,
       agentDir: paths.agentDir,
       socketPath: paths.socketPath,
     }
   }
-  if (hello.agentDir !== paths.agentDir) {
-    throw new Error(
-      `Socket ${paths.socketPath} belongs to ${hello.agentDir}, expected ${paths.agentDir}`,
-    )
-  }
+  const { socketPath: targetSocketPath, hello } = reachable
   try {
     return await rpcOnce<DaemonStatus>(
-      paths.socketPath,
+      targetSocketPath,
       'daemon.status',
       undefined,
       options.timeoutMs ?? 5000,
@@ -732,7 +638,7 @@ export async function getDaemonStatus(
     return {
       running: true,
       agentDir: paths.agentDir,
-      socketPath: paths.socketPath,
+      socketPath: targetSocketPath,
       pid: hello.pid,
       protocolVersion: hello.protocolVersion,
       appVersion: hello.appVersion,

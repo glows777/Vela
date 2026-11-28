@@ -229,6 +229,7 @@ export class VelaRuntimeEngine {
       await existing.stop()
     } finally {
       this.channelStatuses.markStopped(name)
+      this.syncWakeTimer()
     }
     await this.outbox.drainChannel(name).catch(() => {})
   }
@@ -621,7 +622,10 @@ export class VelaRuntimeEngine {
     }
     if (this.disposed || !this.db.open) return
     const registeredChannels = [...this.channels.keys()].filter(
-      (name) => this.isChannelEnabled(name) && !this.ignoredChannels.has(name),
+      (name) =>
+        this.readyChannel(name) !== undefined &&
+        this.isChannelEnabled(name) &&
+        !this.ignoredChannels.has(name),
     )
     this.nextWakeTimer = scheduleRuntimeWakeTimer({
       db: this.db,
@@ -629,7 +633,7 @@ export class VelaRuntimeEngine {
       outbox: this.outbox,
       registeredChannels,
       ignoredChannels: this.ignoredChannels,
-      hasChannels: this.channels.size > 0,
+      hasChannels: registeredChannels.length > 0,
       onFire: () => {
         this.nextWakeTimer = undefined
         return !this.disposed && this.db.open

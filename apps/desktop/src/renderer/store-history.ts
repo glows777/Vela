@@ -42,11 +42,16 @@ export async function readLarkGroupHistory(params: {
   older?: boolean
   shown: (sessionId: string) => Message[]
   onPage: (sessionId: string, messages: Message[], hasEarlier?: boolean) => void
+  fetchMessages?: (params: {
+    sessionId: string
+    cursor?: string
+    limit?: number
+  }) => Promise<{ messages: Message[]; nextCursor?: string }>
 }): Promise<string | undefined> {
-  const { project, older = false, shown, onPage } = params
+  const { project, older = false, shown, onPage, fetchMessages } = params
   const sessionId = project.sessionId
   const read = (cursor?: string) =>
-    vela.messages({
+    (fetchMessages ?? vela.messages)({
       sessionId,
       ...(cursor ? { cursor } : {}),
       limit: LARK_PAGE_LIMIT,
@@ -107,7 +112,7 @@ export async function readLarkGroupHistory(params: {
         return shownIds.size === 0 || overlaps
       },
     )
-    if (!walked && (overlaps || larkCursors.has(sessionId))) return undefined
+    if (!walked && overlaps && larkCursors.has(sessionId)) return undefined
     onPage(sessionId, shown(sessionId), remember(next))
     return undefined
   } catch (cause) {

@@ -114,27 +114,17 @@ export function getBoundChannelForSession(
     thread_id: string | null
   }>(
     `SELECT channel, external_id, thread_id FROM channel_bindings
-     WHERE session_id = ? AND enabled = 1
+     WHERE session_id = ?
      ORDER BY created_at ASC, rowid ASC`,
     sessionId,
   )
   for (const row of direct) {
-    if (row.thread_id) {
-      const root = db.get<{ enabled: number }>(
-        `SELECT enabled FROM channel_bindings
-         WHERE channel = ? AND external_id = ? AND thread_id IS NULL
-         ORDER BY created_at ASC, rowid ASC LIMIT 1`,
-        row.channel,
-        row.external_id,
-      )
-      if (root && root.enabled === 0) continue
-    }
     return row.channel
   }
   if (session.projectId) {
     const root = db.get<{ channel: string }>(
       `SELECT channel FROM channel_bindings
-       WHERE project_id = ? AND thread_id IS NULL AND enabled = 1
+       WHERE project_id = ? AND thread_id IS NULL
        ORDER BY created_at ASC, rowid ASC LIMIT 1`,
       session.projectId,
     )

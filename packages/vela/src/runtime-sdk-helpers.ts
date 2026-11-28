@@ -1,3 +1,5 @@
+import { join } from 'node:path'
+import { type VelaDatabase, withReadonlyDb } from './db/index.ts'
 import type { VelaExtension } from './driver/extensions/types.ts'
 import type { RuntimeMcpAdapter } from './driver/runtime-adapter.ts'
 import type { ResolveSpecialModelFn } from './driver/runtime-types.ts'
@@ -94,5 +96,49 @@ export function createSpecialModelResolver(): ResolveSpecialModelFn {
           }
         : {}),
     }
+  }
+}
+
+export function seedEphemeralDbFromOwner(
+  db: VelaDatabase,
+  agentDir: string,
+): void {
+  try {
+    withReadonlyDb(join(agentDir, 'vela.db'), (ownerDb) => {
+      const trustRows = ownerDb.all<{
+        path: string
+        trusted: number
+        updated_at: string
+      }>('SELECT path, trusted, updated_at FROM trusted_paths')
+      for (const r of trustRows) {
+        db.run(
+          'INSERT OR REPLACE INTO trusted_paths (path, trusted, updated_at) VALUES (?, ?, ?)',
+          r.path,
+          r.trusted,
+          r.updated_at,
+        )
+      }
+      const oauthRows = ownerDb.all<{
+        provider: string
+        client_id: string
+        host_id: string | null
+        subject: string | null
+        updated_at: string
+      }>(
+        'SELECT provider, client_id, host_id, subject, updated_at FROM oauth_registrations',
+      )
+      for (const r of oauthRows) {
+        db.run(
+          'INSERT OR REPLACE INTO oauth_registrations (provider, client_id, host_id, subject, updated_at) VALUES (?, ?, ?, ?, ?)',
+          r.provider,
+          r.client_id,
+          r.host_id,
+          r.subject,
+          r.updated_at,
+        )
+      }
+    })
+  } catch {
+    /* ignore unreadable owner db when seeding ephemeral state */
   }
 }

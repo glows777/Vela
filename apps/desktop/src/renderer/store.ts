@@ -87,7 +87,15 @@ const subscribe = (listener: () => void) => {
 export const useStore = () => useSyncExternalStore(subscribe, current)
 export { errorMessage } from './errors.ts'
 
+const activeReadLiveIds = new Map<string, Set<string>>()
+
 function mergeMessages(sessionId: string, incoming: Message[]) {
+  const liveSet = activeReadLiveIds.get(sessionId)
+  if (liveSet) {
+    for (const message of incoming) {
+      if (!message.id.startsWith('pending:')) liveSet.add(message.id)
+    }
+  }
   const existingList = snapshot.messages[sessionId] ?? []
   if (incoming.length === 0) {
     if (snapshot.messages[sessionId] === undefined) {
@@ -105,13 +113,18 @@ function mergeMessages(sessionId: string, incoming: Message[]) {
   })
 }
 
-function replaceMessages(sessionId: string, incoming: Message[]) {
+function replaceMessages(
+  sessionId: string,
+  incoming: Message[],
+  liveSinceReadStart?: ReadonlySet<string>,
+) {
   publish({
     messages: {
       ...snapshot.messages,
       [sessionId]: reconcileLocalMessages(
         snapshot.messages[sessionId] ?? [],
         incoming,
+        liveSinceReadStart,
       ),
     },
   })
@@ -159,17 +172,23 @@ async function readLocalHistory(
 ) {
   const report = pageError(place)
   const generation = historyGeneration.get(sessionId) ?? 0
+  const readLive = firstOnly ? undefined : new Set<string>()
+  if (readLive) activeReadLiveIds.set(sessionId, readLive)
   try {
     const incoming = await readLocalHistoryPages(sessionId, firstOnly)
     if ((historyGeneration.get(sessionId) ?? 0) !== generation) {
       return false
     }
     if (firstOnly) mergeMessages(sessionId, incoming)
-    else replaceMessages(sessionId, incoming)
+    else replaceMessages(sessionId, incoming, readLive)
     return true
   } catch (cause) {
     report(errorMessage(cause))
     return false
+  } finally {
+    if (readLive && activeReadLiveIds.get(sessionId) === readLive) {
+      activeReadLiveIds.delete(sessionId)
+    }
   }
 }
 

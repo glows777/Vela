@@ -627,22 +627,39 @@ export class LarkRuntimeProgressManager {
 
       if (event.replyPending && outcome === 'done') {
         const waitPromise = new Promise<void>((resolve) => {
+          let settled = false
+          const resolveOnce = () => {
+            if (settled) return
+            settled = true
+            resolve()
+          }
           const timer = setTimeout(() => {
-            if (this.awaitingOutbox.delete(event.runId)) {
-              void finalize('failed').finally(resolve)
-            } else {
-              resolve()
-            }
+            // Stop blocking `inflightFinish` on slow outbox retries, but keep
+            // `awaitingOutbox` registered so eventual delivery/failure settles cleanly.
+            resolveOnce()
           }, 30_000)
+          timer.unref?.()
+          if (this.awaitingOutbox.size >= 512) {
+            const oldestRunId = this.awaitingOutbox.keys().next().value
+            if (oldestRunId !== undefined) {
+              this.awaitingOutbox.delete(oldestRunId)
+            }
+          }
           this.awaitingOutbox.set(event.runId, {
             settle: (ok) => {
               clearTimeout(timer)
-              void finalize(ok ? 'done' : 'failed').finally(resolve)
+              const finishTask = finalize(ok ? 'done' : 'failed').finally(
+                resolveOnce,
+              )
+              this.inflightFinish.add(finishTask)
+              void finishTask.finally(() =>
+                this.inflightFinish.delete(finishTask),
+              )
             },
             cancel: async () => {
               clearTimeout(timer)
               await this.cancelActiveFeedback(active)
-              resolve()
+              resolveOnce()
             },
           })
         })

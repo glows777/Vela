@@ -2,6 +2,7 @@ export function isDisconnectError(error: unknown): boolean {
   if (error instanceof Error && 'code' in error) {
     const code = (error as NodeJS.ErrnoException).code
     if (
+      code === 'VELA_DAEMON_DISCONNECTED' ||
       code === 'ECONNRESET' ||
       code === 'EPIPE' ||
       code === 'ECONNREFUSED' ||
@@ -11,7 +12,7 @@ export function isDisconnectError(error: unknown): boolean {
     }
   }
   const msg = error instanceof Error ? error.message : String(error ?? '')
-  return /Daemon (?:client|runtime client) (?:is closed|closed|disconnected|not connected|timed out)|Disconnected from Vela daemon|Socket is closed|This socket has been ended/i.test(
+  return /Daemon (?:client|runtime client) (?:connection is closed|has been disposed|is closed|closed|disconnected|not connected|timed out)|Disconnected from Vela daemon|Socket is closed|This socket has been ended/i.test(
     msg,
   )
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   renameSync,
   rmSync,
@@ -132,10 +133,28 @@ export async function startDaemonServer(
   try {
     if (process.platform !== 'win32') {
       ensurePrivateSocketDir(paths.socketPath)
+      const preProbeIno = (() => {
+        try {
+          return lstatSync(paths.socketPath).ino
+        } catch {
+          return undefined
+        }
+      })()
       if (await probeSocketAlive(paths.socketPath)) {
         throw new DaemonAlreadyRunningError(paths.socketPath)
       }
-      removeStaleSocketFile(paths.socketPath)
+      if (preProbeIno !== undefined) {
+        const postProbeIno = (() => {
+          try {
+            return lstatSync(paths.socketPath).ino
+          } catch {
+            return undefined
+          }
+        })()
+        if (postProbeIno === preProbeIno) {
+          removeStaleSocketFile(paths.socketPath)
+        }
+      }
     }
 
     if (options.enableWebhooks !== false) {
@@ -208,8 +227,29 @@ export async function startDaemonServer(
 
   const clients = new Set<ConnectedClient>()
   const sessionOverrideOwners = new Map<string, ConnectedClient>()
+  const sessionConfigureQueues = new Map<string, Promise<void>>()
+  const serializeSessionConfigure = <T>(
+    sessionId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    const prev = sessionConfigureQueues.get(sessionId) ?? Promise.resolve()
+    const run = prev.catch(() => {}).then(fn)
+    const tail = run.then(
+      () => {},
+      () => {},
+    )
+    sessionConfigureQueues.set(sessionId, tail)
+    void tail.finally(() => {
+      if (sessionConfigureQueues.get(sessionId) === tail) {
+        sessionConfigureQueues.delete(sessionId)
+      }
+    })
+    return run
+  }
+  const DAEMON_SHUTDOWN_DEADLINE_MS = 30_000
   let nextPromptId = 1
   let closing: Promise<void> | undefined
+  let didBindSocket = false
   let signalHandlersAttached = false
   let configWatcher: ReturnType<typeof startDaemonConfigWatcher> | undefined
 
@@ -221,12 +261,29 @@ export async function startDaemonServer(
       )
     })
   }
+  const forceExitOnSecondSignal = (sig: 'SIGINT' | 'SIGTERM'): never => {
+    logger.warn(`[daemon] Received second ${sig} during shutdown; forcing exit`)
+    const pidInfo = readOwnerRecord(paths.pidPath)
+    if (
+      didBindSocket &&
+      (!pidInfo?.instanceId || pidInfo.instanceId === instanceId)
+    ) {
+      try {
+        removeStaleSocketFile(paths.socketPath)
+      } catch {}
+      rmSync(paths.pidPath, { force: true })
+    }
+    try {
+      releaseOwner()
+    } catch {}
+    process.exit(sig === 'SIGINT' ? 130 : 143)
+  }
   const onSigInt = () => {
-    if (closing) return
+    if (closing) forceExitOnSecondSignal('SIGINT')
     void close('SIGINT')
   }
   const onSigTerm = () => {
-    if (closing) return
+    if (closing) forceExitOnSecondSignal('SIGTERM')
     void close('SIGTERM')
   }
 
@@ -236,6 +293,9 @@ export async function startDaemonServer(
       unsubEvents()
       unsubDeltas()
       unsubChannels()
+      const serverClosed = new Promise<void>((resolve) => {
+        server.close(() => resolve())
+      }).catch(() => {})
       const snapshotClients = [...clients]
       for (const client of snapshotClients) {
         client.disconnected = true
@@ -272,33 +332,51 @@ export async function startDaemonServer(
             }),
         ),
       )
+      for (const leftover of clients) {
+        leftover.disconnected = true
+        leftover.socket.destroy()
+      }
       clients.clear()
       sessionOverrideOwners.clear()
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve())
-      }).catch(() => {})
+      await serverClosed
+      let shutdownTimer: ReturnType<typeof setTimeout> | undefined
       try {
-        await larkHost?.stop().catch(() => {})
-        await webhooksHost?.stop().catch(() => {})
-        const sessions = await runtime.sessions
-          .list({ includeArchived: true })
-          .catch(() => [])
-        await Promise.all(
-          sessions.map(async (session) => {
-            const jobs = await runtime.jobs.list(session.id).catch(() => [])
-            await Promise.all(
-              jobs
-                .filter((job) => job.snapshot.state === 'running')
-                .map((job) =>
-                  runtime.jobs
-                    .stop(session.id, job.snapshot.id)
-                    .catch(() => {}),
-                ),
-            )
+        const stopServices = (async () => {
+          await larkHost?.stop().catch(() => {})
+          await webhooksHost?.stop().catch(() => {})
+          const sessions = await runtime.sessions
+            .list({ includeArchived: true })
+            .catch(() => [])
+          await Promise.all(
+            sessions.map(async (session) => {
+              const jobs = await runtime.jobs.list(session.id).catch(() => [])
+              await Promise.all(
+                jobs
+                  .filter((job) => job.snapshot.state === 'running')
+                  .map((job) =>
+                    runtime.jobs
+                      .stop(session.id, job.snapshot.id)
+                      .catch(() => {}),
+                  ),
+              )
+            }),
+          )
+          await runtime.dispose()
+        })()
+        await Promise.race([
+          stopServices,
+          new Promise<void>((resolve) => {
+            shutdownTimer = setTimeout(() => {
+              logger.warn(
+                `[daemon] Shutdown exceeded ${DAEMON_SHUTDOWN_DEADLINE_MS}ms deadline; forcing close completion`,
+              )
+              resolve()
+            }, DAEMON_SHUTDOWN_DEADLINE_MS)
+            shutdownTimer.unref?.()
           }),
-        )
-        await runtime.dispose()
+        ])
       } finally {
+        clearTimeout(shutdownTimer)
         if (signalHandlersAttached) {
           signalHandlersAttached = false
           process.off('SIGHUP', onSigHup)
@@ -307,7 +385,8 @@ export async function startDaemonServer(
         }
         const pidInfo = readOwnerRecord(paths.pidPath)
         const stillOwnsFiles =
-          !pidInfo?.instanceId || pidInfo.instanceId === instanceId
+          didBindSocket &&
+          (!pidInfo?.instanceId || pidInfo.instanceId === instanceId)
         if (stillOwnsFiles) {
           removeStaleSocketFile(paths.socketPath)
           rmSync(paths.pidPath, { force: true })
@@ -344,9 +423,14 @@ export async function startDaemonServer(
     requestClose: (reason) => void close(reason),
     nextPromptId: () => nextPromptId++,
     sessionOverrideOwners,
+    serializeSessionConfigure,
   })
 
   const server = createServer((socket) => {
+    if (closing) {
+      socket.destroy()
+      return
+    }
     const client: ConnectedClient = {
       socket,
       disconnected: false,
@@ -463,10 +547,12 @@ export async function startDaemonServer(
       client.disconnected = true
       clients.delete(client)
       for (const sid of [...client.configuredSessions]) {
-        if (sessionOverrideOwners.get(sid) === client) {
-          sessionOverrideOwners.delete(sid)
-          void runtime.sessions.configure(sid, {}).catch(() => {})
-        }
+        void serializeSessionConfigure(sid, async () => {
+          if (sessionOverrideOwners.get(sid) === client) {
+            sessionOverrideOwners.delete(sid)
+            await runtime.sessions.configure(sid, {}).catch(() => {})
+          }
+        })
       }
       client.configuredSessions.clear()
       for (const active of client.activeLogins.values()) {
@@ -498,10 +584,22 @@ export async function startDaemonServer(
     await new Promise<void>((resolve, reject) => {
       const onErr = (err: Error) => reject(err)
       server.once('error', onErr)
-      const prevUmask =
-        process.platform !== 'win32' ? process.umask(0o177) : undefined
+      let prevUmask: number | undefined
+      if (process.platform !== 'win32') {
+        try {
+          prevUmask = process.umask(0o177)
+        } catch (error) {
+          if (
+            (error as NodeJS.ErrnoException).code !==
+            'ERR_WORKER_UNSUPPORTED_OPERATION'
+          ) {
+            throw error
+          }
+        }
+      }
       try {
         server.listen(paths.socketPath, () => {
+          didBindSocket = true
           server.off('error', onErr)
           resolve()
         })
@@ -528,7 +626,10 @@ export async function startDaemonServer(
       server.close(() => resolve())
     }).catch(() => {})
     const pidInfo = readOwnerRecord(paths.pidPath)
-    if (!pidInfo?.instanceId || pidInfo.instanceId === instanceId) {
+    if (
+      didBindSocket &&
+      (!pidInfo?.instanceId || pidInfo.instanceId === instanceId)
+    ) {
       removeStaleSocketFile(paths.socketPath)
       rmSync(paths.pidPath, { force: true })
     }

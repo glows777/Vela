@@ -28,6 +28,7 @@ export interface InteractiveOptions {
     options?: {
       quiet?: boolean
       startup?: boolean
+      resume?: boolean
     },
   ) => Promise<boolean> | boolean
   /** Called before exit */

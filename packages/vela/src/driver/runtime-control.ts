@@ -430,7 +430,7 @@ export function createRuntimeControl(
           const oauthChannel =
             getBoundChannelForSession(state.db, sessionId) ?? saved?.channel
           const fallbackCandidate =
-            candidateRef ?? state.reloadable.defaultModel
+            candidateRef ?? activeModels.defaultRef(oauthChannel)
           fallbackModel = fallbackCandidate
             ? resolveModelInput(
                 activeModels,

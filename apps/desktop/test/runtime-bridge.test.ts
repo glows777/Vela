@@ -418,6 +418,55 @@ test('removeDesktopProject deletes the project and its owned sessions', async ()
   expect(await runtime.sessions.get(sess.sessionId)).toBeUndefined()
 })
 
+test('projects.remove with deleteSessions closes driver session extensions cleanly before recreating session id', async () => {
+  const cwd = tempDir('vela-unlink-ext-')
+  let shutdownCount = 0
+  let closedTarget: string | undefined
+  const runtime = createRuntime({
+    agentDir: tempDir('vela-unlink-agent-'),
+    defaultModel: createFauxModel(),
+    extensions: [
+      (api) => {
+        api.on('session_shutdown', async (_event, ctx) => {
+          shutdownCount += 1
+          closedTarget = ctx.session.id
+        })
+      },
+    ],
+  })
+  cleanups.push(() => runtime.dispose())
+  await runtime.ready()
+
+  const proj = await runtime.projects.create({
+    name: 'Ext Project',
+    cwd,
+  })
+  const sess = await runtime.sessions.create({
+    id: 'reusable-sess-id',
+    projectId: proj.id,
+    location: { environment: 'local', cwd },
+  })
+  await runtime.prompt(sess.id, { text: 'init extension runner' })
+  await runtime.waitForIdle(sess.id)
+
+  const removed = await runtime.projects.remove(proj.id, {
+    deleteSessions: true,
+  })
+  expect(removed).toBe(true)
+  expect(shutdownCount).toBe(1)
+  expect(closedTarget).toBe('reusable-sess-id')
+
+  // Recreating a session with the same ID starts fresh without reusing deleted runner state.
+  const proj2 = await runtime.projects.create({ name: 'Ext Project 2', cwd })
+  const recreated = await runtime.sessions.create({
+    id: 'reusable-sess-id',
+    projectId: proj2.id,
+    location: { environment: 'local', cwd },
+  })
+  await runtime.prompt(recreated.id, { text: 'fresh session' })
+  await runtime.waitForIdle(recreated.id)
+})
+
 test('deleteDesktopSession stops running work before deleting the session', async () => {
   const { runtime } = await openTestRuntime()
   const cwd = tempDir('vela-delete-stop-')

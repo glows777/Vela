@@ -277,7 +277,10 @@ export async function maybeResolveImplicitSpecialModel(
     const activeModels = resolveSessionModels(state, override)
     const oauthChannel = getBoundChannelForSession(state.db, sessionId)
     const candidate =
-      override?.model ?? savedModel ?? state.reloadable.defaultModel
+      override?.model ??
+      savedModel ??
+      state.reloadable.defaultModel ??
+      activeModels.defaultRef(oauthChannel)
     fallbackModel = candidate
       ? resolveModelInput(activeModels, candidate, () => oauthChannel).model
       : undefined

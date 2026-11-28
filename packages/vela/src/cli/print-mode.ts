@@ -34,7 +34,6 @@ export async function runPrintMode(options: {
   const { runtime, session, messages, mode } = options
   let writing = Promise.resolve()
   let lastReply = ''
-  let activeRunId: string | undefined
   let activeRunFailed = false
   let failure:
     | {
@@ -43,6 +42,18 @@ export async function runPrintMode(options: {
         errorHint?: string
       }
     | undefined
+  interface ObservedRun {
+    runId: string
+    inboxEventIds?: readonly string[]
+    reply: string
+    failed: boolean
+    failure?: {
+      message: string
+      kind: AgentErrorKind | undefined
+      errorHint?: string
+    }
+  }
+  const observedRuns = new Map<string, ObservedRun>()
 
   let headerWritten = mode !== 'json'
   const pendingJsonLines: string[] = []
@@ -60,12 +71,19 @@ export async function runPrintMode(options: {
       enqueueJsonLine(jsonEvent(event))
     }
     if (event.type === 'run_started') {
-      activeRunId = event.runId
-      activeRunFailed = false
+      observedRuns.set(event.runId, {
+        runId: event.runId,
+        inboxEventIds: event.inboxEventIds,
+        reply: '',
+        failed: false,
+      })
     } else if (event.type === 'message_committed') {
       const msg = event.message as { role?: unknown; content?: unknown }
-      if (msg.role === 'assistant' && event.runId === activeRunId) {
-        lastReply = extractMessageText(msg.content)
+      if (msg.role === 'assistant' && event.runId) {
+        const run = observedRuns.get(event.runId)
+        if (run) {
+          run.reply = extractMessageText(msg.content)
+        }
       }
     } else if (event.type === 'notify' && mode === 'text') {
       console.error(
@@ -74,19 +92,21 @@ export async function runPrintMode(options: {
           : `[${event.level}] ${event.message}`,
       )
     } else if (event.type === 'run_finished') {
+      const run = observedRuns.get(event.runId)
+      if (!run) return
       if (event.status === 'failed') {
-        if (event.runId === activeRunId) activeRunFailed = true
-        failure ??= {
+        run.failed = true
+        run.failure ??= {
           message: event.error ?? 'Turn failed',
           kind: event.errorKind,
           errorHint: event.errorHint,
         }
       } else if (event.status === 'stopped') {
-        if (event.runId === activeRunId) activeRunFailed = true
-        failure ??= { message: 'Stopped', kind: undefined }
+        run.failed = true
+        run.failure ??= { message: 'Stopped', kind: undefined }
       } else if (event.status === 'waiting_human') {
-        if (event.runId === activeRunId) activeRunFailed = true
-        failure ??= {
+        run.failed = true
+        run.failure ??= {
           message: 'Waiting for human approval or input',
           kind: undefined,
         }
@@ -127,11 +147,22 @@ export async function runPrintMode(options: {
   let exitCode = 0
   try {
     for (const [index, message] of messages.entries()) {
+      observedRuns.clear()
       const res = await session.prompt(message, {
         images: index === 0 ? options.images : undefined,
       })
       if (!res.handledCommand) {
         await session.waitForSettled()
+        const runsList = [...observedRuns.values()]
+        const matchedRun = res.eventId
+          ? (runsList.find((r) => r.inboxEventIds?.includes(res.eventId!)) ??
+            runsList.find((r) => r.inboxEventIds === undefined))
+          : runsList.at(-1)
+        if (matchedRun) {
+          lastReply = matchedRun.reply
+          activeRunFailed = matchedRun.failed
+          failure = matchedRun.failure
+        }
       }
       if (failure) break
     }

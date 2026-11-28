@@ -159,17 +159,17 @@ export class EnvironmentRegistry {
       }
       const prevDefs = this.definitions
       const keys = new Set([...Object.keys(prevDefs), ...Object.keys(nextDefs)])
-      this.definitions = nextDefs
       for (const name of keys) {
+        if (!this.opened.has(name)) continue
         const prevRaw = JSON.stringify(prevDefs[name])
         const nextRaw = JSON.stringify(nextDefs[name])
-        if (prevRaw === nextRaw) continue
-        const existing = this.opened.get(name)
-        if (existing) {
-          this.opened.delete(name)
-          this.retired.add(existing)
+        if (prevRaw !== nextRaw) {
+          throw Error(
+            `Docker configuration for "${name}" changed while already open; explicit owner restart required`,
+          )
         }
       }
+      this.definitions = nextDefs
     })
   }
 

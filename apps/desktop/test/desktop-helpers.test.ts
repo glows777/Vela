@@ -11,8 +11,13 @@ import {
   routineTimezone,
 } from '../src/main/routine-time.ts'
 import {
+  clearLarkCursors,
+  readLarkGroupHistory,
+} from '../src/renderer/store-history.ts'
+import {
   applyChannelEventState,
   initialSnapshot,
+  reconcileLocalMessages,
   submitLocalFlow,
 } from '../src/renderer/store-state.ts'
 
@@ -130,6 +135,7 @@ test('isDisconnectError distinguishes socket disconnects from bare ENOENT errors
   expect(isDisconnectError(enoent)).toBe(false)
 
   for (const code of [
+    'VELA_DAEMON_DISCONNECTED',
     'ECONNRESET',
     'EPIPE',
     'ECONNREFUSED',
@@ -141,6 +147,141 @@ test('isDisconnectError distinguishes socket disconnects from bare ENOENT errors
   expect(isDisconnectError(new Error('Daemon runtime client is closed'))).toBe(
     true,
   )
+  expect(
+    isDisconnectError(new Error('Daemon client connection is closed')),
+  ).toBe(true)
+  expect(
+    isDisconnectError(new Error('Daemon runtime client has been disposed')),
+  ).toBe(true)
+})
+
+test('readLarkGroupHistory rebuilds cursor on overlapping refresh after clearLarkCursors so Load earlier continues working', async () => {
+  clearLarkCursors()
+  const cursorsRequested: Array<string | undefined> = []
+  let shown: import('../src/shared/bridge.ts').Message[] = []
+  let hasEarlier: boolean | undefined
+
+  const makePage = (cursor?: string) => {
+    cursorsRequested.push(cursor)
+    if (!cursor) {
+      return Promise.resolve({
+        messages: [
+          {
+            id: 'm2',
+            sessionId: 'grp-s1',
+            role: 'user' as const,
+            senderName: 'Alice',
+            text: 'latest',
+            createdAt: '2026-11-28T00:02:00.000Z',
+          },
+        ],
+        nextCursor: 'cursor-page-2',
+      })
+    }
+    return Promise.resolve({
+      messages: [
+        {
+          id: 'm1',
+          sessionId: 'grp-s1',
+          role: 'user' as const,
+          senderName: 'Alice',
+          text: 'older',
+          createdAt: '2026-11-28T00:01:00.000Z',
+        },
+      ],
+      nextCursor: undefined,
+    })
+  }
+
+  const project = {
+    id: 'oc_reset_1',
+    name: 'Lark Group',
+    channel: 'lark' as const,
+    sessionId: 'grp-s1',
+  }
+
+  await readLarkGroupHistory({
+    project,
+    shown: () => shown,
+    onPage: (_sid, msgs, earlier) => {
+      shown = msgs
+      if (earlier !== undefined) hasEarlier = earlier
+    },
+    fetchMessages: ({ cursor }) => makePage(cursor),
+  })
+  expect(hasEarlier).toBe(true)
+
+  clearLarkCursors()
+  await readLarkGroupHistory({
+    project,
+    shown: () => shown,
+    onPage: (_sid, msgs, earlier) => {
+      shown = msgs
+      if (earlier !== undefined) hasEarlier = earlier
+    },
+    fetchMessages: ({ cursor }) => makePage(cursor),
+  })
+  expect(hasEarlier).toBe(true)
+
+  await readLarkGroupHistory({
+    project,
+    older: true,
+    shown: () => shown,
+    onPage: (_sid, msgs, earlier) => {
+      shown = msgs
+      if (earlier !== undefined) hasEarlier = earlier
+    },
+    fetchMessages: ({ cursor }) => makePage(cursor),
+  })
+  expect(cursorsRequested).toEqual([undefined, undefined, 'cursor-page-2'])
+  expect(shown.map((m) => m.id)).toEqual(['m1', 'm2'])
+  expect(hasEarlier).toBe(false)
+})
+
+test('reconcileLocalMessages preserves live commits during empty/tie reads and retires matching uncertain optimistic rows', () => {
+  const liveReply = {
+    id: 'm-live',
+    sessionId: 's1',
+    role: 'assistant' as const,
+    text: 'live reply',
+    createdAt: '2026-11-28T00:01:00.000Z',
+  }
+  expect(reconcileLocalMessages([liveReply], [], new Set(['m-live']))).toEqual([
+    liveReply,
+  ])
+
+  const olderUser = {
+    id: 'm-user-1',
+    sessionId: 's1',
+    role: 'user' as const,
+    text: 'hello',
+    createdAt: '2026-11-28T00:01:00.000Z',
+  }
+  const uncertainPending = {
+    id: 'pending:cid-uncertain',
+    sessionId: 's1',
+    clientMessageId: 'cid-uncertain',
+    role: 'user' as const,
+    text: 'lost ack prompt',
+    createdAt: '2026-11-28T00:01:00.000Z',
+  }
+  const persistedCopy = {
+    id: 'm-user-2',
+    sessionId: 's1',
+    role: 'user' as const,
+    text: 'lost ack prompt',
+    createdAt: '2026-11-28T00:01:00.500Z',
+  }
+  const reconciled = reconcileLocalMessages(
+    [uncertainPending, liveReply],
+    [olderUser, persistedCopy],
+    new Set(['m-live']),
+  )
+  expect(reconciled.map((m) => m.id)).toEqual([
+    'm-user-1',
+    'm-live',
+    'm-user-2',
+  ])
 })
 
 test('applyChannelEventState resets local and Lark cursors cleanly and refreshes visible views', async () => {

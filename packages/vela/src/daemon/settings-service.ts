@@ -555,7 +555,7 @@ export async function saveRuntimeLarkSetup(params: {
   verifyCredentials?: (appId: string, appSecret: string) => Promise<void>
   hasPendingOutboxDeliveries?: (chatId?: string) => boolean
   serializeWrite?: <T>(fn: () => Promise<T>) => Promise<T>
-  onBeforeCredentialWrite?: () => void
+  onBeforeCredentialWrite?: () => Promise<void> | void
 }): Promise<RuntimeSettingsState> {
   if (params.ephemeral) {
     throw new Error('Settings cannot be modified on an ephemeral runtime')
@@ -659,7 +659,7 @@ export async function saveRuntimeLarkSetup(params: {
         'A Lark session is still running or queued. Wait for it to finish before changing Lark settings.',
       hasPendingOutboxDeliveries: params.hasPendingOutboxDeliveries,
     })
-    params.onBeforeCredentialWrite?.()
+    await params.onBeforeCredentialWrite?.()
     await saveLarkSection({
       agentDir,
       ...(appId === current.appId ? {} : { appId }),

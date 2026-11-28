@@ -391,12 +391,7 @@ try {
     (env.VELA_OFFLINE ?? '').toLowerCase(),
   )
   const configuredSessionIds = new Set<string>()
-  let cliOverride = buildCliSessionOverride(
-    args,
-    env,
-    cwd,
-    trust.trusted ? true : args.approve,
-  )
+  let cliOverride = buildCliSessionOverride(args, env, cwd, args.approve)
   clearSessionOverrides = async () => {
     if (!runtime || args.noSession) {
       return
@@ -503,7 +498,7 @@ try {
         try {
           configuredSessionIds.add(target.id)
           const effectiveOverride =
-            opts?.startup === false
+            opts?.startup === false && opts?.resume
               ? {
                   ...cliOverride,
                   model: undefined,
